@@ -5,6 +5,7 @@ import { currentUser } from '@clerk/nextjs/server';
 import { generateBlogPost } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
 import { Blog, CalendarEntryWithBlog } from '@/lib/types';
+import type { BusinessBrief } from '@/lib/business-brief';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500) {
   const user = await currentUser();
@@ -58,7 +59,28 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       // optional context for internal links
     }
 
-    const blogData = await generateBlogPost(entry, project, wordCount, research ?? undefined, existingBlogs);
+    // Load the cached Business Brief for this project — powers company
+    // grounding + internal links to the user's REAL site pages.
+    let brief: BusinessBrief | null = null;
+    try {
+      const { data: briefRow } = await supabaseAdmin
+        .from('project_briefs')
+        .select('brief')
+        .eq('project_id', entry.project_id)
+        .maybeSingle();
+      brief = (briefRow?.brief as BusinessBrief | undefined) ?? null;
+    } catch {
+      // Brief is optional at the DB layer — generation must still work if it's missing.
+    }
+
+    const blogData = await generateBlogPost(
+      entry,
+      project,
+      wordCount,
+      research ?? undefined,
+      existingBlogs,
+      brief
+    );
 
     const { data: existing } = await supabaseAdmin
       .from('blogs')

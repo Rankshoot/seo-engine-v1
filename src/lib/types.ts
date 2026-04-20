@@ -43,6 +43,10 @@ export interface Keyword {
   source_url?: string | null;
   /** Competitor domain for gap-sourced keywords */
   gap_competitor?: string | null;
+  /** Google Ads competition bucket (LOW / MEDIUM / HIGH) when known */
+  competition_level?: string | null;
+  /** Dominant SERP intent: informational / commercial / navigational / transactional */
+  intent?: string | null;
 }
 
 export interface CalendarEntry {
@@ -75,6 +79,10 @@ export interface Blog {
   research_sources: number;
   external_links: string[];
   internal_links: string[];
+  /** If this blog is a repair of an existing public page, the original URL. */
+  source_url?: string;
+  /** Bullet list of changes the LLM made during repair (only set when article_type === 'Repair'). */
+  repair_notes?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -95,6 +103,7 @@ export const ARTICLE_TYPES = [
   'Industry Report',
   "Beginner's Guide",
   'Expert Interview',
+  'Repair',
 ] as const;
 
 export const TARGET_REGIONS = [

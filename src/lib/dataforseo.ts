@@ -1,18 +1,51 @@
 import { TARGET_REGIONS } from './types';
 
-interface DataForSEOKeyword {
+export type Intent = 'informational' | 'commercial' | 'navigational' | 'transactional' | '';
+export type CompetitionLevel = 'LOW' | 'MEDIUM' | 'HIGH' | '';
+
+/** Keyword row shape stored in Supabase after discovery. */
+export interface DiscoveredKeyword {
   keyword: string;
+  /** Exact monthly search volume from Google Ads (0 when unknown). */
   volume: number;
+  /** DataForSEO keyword difficulty 0–100 (0 when unknown). */
   kd: number;
+  /** Average CPC in USD (0 when unknown). */
   cpc: number;
+  /** Monthly YoY/MoM trend string, e.g. "+12%" or "-4%" (empty when unknown). */
   trend: string;
+  /** Google Ads competition bucket. */
+  competition_level: CompetitionLevel;
+  /** Dominant search intent of the top-10 SERP. */
+  intent: Intent;
   monthly_searches: { month: string; volume: number }[];
   secondary_keywords: string[];
 }
 
-function getAuthHeader(): string {
-  const login = process.env.DATAFORSEO_LOGIN!;
-  const password = process.env.DATAFORSEO_PASSWORD!;
+/** Single upstream call captured so the browser can `console.log` it. */
+export interface DataForSEOTraceEntry {
+  label: string;
+  url: string;
+  requestBody: unknown;
+  httpStatus: number;
+  ok: boolean;
+  rawText: string;
+  parsed: unknown | null;
+  /** DataForSEO returns cost (in credits) on the response root. */
+  cost?: number;
+  parseError?: string;
+  fetchError?: string;
+}
+
+export interface DiscoverKeywordsForProjectResult {
+  keywords: DiscoveredKeyword[];
+  trace: DataForSEOTraceEntry[];
+}
+
+function getAuthHeader(): string | null {
+  const login = process.env.DATAFORSEO_LOGIN;
+  const password = process.env.DATAFORSEO_PASSWORD;
+  if (!login || !password) return null;
   return `Basic ${Buffer.from(`${login}:${password}`).toString('base64')}`;
 }
 
@@ -21,164 +54,270 @@ function getLocationCode(regionCode: string): number {
   return region?.locationCode ?? 2840;
 }
 
-function computeTrend(monthly: any[]): string {
-  if (!monthly || monthly.length < 2) return '+0%';
-  const sorted = [...monthly].sort((a, b) => {
-    const da = new Date(a.year, a.month - 1);
-    const db = new Date(b.year, b.month - 1);
-    return db.getTime() - da.getTime();
-  });
-  const latest = sorted[0]?.search_volume ?? 0;
-  const prev = sorted[1]?.search_volume ?? 0;
-  if (prev === 0) return '+0%';
-  const pct = Math.round(((latest - prev) / prev) * 100);
-  return pct >= 0 ? `+${pct}%` : `${pct}%`;
+interface DfsMonthly {
+  year: number;
+  month: number;
+  search_volume?: number | null;
 }
 
-async function tryKeywordIdeas(
-  seedKeywords: string[],
-  locationCode: number
-): Promise<DataForSEOKeyword[] | null> {
+async function dfsPost(
+  endpoint: string,
+  body: unknown,
+  auth: string,
+  trace: DataForSEOTraceEntry[]
+): Promise<unknown | null> {
+  const url = `https://api.dataforseo.com/v3/${endpoint}`;
+  const entry: DataForSEOTraceEntry = {
+    label: endpoint,
+    url,
+    requestBody: body,
+    httpStatus: 0,
+    ok: false,
+    rawText: '',
+    parsed: null,
+  };
+
   try {
-    const res = await fetch(
-      'https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_ideas/live',
-      {
-        method: 'POST',
-        headers: { Authorization: getAuthHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify([{
-          keywords: seedKeywords,
-          location_code: locationCode,
-          language_code: 'en',
-          limit: 100,
-          include_seed_keyword: true,
-          filters: [['keyword_data.keyword_info.search_volume', '>', 50]],
-          order_by: ['keyword_data.keyword_info.search_volume,desc'],
-        }]),
-      }
-    );
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    entry.httpStatus = res.status;
+    entry.ok = res.ok;
+    entry.rawText = await res.text();
+    try {
+      entry.parsed = entry.rawText ? JSON.parse(entry.rawText) : null;
+    } catch (e) {
+      entry.parseError = e instanceof Error ? e.message : 'JSON parse failed';
+    }
+    const parsed = entry.parsed as { cost?: number } | null;
+    if (parsed && typeof parsed.cost === 'number') entry.cost = parsed.cost;
+  } catch (e) {
+    entry.fetchError = e instanceof Error ? e.message : String(e);
+  } finally {
+    trace.push(entry);
+  }
+  return entry.parsed;
+}
 
-    if (!res.ok) return null;
-    const json = await res.json();
-    const items = json?.tasks?.[0]?.result?.[0]?.items;
-    if (!items?.length) return null;
+interface DfsIdeaItem {
+  keyword?: string;
+  keyword_info?: {
+    search_volume?: number | null;
+    cpc?: number | string | null;
+    competition_level?: string | null;
+    search_volume_trend?: {
+      monthly?: number | null;
+      quarterly?: number | null;
+      yearly?: number | null;
+    } | null;
+    monthly_searches?: DfsMonthly[] | null;
+  } | null;
+  keyword_properties?: {
+    keyword_difficulty?: number | null;
+  } | null;
+  search_intent_info?: {
+    main_intent?: string | null;
+  } | null;
+}
 
-    return items.map((item: any) => {
-      const kw = item.keyword_data;
-      const monthly = kw.keyword_info?.monthly_searches ?? [];
+function formatTrend(pct: number | null | undefined): string {
+  if (pct === null || pct === undefined || Number.isNaN(pct)) return '';
+  const n = Math.round(pct);
+  return n >= 0 ? `+${n}%` : `${n}%`;
+}
+
+function normalizeIntent(raw: string | null | undefined): Intent {
+  const v = (raw ?? '').toLowerCase();
+  if (v === 'informational' || v === 'commercial' || v === 'navigational' || v === 'transactional') {
+    return v;
+  }
+  return '';
+}
+
+function normalizeCompetition(raw: string | null | undefined): CompetitionLevel {
+  const v = (raw ?? '').toUpperCase();
+  if (v === 'LOW' || v === 'MEDIUM' || v === 'HIGH') return v;
+  return '';
+}
+
+async function fetchKeywordIdeas(
+  seeds: string[],
+  locationCode: number,
+  languageCode: string,
+  auth: string,
+  trace: DataForSEOTraceEntry[]
+): Promise<DiscoveredKeyword[]> {
+  if (!seeds.length) return [];
+
+  const body = [
+    {
+      keywords: seeds.slice(0, 200),
+      location_code: locationCode,
+      language_code: languageCode,
+      limit: 200,
+      include_seed_keyword: true,
+      // Keep results tightly related to the seed phrases — prevents the API
+      // from drifting into unrelated entities (e.g. random company names) for
+      // generic seeds.
+      closely_variants: true,
+      order_by: ['keyword_info.search_volume,desc'],
+    },
+  ];
+
+  const parsed = (await dfsPost(
+    'dataforseo_labs/google/keyword_ideas/live',
+    body,
+    auth,
+    trace
+  )) as {
+    tasks?: Array<{
+      result?: Array<{
+        items?: DfsIdeaItem[];
+      }>;
+    }>;
+  } | null;
+
+  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
+  if (!items.length) return [];
+
+  return items
+    .filter(it => typeof it.keyword === 'string' && it.keyword.trim().length > 0)
+    .map((it): DiscoveredKeyword => {
+      const info = it.keyword_info ?? {};
+      const props = it.keyword_properties ?? {};
+      const intentInfo = it.search_intent_info ?? {};
+      const monthly = info.monthly_searches ?? [];
       return {
-        keyword: kw.keyword,
-        volume: kw.keyword_info?.search_volume ?? 0,
-        kd: kw.keyword_properties?.keyword_difficulty ?? 0,
-        cpc: parseFloat(kw.keyword_info?.cpc ?? '0'),
-        trend: computeTrend(monthly),
-        monthly_searches: monthly.slice(0, 12).map((m: any) => ({
+        keyword: (it.keyword as string).trim(),
+        volume: Number(info.search_volume ?? 0) || 0,
+        kd: Math.round(Number(props.keyword_difficulty ?? 0) || 0),
+        cpc: Number(info.cpc ?? 0) || 0,
+        trend: formatTrend(info.search_volume_trend?.monthly),
+        competition_level: normalizeCompetition(info.competition_level),
+        intent: normalizeIntent(intentInfo.main_intent),
+        monthly_searches: monthly.slice(0, 12).map(m => ({
           month: `${m.year}-${String(m.month).padStart(2, '0')}`,
-          volume: m.search_volume ?? 0,
+          volume: Number(m.search_volume ?? 0) || 0,
         })),
-        secondary_keywords: item.imp_keywords?.slice(0, 5) ?? [],
+        secondary_keywords: [],
       };
     });
-  } catch {
-    return null;
-  }
 }
 
-async function tryKeywordsForKeywords(
-  seedKeywords: string[],
-  locationCode: number
-): Promise<DataForSEOKeyword[] | null> {
-  try {
-    const res = await fetch(
-      'https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_for_keywords/live',
-      {
-        method: 'POST',
-        headers: { Authorization: getAuthHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify([{
-          keywords: seedKeywords,
-          location_code: locationCode,
-          language_code: 'en',
-          search_partners: false,
-        }]),
-      }
-    );
-
-    if (!res.ok) return null;
-    const json = await res.json();
-    const items = json?.tasks?.[0]?.result;
-    if (!items?.length) return null;
-
-    return items
-      .filter((item: any) => item.search_volume > 50)
-      .map((item: any) => {
-        const monthly = item.monthly_searches ?? [];
-        // Estimate KD from competition: LOW=20, MEDIUM=45, HIGH=70
-        const compMap: Record<string, number> = { LOW: 20, MEDIUM: 45, HIGH: 70 };
-        const kd = compMap[item.competition ?? 'MEDIUM'] ?? 40;
-        return {
-          keyword: item.keyword,
-          volume: item.search_volume ?? 0,
-          kd,
-          cpc: parseFloat(item.cpc ?? '0'),
-          trend: computeTrend(monthly),
-          monthly_searches: monthly.slice(0, 12).map((m: any) => ({
-            month: `${m.year}-${String(m.month).padStart(2, '0')}`,
-            volume: m.search_volume ?? 0,
-          })),
-          secondary_keywords: [],
-        };
-      });
-  } catch {
-    return null;
-  }
+export interface KeywordVitals {
+  keyword: string;
+  /** Monthly search volume (0 when unknown). */
+  volume: number;
+  /** Percent change vs prior period, signed. Empty string when unknown. */
+  trend: string;
+  /** Numeric trend pct for sorting/filtering. */
+  trend_pct: number;
+  /** Last ~12 months of search volume for sparkline rendering. */
+  monthly_searches: { month: string; volume: number }[];
 }
 
-async function fallbackSerper(seedKeywords: string[]): Promise<DataForSEOKeyword[]> {
-  const SERPER_API_KEY = process.env.SERPER_API_KEY;
-  if (!SERPER_API_KEY) return [];
+/**
+ * Look up current search demand for a list of keywords. Cheap (one
+ * `keyword_overview/live` call covers up to ~700 keywords). Used by the
+ * Content Health audit to answer: "is the keyword this blog targets still
+ * trending, or is demand dying?".
+ *
+ * Returns a Map keyed by the lower-cased keyword. Returns an empty Map if
+ * DataForSEO credentials are missing — caller should treat this as optional.
+ */
+export async function fetchKeywordVitals(
+  keywords: string[],
+  region: string,
+  language: string = 'en'
+): Promise<Map<string, KeywordVitals>> {
+  const out = new Map<string, KeywordVitals>();
+  const clean = [...new Set(keywords.map(k => k.trim()).filter(Boolean))];
+  if (!clean.length) return out;
 
-  const results: DataForSEOKeyword[] = [];
+  const auth = getAuthHeader();
+  if (!auth) return out;
 
-  for (const seed of seedKeywords.slice(0, 4)) {
-    try {
-      const res = await fetch('https://google.serper.dev/search', {
-        method: 'POST',
-        headers: { 'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: seed }),
-      });
-      const data = await res.json();
-      const kwTexts = [
-        ...(data.relatedSearches?.map((r: any) => r.query) ?? []),
-        ...(data.peopleAlsoAsk?.map((p: any) => p.question) ?? []),
-      ];
-      for (const kw of kwTexts) {
-        const vol = Math.floor(Math.random() * 7500 + 200);
-        const kd = Math.floor(Math.random() * 55 + 10);
-        const pct = Math.random() > 0.4
-          ? `+${Math.floor(Math.random() * 35)}%`
-          : `-${Math.floor(Math.random() * 15)}%`;
-        results.push({ keyword: kw, volume: vol, kd, cpc: parseFloat((Math.random() * 4).toFixed(2)), trend: pct, monthly_searches: [], secondary_keywords: [] });
-      }
-    } catch { /* skip */ }
+  const locationCode = getLocationCode(region);
+  const languageCode = language || 'en';
+  const trace: DataForSEOTraceEntry[] = [];
+
+  const body = [
+    {
+      keywords: clean.slice(0, 700),
+      location_code: locationCode,
+      language_code: languageCode,
+    },
+  ];
+
+  const parsed = (await dfsPost(
+    'dataforseo_labs/google/keyword_overview/live',
+    body,
+    auth,
+    trace
+  )) as {
+    tasks?: Array<{
+      result?: Array<{
+        items?: DfsIdeaItem[];
+      }>;
+    }>;
+  } | null;
+
+  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
+  for (const it of items) {
+    const kw = typeof it.keyword === 'string' ? it.keyword.trim() : '';
+    if (!kw) continue;
+    const info = it.keyword_info ?? {};
+    const trendPct = Number(info.search_volume_trend?.monthly ?? 0) || 0;
+    out.set(kw.toLowerCase(), {
+      keyword: kw,
+      volume: Number(info.search_volume ?? 0) || 0,
+      trend: formatTrend(info.search_volume_trend?.monthly),
+      trend_pct: trendPct,
+      monthly_searches: (info.monthly_searches ?? []).slice(0, 12).map(m => ({
+        month: `${m.year}-${String(m.month).padStart(2, '0')}`,
+        volume: Number(m.search_volume ?? 0) || 0,
+      })),
+    });
   }
 
-  return results;
+  return out;
 }
 
 export async function discoverKeywordsForProject(
   seedKeywords: string[],
-  region: string
-): Promise<DataForSEOKeyword[]> {
+  region: string,
+  language: string = 'en'
+): Promise<DiscoverKeywordsForProjectResult> {
+  const trace: DataForSEOTraceEntry[] = [];
+  const auth = getAuthHeader();
+  if (!auth) {
+    trace.push({
+      label: '(config)',
+      url: '',
+      requestBody: null,
+      httpStatus: 0,
+      ok: false,
+      rawText: '',
+      parsed: null,
+      fetchError: 'DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD missing in server env',
+    });
+    return { keywords: [], trace };
+  }
+
   const locationCode = getLocationCode(region);
+  const languageCode = language || 'en';
 
-  // Tier 1 – DataForSEO Labs (real volume + KD)
-  const labsResult = await tryKeywordIdeas(seedKeywords, locationCode);
-  if (labsResult && labsResult.length > 0) return labsResult;
+  // `keyword_ideas/live` already returns keyword_difficulty, intent, trend,
+  // competition_level, monthly_searches — so one call is enough.
+  const ideas = await fetchKeywordIdeas(
+    seedKeywords,
+    locationCode,
+    languageCode,
+    auth,
+    trace
+  );
 
-  // Tier 2 – DataForSEO Google Ads (real volume, estimated KD)
-  const adsResult = await tryKeywordsForKeywords(seedKeywords, locationCode);
-  if (adsResult && adsResult.length > 0) return adsResult;
-
-  // Tier 3 – Serper.dev (estimated everything)
-  console.warn('DataForSEO unavailable, using Serper fallback');
-  return fallbackSerper(seedKeywords);
+  return { keywords: ideas, trace };
 }

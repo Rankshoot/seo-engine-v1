@@ -1,0 +1,199 @@
+'use server';
+
+/**
+ * Blog-repair orchestration.
+ *
+ * Given an existing audit row (URL + issues), the `repairBlogFromAudit` action:
+ *   1. Loads the authenticated project + business brief.
+ *   2. Scrapes the live page via Jina (fresh markdown — the audit's scrape may
+ *      be hours/days old).
+ *   3. Creates a placeholder calendar entry tagged "Repair", so the resulting
+ *      blog can live in the calendar / content pipeline like any other post.
+ *   4. Asks Gemini (`repairBlogPost`) to rewrite the page addressing every
+ *      issue, while keeping the same topic and voice.
+ *   5. Inserts a `blogs` row with `article_type='Repair'` and `source_url`
+ *      pointing to the original public URL, so the viewer can show a banner
+ *      "Repaired from <url>".
+ *
+ * Returns `{ success, data: { blogId, entryId } }` — the client navigates to
+ * `/projects/[id]/blogs/[blogId]` to view/download/schedule the rewrite.
+ */
+
+import { supabaseAdmin } from '@/lib/supabase';
+import { currentUser } from '@clerk/nextjs/server';
+import { repairBlogPost } from '@/lib/gemini';
+import { jinaReadUrl } from '@/lib/jina';
+import { getBusinessBrief } from '@/app/actions/brief-actions';
+import type { BlogAuditAnalysis } from '@/lib/content-audit';
+import type { Project } from '@/lib/types';
+
+export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated' };
+
+  // 1. Auth'd project load.
+  const { data: projectRow, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('*')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !projectRow) {
+    return { success: false as const, error: 'Project not found or unauthorized' };
+  }
+  const project = projectRow as Project;
+
+  // 2. Load the audit row — we need the primary keyword, issues, content
+  //    gaps and internal link targets.
+  const { data: auditRow, error: aErr } = await supabaseAdmin
+    .from('blog_audits')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('url', auditUrl)
+    .maybeSingle();
+
+  if (aErr || !auditRow) {
+    return { success: false as const, error: 'Audit row not found — run the audit first.' };
+  }
+
+  const analysis = (auditRow.analysis as BlogAuditAnalysis | null) ?? null;
+  if (!analysis) {
+    return { success: false as const, error: 'Audit has no analysis payload to repair from.' };
+  }
+  if (analysis.page_status === 'broken') {
+    return {
+      success: false as const,
+      error: 'This URL returns an error. Fix the 404/redirect first, then re-audit.',
+    };
+  }
+
+  // 3. Re-scrape the live page so the repair is based on current content, not
+  //    whatever existed when the audit was first run.
+  const fresh = await jinaReadUrl(auditUrl, { timeoutMs: 25_000 });
+  if (!fresh.ok || fresh.markdown.length < 400) {
+    return {
+      success: false as const,
+      error: fresh.error || "Couldn't re-scrape the page for repair.",
+    };
+  }
+
+  // 4. Load the business brief (voice/tone context + sitemap-wide internal
+  //    link pool).
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.success ? briefRes.brief : null;
+
+  // Build the internal link pool: everything the audit already picked +
+  // other peer URLs from the brief. Keep it verbatim so the LLM can't invent.
+  const fromAudit = analysis.internal_link_opportunities.map(i => i.target_url);
+  const fromBrief = (brief?.internal_link_candidates ?? []).map(c => c.url);
+  const fromBriefBlogs = brief?.blog_urls ?? [];
+  const internalLinkPool = Array.from(
+    new Set([...fromAudit, ...fromBrief, ...fromBriefBlogs])
+  ).filter(u => u && u !== auditUrl);
+
+  // 5. Create a placeholder calendar entry tagged Repair. blogs.entry_id is
+  //    NOT NULL, so a calendar row must exist first.
+  const today = new Date().toISOString().slice(0, 10);
+  const focusKw = analysis.primary_keyword || auditRow.primary_keyword || auditRow.title || 'repair';
+  const repairTitle = `Repair: ${auditRow.title || auditUrl}`.slice(0, 240);
+
+  const { data: entryRow, error: entryErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .insert({
+      project_id: projectId,
+      keyword_id: null,
+      scheduled_date: today,
+      title: repairTitle,
+      article_type: 'Repair',
+      slug: `repair-${today}-${Date.now().toString(36)}`,
+      focus_keyword: focusKw,
+      secondary_keywords: analysis.secondary_keywords ?? [],
+      status: 'generating',
+    })
+    .select()
+    .single();
+
+  if (entryErr || !entryRow) {
+    return {
+      success: false as const,
+      error: entryErr?.message ?? 'Failed to create calendar entry for repair.',
+    };
+  }
+
+  try {
+    // 6. Call the LLM to rewrite.
+    const repaired = await repairBlogPost({
+      sourceUrl: auditUrl,
+      originalMarkdown: fresh.markdown,
+      issues: analysis.issues.map(i => ({
+        label: i.label,
+        detail: i.detail,
+        fix: i.fix,
+        severity: i.severity,
+        why_it_matters: i.why_it_matters,
+      })),
+      contentGaps: analysis.content_gaps,
+      internalLinkPool,
+      primaryKeyword: analysis.primary_keyword || auditRow.primary_keyword || '',
+      secondaryKeywords: analysis.secondary_keywords ?? [],
+      brief,
+      project,
+      wordCount: 2200,
+    });
+
+    // 7. Persist the blog.
+    const { data: blogRow, error: blogErr } = await supabaseAdmin
+      .from('blogs')
+      .insert({
+        entry_id: entryRow.id,
+        project_id: projectId,
+        title: repaired.title,
+        content: repaired.content,
+        meta_description: repaired.meta_description,
+        word_count: repaired.word_count,
+        target_keyword: analysis.primary_keyword || auditRow.primary_keyword || '',
+        article_type: 'Repair',
+        slug: repaired.slug,
+        status: 'ready',
+        research_sources: repaired.research_sources,
+        external_links: repaired.external_links,
+        internal_links: repaired.internal_links,
+        source_url: auditUrl,
+        repair_notes: repaired.repair_notes,
+      })
+      .select()
+      .single();
+
+    if (blogErr || !blogRow) {
+      await supabaseAdmin.from('calendar_entries').delete().eq('id', entryRow.id);
+      return {
+        success: false as const,
+        error: blogErr?.message ?? 'Failed to persist repaired blog.',
+      };
+    }
+
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'generated' })
+      .eq('id', entryRow.id);
+
+    return {
+      success: true as const,
+      data: {
+        blogId: blogRow.id,
+        entryId: entryRow.id,
+        repair_notes: repaired.repair_notes,
+      },
+    };
+  } catch (e) {
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'error' })
+      .eq('id', entryRow.id);
+    return {
+      success: false as const,
+      error: `Repair failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}

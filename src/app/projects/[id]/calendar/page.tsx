@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { getCalendarEntries, generateCalendar, updateCalendarEntry } from "@/app/actions/calendar-actions";
+import { getBlogAudits, type AuditCoverage } from "@/app/actions/audit-actions";
 import { CalendarEntry, ARTICLE_TYPES } from "@/lib/types";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
@@ -70,14 +71,23 @@ export default function CalendarPage() {
   const [generating, setGenerating] = useState(false);
   const [startDate, setStartDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [error, setError] = useState("");
+  const [auditCoverage, setAuditCoverage] = useState<AuditCoverage | null>(null);
 
   const load = useCallback(async () => {
-    const res = await getCalendarEntries(projectId);
-    if (res.success) setEntries(res.data);
+    const [entriesRes, auditRes] = await Promise.all([
+      getCalendarEntries(projectId),
+      getBlogAudits(projectId),
+    ]);
+    if (entriesRes.success) setEntries(entriesRes.data);
+    if (auditRes.success) setAuditCoverage(auditRes.coverage);
     setLoading(false);
   }, [projectId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const auditPending = auditCoverage
+    ? Math.max(0, auditCoverage.blogs_found - auditCoverage.blogs_audited)
+    : 0;
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -144,6 +154,27 @@ export default function CalendarPage() {
           </button>
         </div>
       </div>
+
+      {auditCoverage && auditCoverage.blogs_found > 0 && auditPending > 0 && (
+        <Link
+          href={`/projects/${projectId}/audit`}
+          className="group flex items-start gap-3 p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm hover:bg-yellow-500/15 transition-colors"
+        >
+          <svg className="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <div className="flex-1">
+            <p className="font-bold">
+              Audit {auditPending} existing blog{auditPending === 1 ? "" : "s"} before generating new ones
+            </p>
+            <p className="text-xs text-text-secondary mt-0.5">
+              New posts will internally link to your existing blogs and avoid topics you've already covered. Takes ~1
+              minute per blog.
+            </p>
+          </div>
+          <span className="text-xs font-bold group-hover:underline self-center">Run audit →</span>
+        </Link>
+      )}
 
       {error && (
         <div className="flex items-start gap-3 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm">

@@ -2,13 +2,25 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { discoverKeywordsForProject } from '@/lib/dataforseo';
+import { discoverKeywordsForProject, type DiscoveredKeyword } from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
+import { generateBusinessBrief } from './brief-actions';
+import type { BusinessBrief } from '@/lib/business-brief';
+import { filterByRelevance } from '@/lib/relevance';
 
-function aiScore(volume: number, kd: number): number {
+function aiScore(volume: number, kd: number, intent: string = ''): number {
+  // Require both volume and KD to be known, otherwise the score misleads.
+  if (!volume || !kd) return 0;
+  // Volume: 0–50 points (capped at 10k searches/mo).
   const volScore = Math.min((volume / 10000) * 50, 50);
-  const kdScore = ((100 - kd) / 100) * 50;
-  return Math.round(volScore + kdScore);
+  // Difficulty: 0–40 points (easier keyword = more points).
+  const kdScore = ((100 - kd) / 100) * 40;
+  // Intent bonus: commercial / transactional queries convert best for SEO.
+  const intentBonus =
+    intent === 'commercial' || intent === 'transactional' ? 10 :
+    intent === 'informational' ? 6 :
+    intent === 'navigational' ? 2 : 0;
+  return Math.round(volScore + kdScore + intentBonus);
 }
 
 export async function discoverKeywords(projectId: string) {
@@ -24,38 +36,73 @@ export async function discoverKeywords(projectId: string) {
 
   if (pErr || !project) return { success: false, error: 'Project not found' };
 
-  const seeds = [
-    project.niche,
-    `best ${project.niche}`,
-    `${project.niche} tools`,
-    `${project.niche} software`,
-    `${project.niche} guide`,
-    `how to ${project.niche}`,
-    `${project.niche} tips`,
-    `${project.niche} for ${project.target_audience}`,
-  ];
+  // 1. Ensure a Business Brief exists — this scrapes the user's own domain
+  //    once and caches it. On refresh we reuse the cached brief, so the cost
+  //    only hits on the first "Discover" for a project (or a manual refresh).
+  const briefRes = await generateBusinessBrief(projectId, { force: false });
+  const brief = briefRes.brief;
 
-  const competitors = project.project_competitors ?? [];
-  for (const c of competitors.slice(0, 3)) {
-    seeds.push(c.domain.replace(/\.(com|io|net|org|co)$/, '').replace(/-/g, ' '));
-  }
+  // 2. Seeds. Prefer the brief's business-specific phrases; fall back to
+  //    niche-template strings only when the brief is empty / failed.
+  const seeds = buildSeedsFromBrief(brief, {
+    niche: project.niche,
+    audience: project.target_audience,
+    competitors: (project.project_competitors ?? []).map((c: { domain: string }) => c.domain),
+  });
 
-  const rawKeywords = await discoverKeywordsForProject(seeds.slice(0, 10), project.target_region);
+  const { keywords: rawKeywords, trace: discoveryTrace } = await discoverKeywordsForProject(
+    seeds.slice(0, 12),
+    project.target_region,
+    project.target_language
+  );
 
   if (!rawKeywords.length) {
-    return { success: false, error: 'No keywords found. Try adjusting your niche description.' };
+    const firstIdeas = discoveryTrace.find(t => t.label.includes('keyword_ideas'));
+    const parsed = firstIdeas?.parsed as
+      | { status_code?: number; status_message?: string; tasks?: Array<{ status_code?: number; status_message?: string }> }
+      | null
+      | undefined;
+    const apiStatus =
+      parsed?.tasks?.[0]?.status_message ||
+      parsed?.status_message ||
+      (firstIdeas && `HTTP ${firstIdeas.httpStatus}`) ||
+      'no response';
+    return {
+      success: false,
+      error: `No keywords returned by DataForSEO (${apiStatus}). Open DevTools console for the full trace.`,
+      discoveryTrace,
+      briefSummary: briefSummary(brief),
+    };
   }
 
-  const rows = rawKeywords.map(kw => ({
+  // 3. Filter raw DataForSEO ideas against the brief so off-topic suggestions
+  //    (e.g. random company names Google thinks are "creator industry")
+  //    are dropped before we hit the DB.
+  let filtered: DiscoveredKeyword[] = rawKeywords;
+  let relevanceSummary: { kept: number; dropped: number; threshold: number; reason?: string } | null = null;
+  if (brief) {
+    const result = await filterByRelevance(brief, rawKeywords, { threshold: 0.55, minKept: 25 });
+    filtered = result.kept;
+    relevanceSummary = {
+      kept: result.kept.length,
+      dropped: result.dropped.length,
+      threshold: result.threshold,
+      reason: result.reason,
+    };
+  }
+
+  const rows = filtered.map(kw => ({
     project_id: projectId,
     keyword: kw.keyword,
     volume: kw.volume,
     kd: kw.kd,
     cpc: kw.cpc,
     trend: kw.trend,
+    competition_level: kw.competition_level || null,
+    intent: kw.intent || null,
     monthly_searches: kw.monthly_searches,
     secondary_keywords: kw.secondary_keywords,
-    ai_score: aiScore(kw.volume, kw.kd),
+    ai_score: aiScore(kw.volume, kw.kd, kw.intent),
     status: 'pending',
   }));
 
@@ -64,8 +111,67 @@ export async function discoverKeywords(projectId: string) {
     .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
     .select();
 
-  if (error) return { success: false, error: error.message };
-  return { success: true, data, count: data?.length ?? 0 };
+  if (error)
+    return {
+      success: false,
+      error: error.message,
+      discoveryTrace,
+      briefSummary: briefSummary(brief),
+      relevance: relevanceSummary,
+    };
+  return {
+    success: true,
+    data,
+    count: data?.length ?? 0,
+    discoveryTrace,
+    briefSummary: briefSummary(brief),
+    relevance: relevanceSummary,
+  };
+}
+
+function buildSeedsFromBrief(
+  brief: BusinessBrief | undefined,
+  fallback: { niche: string; audience: string; competitors: string[] }
+): string[] {
+  const seeds: string[] = [];
+  if (brief?.seed_phrases?.length) {
+    seeds.push(...brief.seed_phrases);
+  }
+  // Top up with niche/competitor derivatives if the brief came back short.
+  if (seeds.length < 8) {
+    seeds.push(
+      fallback.niche,
+      `best ${fallback.niche}`,
+      `${fallback.niche} tools`,
+      `${fallback.niche} software`,
+      `${fallback.niche} for ${fallback.audience}`,
+      `how to ${fallback.niche}`
+    );
+    for (const c of fallback.competitors.slice(0, 2)) {
+      seeds.push(c.replace(/\.(com|io|net|org|co)$/, '').replace(/-/g, ' '));
+    }
+  }
+  // Dedupe, lowercase, drop empties.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of seeds) {
+    const norm = (s || '').trim().toLowerCase();
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(norm);
+  }
+  return out;
+}
+
+function briefSummary(brief: BusinessBrief | undefined) {
+  if (!brief) return null;
+  return {
+    summary: brief.summary,
+    seed_count: brief.seed_phrases.length,
+    scraped_urls: brief.source_urls,
+    scraped_chars: brief.scraped_chars,
+    generated_at: brief.generated_at,
+  };
 }
 
 export async function getKeywords(projectId: string) {

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, type AnchorHTMLAttributes, type ComponentType, type HTMLAttributes, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getBlogById, generateBlog } from "@/app/actions/blog-actions";
 import { Blog, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
@@ -96,6 +96,15 @@ export default function BlogViewerPage() {
         <span className="text-text-secondary truncate max-w-sm">{blog.title}</span>
       </div>
 
+      {/* Repair banner — only shown when this blog was generated from the audit */}
+      {blog.source_url && blog.article_type === "Repair" && (
+        <RepairBanner
+          sourceUrl={blog.source_url}
+          repairNotes={blog.repair_notes ?? []}
+          projectId={projectId}
+        />
+      )}
+
       {/* Research badge */}
       {researchSources > 0 && (
         <div className="flex items-center gap-2 text-xs">
@@ -149,28 +158,15 @@ export default function BlogViewerPage() {
           </div>
 
           {/* Content */}
-          <div className="p-8">
-            {activeView === "preview" ? (
-              <div className="prose prose-invert prose-sm max-w-none
-                prose-headings:font-black prose-headings:text-text-primary
-                prose-h1:text-3xl prose-h1:leading-tight prose-h1:mb-4
-                prose-h2:text-xl prose-h2:mt-8 prose-h2:mb-3 prose-h2:border-b prose-h2:border-border-subtle prose-h2:pb-2
-                prose-h3:text-base prose-h3:mt-5 prose-h3:mb-2
-                prose-p:text-text-secondary prose-p:leading-relaxed prose-p:my-3
-                prose-strong:text-text-primary
-                prose-a:text-brand-400 prose-a:no-underline hover:prose-a:underline
-                prose-ul:space-y-1 prose-li:text-text-secondary
-                prose-code:text-accent-400 prose-code:bg-surface-elevated prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {blog.content}
-                </ReactMarkdown>
-              </div>
-            ) : (
+          {activeView === "preview" ? (
+            <EditorialPreview blog={blog} />
+          ) : (
+            <div className="p-8">
               <pre className="text-xs text-text-secondary font-mono whitespace-pre-wrap leading-relaxed overflow-x-auto">
                 {blog.content}
               </pre>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Right: Sidebar panels */}
@@ -287,4 +283,391 @@ export default function BlogViewerPage() {
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Repair banner — surfaces what changed from the original URL.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RepairBanner({
+  sourceUrl,
+  repairNotes,
+  projectId,
+}: {
+  sourceUrl: string;
+  repairNotes: string[];
+  projectId: string;
+}) {
+  const [open, setOpen] = useState(repairNotes.length > 0);
+
+  return (
+    <div className="rounded-2xl border border-brand-500/30 bg-gradient-to-r from-brand-500/10 to-accent-500/10 px-5 py-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-500/20 text-brand-400">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+            </svg>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-400">Repair draft</p>
+            <p className="text-sm text-text-primary">
+              AI rewrite of{" "}
+              <a
+                href={sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="break-all text-brand-400 underline decoration-brand-500/40 underline-offset-2 hover:decoration-brand-400"
+                title={`Open the original page — ${sourceUrl}`}
+              >
+                {sourceUrl}
+              </a>
+            </p>
+            <p className="mt-1 text-xs text-text-tertiary">
+              Preview below shows the repaired version as it would appear once published. Replace the content on your
+              CMS, or download it in any format from the sidebar.
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {repairNotes.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setOpen(v => !v)}
+              className="rounded-xl border border-accent-500/30 bg-accent-500/10 px-3 py-2 text-xs font-bold text-accent-400 hover:bg-accent-500/20"
+            >
+              {open ? "Hide changes" : `See ${repairNotes.length} change${repairNotes.length === 1 ? "" : "s"}`}
+            </button>
+          )}
+          <Link
+            href={`/projects/${projectId}/audit`}
+            className="rounded-xl border border-brand-500/30 bg-surface-elevated px-4 py-2 text-xs font-bold text-brand-400 hover:bg-brand-500/10"
+          >
+            Back to audit
+          </Link>
+        </div>
+      </div>
+
+      {open && repairNotes.length > 0 && (
+        <div className="mt-4 rounded-xl border border-accent-500/20 bg-surface-primary/60 p-4">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-accent-400">
+            What the AI changed
+          </p>
+          <ul className="space-y-1.5 text-sm text-text-secondary">
+            {repairNotes.map((note, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <svg
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={3}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                </svg>
+                <span>{note}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Editorial preview — renders the Markdown as it'd appear on a public blog:
+//   · Centered, constrained reading column (max ~720px, like Medium/Substack).
+//   · Serif-leaning body copy with generous line-height and paragraph spacing.
+//   · Hero: category pill, H1, meta row (read time, date).
+//   · Rich link pills: every [text](url) becomes an underlined, tooltip-bearing
+//     anchor that opens in a new tab, with an inline ↗ icon for external links.
+//   · FAQ / Key takeaways / blockquotes all get distinct treatments.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EditorialPreview({ blog }: { blog: Blog }) {
+  const internalSet = useMemo(() => new Set(blog.internal_links ?? []), [blog.internal_links]);
+
+  // Strip the first H1 from the content so we can render it as the hero title
+  // and avoid a duplicate H1 inside the body.
+  const { heroTitle, body } = useMemo(() => {
+    const h1 = blog.content.match(/^\s*#\s+(.+)\s*$/m);
+    if (!h1) return { heroTitle: blog.title, body: blog.content };
+    const stripped = blog.content.replace(h1[0], "").replace(/^\n+/, "");
+    return { heroTitle: h1[1].replace(/\*+/g, "").trim(), body: stripped };
+  }, [blog.content, blog.title]);
+
+  const components = useMemo(
+    () => buildMarkdownComponents(internalSet),
+    [internalSet]
+  );
+
+  const publishedDate = new Date(blog.created_at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  return (
+    <article className="mx-auto max-w-[720px] px-6 py-10 sm:px-10 sm:py-14">
+      {/* Hero */}
+      <header className="mb-10 border-b border-border-subtle pb-8">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {blog.article_type && (
+            <span className="rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-brand-400">
+              {blog.article_type}
+            </span>
+          )}
+          {blog.target_keyword && (
+            <span className="text-[11px] text-text-tertiary">
+              Targets <span className="font-bold text-text-secondary">{blog.target_keyword}</span>
+            </span>
+          )}
+        </div>
+        <h1 className="mb-4 text-[34px] font-black leading-[1.15] tracking-tight text-text-primary sm:text-[40px]">
+          {heroTitle}
+        </h1>
+        {blog.meta_description && (
+          <p className="text-lg leading-relaxed text-text-secondary">{blog.meta_description}</p>
+        )}
+        <div className="mt-5 flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
+          <span>{publishedDate}</span>
+          <span className="text-text-tertiary/40">·</span>
+          <span>{Math.max(1, Math.ceil(blog.word_count / 200))} min read</span>
+          <span className="text-text-tertiary/40">·</span>
+          <span>{blog.word_count.toLocaleString()} words</span>
+        </div>
+      </header>
+
+      {/* Body */}
+      <div className="editorial-body space-y-5 text-[17px] leading-[1.75] text-text-secondary">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          {body}
+        </ReactMarkdown>
+      </div>
+
+      {/* Footer — like a published blog "end of article" mark */}
+      <footer className="mt-14 border-t border-border-subtle pt-6 text-[11px] text-text-tertiary">
+        <p>— End of article —</p>
+      </footer>
+    </article>
+  );
+}
+
+// Build ReactMarkdown component overrides. Factoring out so we can memoize
+// against the internal-link set.
+function buildMarkdownComponents(internalSet: Set<string>): Components {
+  const MarkdownLink: ComponentType<AnchorHTMLAttributes<HTMLAnchorElement>> = ({
+    href = "",
+    children,
+    ...rest
+  }) => {
+    const isExternal = /^https?:\/\//i.test(href);
+    const isKnownInternal = internalSet.has(href) || href.startsWith("/");
+    const isInternal = isKnownInternal && !isExternal ? true : internalSet.has(href);
+    const label = typeof children === "string" ? children : flattenChildren(children);
+
+    return (
+      <a
+        href={href}
+        target={isExternal ? "_blank" : undefined}
+        rel={isExternal ? "noopener noreferrer" : undefined}
+        title={`${isInternal ? "Internal link · " : isExternal ? "External link · " : ""}${href}`}
+        data-external={isExternal ? "true" : undefined}
+        className={
+          isInternal
+            ? "font-semibold text-brand-400 underline decoration-brand-500/40 decoration-2 underline-offset-[3px] transition-colors hover:bg-brand-500/10 hover:decoration-brand-400 rounded-sm px-0.5"
+            : "font-semibold text-accent-400 underline decoration-accent-500/40 decoration-2 underline-offset-[3px] transition-colors hover:bg-accent-500/10 hover:decoration-accent-400 rounded-sm px-0.5 inline-flex items-baseline gap-0.5"
+        }
+        {...rest}
+      >
+        {label}
+        {isExternal && (
+          <svg
+            className="relative top-px inline h-3 w-3 opacity-70"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+            aria-hidden
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+            />
+          </svg>
+        )}
+      </a>
+    );
+  };
+
+  const Heading1: ComponentType<HTMLAttributes<HTMLHeadingElement>> = ({ children, ...rest }) => (
+    <h1
+      className="mt-10 mb-5 text-3xl font-black leading-tight tracking-tight text-text-primary"
+      {...rest}
+    >
+      {children}
+    </h1>
+  );
+
+  const Heading2: ComponentType<HTMLAttributes<HTMLHeadingElement>> = ({ children, ...rest }) => (
+    <h2
+      className="mt-12 mb-4 text-2xl font-black leading-snug tracking-tight text-text-primary"
+      {...rest}
+    >
+      {children}
+    </h2>
+  );
+
+  const Heading3: ComponentType<HTMLAttributes<HTMLHeadingElement>> = ({ children, ...rest }) => (
+    <h3 className="mt-8 mb-3 text-lg font-bold text-text-primary" {...rest}>
+      {children}
+    </h3>
+  );
+
+  const Paragraph: ComponentType<HTMLAttributes<HTMLParagraphElement>> = ({ children, ...rest }) => (
+    <p className="text-[17px] leading-[1.75] text-text-secondary" {...rest}>
+      {children}
+    </p>
+  );
+
+  const Strong: ComponentType<HTMLAttributes<HTMLElement>> = ({ children, ...rest }) => (
+    <strong className="font-bold text-text-primary" {...rest}>
+      {children}
+    </strong>
+  );
+
+  const Emphasis: ComponentType<HTMLAttributes<HTMLElement>> = ({ children, ...rest }) => (
+    <em className="italic text-text-primary/90" {...rest}>
+      {children}
+    </em>
+  );
+
+  const UnorderedList: ComponentType<HTMLAttributes<HTMLUListElement>> = ({ children, ...rest }) => (
+    <ul className="my-5 space-y-2 pl-6 [&>li]:relative [&>li]:pl-2 [&>li]:marker:text-brand-400" {...rest}>
+      {children}
+    </ul>
+  );
+
+  const OrderedList: ComponentType<HTMLAttributes<HTMLOListElement>> = ({ children, ...rest }) => (
+    <ol className="my-5 list-decimal space-y-2 pl-6 [&>li]:marker:font-bold [&>li]:marker:text-brand-400" {...rest}>
+      {children}
+    </ol>
+  );
+
+  const ListItem: ComponentType<HTMLAttributes<HTMLLIElement>> = ({ children, ...rest }) => (
+    <li className="text-[17px] leading-[1.7] text-text-secondary [&>p]:my-0!" {...rest}>
+      {children}
+    </li>
+  );
+
+  const Blockquote: ComponentType<HTMLAttributes<HTMLQuoteElement>> = ({ children, ...rest }) => (
+    <blockquote
+      className="my-6 rounded-r-lg border-l-4 border-brand-500 bg-brand-500/5 px-5 py-4 text-[17px] italic leading-[1.7] text-text-primary [&>p]:my-0!"
+      {...rest}
+    >
+      {children}
+    </blockquote>
+  );
+
+  // react-markdown passes `className="language-xxx"` on fenced code blocks.
+  // Inline code has no className — we style it as a pill; fenced code lives
+  // inside our <pre> renderer and should stay unstyled.
+  const InlineCode: ComponentType<HTMLAttributes<HTMLElement> & { className?: string }> = ({
+    children,
+    className,
+    ...rest
+  }) => {
+    const isFenced = typeof className === "string" && /language-/i.test(className);
+    if (isFenced) {
+      return (
+        <code className={`${className} font-mono text-[13px] text-text-secondary`} {...rest}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code
+        className="rounded-md border border-border-subtle bg-surface-elevated px-1.5 py-0.5 text-[0.85em] font-mono text-accent-400"
+        {...rest}
+      >
+        {children}
+      </code>
+    );
+  };
+
+  const Preformatted: ComponentType<HTMLAttributes<HTMLPreElement>> = ({ children, ...rest }) => (
+    <pre
+      className="my-6 overflow-x-auto rounded-xl border border-border-subtle bg-surface-primary p-4 text-[13px] leading-relaxed text-text-secondary"
+      {...rest}
+    >
+      {children}
+    </pre>
+  );
+
+  const HorizontalRule: ComponentType<HTMLAttributes<HTMLHRElement>> = props => (
+    <hr className="my-10 border-t border-border-subtle" {...props} />
+  );
+
+  const Table: ComponentType<HTMLAttributes<HTMLTableElement>> = ({ children, ...rest }) => (
+    <div className="my-6 overflow-x-auto rounded-xl border border-border-subtle">
+      <table className="w-full border-collapse text-sm" {...rest}>
+        {children}
+      </table>
+    </div>
+  );
+
+  const TableHead: ComponentType<HTMLAttributes<HTMLTableSectionElement>> = ({ children, ...rest }) => (
+    <thead className="bg-surface-elevated text-left text-[11px] font-bold uppercase tracking-wider text-text-tertiary" {...rest}>
+      {children}
+    </thead>
+  );
+
+  const TableRow: ComponentType<HTMLAttributes<HTMLTableRowElement>> = ({ children, ...rest }) => (
+    <tr className="border-t border-border-subtle" {...rest}>
+      {children}
+    </tr>
+  );
+
+  const TableCell: ComponentType<HTMLAttributes<HTMLTableCellElement>> = ({ children, ...rest }) => (
+    <td className="px-4 py-2.5 align-top text-text-secondary" {...rest}>
+      {children}
+    </td>
+  );
+
+  const TableHeaderCell: ComponentType<HTMLAttributes<HTMLTableCellElement>> = ({ children, ...rest }) => (
+    <th className="px-4 py-2.5 align-top" {...rest}>
+      {children}
+    </th>
+  );
+
+  // React-markdown's Components map expects these keys; cast unifies ref types.
+  return {
+    a: MarkdownLink,
+    h1: Heading1,
+    h2: Heading2,
+    h3: Heading3,
+    p: Paragraph,
+    strong: Strong,
+    em: Emphasis,
+    ul: UnorderedList,
+    ol: OrderedList,
+    li: ListItem,
+    blockquote: Blockquote,
+    code: InlineCode,
+    pre: Preformatted,
+    hr: HorizontalRule,
+    table: Table,
+    thead: TableHead,
+    tr: TableRow,
+    td: TableCell,
+    th: TableHeaderCell,
+  } as unknown as Components;
+}
+
+function flattenChildren(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(flattenChildren).join("");
+  return "";
 }

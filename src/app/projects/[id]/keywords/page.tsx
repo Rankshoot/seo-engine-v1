@@ -15,6 +15,12 @@ import {
   approveKeywordCluster,
 } from "@/app/actions/keyword-actions";
 import {
+  getBusinessBrief,
+  generateBusinessBrief,
+} from "@/app/actions/brief-actions";
+import type { BusinessBrief } from "@/lib/business-brief";
+import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
+import {
   findCompetitorGaps,
   importGapKeywords,
   analyzeKeywordGapsAction,
@@ -64,6 +70,11 @@ export default function KeywordsPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
 
+  const [brief, setBrief] = useState<BusinessBrief | null>(null);
+  const [briefUpdatedAt, setBriefUpdatedAt] = useState<string | null>(null);
+  const [refreshingBrief, setRefreshingBrief] = useState(false);
+  const [briefOpen, setBriefOpen] = useState(false);
+
   const step1Done = keywords.length > 0;
 
   const load = useCallback(async () => {
@@ -73,17 +84,95 @@ export default function KeywordsPage() {
     setLoading(false);
   }, [projectId]);
 
+  const loadBrief = useCallback(async () => {
+    const res = await getBusinessBrief(projectId);
+    if (res.success) {
+      setBrief(res.brief);
+      setBriefUpdatedAt(res.updated_at ?? null);
+    }
+  }, [projectId]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadBrief();
+  }, [load, loadBrief]);
 
   const handleDiscover = async () => {
     setDiscovering(true);
     setError("");
     const res = await discoverKeywords(projectId);
-    if (res.success) await load();
-    else setError(res.error ?? "Discovery failed");
+    const typed = res as {
+      discoveryTrace?: DataForSEOTraceEntry[];
+      briefSummary?: {
+        summary: string;
+        seed_count: number;
+        scraped_urls: string[];
+        scraped_chars: number;
+        generated_at: string;
+      } | null;
+      relevance?: { kept: number; dropped: number; threshold: number; reason?: string } | null;
+    };
+    if (typed.briefSummary) {
+      console.groupCollapsed(`[Keywords] Business brief — seeds used to drive this run`);
+      console.log("summary", typed.briefSummary.summary);
+      console.log("seed_count", typed.briefSummary.seed_count);
+      console.log("scraped_urls", typed.briefSummary.scraped_urls);
+      console.log("scraped_chars", typed.briefSummary.scraped_chars);
+      console.log("brief_generated_at", typed.briefSummary.generated_at);
+      console.groupEnd();
+    }
+    if (typed.relevance) {
+      console.groupCollapsed(
+        `[Keywords] Relevance filter — kept ${typed.relevance.kept}, dropped ${typed.relevance.dropped}`
+      );
+      console.log("threshold", typed.relevance.threshold);
+      if (typed.relevance.reason) console.log("reason", typed.relevance.reason);
+      console.groupEnd();
+    }
+    if (typed.discoveryTrace?.length) {
+      console.groupCollapsed(
+        `[Keywords] DataForSEO — this Discover / Re-discover run (${typed.discoveryTrace.length} calls)`
+      );
+      for (const t of typed.discoveryTrace) {
+        console.groupCollapsed(`${t.label}  HTTP ${t.httpStatus}${t.ok ? "" : " ✗"}`);
+        console.log("url", t.url);
+        console.log("request body", t.requestBody);
+        if (typeof t.cost === "number") console.log("cost (credits)", t.cost);
+        if (t.fetchError) console.warn("fetchError", t.fetchError);
+        if (t.parseError) console.warn("parseError", t.parseError);
+        console.log("rawText", t.rawText);
+        console.log("parsed JSON", t.parsed);
+        console.groupEnd();
+      }
+      console.groupEnd();
+    }
+    if (res.success) {
+      await load();
+      await loadBrief();
+    } else setError(res.error ?? "Discovery failed");
     setDiscovering(false);
+  };
+
+  const handleRefreshBrief = async () => {
+    setRefreshingBrief(true);
+    setError("");
+    const res = await generateBusinessBrief(projectId, { force: true });
+    if (res.trace?.length) {
+      console.groupCollapsed(
+        `[Brief] Refresh — scraped ${res.trace.filter(t => t.label === "jina_read" && t.ok).length} pages`
+      );
+      for (const t of res.trace) {
+        console.log(t.label, { url: t.url, ok: t.ok, length: t.length, error: t.error });
+      }
+      console.groupEnd();
+    }
+    if (res.success && res.brief) {
+      setBrief(res.brief);
+      setBriefUpdatedAt(new Date().toISOString());
+    } else {
+      setError(res.error ?? "Failed to refresh business brief");
+    }
+    setRefreshingBrief(false);
   };
 
   const handleStatusUpdate = async (kwId: string, status: KeywordStatus) => {
@@ -251,6 +340,15 @@ export default function KeywordsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href={`/projects/${projectId}/audit`}
+            className="px-4 py-2.5 rounded-xl border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 text-xs font-bold hover:bg-yellow-500/15 transition-all inline-flex items-center gap-2"
+          >
+            Content health
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+            </svg>
+          </Link>
           {counts.approved >= 5 && (
             <Link
               href={`/projects/${projectId}/calendar`}
@@ -309,6 +407,134 @@ export default function KeywordsPage() {
             <p className="text-xs text-text-tertiary">Scan competitor sites, compare, pick a writing cluster.</p>
           </div>
         </div>
+      </div>
+
+      <div className="glass-card border border-brand-500/15 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-500/15 text-brand-400">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2Z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-text-primary">Business brief</p>
+              {brief ? (
+                <p className="text-xs text-text-tertiary">
+                  {brief.seed_phrases.length} seeds · scraped {brief.source_urls.length} pages
+                  {briefUpdatedAt ? ` · updated ${new Date(briefUpdatedAt).toLocaleString()}` : ""}
+                </p>
+              ) : (
+                <p className="text-xs text-text-tertiary">
+                  No brief yet — we'll auto-build one on your first Discover click.
+                </p>
+              )}
+              {brief?.summary ? (
+                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-text-secondary line-clamp-2">
+                  {brief.summary}
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {brief ? (
+              <button
+                type="button"
+                onClick={() => setBriefOpen(o => !o)}
+                className="rounded-lg border border-border-subtle bg-surface-elevated px-3 py-1.5 text-xs font-bold text-text-secondary hover:border-brand-500/30"
+              >
+                {briefOpen ? "Hide details" : "View details"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleRefreshBrief}
+              disabled={refreshingBrief}
+              className="flex items-center gap-1.5 rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 py-1.5 text-xs font-bold text-brand-400 hover:bg-brand-500/20 disabled:opacity-60"
+            >
+              {refreshingBrief ? (
+                <>
+                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-brand-400/30 border-t-brand-400" />
+                  Scraping…
+                </>
+              ) : (
+                <>
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                  </svg>
+                  {brief ? "Refresh brief" : "Generate brief"}
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {briefOpen && brief ? (
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            {brief.products.length ? (
+              <div>
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Products</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {brief.products.map(p => (
+                    <span key={p} className="rounded-full bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">{p}</span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {brief.entities.length ? (
+              <div>
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Entities</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {brief.entities.slice(0, 18).map(e => (
+                    <span key={e} className="rounded-full bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">{e}</span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {brief.audiences.length ? (
+              <div>
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Audiences</p>
+                <ul className="space-y-0.5 text-xs text-text-secondary">
+                  {brief.audiences.map(a => <li key={a}>· {a}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            {brief.usps.length ? (
+              <div>
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">USPs</p>
+                <ul className="space-y-0.5 text-xs text-text-secondary">
+                  {brief.usps.map(u => <li key={u}>· {u}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            {brief.seed_phrases.length ? (
+              <div className="md:col-span-2">
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                  Seed phrases ({brief.seed_phrases.length})
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {brief.seed_phrases.map(s => (
+                    <span key={s} className="rounded-full border border-brand-500/20 bg-brand-500/10 px-2 py-0.5 text-xs text-brand-400">
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {brief.source_urls.length ? (
+              <div className="md:col-span-2">
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Scraped pages</p>
+                <ul className="space-y-0.5 text-xs">
+                  {brief.source_urls.map(u => (
+                    <li key={u} className="truncate">
+                      <a href={u} target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">{u}</a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border-subtle bg-surface-secondary/50 p-1 w-fit">
@@ -464,6 +690,8 @@ export default function KeywordsPage() {
                       <th className="px-4 py-3 text-center">Difficulty</th>
                       <th className="px-4 py-3 text-right">CPC</th>
                       <th className="px-4 py-3 text-center">Trend</th>
+                      <th className="px-4 py-3 text-center">Intent</th>
+                      <th className="px-4 py-3 text-center">Competition</th>
                       <th className="px-4 py-3 text-center">AI score</th>
                       <th className="px-4 py-3 text-center">Status</th>
                       <th className="px-4 py-3 text-center">Action</th>
@@ -525,6 +753,40 @@ export default function KeywordsPage() {
                           >
                             {kw.trend || "—"}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {kw.intent ? (
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize ${
+                                kw.intent === "commercial" || kw.intent === "transactional"
+                                  ? "border-accent-500/20 bg-accent-500/10 text-accent-400"
+                                  : kw.intent === "informational"
+                                    ? "border-cyan-500/20 bg-cyan-500/10 text-cyan-400"
+                                    : "border-border-subtle bg-surface-elevated text-text-tertiary"
+                              }`}
+                            >
+                              {kw.intent}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-text-tertiary">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {kw.competition_level ? (
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                kw.competition_level === "LOW"
+                                  ? "border-accent-500/20 bg-accent-500/10 text-accent-400"
+                                  : kw.competition_level === "MEDIUM"
+                                    ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-400"
+                                    : "border-rose-500/20 bg-rose-500/10 text-rose-400"
+                              }`}
+                            >
+                              {kw.competition_level}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-text-tertiary">—</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-2.5 py-1 text-xs font-black text-brand-400">

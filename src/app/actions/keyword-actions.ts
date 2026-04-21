@@ -53,7 +53,12 @@ export async function discoverKeywords(projectId: string) {
   const { keywords: rawKeywords, trace: discoveryTrace } = await discoverKeywordsForProject(
     seeds.slice(0, 12),
     project.target_region,
-    project.target_language
+    project.target_language,
+    project.domain || undefined,
+    // Passing the user-entered niche as `businessDomain` is what anchors the
+    // relevance + business-fit scorers. Without this the pipeline falls back
+    // to inferring the niche from seed tokens, which is far weaker.
+    project.niche || undefined
   );
 
   if (!rawKeywords.length) {
@@ -102,7 +107,18 @@ export async function discoverKeywords(projectId: string) {
     intent: kw.intent || null,
     monthly_searches: kw.monthly_searches,
     secondary_keywords: kw.secondary_keywords,
+    // Legacy simple scalar — kept for backwards compatibility with the
+    // existing calendar/cluster logic that sorts on `ai_score`.
     ai_score: aiScore(kw.volume, kw.kd, kw.intent),
+    // New composite score produced by `calculateKeywordAnalysisScore`. Falls
+    // back to `ai_score` so rows stay sortable even if the pipeline ever
+    // returns it as 0 (e.g. SERP-only failure path).
+    keyword_analysis_score:
+      kw.keyword_analysis_score || aiScore(kw.volume, kw.kd, kw.intent),
+    // Persist the two upstream scores so the keywords page can render
+    // "Rel/Fit" micro-badges without recomputing.
+    relevance_score: kw.relevance_score ?? null,
+    business_fit_score: kw.business_fit_score ?? null,
     status: 'pending',
   }));
 
@@ -182,6 +198,9 @@ export async function getKeywords(projectId: string) {
     .from('keywords')
     .select('*')
     .eq('project_id', projectId)
+    // Sort by the new composite analysis score; rows that were written before
+    // the new column existed will have 0 and simply fall to the bottom.
+    .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
     .order('volume', { ascending: false });
 
   if (error) return { success: false, error: error.message, data: [] as Keyword[] };

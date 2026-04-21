@@ -55,7 +55,9 @@ export default function KeywordsPage() {
   const [discovering, setDiscovering] = useState(false);
   const [filter, setFilter] = useState<FilterTab>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sortBy, setSortBy] = useState<"volume" | "kd" | "ai_score">("volume");
+  const [sortBy, setSortBy] = useState<"volume" | "kd" | "ai_score" | "analysis_score">(
+    "analysis_score"
+  );
   const [error, setError] = useState("");
 
   const [gaps, setGaps] = useState<CompetitorGapKeyword[]>([]);
@@ -204,13 +206,18 @@ export default function KeywordsPage() {
       return s;
     });
 
-  const filtered = useMemo(
-    () =>
-      keywords
-        .filter(k => filter === "all" || k.status === filter)
-        .sort((a, b) => b[sortBy] - a[sortBy]),
-    [keywords, filter, sortBy]
-  );
+  const filtered = useMemo(() => {
+    const scoreOf = (k: Keyword, key: typeof sortBy): number => {
+      if (key === "analysis_score") return k.keyword_analysis_score ?? 0;
+      return (k[key] ?? 0) as number;
+    };
+    const list = keywords
+      .filter(k => filter === "all" || k.status === filter)
+      .sort((a, b) => scoreOf(b, sortBy) - scoreOf(a, sortBy));
+    // Product rule: only show the top 20 keywords in the table (the pipeline
+    // already caps discovery to 20, but older rows may still live in the DB).
+    return list.slice(0, 20);
+  }, [keywords, filter, sortBy]);
 
   const toggleSelectAll = () => {
     const visible = filtered.map(k => k.id);
@@ -620,7 +627,7 @@ export default function KeywordsPage() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-text-tertiary">Sort:</span>
-                {(["volume", "kd", "ai_score"] as const).map(s => (
+                {(["analysis_score", "volume", "kd", "ai_score"] as const).map(s => (
                   <button
                     key={s}
                     type="button"
@@ -629,7 +636,13 @@ export default function KeywordsPage() {
                       sortBy === s ? "bg-surface-elevated text-text-primary" : "text-text-tertiary hover:text-text-secondary"
                     }`}
                   >
-                    {s === "ai_score" ? "AI score" : s === "kd" ? "Difficulty" : "Volume"}
+                    {s === "analysis_score"
+                      ? "Analysis score"
+                      : s === "ai_score"
+                        ? "AI score"
+                        : s === "kd"
+                          ? "Difficulty"
+                          : "Volume"}
                   </button>
                 ))}
               </div>
@@ -693,6 +706,7 @@ export default function KeywordsPage() {
                       <th className="px-4 py-3 text-center">Intent</th>
                       <th className="px-4 py-3 text-center">Competition</th>
                       <th className="px-4 py-3 text-center">AI score</th>
+                      <th className="px-4 py-3 text-center">Keyword Analysis Score</th>
                       <th className="px-4 py-3 text-center">Status</th>
                       <th className="px-4 py-3 text-center">Action</th>
                     </tr>
@@ -715,6 +729,16 @@ export default function KeywordsPage() {
                           <p className="text-sm font-semibold text-text-primary">{kw.keyword}</p>
                           {kw.gap_competitor ? (
                             <p className="text-[10px] text-cyan-400/90">Gap · {kw.gap_competitor}</p>
+                          ) : null}
+                          {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
+                          (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
+                            <p
+                              className="mt-0.5 text-[10px] text-text-tertiary"
+                              title="Relevance = syntactic match to niche/phrase anchors. Fit = tiered business-fit (100 = niche × buying-intent match)."
+                            >
+                              Rel {typeof kw.relevance_score === "number" ? kw.relevance_score : "—"} ·
+                              Fit {typeof kw.business_fit_score === "number" ? kw.business_fit_score : "—"}
+                            </p>
                           ) : null}
                           {kw.secondary_keywords?.length ? (
                             <p className="max-w-xs truncate text-[10px] text-text-tertiary">
@@ -792,6 +816,15 @@ export default function KeywordsPage() {
                           <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-2.5 py-1 text-xs font-black text-brand-400">
                             {kw.ai_score}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+                            <span className="rounded-full border border-accent-500/20 bg-accent-500/10 px-2.5 py-1 text-xs font-black text-accent-400">
+                              {Math.round(kw.keyword_analysis_score)}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-text-tertiary">—</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span

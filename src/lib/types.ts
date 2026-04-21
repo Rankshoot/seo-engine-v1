@@ -37,6 +37,15 @@ export interface Keyword {
   monthly_searches: { month: string; volume: number }[];
   secondary_keywords: string[];
   ai_score: number;
+  /**
+   * Composite DataForSEO opportunity score (0–100) produced by the new
+   * keyword-analysis pipeline. Higher = better SEO opportunity.
+   */
+  keyword_analysis_score?: number;
+  /** How syntactically tied the keyword is to the project context (0–100). */
+  relevance_score?: number | null;
+  /** Tiered business-fit score (0–100) — 100 = niche × buying-intent match. */
+  business_fit_score?: number | null;
   status: KeywordStatus;
   created_at: string;
   /** Competitor article URL when keyword came from gap import */

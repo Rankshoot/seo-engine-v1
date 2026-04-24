@@ -224,7 +224,9 @@ export async function discoverCompetitorGapKeywords(
         competitorDomain: cleanDomain,
         sourceTitle: title,
         sourceUrl,
-        estimatedVolume: Math.floor(Math.random() * 3000 + 300),
+        // AGENTS.md rule: never fake metrics. Callers hydrate real volumes
+        // from DataForSEO `keyword_overview/live` before showing to the user.
+        estimatedVolume: 0,
       });
     }
 
@@ -237,7 +239,7 @@ export async function discoverCompetitorGapKeywords(
         competitorDomain: cleanDomain,
         sourceTitle: `Related search (${cleanDomain})`,
         sourceUrl: `https://www.google.com/search?q=${encodeURIComponent(q)}`,
-        estimatedVolume: Math.floor(Math.random() * 2000 + 200),
+        estimatedVolume: 0,
       });
     }
 

@@ -9,67 +9,6 @@
  * Set `JINA_API_KEY` in env for better rate limits (optional).
  */
 
-const JINA_BASE = 'https://r.jina.ai/';
-
-export interface JinaPage {
-  url: string;
-  /** Final URL after redirects, if Jina exposed it. */
-  resolvedUrl?: string;
-  markdown: string;
-  /** Characters in markdown; useful to cap LLM input. */
-  length: number;
-  ok: boolean;
-  error?: string;
-}
-
-/** Fetch one URL as Markdown. Fails soft — caller gets `ok: false` + error. */
-export async function jinaReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<JinaPage> {
-  const timeoutMs = opts.timeoutMs ?? 25_000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(`${JINA_BASE}${url}`, {
-      method: 'GET',
-      headers: {
-        // Ask for plain markdown body rather than the HTML chrome wrapper.
-        Accept: 'text/plain',
-        ...(process.env.JINA_API_KEY
-          ? { Authorization: `Bearer ${process.env.JINA_API_KEY}` }
-          : {}),
-      },
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      return {
-        url,
-        markdown: '',
-        length: 0,
-        ok: false,
-        error: `Jina ${res.status}: ${text.slice(0, 200)}`,
-      };
-    }
-    return { url, markdown: text, length: text.length, ok: true };
-  } catch (e) {
-    return {
-      url,
-      markdown: '',
-      length: 0,
-      ok: false,
-      error: e instanceof Error ? e.message : String(e),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Fetch several URLs in parallel, dropping failures silently. */
-export async function jinaReadBatch(urls: string[], opts: { timeoutMs?: number } = {}): Promise<JinaPage[]> {
-  const unique = [...new Set(urls)].slice(0, 12);
-  return Promise.all(unique.map(u => jinaReadUrl(u, opts)));
-}
-
 /**
  * Best-effort sitemap discovery. Handles two real-world shapes:
  *   1. Flat urlset  —  sitemap.xml lists every page directly.

@@ -25,6 +25,7 @@ import {
   importGapKeywords,
   analyzeKeywordGapsAction,
 } from "@/app/actions/research-actions";
+import { generateBlogFromOpportunity } from "@/app/actions/competitor-actions";
 import type { CompetitorGapKeyword } from "@/lib/research";
 
 const STATUS_COLORS: Record<KeywordStatus, string> = {
@@ -63,6 +64,7 @@ export default function KeywordsPage() {
   const [gaps, setGaps] = useState<CompetitorGapKeyword[]>([]);
   const [gapLoading, setGapLoading] = useState(false);
   const [gapError, setGapError] = useState("");
+  const [autoDiscoveredCompetitors, setAutoDiscoveredCompetitors] = useState<string[]>([]);
   const [selectedGapKeys, setSelectedGapKeys] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
 
@@ -71,6 +73,7 @@ export default function KeywordsPage() {
   const [clusterPick, setClusterPick] = useState<Set<string>>(new Set());
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
+  const [generatingGapKeyword, setGeneratingGapKeyword] = useState<string | null>(null);
 
   const [brief, setBrief] = useState<BusinessBrief | null>(null);
   const [briefUpdatedAt, setBriefUpdatedAt] = useState<string | null>(null);
@@ -234,9 +237,16 @@ export default function KeywordsPage() {
     setAnalysisMd("");
     setClusterKeywords([]);
     setClusterPick(new Set());
+    setAutoDiscoveredCompetitors([]);
     const res = await findCompetitorGaps(projectId);
-    if (res.success) setGaps(res.data);
-    else setGapError(res.error ?? "Failed to find competitor gaps");
+    if (res.success) {
+      setGaps(res.data);
+      if (res.autoDiscoveredCompetitors?.length) {
+        setAutoDiscoveredCompetitors(res.autoDiscoveredCompetitors);
+      }
+    } else {
+      setGapError(res.error ?? "Failed to find competitor gaps");
+    }
     setGapLoading(false);
   };
 
@@ -251,6 +261,17 @@ export default function KeywordsPage() {
     const keys = gaps.map(gapRowKey);
     const allOn = keys.length > 0 && keys.every(k => selectedGapKeys.has(k));
     setSelectedGapKeys(allOn ? new Set() : new Set(keys));
+  };
+
+  const handleGenerateBlogFromGap = async (keyword: string) => {
+    setGeneratingGapKeyword(keyword);
+    const res = await generateBlogFromOpportunity(projectId, keyword);
+    setGeneratingGapKeyword(null);
+    if (res.success) {
+      router.push(`/projects/${projectId}/calendar`);
+    } else {
+      setGapError(res.error ?? "Could not create calendar entry.");
+    }
   };
 
   const handleImportGaps = async () => {
@@ -922,23 +943,67 @@ export default function KeywordsPage() {
           ) : (
             <>
               <div className="glass-card border-cyan-500/10 bg-gradient-to-br from-cyan-500/5 to-transparent p-6">
-                <h3 className="mb-1 font-bold text-text-primary">Competitor keyword gap scan</h3>
-                <p className="text-sm leading-relaxed text-text-tertiary">
-                  We read competitor SERPs for your niche, skip topics you already saved as keywords, and return live
-                  article URLs when Google exposes them. Use analysis to merge industry + competitor signals, then
-                  approve a cluster and jump to the calendar.
-                </p>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="mb-1 font-bold text-text-primary">Competitor keyword gap scan</h3>
+                    <p className="text-sm leading-relaxed text-text-tertiary max-w-2xl">
+                      We read competitor SERPs for your niche, hydrate volumes from DataForSEO, and skip topics you
+                      already saved. If you haven&apos;t added competitors yet, we auto-discover the top domains
+                      ranking for your niche and save them to the project. For the full pipeline — page-level
+                      benchmarks, opportunity scores, and one-click publishing — open the Competitor Insights
+                      dashboard.
+                    </p>
+                  </div>
+                  <Link
+                    href={`/projects/${projectId}/competitors`}
+                    className="inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-bold text-cyan-400 hover:bg-cyan-500/20 transition-all"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <circle cx="12" cy="12" r="10" />
+                      <circle cx="12" cy="12" r="6" />
+                      <circle cx="12" cy="12" r="2" />
+                    </svg>
+                    Competitor Insights
+                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                    </svg>
+                  </Link>
+                </div>
               </div>
 
               {gapError && (
                 <div className="flex gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-400">
                   <div>
                     {gapError}
-                    {gapError.includes("No competitors") ? (
-                      <Link href={`/projects/${projectId}`} className="mt-1 block text-xs text-brand-400 hover:underline">
-                        Add competitors on the project overview
-                      </Link>
-                    ) : null}
+                    <Link href={`/projects/${projectId}`} className="mt-1 block text-xs text-brand-400 hover:underline">
+                      Add competitors on the project overview
+                    </Link>
+                  </div>
+                </div>
+              )}
+
+              {autoDiscoveredCompetitors.length > 0 && (
+                <div className="flex gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 text-sm text-cyan-200">
+                  <svg className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" />
+                  </svg>
+                  <div className="space-y-1">
+                    <div className="font-bold text-cyan-100">
+                      No competitors on file — auto-discovered from search
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {autoDiscoveredCompetitors.map(domain => (
+                        <span
+                          key={domain}
+                          className="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-100"
+                        >
+                          {domain}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="text-xs text-cyan-300/80">
+                      Saved to this project so future runs reuse them. You can edit the list any time on the project overview.
+                    </div>
                   </div>
                 </div>
               )}
@@ -1016,7 +1081,8 @@ export default function KeywordsPage() {
                             <th className="px-4 py-3">Topic</th>
                             <th className="px-4 py-3">Competitor</th>
                             <th className="px-4 py-3">Source page</th>
-                            <th className="px-4 py-3 text-right">Est. volume</th>
+                            <th className="px-4 py-3 text-right">Volume</th>
+                            <th className="px-4 py-3 text-center">Action</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border-subtle">
@@ -1058,7 +1124,17 @@ export default function KeywordsPage() {
                                   )}
                                 </td>
                                 <td className="px-4 py-3 text-right text-sm font-bold text-text-primary">
-                                  {gap.estimatedVolume.toLocaleString()}
+                                  {gap.estimatedVolume > 0 ? gap.estimatedVolume.toLocaleString() : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleGenerateBlogFromGap(gap.keyword)}
+                                    disabled={generatingGapKeyword === gap.keyword}
+                                    className="rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                                  >
+                                    {generatingGapKeyword === gap.keyword ? "Queuing…" : "Generate blog"}
+                                  </button>
                                 </td>
                               </tr>
                             );

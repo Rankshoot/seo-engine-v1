@@ -21,7 +21,7 @@
  *      + LLM quality score. Persist everything in `blog_audits`.
  */
 
-import { jinaReadUrl, type JinaPage } from './jina';
+import { hybridReadUrl, type ScrapedPageMarkdown as JinaPage } from '../services/hybridScraper';
 import type { BusinessBrief } from './business-brief';
 import { fetchKeywordVitals, type KeywordVitals } from './dataforseo';
 
@@ -147,7 +147,7 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
   }
 
   // 2. Scrape.
-  const page = await jinaReadUrl(url, { timeoutMs: 25_000 });
+  const page = await hybridReadUrl(url, { timeoutMs: 25_000 });
   if (!page.ok || page.markdown.length < 400) {
     return {
       url,

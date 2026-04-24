@@ -115,6 +115,63 @@ CREATE TABLE IF NOT EXISTS blogs (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ============================================================
+-- Competitor Benchmarking Engine (phase 5)
+-- See supabase-migration-competitor-benchmark.sql for details.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS competitors (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  domain TEXT NOT NULL,
+  title TEXT DEFAULT '',
+  rank_score INTEGER DEFAULT 0,
+  pages_scraped INTEGER DEFAULT 0,
+  avg_word_count INTEGER DEFAULT 0,
+  avg_h2 NUMERIC(6,2) DEFAULT 0,
+  avg_h3 NUMERIC(6,2) DEFAULT 0,
+  avg_images NUMERIC(6,2) DEFAULT 0,
+  avg_internal_links NUMERIC(6,2) DEFAULT 0,
+  avg_external_links NUMERIC(6,2) DEFAULT 0,
+  faq_pages_pct INTEGER DEFAULT 0,
+  top_pages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recommendations TEXT[] DEFAULT '{}',
+  last_benchmarked_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(project_id, domain)
+);
+
+CREATE TABLE IF NOT EXISTS competitor_keywords (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  competitor_id UUID NOT NULL REFERENCES competitors(id) ON DELETE CASCADE,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  keyword TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'primary',
+  freq INTEGER DEFAULT 1,
+  source_url TEXT DEFAULT '',
+  source_title TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS keyword_gaps (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  keyword TEXT NOT NULL,
+  gap_type TEXT NOT NULL DEFAULT 'missing',
+  opportunity_score INTEGER DEFAULT 0,
+  volume INTEGER DEFAULT 0,
+  kd INTEGER DEFAULT 0,
+  trend TEXT DEFAULT '+0%',
+  trend_pct NUMERIC(6,2) DEFAULT 0,
+  competitor_weakness INTEGER DEFAULT 0,
+  top_competitor_domain TEXT DEFAULT '',
+  top_competitor_url TEXT DEFAULT '',
+  reasoning TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(project_id, keyword)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_project_briefs_project_id ON project_briefs(project_id);
@@ -126,3 +183,8 @@ CREATE INDEX IF NOT EXISTS idx_calendar_project_id ON calendar_entries(project_i
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_entries(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_blogs_entry_id ON blogs(entry_id);
 CREATE INDEX IF NOT EXISTS idx_blogs_project_id ON blogs(project_id);
+CREATE INDEX IF NOT EXISTS idx_competitors_project_id ON competitors(project_id);
+CREATE INDEX IF NOT EXISTS idx_competitor_keywords_project_id ON competitor_keywords(project_id);
+CREATE INDEX IF NOT EXISTS idx_competitor_keywords_competitor_id ON competitor_keywords(competitor_id);
+CREATE INDEX IF NOT EXISTS idx_keyword_gaps_project_id ON keyword_gaps(project_id);
+CREATE INDEX IF NOT EXISTS idx_keyword_gaps_score ON keyword_gaps(opportunity_score DESC);

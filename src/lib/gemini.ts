@@ -17,7 +17,7 @@ function safeHost(url: string): string | null {
   }
 }
 
-async function geminiGenerate(prompt: string, retries = 3): Promise<string> {
+export async function geminiGenerate(prompt: string, retries = 3): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const res = await fetch(GEMINI_URL, {

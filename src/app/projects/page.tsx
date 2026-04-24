@@ -2,39 +2,8 @@ import { redirect } from "next/navigation";
 import { currentUser } from "@clerk/nextjs/server";
 import Link from "next/link";
 import Sidebar from "@/components/dashboard/Sidebar";
+import ProjectCard from "@/components/dashboard/ProjectCard";
 import { getProjects } from "@/app/actions/project-actions";
-import { Project } from "@/lib/types";
-
-function ProjectCard({ project }: { project: Project }) {
-  return (
-    <Link href={`/projects/${project.id}`} className="glass-card p-6 group hover:border-brand-500/30 transition-all duration-300 block">
-      <div className="flex items-start justify-between mb-4">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-500/20 to-brand-700/20 border border-brand-500/20 flex items-center justify-center text-xl font-black text-brand-400">
-          {project.name.charAt(0).toUpperCase()}
-        </div>
-        <span className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary bg-surface-elevated px-2 py-1 rounded-lg">
-          {project.target_region.toUpperCase()}
-        </span>
-      </div>
-
-      <h3 className="text-base font-bold text-text-primary group-hover:text-brand-400 transition-colors mb-1">
-        {project.name}
-      </h3>
-      <p className="text-xs text-text-tertiary mb-1">{project.domain}</p>
-      <p className="text-xs text-text-tertiary/70 line-clamp-2">{project.niche}</p>
-
-      <div className="mt-4 pt-4 border-t border-border-subtle flex items-center justify-between">
-        <span className="text-[10px] text-text-tertiary">
-          {new Date(project.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-        </span>
-        <span className="text-[10px] font-bold text-brand-400 group-hover:translate-x-1 transition-transform inline-flex items-center gap-1">
-          Open
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
-        </span>
-      </div>
-    </Link>
-  );
-}
 
 export default async function ProjectsPage() {
   const user = await currentUser();

@@ -81,6 +81,65 @@ export async function deleteProject(id: string) {
   return { success: true };
 }
 
+/**
+ * Update an existing project. When `competitors` is passed we replace the
+ * project's competitor list wholesale (simpler than diffing — the list is
+ * short and recreated cheaply). Omitting `competitors` leaves it untouched.
+ */
+export async function updateProject(
+  id: string,
+  data: {
+    name: string;
+    domain: string;
+    company: string;
+    niche: string;
+    target_audience: string;
+    target_region: string;
+    description: string;
+    competitors?: string[];
+  }
+) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated' };
+
+  // Ownership check — deny updates on projects the user doesn't own.
+  const { data: existing, error: checkErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (checkErr || !existing) {
+    return { success: false as const, error: 'Project not found' };
+  }
+
+  const { competitors, ...patch } = data;
+
+  const { data: updated, error: updErr } = await supabaseAdmin
+    .from('projects')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .select()
+    .single();
+
+  if (updErr) return { success: false as const, error: updErr.message };
+
+  if (Array.isArray(competitors)) {
+    await supabaseAdmin.from('project_competitors').delete().eq('project_id', id);
+    const cleaned = competitors.map(c => c.trim()).filter(Boolean);
+    if (cleaned.length) {
+      const { error: compErr } = await supabaseAdmin
+        .from('project_competitors')
+        .insert(cleaned.map(domain => ({ project_id: id, domain })));
+      if (compErr) return { success: false as const, error: compErr.message };
+    }
+  }
+
+  return { success: true as const, data: updated as Project };
+}
+
 export async function getProjectStats(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: null };

@@ -214,9 +214,10 @@ export default function KeywordsPage() {
     const list = keywords
       .filter(k => filter === "all" || k.status === filter)
       .sort((a, b) => scoreOf(b, sortBy) - scoreOf(a, sortBy));
-    // Product rule: only show the top 20 keywords in the table (the pipeline
-    // already caps discovery to 20, but older rows may still live in the DB).
-    return list.slice(0, 20);
+    // Product rule: the pipeline caps discovery + clustering at 100 keywords.
+    // Older projects may have more rows from a prior run — we display the
+    // top-100 by the active sort (defaults to keyword_analysis_score desc).
+    return list.slice(0, 100);
   }, [keywords, filter, sortBy]);
 
   const toggleSelectAll = () => {
@@ -687,10 +688,13 @@ export default function KeywordsPage() {
           ) : filtered.length > 0 ? (
             <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30 backdrop-blur-md">
               <div className="overflow-x-auto">
-                <table className="w-full text-left">
+                {/* `table-fixed` + per-column widths keeps the 12 columns inside
+                    the viewport on 1280-px screens. Users can still scroll the
+                    wrapper horizontally on narrower windows. */}
+                <table className="w-full min-w-[1100px] text-left">
                   <thead className="bg-surface-tertiary/50 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
                     <tr>
-                      <th className="w-10 px-4 py-3">
+                      <th className="w-8 px-2 py-2.5">
                         <input
                           type="checkbox"
                           checked={filtered.length > 0 && filtered.every(k => selected.has(k.id))}
@@ -698,17 +702,22 @@ export default function KeywordsPage() {
                           className="rounded"
                         />
                       </th>
-                      <th className="px-4 py-3">Keyword</th>
-                      <th className="px-4 py-3 text-right">Volume</th>
-                      <th className="px-4 py-3 text-center">Difficulty</th>
-                      <th className="px-4 py-3 text-right">CPC</th>
-                      <th className="px-4 py-3 text-center">Trend</th>
-                      <th className="px-4 py-3 text-center">Intent</th>
-                      <th className="px-4 py-3 text-center">Competition</th>
-                      <th className="px-4 py-3 text-center">AI score</th>
-                      <th className="px-4 py-3 text-center">Keyword Analysis Score</th>
-                      <th className="px-4 py-3 text-center">Status</th>
-                      <th className="px-4 py-3 text-center">Action</th>
+                      <th className="px-2 py-2.5">Keyword</th>
+                      <th className="px-2 py-2.5 text-right">Volume</th>
+                      <th className="px-2 py-2.5 text-center">KD</th>
+                      <th className="px-2 py-2.5 text-right">CPC</th>
+                      <th className="px-2 py-2.5 text-center">Trend</th>
+                      <th className="px-2 py-2.5 text-center">Intent</th>
+                      <th className="px-2 py-2.5 text-center">Comp</th>
+                      <th className="px-2 py-2.5 text-center" title="Legacy AI score">AI</th>
+                      <th
+                        className="px-2 py-2.5 text-center"
+                        title="Keyword Analysis Score — composite of relevance, business-fit, intent, KD, volume, CPC and SERP opportunity"
+                      >
+                        Analysis
+                      </th>
+                      <th className="px-2 py-2.5 text-center">Status</th>
+                      <th className="px-2 py-2.5 text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle">
@@ -717,7 +726,7 @@ export default function KeywordsPage() {
                         key={kw.id}
                         className={`transition-colors hover:bg-white/[0.02] ${selected.has(kw.id) ? "bg-brand-500/5" : ""}`}
                       >
-                        <td className="px-4 py-3">
+                        <td className="px-2 py-2.5">
                           <input
                             type="checkbox"
                             checked={selected.has(kw.id)}
@@ -725,7 +734,7 @@ export default function KeywordsPage() {
                             className="rounded"
                           />
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-2 py-2.5">
                           <p className="text-sm font-semibold text-text-primary">{kw.keyword}</p>
                           {kw.gap_competitor ? (
                             <p className="text-[10px] text-cyan-400/90">Gap · {kw.gap_competitor}</p>
@@ -746,13 +755,13 @@ export default function KeywordsPage() {
                             </p>
                           ) : null}
                         </td>
-                        <td className="px-4 py-3 text-right text-sm font-bold text-text-primary">
+                        <td className="px-2 py-2.5 text-right text-sm font-bold text-text-primary">
                           {kw.volume ? kw.volume.toLocaleString() : "—"}
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-2.5 text-center">
                           {kw.kd > 0 ? (
-                            <div className="flex items-center justify-center gap-2">
-                              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-surface-elevated">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-elevated">
                                 <div
                                   className={`h-full rounded-full ${
                                     kw.kd < 30 ? "bg-accent-500" : kw.kd < 60 ? "bg-yellow-500" : "bg-rose-500"
@@ -760,16 +769,16 @@ export default function KeywordsPage() {
                                   style={{ width: `${kw.kd}%` }}
                                 />
                               </div>
-                              <span className={`text-xs font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
+                              <span className={`text-[11px] font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
                             </div>
                           ) : (
                             <span className="text-xs text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-right text-xs text-text-secondary">
+                        <td className="px-2 py-2.5 text-right text-xs text-text-secondary">
                           {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-2.5 text-center">
                           <span
                             className={`text-xs font-bold ${
                               kw.trend?.startsWith("+") ? "text-accent-400" : "text-rose-400"
@@ -778,10 +787,10 @@ export default function KeywordsPage() {
                             {kw.trend || "—"}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-2.5 text-center">
                           {kw.intent ? (
                             <span
-                              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize ${
+                              className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold capitalize ${
                                 kw.intent === "commercial" || kw.intent === "transactional"
                                   ? "border-accent-500/20 bg-accent-500/10 text-accent-400"
                                   : kw.intent === "informational"
@@ -795,10 +804,10 @@ export default function KeywordsPage() {
                             <span className="text-xs text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-2.5 text-center">
                           {kw.competition_level ? (
                             <span
-                              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
+                              className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold uppercase ${
                                 kw.competition_level === "LOW"
                                   ? "border-accent-500/20 bg-accent-500/10 text-accent-400"
                                   : kw.competition_level === "MEDIUM"
@@ -812,28 +821,28 @@ export default function KeywordsPage() {
                             <span className="text-xs text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-2.5 py-1 text-xs font-black text-brand-400">
+                        <td className="px-2 py-2.5 text-center">
+                          <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-2 py-0.5 text-xs font-black text-brand-400">
                             {kw.ai_score}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-2.5 text-center">
                           {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
-                            <span className="rounded-full border border-accent-500/20 bg-accent-500/10 px-2.5 py-1 text-xs font-black text-accent-400">
+                            <span className="rounded-full border border-accent-500/20 bg-accent-500/10 px-2 py-0.5 text-xs font-black text-accent-400">
                               {Math.round(kw.keyword_analysis_score)}
                             </span>
                           ) : (
                             <span className="text-xs text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-2 py-2.5 text-center">
                           <span
-                            className={`rounded-full border px-2.5 py-1 text-[10px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
+                            className={`rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
                           >
                             {kw.status}
                           </span>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-2 py-2.5">
                           <div className="flex justify-center gap-1">
                             {kw.status !== "approved" && (
                               <button

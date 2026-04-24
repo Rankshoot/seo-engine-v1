@@ -1,4 +1,5 @@
 import { TARGET_REGIONS } from './types';
+import type { WebsiteCrawlResult } from './websiteCrawler';
 
 export type Intent = 'informational' | 'commercial' | 'navigational' | 'transactional' | '';
 export type CompetitionLevel = 'LOW' | 'MEDIUM' | 'HIGH' | '';
@@ -134,9 +135,9 @@ async function dfsPost(
       entry.parseError = e instanceof Error ? e.message : 'JSON parse failed';
     }
 
-    console.log('DataForSEO URL:', url);
-    console.log('DataForSEO request body:', JSON.stringify(body, null, 2));
-    console.log('DataForSEO HTTP status:', entry.httpStatus);
+    // console.log('DataForSEO URL:', url);
+    // console.log('DataForSEO request body:', JSON.stringify(body, null, 2));
+    // console.log('DataForSEO HTTP status:', entry.httpStatus);
 
     const parsed = entry.parsed as { cost?: number } | null;
     if (parsed && typeof parsed.cost === 'number') entry.cost = parsed.cost;
@@ -272,37 +273,12 @@ function itemToKeyword(it: DfsIdeaItem, source: string): DiscoveredKeyword | nul
 // Endpoint wrappers (all use `dfsPost`, all push into `trace`)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchKeywordsForSite(
-  targetDomain: string,
-  locationCode: number,
-  languageCode: string,
-  auth: string,
-  trace: DataForSEOTraceEntry[]
-): Promise<DiscoveredKeyword[]> {
-  if (!targetDomain) return [];
-  const body = [
-    {
-      target: targetDomain,
-      location_code: locationCode,
-      language_code: languageCode,
-      include_serp_info: true,
-      limit: 50,
-      order_by: ['keyword_info.search_volume,desc'],
-    },
-  ];
-  const parsed = (await dfsPost(
-    'dataforseo_labs/google/keywords_for_site/live',
-    body,
-    auth,
-    trace
-  )) as {
-    tasks?: Array<{ result?: Array<{ items?: DfsIdeaItem[] }> }>;
-  } | null;
-  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
-  return items
-    .map(it => itemToKeyword(it, 'keywords_for_site'))
-    .filter((x): x is DiscoveredKeyword => x !== null);
-}
+// NOTE: `fetchKeywordsForSite` (dataforseo_labs/google/keywords_for_site/live)
+// and `fetchRankedKeywords` (dataforseo_labs/google/ranked_keywords/live) were
+// removed because their output is dominated by whatever tangential traffic the
+// target domain already ranks for — "ecr filing", "sarkari resume", random
+// customer-care queries, etc. — which poisoned the relevance scorer. The
+// pipeline now relies on keyword_ideas + related_keywords only.
 
 async function fetchKeywordIdeas(
   seeds: string[],
@@ -318,8 +294,9 @@ async function fetchKeywordIdeas(
       keywords: seeds.slice(0, 200),
       location_code: locationCode,
       language_code: languageCode,
-      // Dropped from 200 → 100 to keep credits in check now that we fan out
-      // across several additional endpoints downstream.
+      // User-facing contract: exactly 100 ideas for the seed set. The UI
+      // then pairs these with ~10 related_keywords results for ~110 rows,
+      // plus whatever `include_seed_keyword` echoes back.
       limit: 100,
       include_seed_keyword: true,
       // Keep results tightly related to the seed phrases — prevents the API
@@ -329,6 +306,11 @@ async function fetchKeywordIdeas(
       order_by: ['keyword_info.search_volume,desc'],
     },
   ];
+
+  // console.log(
+  //   '[DataForSEO] → keyword_ideas/live body:',
+  //   JSON.stringify(body, null, 2)
+  // );
 
   const parsed = (await dfsPost(
     'dataforseo_labs/google/keyword_ideas/live',
@@ -353,8 +335,9 @@ async function fetchRelatedKeywords(
   trace: DataForSEOTraceEntry[]
 ): Promise<DiscoveredKeyword[]> {
   const out: DiscoveredKeyword[] = [];
-  // Cost control: only expand the top 5 seeds.
-  for (const seed of seedKeywords.slice(0, 5)) {
+  // One call per seed, 2 related keywords per seed. Safety cap at 20 seeds
+  // so an accidentally-huge seed list can't blow the DataForSEO budget.
+  for (const seed of seedKeywords.slice(0, 20)) {
     if (!seed || !seed.trim()) continue;
     const body = [
       {
@@ -364,9 +347,13 @@ async function fetchRelatedKeywords(
         include_seed_keyword: true,
         include_serp_info: true,
         depth: 1,
-        limit: 25,
+        limit: 2,
       },
     ];
+    // console.log(
+    //   '[DataForSEO] → related_keywords/live body:',
+    //   JSON.stringify(body, null, 2)
+    // );
     const parsed = (await dfsPost(
       'dataforseo_labs/google/related_keywords/live',
       body,
@@ -384,40 +371,6 @@ async function fetchRelatedKeywords(
   return out;
 }
 
-async function fetchRankedKeywords(
-  targetDomain: string,
-  locationCode: number,
-  languageCode: string,
-  auth: string,
-  trace: DataForSEOTraceEntry[],
-  limit: number = 50
-): Promise<DiscoveredKeyword[]> {
-  if (!targetDomain) return [];
-  const body = [
-    {
-      target: targetDomain,
-      location_code: locationCode,
-      language_code: languageCode,
-      ignore_synonyms: true,
-      item_types: ['organic', 'featured_snippet'],
-      limit,
-      order_by: ['keyword_data.keyword_info.search_volume,desc'],
-    },
-  ];
-  const parsed = (await dfsPost(
-    'dataforseo_labs/google/ranked_keywords/live',
-    body,
-    auth,
-    trace
-  )) as {
-    tasks?: Array<{ result?: Array<{ items?: DfsIdeaItem[] }> }>;
-  } | null;
-  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
-  return items
-    .map(it => itemToKeyword(it, 'ranked_keywords'))
-    .filter((x): x is DiscoveredKeyword => x !== null);
-}
-
 async function fetchKeywordOverview(
   keywords: string[],
   locationCode: number,
@@ -430,13 +383,19 @@ async function fetchKeywordOverview(
   if (!clean.length) return out;
   const body = [
     {
-      keywords: clean.slice(0, 150),
+      // API max is 700 — we rely on the caller to pass the already-truncated
+      // top-N slice (currently 250). This cap is a safety net only.
+      keywords: clean.slice(0, 700),
       location_code: locationCode,
       language_code: languageCode,
       include_serp_info: true,
       include_clickstream_data: true,
     },
   ];
+  // console.log(
+  //   '[DataForSEO] → keyword_overview/live body:',
+  //   JSON.stringify(body, null, 2)
+  // );
   const parsed = (await dfsPost(
     'dataforseo_labs/google/keyword_overview/live',
     body,
@@ -465,11 +424,16 @@ async function fetchBulkKeywordDifficulty(
   if (!clean.length) return out;
   const body = [
     {
-      keywords: clean.slice(0, 150),
+      // Safety cap only — caller already slices to 250.
+      keywords: clean.slice(0, 700),
       location_code: locationCode,
       language_code: languageCode,
     },
   ];
+  // console.log(
+  //   '[DataForSEO] → bulk_keyword_difficulty/live body:',
+  //   JSON.stringify(body, null, 2)
+  // );
   const parsed = (await dfsPost(
     'dataforseo_labs/google/bulk_keyword_difficulty/live',
     body,
@@ -500,6 +464,12 @@ interface DfsSerpItem {
   domain?: string | null;
 }
 
+/**
+ * Fetch live Google organic SERPs for N keywords. Previously this ran
+ * sequentially (≈1 req/s × 100 keywords ≈ 1.5 minutes). We now fan out with a
+ * bounded concurrency so the caller sees a few-seconds response even for the
+ * full 100-keyword top slice.
+ */
 async function fetchSerpForKeywords(
   topKeywords: string[],
   locationCode: number,
@@ -508,45 +478,193 @@ async function fetchSerpForKeywords(
   trace: DataForSEOTraceEntry[]
 ): Promise<Map<string, DiscoveredSerpResult[]>> {
   const out = new Map<string, DiscoveredSerpResult[]>();
-  for (const keyword of topKeywords) {
-    const clean = (keyword || '').trim();
-    if (!clean) continue;
-    const body = [
-      {
-        keyword: clean,
-        location_code: locationCode,
-        language_code: languageCode,
-        device: 'desktop',
-        os: 'windows',
-        depth: 10,
-      },
-    ];
-    const parsed = (await dfsPost(
-      'serp/google/organic/live/advanced',
-      body,
-      auth,
-      trace
-    )) as {
-      tasks?: Array<{ result?: Array<{ items?: DfsSerpItem[] }> }>;
-    } | null;
-    const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
-    const rows: DiscoveredSerpResult[] = [];
-    for (const it of items) {
-      const t = (it.type ?? '').toLowerCase();
-      if (t !== 'organic' && t !== 'featured_snippet') continue;
-      const url = (it.url ?? '').toString();
-      if (!url) continue;
-      rows.push({
-        position: Number(it.rank_absolute ?? 0) || 0,
-        title: (it.title ?? '').toString(),
-        url,
-        domain: (it.domain ?? extractDomainFromUrl(url)).toString(),
-        type: t,
-      });
+  const clean = topKeywords
+    .map(k => (k || '').trim())
+    .filter(Boolean);
+  if (!clean.length) return out;
+
+  const CONCURRENCY = 8;
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < clean.length) {
+      const idx = cursor++;
+      const kw = clean[idx];
+      const body = [
+        {
+          keyword: kw,
+          location_code: locationCode,
+          language_code: languageCode,
+          device: 'desktop',
+          os: 'windows',
+          depth: 10,
+        },
+      ];
+      // console.log(
+      //   '[DataForSEO] → serp/google/organic/live/advanced body:',
+      //   JSON.stringify(body, null, 2)
+      // );
+      const parsed = (await dfsPost(
+        'serp/google/organic/live/advanced',
+        body,
+        auth,
+        trace
+      )) as {
+        tasks?: Array<{ result?: Array<{ items?: DfsSerpItem[] }> }>;
+      } | null;
+      const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
+      const rows: DiscoveredSerpResult[] = [];
+      for (const it of items) {
+        const t = (it.type ?? '').toLowerCase();
+        if (t !== 'organic' && t !== 'featured_snippet') continue;
+        const url = (it.url ?? '').toString();
+        if (!url) continue;
+        rows.push({
+          position: Number(it.rank_absolute ?? 0) || 0,
+          title: (it.title ?? '').toString(),
+          url,
+          domain: (it.domain ?? extractDomainFromUrl(url)).toString(),
+          type: t,
+        });
+      }
+      out.set(kw.toLowerCase(), rows);
     }
-    out.set(clean.toLowerCase(), rows);
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, clean.length) }, () => worker())
+  );
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyword clustering / near-duplicate dedup
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Stopwords stripped before comparing keyword token sets. Different from the
+ *  relevance-scorer stopword list — here we also want to drop pure commercial
+ *  qualifiers ("best", "top") so "best SEO tool" and "SEO tool" cluster. */
+const CLUSTER_STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'for', 'and', 'or', 'to', 'in', 'on', 'is', 'are',
+  'with', 'your', 'you', 'our', 'my', 'me', 'we', 'they', 'their', 'that',
+  'this', 'best', 'top', 'how', 'what', 'why', 'when', 'where',
+]);
+
+/** Synonym → canonical token. Keeps the clusterer from treating "engineer" and
+ *  "developer" as different keywords. Kept small and domain-specific; expand
+ *  as new niches show up in the top-100. */
+const CLUSTER_SYNONYMS: Record<string, string> = {
+  engineer: 'developer', engineers: 'developer', developers: 'developer',
+  developer: 'developer', programmer: 'developer', programmers: 'developer',
+  coder: 'developer', coders: 'developer', swe: 'developer', sde: 'developer',
+  coding: 'developer', programming: 'developer', dev: 'developer',
+  devs: 'developer',
+
+  hire: 'hire', hiring: 'hire', hires: 'hire', hired: 'hire',
+
+  recruit: 'recruit', recruiting: 'recruit', recruitment: 'recruit',
+  recruiter: 'recruit', recruiters: 'recruit',
+
+  staff: 'staff', staffing: 'staff',
+
+  tech: 'software', technology: 'software', technologies: 'software',
+  technical: 'software', software: 'software', it: 'software',
+
+  talent: 'talent', talents: 'talent', talented: 'talent',
+
+  agency: 'agency', agencies: 'agency',
+  company: 'company', companies: 'company',
+  service: 'service', services: 'service',
+  platform: 'platform', platforms: 'platform',
+
+  course: 'course', courses: 'course', tutorial: 'course', tutorials: 'course',
+  guide: 'course', guides: 'course',
+};
+
+function normalizeForClustering(keyword: string): string[] {
+  const raw = (keyword || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const tok of raw) {
+    if (CLUSTER_STOPWORDS.has(tok)) continue;
+    const mapped = CLUSTER_SYNONYMS[tok];
+    if (mapped) { out.push(mapped); continue; }
+    // Cheap singulariser for unknown words — good enough to cluster
+    // "developers"/"developer" even when they're not in the synonym map.
+    let root = tok;
+    if (/ies$/.test(root) && root.length > 4) root = root.replace(/ies$/, 'y');
+    else if (/sses$/.test(root)) root = root.replace(/sses$/, 'ss');
+    else if (/s$/.test(root) && !/(ss|us|is)$/.test(root) && root.length > 3) {
+      root = root.slice(0, -1);
+    }
+    out.push(root);
   }
   return out;
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  const union = a.size + b.size - inter;
+  return union ? inter / union : 0;
+}
+
+/**
+ * Collapse near-duplicate keywords — we keep the one with the highest
+ * `keyword_analysis_score` as the primary and fold every sibling keyword into
+ * its `secondary_keywords`. Grouping is a greedy Jaccard pass using the
+ * normalised-synonym-aware token set; threshold 0.7 keeps tight dupes (e.g.
+ * "software developer hiring" vs "software engineer hiring") while leaving
+ * meaningfully different intents separate ("software developer recruitment"
+ * vs "tech recruitment agency" share ~50% tokens → stay as two rows).
+ */
+function clusterKeywords(keywords: DiscoveredKeyword[]): {
+  kept: DiscoveredKeyword[];
+  merges: Array<{ primary: string; secondary: string[] }>;
+} {
+  const SIMILARITY = 0.7;
+  // Sort by analysis score desc so the best keyword in each cluster wins.
+  const sorted = [...keywords].sort(
+    (a, b) => (b.keyword_analysis_score ?? 0) - (a.keyword_analysis_score ?? 0)
+  );
+  const tokensOf = new Map<DiscoveredKeyword, Set<string>>();
+  for (const kw of sorted) {
+    tokensOf.set(kw, new Set(normalizeForClustering(kw.keyword)));
+  }
+
+  const kept: DiscoveredKeyword[] = [];
+  const claimed = new Set<DiscoveredKeyword>();
+  const merges: Array<{ primary: string; secondary: string[] }> = [];
+
+  for (const primary of sorted) {
+    if (claimed.has(primary)) continue;
+    claimed.add(primary);
+    const pTokens = tokensOf.get(primary) ?? new Set<string>();
+    const similar: string[] = [];
+
+    for (const other of sorted) {
+      if (claimed.has(other)) continue;
+      const oTokens = tokensOf.get(other) ?? new Set<string>();
+      if (!pTokens.size || !oTokens.size) continue;
+      if (jaccardSimilarity(pTokens, oTokens) >= SIMILARITY) {
+        claimed.add(other);
+        similar.push(other.keyword);
+      }
+    }
+
+    if (similar.length) {
+      const prev = primary.secondary_keywords ?? [];
+      primary.secondary_keywords = [...new Set([...prev, ...similar])];
+      merges.push({ primary: primary.keyword, secondary: similar });
+    }
+    kept.push(primary);
+  }
+
+  return { kept, merges };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -941,34 +1059,134 @@ function tokenize(s: string): string[] {
     .filter(t => t.length >= 2 && !STOPWORDS.has(t));
 }
 
+/**
+ * Optional side-context the Create Project form can provide. When present,
+ * these fields are folded into the ProjectContext so relevance scoring and
+ * synthetic-seed generation reason over the *whole* business, not just the
+ * niche phrase.
+ */
+export interface ProjectContextExtras {
+  /** Target audience as entered in the form (e.g. "HR managers at mid-size companies"). */
+  targetAudience?: string;
+  /** Free-form project description. */
+  description?: string;
+  /** Company name — helps disable negative patterns that would otherwise kill
+   *  brand-adjacent keywords. */
+  companyName?: string;
+  /** Output of `crawlWebsite(domain)`. Title / meta / headings / top phrases
+   *  / URL slugs all feed into coreTokens, phraseBoosts and syntheticSeeds. */
+  crawl?: WebsiteCrawlResult;
+}
+
 export function buildProjectContext(
   seedKeywords: string[],
   businessDomain?: string,
-  targetUrl?: string
+  targetUrl?: string,
+  extras?: ProjectContextExtras
 ): ProjectContext {
   const seeds = (seedKeywords || []).map(s => s.trim()).filter(Boolean);
   const niche = (businessDomain || '').trim() || seeds.slice(0, 3).join(' ');
   const domainOnly = extractDomainFromUrl(targetUrl || '');
-  const rawContext = [niche, ...seeds, domainOnly].join(' ').toLowerCase();
 
-  const bizCats = detectNicheCategories(niche);
-  const seedCats = detectNicheCategories(seeds.join(' '));
+  const audience = (extras?.targetAudience || '').trim();
+  const description = (extras?.description || '').trim();
+  const companyName = (extras?.companyName || '').trim();
+  const crawl = extras?.crawl;
+
+  // Distilled copy of the crawl result — we deliberately keep paragraph text
+  // out of the raw string (too noisy) but pull in every strong SEO signal:
+  // title, meta, H1/H2/H3, nav/link labels, URL slugs, top phrases.
+  const crawlSignals: string[] = [];
+  if (crawl) {
+    crawlSignals.push(crawl.title, crawl.metaDescription);
+    crawlSignals.push(...crawl.headings.h1);
+    crawlSignals.push(...crawl.headings.h2.slice(0, 20));
+    crawlSignals.push(...crawl.headings.h3.slice(0, 20));
+    crawlSignals.push(...crawl.linkTexts.slice(0, 30));
+    crawlSignals.push(...crawl.urlSlugs.slice(0, 40));
+    crawlSignals.push(...crawl.topPhrases.slice(0, 30));
+  }
+  const crawlBlob = crawlSignals.join(' ');
+
+  const rawContext = [
+    niche,
+    audience,
+    description,
+    companyName,
+    domainOnly,
+    ...seeds,
+    crawlBlob,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  // Primary categories come from the user-declared niche + description + company
+  // name. Secondary categories come from the audience + seeds + everything the
+  // website itself advertises (nav / headings / slugs). That split is what lets
+  // us detect e.g. "niche=software, site=recruitment" intersections.
+  const bizCats = [
+    ...new Set([
+      ...detectNicheCategories(niche),
+      ...detectNicheCategories(description),
+      ...detectNicheCategories(companyName),
+    ]),
+  ];
+  const seedCats = [
+    ...new Set([
+      ...detectNicheCategories(seeds.join(' ')),
+      ...detectNicheCategories(audience),
+      ...detectNicheCategories(crawlBlob),
+    ]),
+  ];
 
   const primaryCats = bizCats.length ? bizCats : [...seedCats];
-  const secondaryCats = [...seedCats].filter(c => !bizCats.includes(c));
+  const secondaryCats = [...seedCats].filter(c => !primaryCats.includes(c));
 
   const coreTokens = new Set<string>();
   for (const c of primaryCats) {
     for (const t of NICHE_VOCABULARY[c] ?? []) coreTokens.add(t);
   }
   for (const t of tokenize(niche)) coreTokens.add(t);
+  // Audience/description-derived single tokens also belong to the core —
+  // e.g. "HR" from "HR managers" is a core brand token.
+  for (const t of tokenize(audience)) coreTokens.add(t);
+  for (const t of tokenize(description)) coreTokens.add(t);
 
   const mustHaveAnyTokens = new Set<string>();
   for (const c of secondaryCats) {
     for (const t of NICHE_VOCABULARY[c] ?? []) mustHaveAnyTokens.add(t);
   }
+  // When the audience text itself references recruitment/hiring/etc., promote
+  // those niche-vocabulary words into must-have territory too.
+  const audienceCats = detectNicheCategories(audience);
+  for (const c of audienceCats) {
+    if (primaryCats.includes(c)) continue;
+    for (const t of NICHE_VOCABULARY[c] ?? []) mustHaveAnyTokens.add(t);
+  }
 
-  const phraseBoosts = buildPhraseBoosts(primaryCats, secondaryCats);
+  let phraseBoosts = buildPhraseBoosts(primaryCats, secondaryCats);
+
+  // Augment phrase boosts with crawl-derived 2–3-word phrases that contain at
+  // least one core token AND one must-have (or commercial) token. This is how
+  // we surface business-specific anchors like "tech hiring platform" or
+  // "software developer staffing" when the user only typed "software engineering".
+  if (crawl) {
+    const commercial = DEFAULT_COMMERCIAL_MODIFIERS.map(m => m.toLowerCase());
+    for (const phrase of crawl.topPhrases.slice(0, 40)) {
+      const tokens = tokenize(phrase);
+      if (!tokens.length) continue;
+      const coreHit = tokens.some(t => coreTokens.has(t));
+      const mustHit = mustHaveAnyTokens.size
+        ? tokens.some(t => mustHaveAnyTokens.has(t))
+        : false;
+      const commercialHit = commercial.some(m => phrase.includes(m));
+      if ((coreHit && mustHit) || (coreHit && commercialHit)) {
+        phraseBoosts.push(phrase);
+      }
+    }
+    phraseBoosts = [...new Set(phraseBoosts)];
+  }
 
   const commercialModifiers = [...DEFAULT_COMMERCIAL_MODIFIERS];
   if (secondaryCats.includes('recruitment') || primaryCats.includes('recruitment')) {
@@ -976,6 +1194,11 @@ export function buildProjectContext(
   }
 
   const negativePatterns = buildNegativePatterns(primaryCats, secondaryCats, rawContext);
+
+  // Synthetic seeds = phrase boosts (template + crawl-derived). We dedupe
+  // and order with the strongest intersection phrases first so the top N
+  // passed to keyword_ideas / related_keywords are the best anchors.
+  const syntheticSeeds = [...new Set(phraseBoosts)];
 
   return {
     raw: rawContext,
@@ -985,7 +1208,7 @@ export function buildProjectContext(
     mustHaveAnyTokens,
     negativePatterns,
     commercialModifiers,
-    syntheticSeeds: [...phraseBoosts],
+    syntheticSeeds,
   };
 }
 
@@ -1079,47 +1302,16 @@ export function calculateBusinessFitScore(keyword: string, ctx: ProjectContext):
   return 25;
 }
 
-function isRelevantKeyword(kw: DiscoveredKeyword, ctx: ProjectContext): boolean {
-  if (matchesNegativePattern(kw.keyword, ctx)) {
-    kw.relevance_score = 0;
-    kw.business_fit_score = 0;
-    return false;
-  }
-  const relevance = calculateRelevanceScore(kw.keyword, ctx);
-  const fit = calculateBusinessFitScore(kw.keyword, ctx);
-  kw.relevance_score = relevance;
-  kw.business_fit_score = fit;
-
-  if (relevance < 45) return false;
-  if (fit < 35) return false;
-
-  const sources = kw.source ?? [];
-  // Keywords that came *only* from site-attribution endpoints (so we'd never
-  // have found them via semantic seed expansion) must clear a higher bar —
-  // these are the rows that in the old pipeline caused "ecr filing" to leak
-  // through just because taggd.in happened to rank for it.
-  if (
-    (sources.includes('keywords_for_site') || sources.includes('ranked_keywords')) &&
-    !sources.includes('keyword_ideas') &&
-    !sources.includes('related_keywords')
-  ) {
-    return relevance >= 55;
-  }
-  return true;
-}
-
 /**
- * Composite SEO-opportunity score. Relevance and business-fit carry the
- * majority of the weight now, and if either of them is below the gate the
- * overall score collapses to 0 — so the final sort can never re-surface a
- * high-volume-but-off-topic keyword.
+ * Composite SEO-opportunity score. Relevance and business-fit still carry
+ * the majority of the weight so on-topic keywords sort to the top, but we
+ * no longer zero-gate on low relevance / fit — the pipeline no longer
+ * filters upstream, so every keyword we return must produce a displayable
+ * score (otherwise the UI shows "—" for dozens of rows).
  */
 export function calculateKeywordAnalysisScore(kw: DiscoveredKeyword): number {
   const fit = kw.business_fit_score ?? 0;
   const rel = kw.relevance_score ?? 0;
-  // Hard gates — mirrors the filter so the stored score matches the filter.
-  if (fit < 35) return 0;
-  if (rel < 45) return 0;
 
   const intent = intentScore(kw.intent);
   const kd = lowDifficultyScore(kw.kd);
@@ -1233,7 +1425,8 @@ export async function fetchKeywordVitals(
 const SERP_BOILERPLATE_DOMAINS = new Set([
   'google.com', 'youtube.com', 'facebook.com', 'instagram.com',
   'linkedin.com', 'wikipedia.org', 'en.wikipedia.org', 'twitter.com', 'x.com',
-  'pinterest.com', 'tiktok.com',
+  'pinterest.com', 'tiktok.com', 'reddit.com', 'quora.com', 'medium.com',
+  'amazon.com', 'amazon.in',
 ]);
 
 function pickCompetitorDomains(
@@ -1279,7 +1472,8 @@ export async function discoverKeywordsForProject(
   region: string,
   language: string = 'en',
   targetUrl?: string,
-  businessDomain?: string
+  businessDomain?: string,
+  extras: ProjectContextExtras = {}
 ): Promise<DiscoverKeywordsForProjectResult> {
   const trace: DataForSEOTraceEntry[] = [];
   const auth = getAuthHeader();
@@ -1302,257 +1496,178 @@ export async function discoverKeywordsForProject(
   const ownDomain = extractDomainFromUrl(targetUrl ?? '');
   const seeds = seedKeywords.map(s => s.trim()).filter(Boolean);
 
-  // 1. Build the project context — this is the single source of truth for
-  //    every relevance / business-fit / negative-pattern decision below.
-  const context = buildProjectContext(seeds, businessDomain, targetUrl);
+  // 1a. Log the raw form inputs exactly as they reached the server action —
+  //     makes it trivial to verify in DevTools that the niche / audience /
+  //     description / company name were actually threaded through.
+  pushDebugTrace(trace, '(project_input)', {
+    seedKeywords: seeds,
+    region,
+    language,
+    targetUrl: targetUrl ?? '',
+    businessDomain: businessDomain ?? '',
+    targetAudience: extras.targetAudience ?? '',
+    description: extras.description ?? '',
+    companyName: extras.companyName ?? '',
+  });
+
+  // 1b. Echo what the crawler saw on the live domain so the relevance scorer's
+  //     decisions can be reasoned about offline from the trace alone. We
+  //     deliberately DO NOT emit a "skipped" placeholder — the caller is
+  //     contract-bound to pass a real WebsiteCrawlResult (the crawler never
+  //     throws; on empty/invalid URLs it returns a stub with `error` set), so
+  //     if this trace is ever missing fields it means a bug in the caller.
+  const c = extras.crawl;
+  pushDebugTrace(
+    trace,
+    '(crawled_website_context)',
+    c
+      ? {
+          url: c.finalUrl || c.url,
+          status: c.status,
+          title: c.title,
+          metaDescription: c.metaDescription,
+          h1: c.headings.h1,
+          h2: c.headings.h2.slice(0, 20),
+          h3: c.headings.h3.slice(0, 20),
+          navText: c.navText.slice(0, 3),
+          linkTexts: c.linkTexts.slice(0, 40),
+          urlSlugs: c.urlSlugs.slice(0, 40),
+          topPhrases: c.topPhrases.slice(0, 40),
+          wordCount: c.wordCount,
+          error: c.error ?? null,
+        }
+      : {
+          url: '',
+          status: 0,
+          title: '',
+          metaDescription: '',
+          h1: [],
+          h2: [],
+          h3: [],
+          navText: [],
+          linkTexts: [],
+          urlSlugs: [],
+          topPhrases: [],
+          wordCount: 0,
+          error: 'caller did not pass extras.crawl — upgrade the caller',
+        }
+  );
+
+  // 1c. Build the project context — the single source of truth for every
+  //     relevance / business-fit / negative-pattern decision below.
+  const context = buildProjectContext(seeds, businessDomain, targetUrl, extras);
   pushDebugTrace(trace, '(project_context)', {
     nichePhrase: context.nichePhrase,
-    coreTokens: [...context.coreTokens].slice(0, 40),
-    mustHaveAnyTokens: [...context.mustHaveAnyTokens].slice(0, 40),
+    coreTokens: [...context.coreTokens].slice(0, 60),
+    mustHaveAnyTokens: [...context.mustHaveAnyTokens].slice(0, 60),
     phraseBoosts: context.phraseBoosts,
     negativePatterns: context.negativePatterns.map(p => p.toString()),
     commercialModifiers: context.commercialModifiers,
-    syntheticSeedCount: context.syntheticSeeds.length,
   });
 
-  // 2. Compose enriched seeds — synthetic cross-product phrases go first so
-  //    `keyword_ideas` and `related_keywords` are anchored on them rather
-  //    than on the generic user input.
-  const mergedSeeds: string[] = [];
-  const seenSeed = new Set<string>();
-  for (const s of [...context.syntheticSeeds, ...seeds]) {
-    const norm = s.toLowerCase().trim();
-    if (!norm || seenSeed.has(norm)) continue;
-    seenSeed.add(norm);
-    mergedSeeds.push(s);
-  }
+  // 2. Seeds go to DataForSEO VERBATIM — we no longer merge in synthetic
+  //    cross-product phrases (they were injecting "leadership hiring
+  //    consulting", "executive search for leadership hiring", etc. into
+  //    request bodies even when the user typed only "Software engineering,
+  //    HR, RPO services…"). The user's raw form input is the source of truth.
+  const userSeeds = seeds.slice(0, 20);
 
-  // 3. Fire off discovery endpoints in parallel, guarding each so one
-  //    failure never sinks the whole run.
-  const siteKwPromise = ownDomain
-    ? fetchKeywordsForSite(ownDomain, locationCode, languageCode, auth, trace).catch(e => {
-        trace.push(errEntry('keywords_for_site', e));
-        return [] as DiscoveredKeyword[];
-      })
-    : Promise.resolve([] as DiscoveredKeyword[]);
+  pushDebugTrace(trace, '(synthetic_seeds)', {
+    fromTemplatesAndCrawl: context.syntheticSeeds,
+    userSeeds: seeds,
+    actuallySentToDataForSeo: userSeeds,
+    note: 'synthetic seeds are computed for context/scoring only; the request body uses the raw user inputs',
+    count: userSeeds.length,
+  });
 
-  const ideasPromise = fetchKeywordIdeas(mergedSeeds, locationCode, languageCode, auth, trace).catch(e => {
+  // Echo the EXACT request body we're about to send to keyword_ideas/live —
+  // useful when the API returns nothing unexpected and you want to eyeball
+  // the payload without re-running the pipeline.
+  pushDebugTrace(trace, '(dataforseo_keyword_ideas_body)', {
+    endpoint: 'dataforseo_labs/google/keyword_ideas/live',
+    body: [
+      {
+        keywords: userSeeds,
+        location_code: locationCode,
+        language_code: languageCode,
+        limit: 100,
+        include_seed_keyword: true,
+        closely_variants: true,
+        order_by: ['keyword_info.search_volume,desc'],
+      },
+    ],
+  });
+
+  // 3. Discovery — the two semantic-seed endpoints in parallel.
+  //    `keyword_ideas/live`: one call, returns up to 100 ideas for the full
+  //    seed set (volume + cpc + competition + intent + monthly searches
+  //    come back in the same response — we no longer call keyword_overview
+  //    separately).
+  //    `related_keywords/live`: one call PER seed, 2 related per seed.
+  const ideasPromise = fetchKeywordIdeas(userSeeds, locationCode, languageCode, auth, trace).catch(e => {
     trace.push(errEntry('keyword_ideas', e));
     return [] as DiscoveredKeyword[];
   });
 
-  const relatedPromise = fetchRelatedKeywords(mergedSeeds, locationCode, languageCode, auth, trace).catch(e => {
+  const relatedPromise = fetchRelatedKeywords(userSeeds, locationCode, languageCode, auth, trace).catch(e => {
     trace.push(errEntry('related_keywords', e));
     return [] as DiscoveredKeyword[];
   });
 
-  const rankedOwnPromise = ownDomain
-    ? fetchRankedKeywords(ownDomain, locationCode, languageCode, auth, trace, 50).catch(e => {
-        trace.push(errEntry('ranked_keywords(own)', e));
-        return [] as DiscoveredKeyword[];
-      })
-    : Promise.resolve([] as DiscoveredKeyword[]);
+  const [ideas, related] = await Promise.all([ideasPromise, relatedPromise]);
 
-  const [siteKw, ideas, related, rankedOwn] = await Promise.all([
-    siteKwPromise,
-    ideasPromise,
-    relatedPromise,
-    rankedOwnPromise,
-  ]);
+  // 4. Merge + dedupe. No relevance / business-fit hard filter — the user
+  //    asked for the raw ~120-keyword result set displayed as-is. We still
+  //    COMPUTE relevance + business-fit for the Rel/Fit micro-badges.
+  const merged = mergeKeywordCandidates(ideas, related);
 
-  // 4. Merge + dedupe all candidates.
-  let merged = mergeKeywordCandidates(siteKw, ideas, related, rankedOwn);
-
-  // 5. RELEVANCE-FIRST filter (before any enrichment). This is the critical
-  //    change vs. the previous pipeline — we never let an off-topic keyword
-  //    into the top-150 enrichment slice just because its volume is high.
-  const rejected: Array<{
-    keyword: string;
-    source: string[];
-    volume: number;
-    relevance_score: number;
-    business_fit_score: number;
-    reason: string;
-  }> = [];
-
-  const kept: DiscoveredKeyword[] = [];
   for (const kw of merged) {
     if (!kw.keyword) continue;
-    // Compute scores first so we can log them even on rejection.
     const neg = matchesNegativePattern(kw.keyword, context);
-    const relevance = neg ? 0 : calculateRelevanceScore(kw.keyword, context);
-    const fit = neg ? 0 : calculateBusinessFitScore(kw.keyword, context);
-    kw.relevance_score = relevance;
-    kw.business_fit_score = fit;
-
-    const sources = kw.source ?? [];
-    const onlySiteOrRanked =
-      (sources.includes('keywords_for_site') || sources.includes('ranked_keywords')) &&
-      !sources.includes('keyword_ideas') &&
-      !sources.includes('related_keywords');
-
-    let reason = '';
-    if (neg) reason = 'negative_pattern';
-    else if (fit < 35) reason = `business_fit<${35} (${fit})`;
-    else if (relevance < 45) reason = `relevance<${45} (${relevance})`;
-    else if (onlySiteOrRanked && relevance < 55) reason = `site/ranked-only but relevance<${55} (${relevance})`;
-
-    if (reason) {
-      rejected.push({
-        keyword: kw.keyword,
-        source: sources,
-        volume: kw.volume ?? 0,
-        relevance_score: relevance,
-        business_fit_score: fit,
-        reason,
-      });
-      continue;
-    }
-    kept.push(kw);
-  }
-  merged = kept;
-
-  // Expose rejected keywords so the devtools trace can explain *why* the
-  // final list looks the way it does.
-  pushDebugTrace(trace, '(rejected_keywords)', {
-    total: rejected.length,
-    sample: rejected.slice(0, 40),
-  });
-
-  // 6. Sort by fit → relevance → volume → source count, then send the top
-  //    150 to the enrichment endpoints (not by volume!).
-  merged.sort((a, b) => {
-    const fa = a.business_fit_score ?? 0;
-    const fb = b.business_fit_score ?? 0;
-    if (fb !== fa) return fb - fa;
-    const ra = a.relevance_score ?? 0;
-    const rb = b.relevance_score ?? 0;
-    if (rb !== ra) return rb - ra;
-    if ((b.volume || 0) !== (a.volume || 0)) return (b.volume || 0) - (a.volume || 0);
-    return (b.source?.length ?? 0) - (a.source?.length ?? 0);
-  });
-
-  const top150 = merged.slice(0, 150).map(k => k.keyword);
-
-  // 7. Keyword overview (volume / cpc / competition / intent / trend / monthly).
-  let overviewMap = new Map<string, DiscoveredKeyword>();
-  if (top150.length) {
-    try {
-      overviewMap = await fetchKeywordOverview(top150, locationCode, languageCode, auth, trace);
-    } catch (e) {
-      trace.push(errEntry('keyword_overview', e));
-    }
-  }
-
-  // 8. Bulk KD.
-  let kdMap = new Map<string, number>();
-  if (top150.length) {
-    try {
-      kdMap = await fetchBulkKeywordDifficulty(top150, locationCode, languageCode, auth, trace);
-    } catch (e) {
-      trace.push(errEntry('bulk_keyword_difficulty', e));
-    }
-  }
-
-  for (const kw of merged) {
-    const key = kw.keyword.toLowerCase();
-    const ov = overviewMap.get(key);
-    if (ov) {
-      if (ov.volume > 0) kw.volume = Math.max(kw.volume, ov.volume);
-      if (ov.cpc > 0) kw.cpc = ov.cpc;
-      if (ov.competition_level) kw.competition_level = ov.competition_level;
-      if (ov.intent) kw.intent = ov.intent;
-      if (ov.trend) kw.trend = ov.trend;
-      if (ov.monthly_searches?.length) kw.monthly_searches = ov.monthly_searches;
-      if (typeof ov.traffic_potential === 'number') {
-        kw.traffic_potential = Math.max(kw.traffic_potential ?? 0, ov.traffic_potential);
-      }
-    }
-    const kd = kdMap.get(key);
-    if (typeof kd === 'number' && kd > 0) kw.kd = kd;
-  }
-
-  // 9. Preliminary analysis score + pick top 20.
-  for (const kw of merged) {
+    kw.relevance_score = neg ? 0 : calculateRelevanceScore(kw.keyword, context);
+    kw.business_fit_score = neg ? 0 : calculateBusinessFitScore(kw.keyword, context);
     kw.suggested_content_type = suggestedContentType(kw.keyword);
-    kw.keyword_analysis_score = calculateKeywordAnalysisScore(kw);
   }
-  merged.sort((a, b) => b.keyword_analysis_score - a.keyword_analysis_score);
-  const top20 = merged.slice(0, 20);
 
-  // 10. Live SERP for the top 20.
-  let serpMap = new Map<string, DiscoveredSerpResult[]>();
-  if (top20.length) {
+  // 5. Bulk KD for the ENTIRE merged pool — roughly 100 (ideas) + 2 × N
+  //    (related, one call per seed). The API max is 700, we're well under.
+  if (merged.length) {
     try {
-      serpMap = await fetchSerpForKeywords(
-        top20.map(k => k.keyword),
+      const kdMap = await fetchBulkKeywordDifficulty(
+        merged.map(k => k.keyword),
         locationCode,
         languageCode,
         auth,
         trace
       );
+      for (const kw of merged) {
+        const kd = kdMap.get(kw.keyword.toLowerCase());
+        if (typeof kd === 'number' && kd > 0) kw.kd = kd;
+      }
     } catch (e) {
-      trace.push(errEntry('serp/google/organic', e));
+      trace.push(errEntry('bulk_keyword_difficulty', e));
     }
   }
 
-  // 11. Attach SERP, recompute score.
-  const globalCompetitorFreq = new Map<string, number>();
-  for (const kw of top20) {
-    const rows = serpMap.get(kw.keyword.toLowerCase()) ?? [];
-    if (rows.length) {
-      kw.serp_results = rows;
-      kw.competitor_domains = pickCompetitorDomains(rows, ownDomain, 5);
-      for (const d of kw.competitor_domains) {
-        globalCompetitorFreq.set(d, (globalCompetitorFreq.get(d) ?? 0) + 1);
-      }
-    }
+  // 6. Final composite score — used only for ordering in the UI.
+  for (const kw of merged) {
     kw.keyword_analysis_score = calculateKeywordAnalysisScore(kw);
   }
-
-  // 12. Top-3 global competitor domains → ranked_keywords for each, then
-  //     attach only the relevant ones to the matching final keyword.
-  const topCompetitors = [...globalCompetitorFreq.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([d]) => d);
-
-  const competitorRanked: DiscoveredKeyword[] = [];
-  for (const domain of topCompetitors) {
-    try {
-      const rows = await fetchRankedKeywords(domain, locationCode, languageCode, auth, trace, 20);
-      for (const r of rows) competitorRanked.push(r);
-    } catch (e) {
-      trace.push(errEntry(`ranked_keywords(${domain})`, e));
-    }
-  }
-
-  if (competitorRanked.length) {
-    for (const kw of top20) {
-      const primaryTokens = new Set(tokenize(kw.keyword));
-      const matches: string[] = [];
-      for (const c of competitorRanked) {
-        if (matchesNegativePattern(c.keyword, context)) continue;
-        const tokens = tokenize(c.keyword);
-        const overlap =
-          tokens.some(t => primaryTokens.has(t)) ||
-          tokens.some(t => context.coreTokens.has(t));
-        if (overlap) matches.push(c.keyword);
-        if (matches.length >= 5) break;
-      }
-      if (matches.length) kw.competitor_ranking_keywords = matches;
-    }
-  }
-
-  // 13. Final recompute + sort by analysis score descending.
-  for (const kw of top20) {
-    kw.keyword_analysis_score = calculateKeywordAnalysisScore(kw);
-  }
-  top20.sort(
+  merged.sort(
     (a, b) => (b.keyword_analysis_score ?? 0) - (a.keyword_analysis_score ?? 0)
   );
 
-  return { keywords: top20.slice(0, 20), trace };
+  // NOTE: SERP (`serp/google/organic/live/advanced`), keyword_overview and
+  // clustering are intentionally not called — the user asked for the raw
+  // keyword_ideas + related_keywords + bulk_keyword_difficulty pipeline with
+  // all ~120 rows visible. Re-introduce them behind a flag if that changes.
+  void ownDomain;
+  void fetchKeywordOverview;
+  void fetchSerpForKeywords;
+  void clusterKeywords;
+  void pickCompetitorDomains;
+
+  return { keywords: merged, trace };
 }
 
 function errEntry(label: string, e: unknown): DataForSEOTraceEntry {

@@ -2,11 +2,11 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { discoverKeywordsForProject, type DiscoveredKeyword } from '@/lib/dataforseo';
+import { discoverKeywordsForProject } from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
-import { filterByRelevance } from '@/lib/relevance';
+import { crawlWebsite, type WebsiteCrawlResult } from '@/lib/websiteCrawler';
 
 function aiScore(volume: number, kd: number, intent: string = ''): number {
   // Require both volume and KD to be known, otherwise the score misleads.
@@ -36,29 +36,90 @@ export async function discoverKeywords(projectId: string) {
 
   if (pErr || !project) return { success: false, error: 'Project not found' };
 
-  // 1. Ensure a Business Brief exists — this scrapes the user's own domain
-  //    once and caches it. On refresh we reuse the cached brief, so the cost
-  //    only hits on the first "Discover" for a project (or a manual refresh).
-  const briefRes = await generateBusinessBrief(projectId, { force: false });
+  // Unpack the form fields once, so the rest of the action — and the dev-time
+  // console.log below — reads naturally.
+  const websiteDomain: string = project.domain ?? '';
+  const nicheIndustry: string = project.niche ?? '';
+  const targetAudience: string = project.target_audience ?? '';
+  const description: string = project.description ?? '';
+  const companyName: string = project.company ?? '';
+  const region: string = project.target_region ?? '';
+  const language: string = project.target_language ?? 'en';
+
+  // 1. In parallel: ensure a Business Brief exists (Jina scrape — cached in
+  //    `project_briefs`) and run the lightweight SEO crawler against the
+  //    user's domain. `crawlWebsite` NEVER throws — it always resolves to a
+  //    WebsiteCrawlResult, even when the domain is empty or the target is
+  //    down (the returned object then carries an `error` field). We use that
+  //    guarantee to always forward a real object into `discoverKeywordsForProject`
+  //    so the `(crawled_website_context)` trace can never read "skipped".
+  const [briefRes, crawlRaw] = await Promise.all([
+    generateBusinessBrief(projectId, { force: false }),
+    crawlWebsite(websiteDomain).catch(
+      (e): WebsiteCrawlResult => ({
+        url: websiteDomain,
+        finalUrl: websiteDomain,
+        status: 0,
+        title: '',
+        metaDescription: '',
+        headings: { h1: [], h2: [], h3: [] },
+        navText: [],
+        paragraphs: [],
+        urlSlugs: [],
+        linkTexts: [],
+        topPhrases: [],
+        wordCount: 0,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    ),
+  ]);
+  const crawl: WebsiteCrawlResult = crawlRaw;
   const brief = briefRes.brief;
 
-  // 2. Seeds. Prefer the brief's business-specific phrases; fall back to
-  //    niche-template strings only when the brief is empty / failed.
-  const seeds = buildSeedsFromBrief(brief, {
-    niche: project.niche,
-    audience: project.target_audience,
-    competitors: (project.project_competitors ?? []).map((c: { domain: string }) => c.domain),
+  // 2. Seeds. We DO NOT use the brief's AI-generated seed_phrases here —
+  //    they're inferred from the website scrape and were drifting into
+  //    phrases the user never typed (e.g. "leadership hiring consulting"
+  //    for a project whose niche was "Software engineering"). Instead we
+  //    split the user's raw Niche / Industry + Target Audience fields on
+  //    commas / semicolons / " and " / "&" / "/" — so what the user typed
+  //    is literally what DataForSEO receives.
+  const seedKeywords = buildSeedsFromInputs(nicheIndustry, targetAudience);
+
+  // Dev-time sanity log so the Next.js server terminal makes it obvious which
+  // form fields actually reached the pipeline. This fires on every Discover
+  // click — it's cheap, and we've been bitten before by fields silently
+  // dropping at the action boundary.
+  console.log('Keyword discovery input', {
+    seedKeywords,
+    region,
+    language,
+    websiteDomain,
+    nicheIndustry,
+    targetAudience,
+    description,
+    companyName,
+    crawlTitle: crawl.title,
+    crawlTopPhrases: crawl.topPhrases.slice(0, 20),
+    crawlStatus: crawl.status,
+    crawlError: crawl.error ?? null,
   });
 
   const { keywords: rawKeywords, trace: discoveryTrace } = await discoverKeywordsForProject(
-    seeds.slice(0, 12),
-    project.target_region,
-    project.target_language,
-    project.domain || undefined,
-    // Passing the user-entered niche as `businessDomain` is what anchors the
-    // relevance + business-fit scorers. Without this the pipeline falls back
-    // to inferring the niche from seed tokens, which is far weaker.
-    project.niche || undefined
+    seedKeywords,
+    region,
+    language,
+    // 1. Website Domain → targetUrl
+    websiteDomain || undefined,
+    // 2. Niche / Industry → businessDomain (anchors the relevance + fit scorers)
+    nicheIndustry || undefined,
+    // 3-6. Target Audience, Description, Company Name, and the live crawl
+    //      all go through the extras bag.
+    {
+      targetAudience: targetAudience || undefined,
+      description: description || undefined,
+      companyName: companyName || undefined,
+      crawl,
+    }
   );
 
   if (!rawKeywords.length) {
@@ -80,21 +141,19 @@ export async function discoverKeywords(projectId: string) {
     };
   }
 
-  // 3. Filter raw DataForSEO ideas against the brief so off-topic suggestions
-  //    (e.g. random company names Google thinks are "creator industry")
-  //    are dropped before we hit the DB.
-  let filtered: DiscoveredKeyword[] = rawKeywords;
-  let relevanceSummary: { kept: number; dropped: number; threshold: number; reason?: string } | null = null;
-  if (brief) {
-    const result = await filterByRelevance(brief, rawKeywords, { threshold: 0.55, minKept: 25 });
-    filtered = result.kept;
-    relevanceSummary = {
-      kept: result.kept.length,
-      dropped: result.dropped.length,
-      threshold: result.threshold,
-      reason: result.reason,
-    };
-  }
+  // 3. The DataForSEO pipeline (relevance_score ≥ 45 + business_fit_score ≥ 35
+  //    + context-aware negative patterns + cluster-dedupe) already enforces
+  //    strict topical relevance. The old Gemini-embedding post-filter used to
+  //    run here on top, but it was cutting the final 100 keywords down to
+  //    ~13 at the default 0.55 threshold — the two filters were fighting each
+  //    other. We trust the pipeline gates now and let the full result through.
+  const filtered = rawKeywords;
+  const relevanceSummary = {
+    kept: rawKeywords.length,
+    dropped: 0,
+    threshold: 0,
+    reason: 'pipeline_gates_only',
+  };
 
   const rows = filtered.map(kw => ({
     project_id: projectId,
@@ -122,6 +181,31 @@ export async function discoverKeywords(projectId: string) {
     status: 'pending',
   }));
 
+  // Fresh-start replace: wipe the existing `pending` keywords for this project
+  // before inserting the fresh 100. Approved/rejected rows are preserved so the
+  // calendar and existing content don't lose their anchors.
+  //
+  // Important: the previous pipeline used `upsert(..., { ignoreDuplicates: true })`,
+  // which made re-runs silently no-op for any keyword the project had seen
+  // before. That's why earlier refactors looked like "nothing changed".
+  const { error: delErr } = await supabaseAdmin
+    .from('keywords')
+    .delete()
+    .eq('project_id', projectId)
+    .eq('status', 'pending');
+
+  if (delErr) {
+    return {
+      success: false,
+      error: `Failed to clear stale keywords before re-discovery: ${delErr.message}`,
+      discoveryTrace,
+      briefSummary: briefSummary(brief),
+      relevance: relevanceSummary,
+    };
+  }
+
+  // Use upsert with `ignoreDuplicates: true` only to skip rows whose keyword
+  // is already approved/rejected (still in the table). All other rows insert.
   const { data, error } = await supabaseAdmin
     .from('keywords')
     .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
@@ -145,36 +229,31 @@ export async function discoverKeywords(projectId: string) {
   };
 }
 
-function buildSeedsFromBrief(
-  brief: BusinessBrief | undefined,
-  fallback: { niche: string; audience: string; competitors: string[] }
-): string[] {
-  const seeds: string[] = [];
-  if (brief?.seed_phrases?.length) {
-    seeds.push(...brief.seed_phrases);
-  }
-  // Top up with niche/competitor derivatives if the brief came back short.
-  if (seeds.length < 8) {
-    seeds.push(
-      fallback.niche,
-      `best ${fallback.niche}`,
-      `${fallback.niche} tools`,
-      `${fallback.niche} software`,
-      `${fallback.niche} for ${fallback.audience}`,
-      `how to ${fallback.niche}`
-    );
-    for (const c of fallback.competitors.slice(0, 2)) {
-      seeds.push(c.replace(/\.(com|io|net|org|co)$/, '').replace(/-/g, ' '));
-    }
-  }
-  // Dedupe, lowercase, drop empties.
+/**
+ * Parse the raw Niche / Industry and Target Audience fields from the Create
+ * Project form into a clean list of seed phrases — in the exact wording the
+ * user typed. Splits on commas, semicolons, pipes, slashes, ampersands, and
+ * the word " and " so multi-topic projects (e.g. "Software engineering, HR,
+ * RPO services") yield one seed per topic.
+ *
+ * The brief's AI-generated `seed_phrases` are intentionally NOT consulted
+ * here — they drift into phrases the user never typed. We still build the
+ * brief (it's what the UI brief card reads) but we don't mine it for seeds.
+ */
+function buildSeedsFromInputs(niche: string, audience: string): string[] {
+  const raw = `${niche ?? ''}, ${audience ?? ''}`;
+  const parts = raw
+    .split(/[,;|/&]|\s+and\s+/i)
+    .map(s => s.trim())
+    .filter(Boolean);
+
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const s of seeds) {
-    const norm = (s || '').trim().toLowerCase();
-    if (!norm || seen.has(norm)) continue;
-    seen.add(norm);
-    out.push(norm);
+  for (const p of parts) {
+    const key = p.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
   }
   return out;
 }

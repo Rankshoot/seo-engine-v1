@@ -11,21 +11,29 @@
   "dependencies": {
     "@clerk/nextjs": "^7.0.11",
     "@clerk/themes": "^2.4.57",
+    "@mozilla/readability": "^0.6.0",
     "@supabase/supabase-js": "^2.103.0",
     "@tailwindcss/postcss": "^4.2.2",
+    "cheerio": "^1.2.0",
     "docx": "^9.6.1",
+    "jsdom": "^29.0.2",
     "next": "16.2.2",
+    "playwright": "^1.59.1",
     "postcss": "^8.5.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "tailwindcss": "^4.2.2"
+    "tailwindcss": "^4.2.2",
+    "turndown": "^7.2.4"
   },
   "devDependencies": {
+    "@types/jsdom": "^28.0.1",
+    "@types/mozilla-readability": "^0.2.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/turndown": "^5.0.6",
     "eslint": "^9",
     "eslint-config-next": "16.2.2",
     "typescript": "^5"

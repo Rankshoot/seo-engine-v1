@@ -22,7 +22,7 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { repairBlogPost } from '@/lib/gemini';
-import { jinaReadUrl } from '@/lib/jina';
+import { hybridReadUrl as jinaReadUrl } from '@/services/hybridScraper';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
 import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import type { Project } from '@/lib/types';

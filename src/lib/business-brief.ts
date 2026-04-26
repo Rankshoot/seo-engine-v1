@@ -8,11 +8,10 @@
 
 import {
   fetchBlogUrls,
-  jinaReadBatch,
   pickBriefUrls,
   normalizeDomain,
-  type JinaPage,
 } from './jina';
+import { hybridReadBatch, type ScrapedPageMarkdown as JinaPage } from '../services/hybridScraper';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
@@ -97,11 +96,11 @@ export async function buildBusinessBrief(input: BuildBriefInput): Promise<BuildB
   trace.push({ label: 'picked_urls', ok: true, length: allUrls.length });
   trace.push({ label: 'blog_urls_discovered', ok: true, length: blogUrls.length });
 
-  // 2. Scrape them with Jina Reader (free, markdown out).
-  const pages = await jinaReadBatch(allUrls, { timeoutMs: 25_000 });
+  // 2. Scrape them with the hybrid scraper (markdown out).
+  const pages = await hybridReadBatch(allUrls, { timeoutMs: 25_000 });
   for (const p of pages) {
     trace.push({
-      label: 'jina_read',
+      label: 'hybrid_read',
       url: p.url,
       ok: p.ok,
       length: p.length,

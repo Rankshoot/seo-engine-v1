@@ -129,3 +129,92 @@ export const TARGET_REGIONS = [
 ] as const;
 
 export const WORD_COUNT_OPTIONS = [500, 1000, 1500, 2500, 3000, 5000] as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Competitor Benchmarking Engine
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type GapType = 'missing' | 'weak' | 'untapped';
+export type CompetitorKeywordKind = 'primary' | 'longtail' | 'question';
+
+/** Snapshot of one scraped competitor page — used inside Competitor.top_pages. */
+export interface CompetitorPageSnapshot {
+  url: string;
+  title: string;
+  h1: string;
+  h2_count: number;
+  h3_count: number;
+  word_count: number;
+  image_count: number;
+  internal_link_count: number;
+  external_link_count: number;
+  has_faq: boolean;
+  meta_description?: string;
+}
+
+/** One competitor domain with benchmarked content averages. */
+export interface Competitor {
+  id: string;
+  project_id: string;
+  domain: string;
+  title: string;
+  rank_score: number;
+  pages_scraped: number;
+  avg_word_count: number;
+  avg_h2: number;
+  avg_h3: number;
+  avg_images: number;
+  avg_internal_links: number;
+  avg_external_links: number;
+  faq_pages_pct: number;
+  top_pages: CompetitorPageSnapshot[];
+  recommendations: string[];
+  last_benchmarked_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompetitorKeyword {
+  id: string;
+  competitor_id: string;
+  project_id: string;
+  keyword: string;
+  kind: CompetitorKeywordKind;
+  freq: number;
+  source_url: string;
+  source_title: string;
+  created_at: string;
+}
+
+/** Resolved gap row — drives the Opportunity Dashboard. */
+export interface KeywordGap {
+  id: string;
+  project_id: string;
+  keyword: string;
+  gap_type: GapType;
+  opportunity_score: number;
+  volume: number;
+  kd: number;
+  trend: string;
+  trend_pct: number;
+  competitor_weakness: number;
+  top_competitor_domain: string;
+  top_competitor_url: string;
+  reasoning: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Aggregated benchmark across all competitors for one project. */
+export interface BenchmarkAverages {
+  avg_word_count: number;
+  avg_h2: number;
+  avg_h3: number;
+  avg_images: number;
+  avg_internal_links: number;
+  avg_external_links: number;
+  faq_pages_pct: number;
+  pages_analyzed: number;
+  recommendations: string[];
+}
+

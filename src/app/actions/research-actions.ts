@@ -4,27 +4,141 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { discoverCompetitorGapKeywords, type CompetitorGapKeyword } from '@/lib/research';
 import { analyzeKeywordGapStrategy } from '@/lib/gemini';
+import { fetchKeywordVitals } from '@/lib/dataforseo';
+import { discoverCompetitors, type BenchmarkTraceEntry } from '@/lib/competitor-benchmark';
+import { getBusinessBrief } from '@/app/actions/brief-actions';
 import type { Project, ProjectCompetitor } from '@/lib/types';
 
-export async function findCompetitorGaps(projectId: string) {
+export interface FindCompetitorGapsResult {
+  success: boolean;
+  error?: string;
+  data: CompetitorGapKeyword[];
+  /** Domains we auto-discovered from SERP because the user hadn't added any. */
+  autoDiscoveredCompetitors?: string[];
+}
+
+/**
+ * When the project has no competitors on file, rank the top-of-SERP domains
+ * for the project's seed keywords (business-brief seeds if we have them, else
+ * niche-based fallbacks) and persist them into `project_competitors` so the
+ * rest of the gap-analysis + benchmarking pipeline has something to chew on.
+ *
+ * Returns the freshly-persisted ProjectCompetitor rows.
+ */
+async function autoDiscoverProjectCompetitors(
+  project: Project,
+): Promise<ProjectCompetitor[]> {
+  const briefRes = await getBusinessBrief(project.id);
+
+  // Stack multiple seed sources so we have real coverage even when the
+  // business brief is missing or the niche is a single narrow phrase.
+  const niche = (project.niche || '').trim();
+  const audience = (project.target_audience || '').trim();
+  const seedSet = new Set<string>();
+  for (const phrase of briefRes.brief?.seed_phrases ?? []) {
+    const p = (phrase || '').trim();
+    if (p) seedSet.add(p);
+  }
+  if (niche) {
+    seedSet.add(niche);
+    seedSet.add(`best ${niche}`);
+    seedSet.add(`top ${niche}`);
+    seedSet.add(`${niche} tools`);
+    seedSet.add(`${niche} platform`);
+    seedSet.add(`${niche} software`);
+    if (audience) seedSet.add(`${niche} for ${audience}`);
+  }
+  const seeds = [...seedSet].filter(Boolean);
+
+  const trace: BenchmarkTraceEntry[] = [];
+
+  const discovered = await discoverCompetitors(seeds, {
+    region: project.target_region,
+    language: project.target_language,
+    ownDomain: project.domain,
+    maxSeeds: 8,
+    maxCompetitors: 5,
+    trace,
+  });
+
+  // Surface the full Serper trace in server logs so we can diagnose empty
+  // discovery runs (missing API key, zero organic results, all-boilerplate
+  // SERP, etc.) without requiring a fresh deploy.
+  console.log(
+    '[auto-discover-competitors]',
+    JSON.stringify(
+      {
+        project_id: project.id,
+        niche,
+        region: project.target_region,
+        language: project.target_language,
+        serper_key_present: Boolean(process.env.SERPER_API_KEY),
+        seed_count: seeds.length,
+        seeds,
+        found: discovered.length,
+        domains: discovered.map(d => d.domain),
+        trace,
+      },
+      null,
+      0
+    )
+  );
+
+  if (!discovered.length) return [];
+
+  // Insert-or-ignore: a stray duplicate (from a race with the full benchmark
+  // run) shouldn't fail the gap lookup, so we swallow that specific case.
+  const rows = discovered.map(d => ({ project_id: project.id, domain: d.domain }));
+  const { data: inserted, error } = await supabaseAdmin
+    .from('project_competitors')
+    .upsert(rows, { onConflict: 'project_id,domain', ignoreDuplicates: true })
+    .select();
+
+  if (error || !inserted?.length) {
+    // Fall back to a plain read — duplicates mean rows already exist.
+    const { data: existing } = await supabaseAdmin
+      .from('project_competitors')
+      .select('*')
+      .eq('project_id', project.id);
+    return (existing ?? []) as ProjectCompetitor[];
+  }
+  return inserted as ProjectCompetitor[];
+}
+
+export async function findCompetitorGaps(projectId: string): Promise<FindCompetitorGapsResult> {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: [] };
 
-  const { data: project, error: pErr } = await supabaseAdmin
+  const { data: projectRow, error: pErr } = await supabaseAdmin
     .from('projects')
     .select('*, project_competitors(*)')
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();
 
-  if (pErr || !project) return { success: false, error: 'Project not found', data: [] };
+  if (pErr || !projectRow) return { success: false, error: 'Project not found', data: [] };
+  const project = projectRow as Project & { project_competitors?: ProjectCompetitor[] };
 
-  const competitors = (project.project_competitors ?? []) as ProjectCompetitor[];
+  let competitors = (project.project_competitors ?? []) as ProjectCompetitor[];
+  let autoDiscoveredCompetitors: string[] | undefined;
+
   if (!competitors.length) {
-    return { success: false, error: 'No competitors added to this project. Edit the project to add competitor domains.', data: [] };
+    // No competitors on file — mine real SERP competitors from Serper based on
+    // the project's niche/business-brief seeds and persist them, so the rest
+    // of the gap pipeline (and every future run) has something to work with.
+    const discovered = await autoDiscoverProjectCompetitors(project);
+    if (!discovered.length) {
+      return {
+        success: false,
+        error:
+          "We couldn't auto-discover competitors from search for this niche. Try adding a couple of known competitors on the project overview and re-run.",
+        data: [],
+      };
+    }
+    competitors = discovered;
+    autoDiscoveredCompetitors = discovered.map(c => c.domain);
   }
 
-  // Get existing keywords to avoid duplicates
   const { data: existingKws } = await supabaseAdmin
     .from('keywords')
     .select('keyword')
@@ -39,7 +153,23 @@ export async function findCompetitorGaps(projectId: string) {
     existingKeywords
   );
 
-  return { success: true, data: gaps };
+  // AGENTS.md rule: never fake metrics. Hydrate real monthly volume for every
+  // mined gap via DataForSEO `keyword_overview/live` (one call covers up to
+  // 700 phrases). Rows where DataForSEO has no match keep volume 0 so the UI
+  // renders an honest "—" instead of a random placeholder.
+  if (gaps.length) {
+    const vitals = await fetchKeywordVitals(
+      gaps.map(g => g.keyword),
+      project.target_region,
+      project.target_language
+    );
+    for (const g of gaps) {
+      const v = vitals.get(g.keyword.toLowerCase());
+      if (v) g.estimatedVolume = v.volume;
+    }
+  }
+
+  return { success: true, data: gaps, autoDiscoveredCompetitors };
 }
 
 export async function analyzeKeywordGapsAction(projectId: string, gaps: CompetitorGapKeyword[]) {

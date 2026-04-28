@@ -5,8 +5,8 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getBlogById, generateBlog, updateBlogStatus, updateBlogContent } from "@/app/actions/blog-actions";
-import { Blog, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
+import { getBlogById, generateBlog, updateBlogStatus, updateBlogContent, fixBlogSeoIssue } from "@/app/actions/blog-actions";
+import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 
@@ -57,6 +57,8 @@ export default function BlogViewerPage() {
   const [savingContent, setSavingContent] = useState(false);
   const [scoreRefreshing, setScoreRefreshing] = useState(false);
   const [scoreVersion, setScoreVersion] = useState(0);
+  const [fixingIssue, setFixingIssue] = useState<BlogSeoIssueKey | null>(null);
+  const [fixError, setFixError] = useState("");
   const [editError, setEditError] = useState("");
   const [activeView, setActiveView] = useState<"preview" | "raw">("preview");
   const titleEditorRef = useRef<HTMLHeadingElement | null>(null);
@@ -153,6 +155,22 @@ export default function BlogViewerPage() {
       setStatusError(res.error ?? "Could not update blog status");
     }
     setSavingStatus(false);
+  };
+
+  const handleSeoFix = async (issueKey: BlogSeoIssueKey) => {
+    if (!blog || fixingIssue || editMode) return;
+    setFixingIssue(issueKey);
+    setFixError("");
+    setScoreRefreshing(true);
+    const res = await fixBlogSeoIssue(blog.id, issueKey);
+    if (res.success && res.data) {
+      setBlog(res.data);
+      setScoreVersion(v => v + 1);
+    } else {
+      setFixError(res.error ?? "AI fix failed. Try again.");
+    }
+    setFixingIssue(null);
+    window.setTimeout(() => setScoreRefreshing(false), 450);
   };
 
   if (loading) {
@@ -297,7 +315,7 @@ export default function BlogViewerPage() {
             <div className="p-0">
 
               <ArticleMetaRow blog={blog} />
-              <article className="mx-auto max-w-[720px] px-6 py-10 sm:px-10 sm:py-14">
+              <article className="mx-auto max-w-[900px] px-6 py-10 sm:px-6 sm:py-14">
                 <header className="mb-10 border-b border-border-subtle pb-8">
                   <h1
                     ref={titleEditorRef}
@@ -352,13 +370,23 @@ export default function BlogViewerPage() {
         <div className="space-y-4 xl:sticky xl:top-6">
           {/* SEO Score */}
           <div className={editMode || savingContent || scoreRefreshing ? "pointer-events-none opacity-35 grayscale transition-all" : "transition-all"}>
-            <SEOScorePanel key={`${blog.id}-${blog.updated_at}-${scoreVersion}`} blog={blog} />
+            <SEOScorePanel
+              key={`${blog.id}-${blog.updated_at}-${scoreVersion}`}
+              blog={blog}
+              fixingIssue={fixingIssue}
+              onFixIssue={check => handleSeoFix(check.key)}
+            />
           </div>
           {(editMode || savingContent || scoreRefreshing) && (
             <p className="-mt-2 rounded-xl border border-border-subtle bg-surface-elevated px-3 py-2 text-[10px] text-text-tertiary">
               {editMode
                 ? "SEO score is paused while editing. Save changes to recalculate it."
                 : "SEO score is recalculating from the saved content..."}
+            </p>
+          )}
+          {fixError && (
+            <p className="-mt-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[10px] text-rose-400">
+              {fixError}
             </p>
           )}
 
@@ -526,7 +554,7 @@ function RepairBanner({
           <div>
             <p className="text-xs font-bold uppercase tracking-widest text-brand-400">Repair draft</p>
             <p className="text-sm text-text-primary">
-              AI rewrite of{" "}
+              Surgical repair of{" "}
               <a
                 href={sourceUrl}
                 target="_blank"
@@ -538,8 +566,8 @@ function RepairBanner({
               </a>
             </p>
             <p className="mt-1 text-xs text-text-tertiary">
-              Preview below shows the repaired version as it would appear once published. Replace the content on your
-              CMS, or download it in any format from the sidebar.
+              Only audit-flagged issues should be changed. Correct sections are preserved; review the repair summary
+              before replacing the content on your CMS.
             </p>
           </div>
         </div>
@@ -550,7 +578,7 @@ function RepairBanner({
               onClick={() => setOpen(v => !v)}
               className="rounded-xl border border-accent-500/30 bg-accent-500/10 px-3 py-2 text-xs font-bold text-accent-400 hover:bg-accent-500/20"
             >
-              {open ? "Hide changes" : `See ${repairNotes.length} change${repairNotes.length === 1 ? "" : "s"}`}
+              {open ? "Hide summary" : "Repair summary"}
             </button>
           )}
           <Link
@@ -565,7 +593,7 @@ function RepairBanner({
       {open && repairNotes.length > 0 && (
         <div className="mt-4 rounded-xl border border-accent-500/20 bg-surface-primary/60 p-4">
           <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-accent-400">
-            What the AI changed
+            Repair summary
           </p>
           <ul className="space-y-1.5 text-sm text-text-secondary">
             {repairNotes.map((note, i) => (
@@ -614,7 +642,7 @@ function EditorialPreview({ blog }: { blog: Blog }) {
   return (
     <>
       <ArticleMetaRow blog={blog} />
-      <article className="mx-auto max-w-[720px] px-6 py-10 sm:px-10 sm:py-14">
+      <article className="mx-auto max-w-[900px] px-6 py-10 sm:px-6 sm:py-14">
       {/* Hero */}
       <header className="mb-10 border-b border-border-subtle pb-8">
         <h1 className="mb-4 text-[34px] font-black leading-[1.15] tracking-tight text-text-primary sm:text-[40px]">
@@ -649,8 +677,8 @@ function ArticleMetaRow({ blog }: { blog: Blog }) {
   });
 
   return (
-    <div className="border-b border-border-subtle bg-surface-primary/40 px-6 py-3">
-      <div className="mx-auto flex max-w-[720px] flex-wrap items-center gap-2 text-[11px] text-text-tertiary sm:px-4">
+    <div className="border-b border-border-subtle bg-surface-primary/40 px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-[900px] flex-wrap items-center gap-2 text-[11px] text-text-tertiary">
         {blog.article_type && (
           <span className="rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-brand-400">
             {blog.article_type}

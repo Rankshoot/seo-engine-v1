@@ -5,7 +5,7 @@
  *
  * Given an existing audit row (URL + issues), the `repairBlogFromAudit` action:
  *   1. Loads the authenticated project + business brief.
- *   2. Scrapes the live page via Jina (fresh markdown — the audit's scrape may
+ *   2. Scrapes the live page via the hybrid scraper (fresh markdown — the audit's scrape may
  *      be hours/days old).
  *   3. Creates a placeholder calendar entry tagged "Repair", so the resulting
  *      blog can live in the calendar / content pipeline like any other post.
@@ -26,6 +26,47 @@ import { hybridReadUrl as jinaReadUrl } from '@/services/hybridScraper';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
 import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import type { Project } from '@/lib/types';
+
+function titleNeedsRepair(analysis: BlogAuditAnalysis): boolean {
+  return analysis.issues.some(i =>
+    /title|h1|headline|keyword in title|target keyword/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+}
+
+function metaNeedsRepair(analysis: BlogAuditAnalysis): boolean {
+  return analysis.issues.some(i =>
+    /meta description|meta tag|description/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+}
+
+function countWords(markdown: string): number {
+  return markdown.split(/\s+/).filter(Boolean).length;
+}
+
+function replaceFirstH1(markdown: string, title: string): string {
+  const safeTitle = title.trim();
+  if (!safeTitle) return markdown;
+  if (/^#\s+.+$/m.test(markdown)) {
+    return markdown.replace(/^#\s+.+$/m, `# ${safeTitle}`);
+  }
+  return `# ${safeTitle}\n\n${markdown.trim()}`;
+}
+
+function normalizeRepairNotes(notes: string[], analysis: BlogAuditAnalysis): string[] {
+  const cleaned = notes.map(n => n.trim()).filter(Boolean);
+  const hasDone = cleaned.some(n => /^done:/i.test(n));
+  const hasStill = cleaned.some(n => /^still to do:/i.test(n));
+
+  const done = hasDone
+    ? cleaned.filter(n => /^done:/i.test(n))
+    : analysis.issues.slice(0, 6).map(i => `Done: ${i.fix || i.label}`);
+
+  const still = hasStill
+    ? cleaned.filter(n => /^still to do:/i.test(n))
+    : ['Still to do: none — re-run Content Health after publishing/replacing the page to verify the fixes.'];
+
+  return [...done, ...still].slice(0, 10);
+}
 
 export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
   const user = await currentUser();
@@ -125,6 +166,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
     // 6. Call the LLM to rewrite.
     const repaired = await repairBlogPost({
       sourceUrl: auditUrl,
+      originalTitle: auditRow.title || '',
       originalMarkdown: fresh.markdown,
       issues: analysis.issues.map(i => ({
         label: i.label,
@@ -142,16 +184,26 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
       wordCount: 2200,
     });
 
+    // Guardrail: repair should not rename the page unless the audit explicitly
+    // flagged title/H1/keyword-title problems.
+    const preserveTitle = !titleNeedsRepair(analysis) && Boolean(auditRow.title);
+    const finalTitle = preserveTitle ? auditRow.title : repaired.title;
+    const finalContent = preserveTitle ? replaceFirstH1(repaired.content, auditRow.title) : repaired.content;
+    const finalMetaDescription = metaNeedsRepair(analysis)
+      ? repaired.meta_description
+      : (analysis.summary || repaired.meta_description);
+    const repairNotes = normalizeRepairNotes(repaired.repair_notes, analysis);
+
     // 7. Persist the blog.
     const { data: blogRow, error: blogErr } = await supabaseAdmin
       .from('blogs')
       .insert({
         entry_id: entryRow.id,
         project_id: projectId,
-        title: repaired.title,
-        content: repaired.content,
-        meta_description: repaired.meta_description,
-        word_count: repaired.word_count,
+        title: finalTitle,
+        content: finalContent,
+        meta_description: finalMetaDescription,
+        word_count: countWords(finalContent),
         target_keyword: analysis.primary_keyword || auditRow.primary_keyword || '',
         article_type: 'Repair',
         slug: repaired.slug,
@@ -160,7 +212,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
         external_links: repaired.external_links,
         internal_links: repaired.internal_links,
         source_url: auditUrl,
-        repair_notes: repaired.repair_notes,
+        repair_notes: repairNotes,
       })
       .select()
       .single();
@@ -183,7 +235,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
       data: {
         blogId: blogRow.id,
         entryId: entryRow.id,
-        repair_notes: repaired.repair_notes,
+        repair_notes: repairNotes,
       },
     };
   } catch (e) {

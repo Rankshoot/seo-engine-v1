@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import { Blog } from "@/lib/types";
+import { Blog, BlogSeoIssueKey } from "@/lib/types";
 
 interface SEOCheck {
+  key: BlogSeoIssueKey;
   label: string;
   pass: boolean;
   points: number;
@@ -31,16 +32,29 @@ function computeSEOScore(blog: Blog): SEOScore {
   const h2Count = (content.match(/^## /gm) ?? []).length;
   const h3Count = (content.match(/^### /gm) ?? []).length;
 
-  // External and internal links
-  const externalLinks = (content.match(/\[([^\]]+)\]\(https?:\/\//g) ?? []).length;
-  const internalLinks = (content.match(/\[([^\]]+)\]\(\//g) ?? []).length;
+  // External and internal links. Prefer the persisted link arrays because the
+  // generator/repair flow already classifies absolute same-domain URLs (e.g.
+  // https://example.com/blog/foo) as internal. Fall back to markdown scanning
+  // for older rows or manually edited content before it has been saved.
+  const markdownExternalLinks = (content.match(/\[([^\]]+)\]\(https?:\/\//g) ?? []).length;
+  const markdownInternalLinks = (content.match(/\[([^\]]+)\]\(\//g) ?? []).length;
+  const externalLinks = blog.external_links?.length ?? markdownExternalLinks;
+  const internalLinks = blog.internal_links?.length ?? markdownInternalLinks;
 
   // Has FAQ section
   const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(content);
 
-  // Keyword density (target 1-3%)
-  const words = content.toLowerCase().split(/\s+/);
-  const kwWords = kw.split(/\s+/);
+  // Keyword density (target 1-3%). Normalize punctuation so phrases like
+  // "chief ai officer," still count as "chief ai officer".
+  const words = content
+    .toLowerCase()
+    .replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const kwWords = kw
+    .replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
   let kwOccurrences = 0;
   for (let i = 0; i <= words.length - kwWords.length; i++) {
     if (kwWords.every((w, j) => words[i + j] === w)) kwOccurrences++;
@@ -49,66 +63,77 @@ function computeSEOScore(blog: Blog): SEOScore {
 
   const checks: SEOCheck[] = [
     {
+      key: "title_keyword",
       label: "Target keyword in title",
       pass: kw.split(" ").some(w => w.length > 3 && title.includes(w)),
       points: 15,
       hint: "Include the target keyword in your H1 title",
     },
     {
+      key: "intro_keyword",
       label: "Keyword in first 100 words",
       pass: kw.split(" ").some(w => w.length > 3 && firstPara.includes(w)),
       points: 10,
       hint: "Mention the target keyword within the opening paragraph",
     },
     {
+      key: "meta_keyword",
       label: "Meta description has keyword",
       pass: kw.split(" ").some(w => w.length > 3 && meta.toLowerCase().includes(w)),
       points: 10,
       hint: "Include the target keyword in your meta description",
     },
     {
+      key: "meta_length",
       label: "Meta description 150–160 chars",
       pass: meta.length >= 140 && meta.length <= 165,
       points: 5,
       hint: `Meta is ${meta.length} chars — aim for 150–160`,
     },
     {
+      key: "word_count",
       label: "Content ≥ 1,500 words",
       pass: blog.word_count >= 1500,
       points: 15,
       hint: `Current: ${blog.word_count} words — aim for at least 1,500`,
     },
     {
+      key: "h2_structure",
       label: "Has ≥ 3 H2 headings",
       pass: h2Count >= 3,
       points: 10,
       hint: `${h2Count} H2 headings — add more structured sections`,
     },
     {
+      key: "h3_structure",
       label: "Has H3 sub-headings",
       pass: h3Count >= 1,
       points: 5,
       hint: "Add H3 headings to organise sub-topics",
     },
     {
+      key: "faq",
       label: "FAQ section included",
       pass: hasFAQ,
       points: 10,
       hint: "Add a FAQ section to capture People Also Ask traffic",
     },
     {
+      key: "external_links",
       label: "External links (3–8)",
       pass: externalLinks >= 3,
       points: 10,
       hint: `${externalLinks} external links found — aim for 3–8 authoritative sources`,
     },
     {
+      key: "internal_links",
       label: "Internal links present",
       pass: internalLinks >= 1,
       points: 5,
       hint: "Link to other relevant articles on your site",
     },
     {
+      key: "keyword_density",
       label: "Keyword density 0.5–3%",
       pass: kwDensity >= 0.5 && kwDensity <= 3,
       points: 5,
@@ -134,7 +159,15 @@ const GRADE_CONFIG = {
   F: { color: "text-rose-400", ring: "ring-rose-500/30", bg: "bg-rose-500/10", label: "Critical" },
 };
 
-export default function SEOScorePanel({ blog }: { blog: Blog }) {
+export default function SEOScorePanel({
+  blog,
+  onFixIssue,
+  fixingIssue,
+}: {
+  blog: Blog;
+  onFixIssue?: (issue: SEOCheck) => void;
+  fixingIssue?: BlogSeoIssueKey | null;
+}) {
   const score = useMemo(() => computeSEOScore(blog), [blog]);
   const cfg = GRADE_CONFIG[score.grade];
   const pct = Math.round((score.total / score.maxTotal) * 100);
@@ -188,11 +221,23 @@ export default function SEOScorePanel({ blog }: { blog: Blog }) {
                 </svg>
               )}
             </div>
-            <div className="min-w-0">
-              <p className={`text-[10px] font-bold leading-tight ${check.pass ? "text-text-secondary" : "text-text-primary"}`}>
-                {check.label}
-                <span className="text-text-tertiary font-normal ml-1">({check.points}pt)</span>
-              </p>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <p className={`text-[10px] font-bold leading-tight ${check.pass ? "text-text-secondary" : "text-text-primary"}`}>
+                  {check.label}
+                  <span className="text-text-tertiary font-normal ml-1">({check.points}pt)</span>
+                </p>
+                {!check.pass && onFixIssue && (
+                  <button
+                    type="button"
+                    onClick={() => onFixIssue(check)}
+                    disabled={Boolean(fixingIssue)}
+                    className="shrink-0 rounded-md border border-brand-500/20 bg-brand-500/10 px-2 py-0.5 text-[9px] font-bold text-brand-400 transition-all hover:bg-brand-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {fixingIssue === check.key ? "Fixing..." : "AI fix"}
+                  </button>
+                )}
+              </div>
               {!check.pass && (
                 <p className="text-[9px] text-text-tertiary leading-tight mt-0.5">{check.hint}</p>
               )}

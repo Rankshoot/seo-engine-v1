@@ -24,6 +24,18 @@ export interface ProjectCompetitor {
 export type KeywordStatus = 'pending' | 'approved' | 'rejected';
 export type CalendarStatus = 'scheduled' | 'generating' | 'generated' | 'downloaded';
 export type BlogStatus = 'generated' | 'approved' | 'published';
+export type BlogSeoIssueKey =
+  | 'title_keyword'
+  | 'intro_keyword'
+  | 'meta_keyword'
+  | 'meta_length'
+  | 'word_count'
+  | 'h2_structure'
+  | 'h3_structure'
+  | 'faq'
+  | 'external_links'
+  | 'internal_links'
+  | 'keyword_density';
 export type ExportFormat = 'markdown' | 'html' | 'txt' | 'docx';
 
 export interface Keyword {

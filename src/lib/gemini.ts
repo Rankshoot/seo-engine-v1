@@ -332,6 +332,8 @@ Return ONLY a JSON array. No markdown. No explanation. No code fences:
 export interface RepairBlogInput {
   /** The live URL of the page being repaired. */
   sourceUrl: string;
+  /** Best known title from the audit/scrape. Used to preserve the original page identity. */
+  originalTitle?: string;
   /** Markdown of the live page (from Jina Reader). */
   originalMarkdown: string;
   /** Audit findings — we feed each issue + fix back to the LLM. */
@@ -374,6 +376,17 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
     wordCount = 2200,
   } = input;
 
+  const originalTitle =
+    input.originalTitle?.trim() ||
+    originalMarkdown.match(/^#\s+(.+)$/m)?.[1]?.replace(/\*+/g, '').trim() ||
+    '';
+  const titleNeedsRepair = issues.some(i =>
+    /title|h1|headline|keyword in title|target keyword/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+  const metaNeedsRepair = issues.some(i =>
+    /meta description|meta tag|description/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+
   const issueBlock = issues.length
     ? issues
         .map(
@@ -402,21 +415,26 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
   // reproduce word-for-word.
   const originalHead = originalMarkdown.slice(0, 10_000);
 
-  const prompt = `You are a senior SEO + content editor. Rewrite an existing public blog post so that it addresses every audit issue listed below, while preserving the ORIGINAL topic, voice, and audience.
+  const prompt = `You are a senior SEO + content editor. Repair an existing public blog post by making the smallest useful changes needed to address the audit issues below. This is NOT a net-new article generation task.
 
 IMPORTANT RULES:
 - This is a REPAIR of an existing page — the topic must stay the same. Do NOT pivot to a different product, industry, or audience.
 - Target the same primary keyword unless the audit explicitly says the keyword is dead; then re-target to the closest secondary keyword listed.
+- Preserve every section, claim, example, and phrasing that is already correct. Only rewrite the parts connected to the listed audit issues or missing subtopics.
+- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
+- Do not change the meta description unless META_NEEDS_REPAIR is true. If false and you cannot see the original meta description, return a neutral summary that matches the original page, not a new angle.
 - Output must be valid Markdown. No HTML.
 - Start with an H1 (# Title).
 - Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
-- Add an H2-structured body with concrete examples, numbers, and subheads. Hit ≈${wordCount} words.
-- Include a ## FAQ section with 4–6 Q/A pairs (this helps earn AI Overview citations).
-- Link to 2–4 peer URLs from the INTERNAL LINK POOL below, verbatim. Use descriptive anchor text tied to the linked page. Never invent URLs.
-- Link to 1–3 credible external sources (research bodies, stats sites, documentation) using [anchor](url) — no Wikipedia.
-- Close with a brief "## Key takeaways" bullet list (3–5 bullets).
+- Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
+- Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
+- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. No Wikipedia.
+- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
 
 SOURCE URL (the live page being repaired): ${sourceUrl}
+ORIGINAL TITLE/H1: ${originalTitle || '(unknown)'}
+TITLE_NEEDS_REPAIR: ${titleNeedsRepair ? 'true' : 'false'}
+META_NEEDS_REPAIR: ${metaNeedsRepair ? 'true' : 'false'}
 PRIMARY KEYWORD: ${primaryKeyword || '(infer from title)'}
 SECONDARY KEYWORDS: ${secondaryKeywords.join(', ') || '(none)'}
 ${briefLine}
@@ -438,9 +456,9 @@ ORIGINAL PAGE (first ~10k chars of markdown, for reference — do not copy, rewr
 ${originalHead}
 ---
 
-Write the repaired blog now. Keep the H1 title close to the original intent but improved for clarity and keyword. End the blog content, then on the next line output EXACTLY:
+Write the repaired blog now. End the blog content, then on the next line output EXACTLY:
 ---META---
-{"meta_description":"150–160 chars with primary keyword","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["one-line summary of each fix applied"]}`;
+{"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;
 
   const text = await geminiGenerate(prompt);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, type AnchorHTMLAttributes, type ComponentType, type HTMLAttributes, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type AnchorHTMLAttributes, type ComponentType, type HTMLAttributes, type ImgHTMLAttributes, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -343,7 +343,11 @@ export default function BlogViewerPage() {
                   spellCheck
                   className="editorial-body visual-blog-editor min-h-[50vh] space-y-5 text-[17px] leading-[1.75] text-text-secondary outline-none focus:bg-brand-500/5"
                 >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSetForBlog(blog))}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={buildMarkdownComponents(internalSetForBlog(blog))}
+                    urlTransform={markdownUrlTransform}
+                  >
                     {stripHeroHeading(blog).body}
                   </ReactMarkdown>
                 </div>
@@ -655,7 +659,7 @@ function EditorialPreview({ blog }: { blog: Blog }) {
 
       {/* Body */}
       <div className="editorial-body space-y-5 text-[17px] leading-[1.75] text-text-secondary">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={markdownUrlTransform}>
           {body}
         </ReactMarkdown>
       </div>
@@ -709,6 +713,14 @@ function stripHeroHeading(blog: Blog): { heroTitle: string; body: string } {
   if (!h1) return { heroTitle: blog.title, body: blog.content };
   const stripped = blog.content.replace(h1[0], "").replace(/^\n+/, "");
   return { heroTitle: h1[1].replace(/\*+/g, "").trim(), body: stripped };
+}
+
+function markdownUrlTransform(url: string): string {
+  const trimmed = url.trim();
+  if (/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(trimmed)) return trimmed;
+  if (/^(https?:|mailto:|tel:)/i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("/") || trimmed.startsWith("#")) return trimmed;
+  return "";
 }
 
 // Build ReactMarkdown component overrides. Factoring out so we can memoize
@@ -788,6 +800,34 @@ function buildMarkdownComponents(internalSet: Set<string>): Components {
       {children}
     </p>
   );
+
+  const Image: ComponentType<ImgHTMLAttributes<HTMLImageElement>> = ({ alt = "", src, ...rest }) => {
+    const safeSrc = typeof src === "string" ? markdownUrlTransform(src) : "";
+    if (!safeSrc) {
+      return (
+        <span className="my-8 block rounded-2xl border border-dashed border-border-subtle bg-surface-primary px-4 py-5 text-xs text-text-tertiary">
+          Image could not be displayed. Regenerate it from edit mode.
+        </span>
+      );
+    }
+
+    return (
+      <span className="my-8 block overflow-hidden rounded-2xl border border-border-subtle bg-surface-primary">
+        <img
+          alt={alt}
+          src={safeSrc}
+          loading="lazy"
+          className="aspect-video w-full object-cover"
+          {...rest}
+        />
+        {alt && (
+          <span className="block border-t border-border-subtle px-4 py-2 text-xs text-text-tertiary">
+            {alt}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   const Strong: ComponentType<HTMLAttributes<HTMLElement>> = ({ children, ...rest }) => (
     <strong className="font-bold text-text-primary" {...rest}>
@@ -905,6 +945,7 @@ function buildMarkdownComponents(internalSet: Set<string>): Components {
     h1: Heading1,
     h2: Heading2,
     h3: Heading3,
+    img: Image,
     p: Paragraph,
     strong: Strong,
     em: Emphasis,

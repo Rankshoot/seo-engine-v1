@@ -6,6 +6,7 @@ import { generateBlogPost, geminiGenerate } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
 import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
+import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500) {
   const user = await currentUser();
@@ -81,6 +82,17 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       existingBlogs,
       brief
     );
+    const images = await generateBlogImages({
+      title: blogData.title,
+      targetKeyword: entry.focus_keyword,
+      articleType: entry.article_type,
+      niche: project.niche,
+      audience: project.target_audience,
+      company: project.company,
+      wordCount: blogData.word_count,
+    });
+    const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(blogData.content, images));
+    const finalWordCount = countWords(contentWithImages);
 
     const { data: existing } = await supabaseAdmin
       .from('blogs')
@@ -90,10 +102,10 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
 
     const upsertPayload = {
       title: blogData.title,
-      content: blogData.content,
+      content: contentWithImages,
       meta_description: blogData.meta_description,
       slug: blogData.slug,
-      word_count: blogData.word_count,
+      word_count: finalWordCount,
       target_keyword: entry.focus_keyword,
       article_type: entry.article_type,
       status: 'generated',
@@ -150,7 +162,8 @@ export async function getBlogByEntryId(entryId: string) {
     .maybeSingle();
 
   if (error) return { success: false, error: error.message, data: null };
-  return { success: true, data: data as Blog | null };
+  const blog = data ? ({ ...data, content: sanitizeBlogMarkdown(data.content ?? '') } as Blog) : null;
+  return { success: true, data: blog };
 }
 
 export async function getBlogById(blogId: string) {
@@ -164,7 +177,7 @@ export async function getBlogById(blogId: string) {
     .single();
 
   if (error) return { success: false, error: error.message, data: null };
-  return { success: true, data: data as Blog };
+  return { success: true, data: { ...data, content: sanitizeBlogMarkdown(data.content ?? '') } as Blog };
 }
 
 export async function updateBlogStatus(blogId: string, status: BlogStatus) {
@@ -225,6 +238,17 @@ function replaceFirstH1(markdown: string, title: string): string {
   return `# ${safeTitle}\n\n${markdown.trim()}`;
 }
 
+function sanitizeBlogMarkdown(markdown: string): string {
+  return markdown
+    .replace(/^\s*```(?:markdown|md)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
+    .replace(/Regenerat(?:e|ing) with AI[^\n]*(?:illustration|visual)?/gi, '')
+    .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function extractMarkdownLinks(markdown: string, ownDomain = '') {
   const external = new Set<string>();
   const internal = new Set<string>();
@@ -232,6 +256,7 @@ function extractMarkdownLinks(markdown: string, ownDomain = '') {
   const linkRe = /\[[^\]]+\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
   let match: RegExpExecArray | null;
   while ((match = linkRe.exec(markdown))) {
+    if (match.index > 0 && markdown[match.index - 1] === '!') continue;
     const href = match[1].trim();
     if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) continue;
     if (/^https?:\/\//i.test(href)) {
@@ -355,7 +380,7 @@ export async function updateBlogContent(
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: null };
 
-  const cleaned = content.trim();
+  const cleaned = sanitizeBlogMarkdown(content);
   if (cleaned.length < 200) {
     return { success: false, error: 'Blog content is too short to save.', data: null };
   }

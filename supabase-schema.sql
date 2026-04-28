@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS blogs (
   target_keyword TEXT DEFAULT '',
   article_type TEXT DEFAULT '',
   slug TEXT DEFAULT '',
-  status TEXT DEFAULT 'draft',
+  status TEXT DEFAULT 'generated' CHECK (status IN ('generated', 'approved', 'published')),
   research_sources INTEGER DEFAULT 0,
   external_links TEXT[] DEFAULT '{}',
   internal_links TEXT[] DEFAULT '{}',

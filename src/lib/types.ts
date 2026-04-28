@@ -23,7 +23,7 @@ export interface ProjectCompetitor {
 
 export type KeywordStatus = 'pending' | 'approved' | 'rejected';
 export type CalendarStatus = 'scheduled' | 'generating' | 'generated' | 'downloaded';
-export type BlogStatus = 'draft' | 'ready' | 'downloaded';
+export type BlogStatus = 'generated' | 'approved' | 'published';
 export type ExportFormat = 'markdown' | 'html' | 'txt' | 'docx';
 
 export interface Keyword {

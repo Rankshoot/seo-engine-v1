@@ -155,7 +155,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
         target_keyword: analysis.primary_keyword || auditRow.primary_keyword || '',
         article_type: 'Repair',
         slug: repaired.slug,
-        status: 'ready',
+        status: 'generated',
         research_sources: repaired.research_sources,
         external_links: repaired.external_links,
         internal_links: repaired.internal_links,

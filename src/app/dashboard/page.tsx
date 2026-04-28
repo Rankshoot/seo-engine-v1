@@ -3,6 +3,7 @@ import { currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getProjects } from "@/app/actions/project-actions";
+import ProjectCard from "@/components/dashboard/ProjectCard";
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -68,29 +69,7 @@ export default async function DashboardPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
                 {projects.slice(0, 6).map(project => (
-                  <Link
-                    key={project.id}
-                    href={`/projects/${project.id}`}
-                    className="glass-card p-5 group hover:border-brand-500/30 transition-all"
-                  >
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-500/20 to-brand-700/20 border border-brand-500/20 flex items-center justify-center font-black text-brand-400 text-base">
-                        {project.name.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-text-primary group-hover:text-brand-400 transition-colors truncate">{project.name}</p>
-                        <p className="text-xs text-text-tertiary truncate">{project.domain}</p>
-                      </div>
-                    </div>
-                    <p className="text-xs text-text-tertiary truncate">{project.niche}</p>
-                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-border-subtle">
-                      <span className="text-[10px] text-text-tertiary uppercase font-bold">{project.target_region}</span>
-                      <span className="text-[10px] font-bold text-brand-400 group-hover:translate-x-1 transition-transform inline-flex items-center gap-1">
-                        Open
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
-                      </span>
-                    </div>
-                  </Link>
+                  <ProjectCard key={project.id} project={project} />
                 ))}
 
                 <Link

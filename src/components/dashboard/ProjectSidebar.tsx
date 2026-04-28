@@ -47,7 +47,7 @@ export default function ProjectSidebar({ project, stats }: ProjectSidebarProps) 
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
-      badge: stats?.blogsGenerated ? `${stats.blogsGenerated} ready` : undefined,
+      badge: stats?.blogsGenerated ? `${stats.blogsGenerated} generated` : undefined,
     },
   ];
 

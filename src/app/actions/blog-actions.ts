@@ -239,7 +239,7 @@ function replaceFirstH1(markdown: string, title: string): string {
 }
 
 function sanitizeBlogMarkdown(markdown: string): string {
-  return markdown
+  return stripSchemaJsonBlocks(markdown)
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
@@ -247,6 +247,17 @@ function sanitizeBlogMarkdown(markdown: string): string {
     .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function stripSchemaJsonBlocks(markdown: string): string {
+  return markdown
+    .replace(/```(?:json|jsonld|ld\+json)?\s*([\s\S]*?)```/gi, (block, inner) => {
+      return /"@context"\s*:\s*"https?:\/\/schema\.org"|schema\.org/i.test(inner) ? '' : block;
+    })
+    .replace(
+      /(?:^|\n)\s*\{\s*\n[\s\S]*?"@context"\s*:\s*"https?:\/\/schema\.org[\s\S]*?\n\s*\}\s*(?=\n#{1,6}\s|\n*$)/gi,
+      '\n'
+    );
 }
 
 function extractMarkdownLinks(markdown: string, ownDomain = '') {

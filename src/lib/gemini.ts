@@ -148,6 +148,7 @@ WRITING RULES (SEO + GEO 2026):
 8. 3–5 external links to authoritative sources from the research block.
 9. 2–4 INTERNAL links from the pools above, placed where they genuinely help. Do NOT invent internal URLs.
 10. H2 for main sections, H3 for subsections. Short paragraphs (max 3–4 sentences).
+11. Do NOT include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
 
 ARTICLE STRUCTURE (adapt for "${entry.article_type}"):
 # [Compelling H1 — use or improve "${entry.title}"]
@@ -424,6 +425,7 @@ IMPORTANT RULES:
 - Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
 - Do not change the meta description unless META_NEEDS_REPAIR is true. If false and you cannot see the original meta description, return a neutral summary that matches the original page, not a new angle.
 - Output must be valid Markdown. No HTML.
+- Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
 - Start with an H1 (# Title).
 - Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.

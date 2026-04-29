@@ -85,7 +85,10 @@ export default function KeywordsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     const res = await getKeywords(projectId);
-    if (res.success) setKeywords(res.data);
+    if (res.success) {
+      setKeywords(res.data);
+      setSelected(new Set(res.data.filter(k => k.status === "approved").map(k => k.id)));
+    }
     setLoading(false);
   }, [projectId]);
 
@@ -181,14 +184,28 @@ export default function KeywordsPage() {
   };
 
   const handleStatusUpdate = async (kwId: string, status: KeywordStatus) => {
+    const previousKeywords = keywords;
+    const previousSelected = selected;
+    setError("");
     setKeywords(prev => prev.map(k => (k.id === kwId ? { ...k, status } : k)));
-    await updateKeywordStatus(kwId, status);
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (status === "approved") next.add(kwId);
+      else next.delete(kwId);
+      return next;
+    });
+    const res = await updateKeywordStatus(kwId, status);
+    if (!res.success) {
+      setKeywords(previousKeywords);
+      setSelected(previousSelected);
+      setError(res.error ?? "Could not update keyword status");
+    }
   };
 
   const handleBulkUpdate = async (status: KeywordStatus) => {
     const ids = [...selected];
     setKeywords(prev => prev.map(k => (ids.includes(k.id) ? { ...k, status } : k)));
-    setSelected(new Set());
+    setSelected(status === "approved" ? new Set(ids) : new Set());
     await bulkUpdateKeywordStatus(ids, status);
   };
 
@@ -745,14 +762,20 @@ export default function KeywordsPage() {
                     {filtered.map(kw => (
                       <tr
                         key={kw.id}
-                        className={`transition-colors hover:bg-white/[0.02] ${selected.has(kw.id) ? "bg-brand-500/5" : ""}`}
+                        onClick={() => toggleSelect(kw.id)}
+                        className={`cursor-pointer transition-all duration-200 ease-out hover:bg-white/[0.035] ${
+                          selected.has(kw.id)
+                            ? "bg-brand-500/8 shadow-[inset_3px_0_0_rgba(99,102,241,0.8)]"
+                            : ""
+                        }`}
                       >
                         <td className="px-2 py-2.5">
                           <input
                             type="checkbox"
                             checked={selected.has(kw.id)}
+                            onClick={e => e.stopPropagation()}
                             onChange={() => toggleSelect(kw.id)}
-                            className="rounded"
+                            className="rounded accent-brand-500 transition-transform duration-150 checked:scale-110"
                           />
                         </td>
                         <td className="px-2 py-2.5">
@@ -868,7 +891,10 @@ export default function KeywordsPage() {
                             {kw.status !== "approved" && (
                               <button
                                 type="button"
-                                onClick={() => handleStatusUpdate(kw.id, "approved")}
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  handleStatusUpdate(kw.id, "approved");
+                                }}
                                 className="rounded-lg bg-accent-500/10 p-1.5 text-accent-400 hover:bg-accent-500/20"
                                 title="Approve"
                               >
@@ -880,7 +906,10 @@ export default function KeywordsPage() {
                             {kw.status !== "rejected" && (
                               <button
                                 type="button"
-                                onClick={() => handleStatusUpdate(kw.id, "rejected")}
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  handleStatusUpdate(kw.id, "rejected");
+                                }}
                                 className="rounded-lg bg-rose-500/10 p-1.5 text-rose-400 hover:bg-rose-500/20"
                                 title="Reject"
                               >
@@ -892,7 +921,10 @@ export default function KeywordsPage() {
                             {kw.status !== "pending" && (
                               <button
                                 type="button"
-                                onClick={() => handleStatusUpdate(kw.id, "pending")}
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  handleStatusUpdate(kw.id, "pending");
+                                }}
                                 className="rounded-lg bg-surface-elevated p-1.5 text-text-tertiary hover:bg-glass"
                                 title="Reset"
                               >

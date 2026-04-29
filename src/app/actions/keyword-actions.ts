@@ -8,6 +8,13 @@ import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { crawlWebsite, type WebsiteCrawlResult } from '@/lib/websiteCrawler';
 
+type KeywordCalendarSeed = {
+  id: string;
+  project_id: string;
+  keyword: string;
+  secondary_keywords: string[] | null;
+};
+
 function aiScore(volume: number, kd: number, intent: string = ''): number {
   // Require both volume and KD to be known, otherwise the score misleads.
   if (!volume || !kd) return 0;
@@ -290,12 +297,25 @@ export async function updateKeywordStatus(keywordId: string, status: KeywordStat
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
+  const { data: keyword, error: kwErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, project_id, keyword, secondary_keywords, projects!inner(user_id)')
+    .eq('id', keywordId)
+    .eq('projects.user_id', user.id)
+    .single();
+
+  if (kwErr || !keyword) return { success: false, error: 'Keyword not found or unauthorized' };
+
   const { error } = await supabaseAdmin
     .from('keywords')
     .update({ status })
     .eq('id', keywordId);
 
   if (error) return { success: false, error: error.message };
+  if (status === 'approved') {
+    const placed = await ensureCalendarEntryForKeyword(keyword as KeywordCalendarSeed);
+    if (!placed.success) return placed;
+  }
   return { success: true };
 }
 
@@ -303,12 +323,27 @@ export async function bulkUpdateKeywordStatus(keywordIds: string[], status: Keyw
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
+  const { data: keywords, error: kwErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, project_id, keyword, secondary_keywords, projects!inner(user_id)')
+    .in('id', keywordIds)
+    .eq('projects.user_id', user.id);
+
+  if (kwErr) return { success: false, error: kwErr.message };
+  if ((keywords ?? []).length !== keywordIds.length) {
+    return { success: false, error: 'Some keywords were not found or unauthorized' };
+  }
+
   const { error } = await supabaseAdmin
     .from('keywords')
     .update({ status })
     .in('id', keywordIds);
 
   if (error) return { success: false, error: error.message };
+  if (status === 'approved') {
+    const placed = await ensureCalendarEntriesForKeywords((keywords ?? []) as KeywordCalendarSeed[]);
+    if (!placed.success) return placed;
+  }
   return { success: true };
 }
 
@@ -358,7 +393,103 @@ export async function approveKeywordCluster(projectId: string, phrases: string[]
     .in('keyword', [...matched]);
 
   if (error) return { success: false, error: error.message, updated: 0 };
+  const { data: approvedRows, error: approvedFetchErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, project_id, keyword, secondary_keywords')
+    .eq('project_id', projectId)
+    .in('keyword', [...matched]);
+
+  if (approvedFetchErr) return { success: false, error: approvedFetchErr.message, updated: 0 };
+  const placed = await ensureCalendarEntriesForKeywords((approvedRows ?? []) as KeywordCalendarSeed[]);
+  if (!placed.success) return { success: false, error: placed.error, updated: 0 };
   return { success: true, updated: matched.size };
+}
+
+async function ensureCalendarEntriesForKeywords(keywords: KeywordCalendarSeed[]) {
+  for (const keyword of keywords) {
+    const res = await ensureCalendarEntryForKeyword(keyword);
+    if (!res.success) return res;
+  }
+  return { success: true };
+}
+
+async function ensureCalendarEntryForKeyword(keyword: KeywordCalendarSeed) {
+  const { data: existing, error: existingErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id')
+    .eq('project_id', keyword.project_id)
+    .eq('keyword_id', keyword.id)
+    .maybeSingle();
+
+  if (existingErr) return { success: false, error: existingErr.message };
+  if (existing) return { success: true };
+
+  const scheduledDate = await nextCalendarSlot(keyword.project_id);
+  const title = titleFromKeyword(keyword.keyword);
+  const { error } = await supabaseAdmin.from('calendar_entries').insert({
+    project_id: keyword.project_id,
+    keyword_id: keyword.id,
+    scheduled_date: scheduledDate,
+    title,
+    article_type: 'Blog Post',
+    slug: slugify(title),
+    focus_keyword: keyword.keyword,
+    secondary_keywords: keyword.secondary_keywords ?? [],
+    status: 'scheduled',
+  });
+
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+async function nextCalendarSlot(projectId: string): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('scheduled_date')
+    .eq('project_id', projectId)
+    .order('scheduled_date', { ascending: true });
+
+  const used = new Set((data ?? []).map(row => row.scheduled_date));
+  const today = toDateOnly(new Date());
+  const start = data?.[0]?.scheduled_date && data[0].scheduled_date < today ? data[0].scheduled_date : today;
+
+  let cursor = parseLocalDate(start);
+  for (let i = 0; i < Math.max((data?.length ?? 0) + 2, 32); i++) {
+    const candidate = toDateOnly(cursor);
+    if (!used.has(candidate)) return candidate;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return toDateOnly(cursor);
+}
+
+function titleFromKeyword(keyword: string): string {
+  const cleaned = keyword.trim().replace(/\s+/g, ' ');
+  const title = cleaned
+    .split(' ')
+    .map(word => (word.length <= 3 ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join(' ');
+  return `${title}: Complete Guide`;
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+function toDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseLocalDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
 }
 
 export async function deleteAllKeywords(projectId: string) {

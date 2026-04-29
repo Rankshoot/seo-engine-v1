@@ -1,0 +1,243 @@
+export interface BlogImageAsset {
+  alt: string;
+  url: string;
+  prompt: string;
+  placement: 'hero' | 'section' | 'summary';
+}
+
+interface GenerateBlogImagesInput {
+  title: string;
+  targetKeyword: string;
+  articleType: string;
+  niche: string;
+  audience: string;
+  company: string;
+  wordCount: number;
+}
+
+interface GenerateContextualBlogImageInput {
+  title: string;
+  targetKeyword: string;
+  articleType: string;
+  niche: string;
+  audience: string;
+  company: string;
+  imageAlt: string;
+  contextBefore: string;
+  contextAfter: string;
+}
+
+interface StabilityImageResponse {
+  image?: string;
+  seed?: number;
+  finish_reason?: string;
+}
+
+const STABILITY_ULTRA_ENDPOINT = 'https://api.stability.ai/v2beta/stable-image/generate/ultra';
+
+export async function generateBlogImages(input: GenerateBlogImagesInput): Promise<BlogImageAsset[]> {
+  const apiKey = process.env.STABILITY_API_KEY;
+  if (!apiKey) {
+    throw new Error('Stability API key is missing. Add STABILITY_API_KEY before generating blog images.');
+  }
+
+  const imageRequests = buildImageRequests(input);
+  const requiredHero = await generateSingleImage(apiKey, imageRequests[0]);
+  if (!requiredHero) {
+    throw new Error('Stability did not return a usable hero image. Blog generation was stopped so it is not saved without an image.');
+  }
+
+  if (imageRequests.length === 1) return [requiredHero];
+
+  const settled = await Promise.allSettled(
+    imageRequests.slice(1).map(request => generateSingleImage(apiKey, request))
+  );
+
+  const optionalImages = settled
+    .map(result => (result.status === 'fulfilled' ? result.value : null))
+    .filter((asset): asset is BlogImageAsset => Boolean(asset));
+
+  return [requiredHero, ...optionalImages];
+}
+
+export async function generateContextualBlogImage(
+  input: GenerateContextualBlogImageInput
+): Promise<BlogImageAsset | null> {
+  const apiKey = process.env.STABILITY_API_KEY;
+  if (!apiKey) return null;
+
+  const prompt = [
+    `Editorial blog illustration for "${input.title}" about "${input.targetKeyword}" in ${input.niche}.`,
+    `Image intent: ${input.imageAlt || `${input.targetKeyword} visual`}. Nearby context: ${compactContext(input.contextBefore, input.contextAfter)}.`,
+    `Style: premium modern SaaS/editorial, clean 16:9 composition, no text, no logos, no watermark.`,
+  ].filter(Boolean).join(' ');
+
+  return generateSingleImage(apiKey, {
+    placement: 'section',
+    alt: input.imageAlt || `${input.targetKeyword} visual`,
+    prompt,
+  });
+}
+
+function compactContext(before: string, after: string): string {
+  const context = [before, after]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return context ? context.slice(0, 220) : 'match the article topic and placement';
+}
+
+export function insertBlogImageAtBestPosition(content: string, image: BlogImageAsset): string {
+  return insertAfterIntro(content, toMarkdownImage(image)).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+export function insertBlogImages(content: string, images: BlogImageAsset[]): string {
+  if (!images.length) return content;
+
+  let next = content.trim();
+  const [hero, section, summary] = images;
+
+  if (hero) {
+    next = insertAfterIntro(next, toMarkdownImage(hero));
+  }
+  if (section) {
+    next = insertBeforeNthH2(next, toMarkdownImage(section), 2);
+  }
+  if (summary) {
+    next = insertBeforeHeading(next, toMarkdownImage(summary), /frequently asked questions|faq|conclusion/i);
+  }
+
+  return next.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImageAsset, 'url'>> {
+  const count = input.wordCount >= 2200 ? 3 : input.wordCount >= 1400 ? 2 : 1;
+  const baseStyle =
+    'premium editorial blog illustration, modern SaaS website style, clean composition, realistic lighting, no text, no logos, no watermark';
+  const context = `${input.niche} industry, for ${input.audience}, company context: ${input.company}`;
+
+  const requests: Array<Omit<BlogImageAsset, 'url'>> = [
+    {
+      placement: 'hero',
+      alt: `${input.title} illustration`,
+      prompt: `${baseStyle}. Hero image for an article titled "${input.title}" about "${input.targetKeyword}". ${context}.`,
+    },
+  ];
+
+  if (count >= 2) {
+    requests.push({
+      placement: 'section',
+      alt: `${input.targetKeyword} strategy visual`,
+      prompt: `${baseStyle}. Strategic visual explaining "${input.targetKeyword}" for a ${input.articleType} article. Show abstract workflow, research, and growth concepts. ${context}.`,
+    });
+  }
+
+  if (count >= 3) {
+    requests.push({
+      placement: 'summary',
+      alt: `${input.targetKeyword} action plan visual`,
+      prompt: `${baseStyle}. Closing visual for a practical action plan about "${input.targetKeyword}". Show clarity, prioritization, and measurable outcomes. ${context}.`,
+    });
+  }
+
+  return requests;
+}
+
+async function generateSingleImage(
+  apiKey: string,
+  request: Omit<BlogImageAsset, 'url'>
+): Promise<BlogImageAsset | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const outputFormat = process.env.STABILITY_IMAGE_FORMAT || 'webp';
+
+  try {
+    const form = new FormData();
+    form.append('prompt', request.prompt);
+    form.append('negative_prompt', 'text, words, letters, logo, watermark, distorted hands, low quality, blurry');
+    form.append('aspect_ratio', process.env.STABILITY_IMAGE_ASPECT_RATIO || '16:9');
+    form.append('output_format', outputFormat);
+
+    const response = await fetch(STABILITY_ULTRA_ENDPOINT, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+      body: form,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.warn(`Stability Ultra image generation failed (${response.status}): ${detail.slice(0, 500)}`);
+      return null;
+    }
+
+    const data = (await response.json()) as StabilityImageResponse;
+    if (!data.image || (data.finish_reason && data.finish_reason !== 'SUCCESS')) {
+      console.warn(`Stability Ultra returned no usable image. finish_reason=${data.finish_reason ?? 'unknown'}`);
+      return null;
+    }
+
+    return {
+      ...request,
+      url: `data:image/${outputFormat};base64,${data.image}`,
+    };
+  } catch (error) {
+    console.warn('Stability Ultra image generation skipped:', error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function toMarkdownImage(image: BlogImageAsset): string {
+  return `![${escapeMarkdownAlt(image.alt)}](${image.url})`;
+}
+
+function insertAfterIntro(content: string, markdownImage: string): string {
+  const lines = content.split('\n');
+  const h1Index = lines.findIndex(line => /^#\s+/.test(line));
+  const start = h1Index >= 0 ? h1Index + 1 : 0;
+
+  for (let i = start; i < lines.length; i++) {
+    if (!lines[i].trim() || /^#{1,6}\s+/.test(lines[i])) continue;
+    let end = i;
+    while (end + 1 < lines.length && lines[end + 1].trim() && !/^#{1,6}\s+/.test(lines[end + 1])) {
+      end++;
+    }
+    lines.splice(end + 1, 0, '', markdownImage, '');
+    return lines.join('\n');
+  }
+
+  return `${content}\n\n${markdownImage}`;
+}
+
+function insertBeforeNthH2(content: string, markdownImage: string, n: number): string {
+  const lines = content.split('\n');
+  let seen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i])) {
+      seen++;
+      if (seen === n) {
+        lines.splice(i, 0, markdownImage, '');
+        return lines.join('\n');
+      }
+    }
+  }
+  return `${content}\n\n${markdownImage}`;
+}
+
+function insertBeforeHeading(content: string, markdownImage: string, headingPattern: RegExp): string {
+  const lines = content.split('\n');
+  const index = lines.findIndex(line => /^##\s+/.test(line) && headingPattern.test(line));
+  if (index === -1) return `${content}\n\n${markdownImage}`;
+  lines.splice(index, 0, markdownImage, '');
+  return lines.join('\n');
+}
+
+function escapeMarkdownAlt(value: string): string {
+  return value.replace(/[\[\]\n\r]/g, ' ').replace(/\s+/g, ' ').trim();
+}

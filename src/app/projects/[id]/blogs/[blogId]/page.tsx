@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo, type AnchorHTMLAttributes, type ComponentType, type HTMLAttributes, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type AnchorHTMLAttributes, type ComponentType, type HTMLAttributes, type ImgHTMLAttributes, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getBlogById, generateBlog } from "@/app/actions/blog-actions";
-import { Blog, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
+import { getBlogById, generateBlog, updateBlogStatus, updateBlogContent, fixBlogSeoIssue } from "@/app/actions/blog-actions";
+import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 
@@ -17,6 +17,31 @@ const FORMATS: { key: ExportFormat; label: string; color: string }[] = [
   { key: "docx", label: ".docx — Word", color: "bg-brand-500/10 text-brand-400 border-brand-500/20 hover:bg-brand-500/20" },
 ];
 
+const BLOG_STATUSES: Array<{ value: BlogStatus; label: string; hint: string; color: string }> = [
+  {
+    value: "generated",
+    label: "Generated",
+    hint: "Draft is written and ready for review.",
+    color: "text-accent-400",
+  },
+  {
+    value: "approved",
+    label: "Approved",
+    hint: "Reviewed and approved for publishing.",
+    color: "text-brand-400",
+  },
+  {
+    value: "published",
+    label: "Published",
+    hint: "Marked live on your website/CMS.",
+    color: "text-cyan-400",
+  },
+];
+
+function asBlogStatus(status: string | undefined): BlogStatus {
+  return status === "approved" || status === "published" ? status : "generated";
+}
+
 export default function BlogViewerPage() {
   const { id: projectId, blogId } = useParams<{ id: string; blogId: string }>();
 
@@ -26,7 +51,19 @@ export default function BlogViewerPage() {
   const [regenerating, setRegenerating] = useState(false);
   const [wordCount, setWordCount] = useState(2500);
   const [copied, setCopied] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
+  const [statusError, setStatusError] = useState("");
+  const [editMode, setEditMode] = useState(false);
+  const [savingContent, setSavingContent] = useState(false);
+  const [scoreRefreshing, setScoreRefreshing] = useState(false);
+  const [scoreVersion, setScoreVersion] = useState(0);
+  const [fixingIssue, setFixingIssue] = useState<BlogSeoIssueKey | null>(null);
+  const [fixError, setFixError] = useState("");
+  const [editError, setEditError] = useState("");
   const [activeView, setActiveView] = useState<"preview" | "raw">("preview");
+  const titleEditorRef = useRef<HTMLHeadingElement | null>(null);
+  const descEditorRef = useRef<HTMLParagraphElement | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     getBlogById(blogId).then(res => {
@@ -63,6 +100,79 @@ export default function BlogViewerPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const startEditing = () => {
+    if (!blog) return;
+    setEditError("");
+    setActiveView("preview");
+    setEditMode(true);
+  };
+
+  const cancelEditing = () => {
+    setEditMode(false);
+    setEditError("");
+  };
+
+  const saveEditing = async () => {
+    if (!blog) return;
+    setSavingContent(true);
+    setEditError("");
+    const html = editorRef.current?.innerHTML ?? "";
+    const TurndownService = (await import("turndown")).default;
+    const turndown = new TurndownService({
+      headingStyle: "atx",
+      codeBlockStyle: "fenced",
+      bulletListMarker: "-",
+    });
+    const bodyMarkdown = turndown.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
+    const title = titleEditorRef.current?.textContent?.trim() || blog.title;
+    const metaDescription = descEditorRef.current?.textContent?.replace(/\s+/g, " ").trim() || "";
+    const markdown = `# ${title}\n\n${bodyMarkdown}`.replace(/\n{3,}/g, "\n\n").trim();
+    const res = await updateBlogContent(blog.id, markdown, { title, metaDescription });
+    if (res.success && res.data) {
+      setScoreRefreshing(true);
+      setBlog(res.data);
+      setEditMode(false);
+      setActiveView("preview");
+      setScoreVersion(v => v + 1);
+      window.setTimeout(() => setScoreRefreshing(false), 450);
+    } else {
+      setEditError(res.error ?? "Could not save edited blog.");
+    }
+    setSavingContent(false);
+  };
+
+  const handleStatusChange = async (status: BlogStatus) => {
+    if (!blog || blog.status === status) return;
+    const previous = blog;
+    setSavingStatus(true);
+    setStatusError("");
+    setBlog({ ...blog, status });
+    const res = await updateBlogStatus(blog.id, status);
+    if (res.success && res.data) {
+      setBlog(res.data);
+    } else {
+      setBlog(previous);
+      setStatusError(res.error ?? "Could not update blog status");
+    }
+    setSavingStatus(false);
+  };
+
+  const handleSeoFix = async (issueKey: BlogSeoIssueKey) => {
+    if (!blog || fixingIssue || editMode) return;
+    setFixingIssue(issueKey);
+    setFixError("");
+    setScoreRefreshing(true);
+    const res = await fixBlogSeoIssue(blog.id, issueKey);
+    if (res.success && res.data) {
+      setBlog(res.data);
+      setScoreVersion(v => v + 1);
+    } else {
+      setFixError(res.error ?? "AI fix failed. Try again.");
+    }
+    setFixingIssue(null);
+    window.setTimeout(() => setScoreRefreshing(false), 450);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32">
@@ -86,6 +196,7 @@ export default function BlogViewerPage() {
   const externalLinks = blog.external_links ?? [];
   const internalLinks = blog.internal_links ?? [];
   const researchSources = blog.research_sources ?? 0;
+  const blogStatus = asBlogStatus(blog.status);
 
   return (
     <div className="space-y-6">
@@ -137,20 +248,56 @@ export default function BlogViewerPage() {
               {(["preview", "raw"] as const).map(v => (
                 <button
                   key={v}
-                  onClick={() => setActiveView(v)}
-                  className={`px-3 py-1 rounded-md text-[10px] font-bold capitalize transition-all ${activeView === v ? "bg-brand-500 text-white" : "text-text-tertiary hover:text-text-secondary"}`}
+                  onClick={() => !editMode && setActiveView(v)}
+                  disabled={editMode && v === "raw"}
+                  className={`px-3 py-1 rounded-md text-[10px] font-bold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${activeView === v ? "bg-brand-500 text-white" : "text-text-tertiary hover:text-text-secondary"}`}
                 >
                   {v}
                 </button>
               ))}
             </div>
             <div className="flex items-center gap-2 text-xs text-text-tertiary">
-              <span>{blog.word_count.toLocaleString()} words</span>
-              <span className="text-text-tertiary/40">·</span>
-              <span>~{Math.ceil(blog.word_count / 200)} min read</span>
+              {editMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={saveEditing}
+                    disabled={savingContent}
+                    className="flex items-center gap-1.5 rounded-lg bg-brand-500 px-3 py-1.5 text-[10px] font-bold text-white transition-all hover:bg-brand-400 disabled:opacity-60"
+                  >
+                    {savingContent ? (
+                      <>
+                        <div className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                        Saving...
+                      </>
+                    ) : (
+                      "Save edits"
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEditing}
+                    disabled={savingContent}
+                    className="rounded-lg border border-border-subtle px-3 py-1.5 text-[10px] font-bold text-text-tertiary transition-all hover:text-text-secondary disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditing}
+                  disabled={activeView !== "preview"}
+                  className="rounded-lg border border-border-subtle bg-surface-elevated px-3 py-1.5 text-[10px] font-bold text-text-secondary transition-all hover:border-brand-500/30 hover:text-brand-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  title={activeView !== "preview" ? "Switch to Preview to edit" : "Edit in Preview mode"}
+                >
+                  Edit
+                </button>
+              )}
               <button
                 onClick={handleCopy}
-                className="ml-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border-subtle text-[10px] font-bold hover:text-text-secondary transition-all"
+                disabled={editMode}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border-subtle text-[10px] font-bold hover:text-text-secondary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {copied ? "Copied!" : "Copy MD"}
               </button>
@@ -158,7 +305,61 @@ export default function BlogViewerPage() {
           </div>
 
           {/* Content */}
-          {activeView === "preview" ? (
+          {editError && (
+            <div className="border-b border-rose-500/20 bg-rose-500/10 px-6 py-3 text-xs text-rose-400">
+              {editError}
+            </div>
+          )}
+
+          {editMode ? (
+            <div className="p-0">
+
+              <ArticleMetaRow blog={blog} />
+              <article className="mx-auto max-w-[900px] px-6 py-10 sm:px-6 sm:py-14">
+                <header className="mb-10 border-b border-border-subtle pb-8">
+                  <h1
+                    ref={titleEditorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    spellCheck
+                    className="mb-4 text-[34px] font-black leading-[1.15] tracking-tight text-text-primary outline-none focus:bg-brand-500/5 sm:text-[40px]"
+                  >
+                    {stripHeroHeading(blog).heroTitle}
+                  </h1>
+                  <p
+                    ref={descEditorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    spellCheck
+                    className="text-lg leading-relaxed text-text-secondary outline-none focus:bg-brand-500/5"
+                  >
+                    {blog.meta_description}
+                  </p>
+                </header>
+                <div
+                  ref={editorRef}
+                  contentEditable
+                  suppressContentEditableWarning
+                  spellCheck
+                  className="editorial-body visual-blog-editor min-h-[50vh] space-y-5 text-[17px] leading-[1.75] text-text-secondary outline-none focus:bg-brand-500/5"
+                >
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={buildMarkdownComponents(internalSetForBlog(blog))}
+                    urlTransform={markdownUrlTransform}
+                  >
+                    {stripHeroHeading(blog).body}
+                  </ReactMarkdown>
+                </div>
+                <footer className="mt-14 border-t border-border-subtle pt-6 text-[11px] text-text-tertiary">
+                  <p>— End of article —</p>
+                </footer>
+              </article>
+              <p className="border-t border-border-subtle px-6 py-3 text-[10px] text-text-tertiary">
+                Save to update the title, description, markdown body, SEO score, word count, and link counts.
+              </p>
+            </div>
+          ) : activeView === "preview" ? (
             <EditorialPreview blog={blog} />
           ) : (
             <div className="p-8">
@@ -172,7 +373,52 @@ export default function BlogViewerPage() {
         {/* Right: Sidebar panels */}
         <div className="space-y-4 xl:sticky xl:top-6">
           {/* SEO Score */}
-          <SEOScorePanel blog={blog} />
+          <div className={editMode || savingContent || scoreRefreshing ? "pointer-events-none opacity-35 grayscale transition-all" : "transition-all"}>
+            <SEOScorePanel
+              key={`${blog.id}-${blog.updated_at}-${scoreVersion}`}
+              blog={blog}
+              fixingIssue={fixingIssue}
+              onFixIssue={check => handleSeoFix(check.key)}
+            />
+          </div>
+          {(editMode || savingContent || scoreRefreshing) && (
+            <p className="-mt-2 rounded-xl border border-border-subtle bg-surface-elevated px-3 py-2 text-[10px] text-text-tertiary">
+              {editMode
+                ? "SEO score is paused while editing. Save changes to recalculate it."
+                : "SEO score is recalculating from the saved content..."}
+            </p>
+          )}
+          {fixError && (
+            <p className="-mt-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[10px] text-rose-400">
+              {fixError}
+            </p>
+          )}
+
+          {/* Editorial status */}
+          <div className="glass-card p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Status</p>
+              {savingStatus && (
+                <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand-500/30 border-t-brand-400" />
+              )}
+            </div>
+            <select
+              value={blogStatus}
+              onChange={e => handleStatusChange(e.target.value as BlogStatus)}
+              disabled={savingStatus}
+              className="input-field w-full text-sm font-bold"
+            >
+              {BLOG_STATUSES.map(status => (
+                <option key={status.value} value={status.value}>
+                  {status.label}
+                </option>
+              ))}
+            </select>
+            <p className={`mt-2 text-[10px] ${BLOG_STATUSES.find(s => s.value === blogStatus)?.color ?? "text-text-tertiary"}`}>
+              {BLOG_STATUSES.find(s => s.value === blogStatus)?.hint}
+            </p>
+            {statusError && <p className="mt-2 text-xs text-rose-400">{statusError}</p>}
+          </div>
 
           {/* Target Keyword */}
           <div className="glass-card p-4">
@@ -312,7 +558,7 @@ function RepairBanner({
           <div>
             <p className="text-xs font-bold uppercase tracking-widest text-brand-400">Repair draft</p>
             <p className="text-sm text-text-primary">
-              AI rewrite of{" "}
+              Surgical repair of{" "}
               <a
                 href={sourceUrl}
                 target="_blank"
@@ -324,8 +570,8 @@ function RepairBanner({
               </a>
             </p>
             <p className="mt-1 text-xs text-text-tertiary">
-              Preview below shows the repaired version as it would appear once published. Replace the content on your
-              CMS, or download it in any format from the sidebar.
+              Only audit-flagged issues should be changed. Correct sections are preserved; review the repair summary
+              before replacing the content on your CMS.
             </p>
           </div>
         </div>
@@ -336,7 +582,7 @@ function RepairBanner({
               onClick={() => setOpen(v => !v)}
               className="rounded-xl border border-accent-500/30 bg-accent-500/10 px-3 py-2 text-xs font-bold text-accent-400 hover:bg-accent-500/20"
             >
-              {open ? "Hide changes" : `See ${repairNotes.length} change${repairNotes.length === 1 ? "" : "s"}`}
+              {open ? "Hide summary" : "Repair summary"}
             </button>
           )}
           <Link
@@ -351,7 +597,7 @@ function RepairBanner({
       {open && repairNotes.length > 0 && (
         <div className="mt-4 rounded-xl border border-accent-500/20 bg-surface-primary/60 p-4">
           <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-accent-400">
-            What the AI changed
+            Repair summary
           </p>
           <ul className="space-y-1.5 text-sm text-text-secondary">
             {repairNotes.map((note, i) => (
@@ -386,62 +632,34 @@ function RepairBanner({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function EditorialPreview({ blog }: { blog: Blog }) {
-  const internalSet = useMemo(() => new Set(blog.internal_links ?? []), [blog.internal_links]);
+  const internalSet = useMemo(() => internalSetForBlog(blog), [blog]);
 
   // Strip the first H1 from the content so we can render it as the hero title
   // and avoid a duplicate H1 inside the body.
-  const { heroTitle, body } = useMemo(() => {
-    const h1 = blog.content.match(/^\s*#\s+(.+)\s*$/m);
-    if (!h1) return { heroTitle: blog.title, body: blog.content };
-    const stripped = blog.content.replace(h1[0], "").replace(/^\n+/, "");
-    return { heroTitle: h1[1].replace(/\*+/g, "").trim(), body: stripped };
-  }, [blog.content, blog.title]);
+  const { heroTitle, body } = useMemo(() => stripHeroHeading(blog), [blog]);
 
   const components = useMemo(
     () => buildMarkdownComponents(internalSet),
     [internalSet]
   );
 
-  const publishedDate = new Date(blog.created_at).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-
   return (
-    <article className="mx-auto max-w-[720px] px-6 py-10 sm:px-10 sm:py-14">
+    <>
+      <ArticleMetaRow blog={blog} />
+      <article className="mx-auto max-w-[900px] px-6 py-10 sm:px-6 sm:py-14">
       {/* Hero */}
       <header className="mb-10 border-b border-border-subtle pb-8">
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {blog.article_type && (
-            <span className="rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-brand-400">
-              {blog.article_type}
-            </span>
-          )}
-          {blog.target_keyword && (
-            <span className="text-[11px] text-text-tertiary">
-              Targets <span className="font-bold text-text-secondary">{blog.target_keyword}</span>
-            </span>
-          )}
-        </div>
         <h1 className="mb-4 text-[34px] font-black leading-[1.15] tracking-tight text-text-primary sm:text-[40px]">
           {heroTitle}
         </h1>
         {blog.meta_description && (
           <p className="text-lg leading-relaxed text-text-secondary">{blog.meta_description}</p>
         )}
-        <div className="mt-5 flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
-          <span>{publishedDate}</span>
-          <span className="text-text-tertiary/40">·</span>
-          <span>{Math.max(1, Math.ceil(blog.word_count / 200))} min read</span>
-          <span className="text-text-tertiary/40">·</span>
-          <span>{blog.word_count.toLocaleString()} words</span>
-        </div>
       </header>
 
       {/* Body */}
       <div className="editorial-body space-y-5 text-[17px] leading-[1.75] text-text-secondary">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={markdownUrlTransform}>
           {body}
         </ReactMarkdown>
       </div>
@@ -450,8 +668,59 @@ function EditorialPreview({ blog }: { blog: Blog }) {
       <footer className="mt-14 border-t border-border-subtle pt-6 text-[11px] text-text-tertiary">
         <p>— End of article —</p>
       </footer>
-    </article>
+      </article>
+    </>
   );
+}
+
+function ArticleMetaRow({ blog }: { blog: Blog }) {
+  const publishedDate = new Date(blog.created_at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  return (
+    <div className="border-b border-border-subtle bg-surface-primary/40 px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-[900px] flex-wrap items-center gap-2 text-[11px] text-text-tertiary">
+        {blog.article_type && (
+          <span className="rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-brand-400">
+            {blog.article_type}
+          </span>
+        )}
+        {blog.target_keyword && (
+          <span>
+            Target keyword: <span className="font-bold text-text-secondary">{blog.target_keyword}</span>
+          </span>
+        )}
+        <span className="text-text-tertiary/40">·</span>
+        <span>{publishedDate}</span>
+        <span className="text-text-tertiary/40">·</span>
+        <span>{Math.max(1, Math.ceil(blog.word_count / 200))} min read</span>
+        <span className="text-text-tertiary/40">·</span>
+        <span>{blog.word_count.toLocaleString()} words</span>
+      </div>
+    </div>
+  );
+}
+
+function internalSetForBlog(blog: Blog): Set<string> {
+  return new Set(blog.internal_links ?? []);
+}
+
+function stripHeroHeading(blog: Blog): { heroTitle: string; body: string } {
+  const h1 = blog.content.match(/^\s*#\s+(.+)\s*$/m);
+  if (!h1) return { heroTitle: blog.title, body: blog.content };
+  const stripped = blog.content.replace(h1[0], "").replace(/^\n+/, "");
+  return { heroTitle: h1[1].replace(/\*+/g, "").trim(), body: stripped };
+}
+
+function markdownUrlTransform(url: string): string {
+  const trimmed = url.trim();
+  if (/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(trimmed)) return trimmed;
+  if (/^(https?:|mailto:|tel:)/i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("/") || trimmed.startsWith("#")) return trimmed;
+  return "";
 }
 
 // Build ReactMarkdown component overrides. Factoring out so we can memoize
@@ -531,6 +800,34 @@ function buildMarkdownComponents(internalSet: Set<string>): Components {
       {children}
     </p>
   );
+
+  const Image: ComponentType<ImgHTMLAttributes<HTMLImageElement>> = ({ alt = "", src, ...rest }) => {
+    const safeSrc = typeof src === "string" ? markdownUrlTransform(src) : "";
+    if (!safeSrc) {
+      return (
+        <span className="my-8 block rounded-2xl border border-dashed border-border-subtle bg-surface-primary px-4 py-5 text-xs text-text-tertiary">
+          Image could not be displayed. Regenerate it from edit mode.
+        </span>
+      );
+    }
+
+    return (
+      <span className="my-8 block overflow-hidden rounded-2xl border border-border-subtle bg-surface-primary">
+        <img
+          alt={alt}
+          src={safeSrc}
+          loading="lazy"
+          className="aspect-video w-full object-cover"
+          {...rest}
+        />
+        {alt && (
+          <span className="block border-t border-border-subtle px-4 py-2 text-xs text-text-tertiary">
+            {alt}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   const Strong: ComponentType<HTMLAttributes<HTMLElement>> = ({ children, ...rest }) => (
     <strong className="font-bold text-text-primary" {...rest}>
@@ -648,6 +945,7 @@ function buildMarkdownComponents(internalSet: Set<string>): Components {
     h1: Heading1,
     h2: Heading2,
     h3: Heading3,
+    img: Image,
     p: Paragraph,
     strong: Strong,
     em: Emphasis,

@@ -160,7 +160,7 @@ export async function getProjectStats(projectId: string) {
       totalKeywords: keywords.length,
       approvedKeywords: keywords.filter(k => k.status === 'approved').length,
       calendarEntries: calendar.length,
-      blogsGenerated: blogs.filter(b => b.status === 'ready' || b.status === 'downloaded').length,
+      blogsGenerated: blogs.filter(b => ['generated', 'approved', 'published'].includes(b.status)).length,
     },
   };
 }

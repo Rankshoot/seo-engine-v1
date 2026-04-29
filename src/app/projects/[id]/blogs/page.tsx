@@ -3,16 +3,27 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { getCalendarWithBlogs, generateBlog } from "@/app/actions/blog-actions";
-import { WORD_COUNT_OPTIONS } from "@/lib/types";
+import { getCalendarWithBlogs, generateBlog, updateBlogStatus } from "@/app/actions/blog-actions";
+import { BlogStatus, WORD_COUNT_OPTIONS } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   scheduled: { label: "Scheduled", color: "bg-surface-elevated text-text-tertiary border-border-subtle" },
   generating: { label: "Generating...", color: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20 animate-pulse" },
-  generated: { label: "Ready", color: "bg-accent-500/10 text-accent-400 border-accent-500/20" },
-  downloaded: { label: "Downloaded", color: "bg-brand-500/10 text-brand-400 border-brand-500/20" },
+  generated: { label: "Generated", color: "bg-accent-500/10 text-accent-400 border-accent-500/20" },
+  approved: { label: "Approved", color: "bg-brand-500/10 text-brand-400 border-brand-500/20" },
+  published: { label: "Published", color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
 };
+
+const BLOG_STATUSES: Array<{ value: BlogStatus; label: string }> = [
+  { value: "generated", label: "Generated" },
+  { value: "approved", label: "Approved" },
+  { value: "published", label: "Published" },
+];
+
+function asBlogStatus(status: string | undefined): BlogStatus {
+  return status === "approved" || status === "published" ? status : "generated";
+}
 
 export default function BlogsPage() {
   const { id: projectId } = useParams<{ id: string }>();
@@ -24,6 +35,7 @@ export default function BlogsPage() {
   const [generating, setGenerating] = useState<string | null>(null);
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [savingStatus, setSavingStatus] = useState<string | null>(null);
   const [error, setError] = useState<Record<string, string>>({});
   const highlightRef = useRef<HTMLDivElement>(null);
 
@@ -60,6 +72,26 @@ export default function BlogsPage() {
     await load();
   };
 
+  const handleStatusChange = async (entryId: string, blogId: string, status: BlogStatus) => {
+    setSavingStatus(blogId);
+    setError(prev => ({ ...prev, [entryId]: "" }));
+    const previous = entries;
+    setEntries(prev =>
+      prev.map(e =>
+        e.id === entryId && e.blog
+          ? { ...e, blog: { ...e.blog, status } }
+          : e
+      )
+    );
+
+    const res = await updateBlogStatus(blogId, status);
+    if (!res.success) {
+      setEntries(previous);
+      setError(prev => ({ ...prev, [entryId]: res.error ?? "Could not update blog status" }));
+    }
+    setSavingStatus(null);
+  };
+
   const handleDownload = async (entry: any, format: "markdown" | "html" | "txt" | "docx") => {
     if (!entry.blog) return;
     setDownloading(entry.id + format);
@@ -83,7 +115,7 @@ export default function BlogsPage() {
     setDownloading(null);
   };
 
-  const readyCount = entries.filter(e => e.status === "generated" || e.status === "downloaded").length;
+  const readyCount = entries.filter(e => e.blog).length;
 
   return (
     <div className="space-y-6">
@@ -98,7 +130,7 @@ export default function BlogsPage() {
         {readyCount > 0 && (
           <div className="text-right">
             <p className="text-2xl font-black text-accent-400">{readyCount}</p>
-            <p className="text-xs text-text-tertiary">blogs ready</p>
+            <p className="text-xs text-text-tertiary">blogs generated</p>
           </div>
         )}
       </div>
@@ -119,11 +151,12 @@ export default function BlogsPage() {
       ) : (
         <div className="space-y-4">
           {entries.map((entry: any, i: number) => {
-            const cfg = STATUS_CONFIG[entry.status] ?? STATUS_CONFIG.scheduled;
+            const hasBlog = Boolean(entry.blog);
+            const blogStatus = asBlogStatus(entry.blog?.status);
+            const cfg = hasBlog ? STATUS_CONFIG[blogStatus] : (STATUS_CONFIG[entry.status] ?? STATUS_CONFIG.scheduled);
             const isHighlighted = entry.id === highlightEntry;
             const isGenerating = generating === entry.id;
             const wc = wordCounts[entry.id] ?? 2500;
-            const hasBlog = entry.blog && (entry.status === "generated" || entry.status === "downloaded");
 
             return (
               <div
@@ -166,6 +199,29 @@ export default function BlogsPage() {
 
                     {error[entry.id] && (
                       <p className="text-xs text-rose-400 mb-2">{error[entry.id]}</p>
+                    )}
+
+                    {hasBlog && (
+                      <div className="mb-3 inline-flex items-center gap-3 rounded-xl border border-border-subtle bg-surface-elevated/60 px-3 py-2">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                          Status
+                        </span>
+                        <select
+                          value={blogStatus}
+                          onChange={e => handleStatusChange(entry.id, entry.blog.id, e.target.value as BlogStatus)}
+                          disabled={savingStatus === entry.blog.id}
+                          className="bg-transparent text-xs font-bold text-text-primary outline-none disabled:opacity-60"
+                        >
+                          {BLOG_STATUSES.map(status => (
+                            <option key={status.value} value={status.value}>
+                              {status.label}
+                            </option>
+                          ))}
+                        </select>
+                        {savingStatus === entry.blog.id && (
+                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-brand-500/30 border-t-brand-400" />
+                        )}
+                      </div>
                     )}
 
                     {/* Actions */}

@@ -9,6 +9,7 @@ export interface Project {
   target_region: string;
   target_language: string;
   description: string;
+  ahrefs_rank_tracker_project_id?: number | null;
   created_at: string;
   updated_at: string;
   project_competitors?: ProjectCompetitor[];

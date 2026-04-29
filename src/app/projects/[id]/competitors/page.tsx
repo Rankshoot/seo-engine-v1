@@ -9,11 +9,13 @@ import {
   generateBlogFromOpportunity,
   type BenchmarkState,
 } from "@/app/actions/competitor-actions";
+import { getProject, updateProject } from "@/app/actions/project-actions";
 import type {
   Competitor,
   CompetitorKeyword,
   GapType,
   KeywordGap,
+  Project,
 } from "@/lib/types";
 
 type TabId = "competitors" | "gaps" | "opportunities";
@@ -59,11 +61,22 @@ export default function CompetitorsPage() {
   const [gapFilter, setGapFilter] = useState<"all" | GapType>("all");
   const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null);
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
+  const [project, setProject] = useState<Project | null>(null);
+  const [rtIdInput, setRtIdInput] = useState("");
+  const [rtIdEditing, setRtIdEditing] = useState(false);
+  const [rtIdSaving, setRtIdSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await getCompetitorBenchmark(projectId);
-    setState(res);
+    const [benchRes, projRes] = await Promise.all([
+      getCompetitorBenchmark(projectId),
+      getProject(projectId),
+    ]);
+    setState(benchRes);
+    if (projRes.success && projRes.data) {
+      setProject(projRes.data);
+      setRtIdInput(String(projRes.data.ahrefs_rank_tracker_project_id ?? ""));
+    }
     setLoading(false);
   }, [projectId]);
 
@@ -94,6 +107,25 @@ export default function CompetitorsPage() {
       await load();
     }
     setRunning(false);
+  };
+
+  const handleSaveRtId = async () => {
+    if (!project) return;
+    setRtIdSaving(true);
+    const parsed = rtIdInput.trim() ? Number(rtIdInput.trim()) : null;
+    await updateProject(projectId, {
+      name: project.name,
+      domain: project.domain,
+      company: project.company,
+      niche: project.niche,
+      target_audience: project.target_audience,
+      target_region: project.target_region,
+      description: project.description,
+      ahrefs_rank_tracker_project_id: parsed,
+    });
+    setProject(prev => prev ? { ...prev, ahrefs_rank_tracker_project_id: parsed } : prev);
+    setRtIdEditing(false);
+    setRtIdSaving(false);
   };
 
   const handleGenerateBlog = async (keyword: string) => {
@@ -187,6 +219,59 @@ export default function CompetitorsPage() {
           {lastRunSummary}
         </div>
       )}
+
+      {/* Ahrefs Rank Tracker Project ID config */}
+      <div className="rounded-xl border border-border-subtle bg-surface-secondary/30 px-4 py-3 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <svg className="w-4 h-4 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25Z" />
+          </svg>
+          <span className="text-xs font-bold text-text-secondary">Ahrefs Rank Tracker Project ID</span>
+          {!rtIdEditing && (
+            <span className="text-xs text-text-tertiary">
+              {project?.ahrefs_rank_tracker_project_id
+                ? <span className="text-cyan-400 font-mono">{project.ahrefs_rank_tracker_project_id}</span>
+                : <span className="italic">not set</span>}
+            </span>
+          )}
+        </div>
+        {rtIdEditing ? (
+          <div className="flex items-center gap-2">
+            <input
+              value={rtIdInput}
+              onChange={e => setRtIdInput(e.target.value)}
+              placeholder="e.g. 8024646"
+              inputMode="numeric"
+              className="input-field w-36 text-xs py-1.5"
+              autoFocus
+              onKeyDown={e => { if (e.key === "Enter") void handleSaveRtId(); if (e.key === "Escape") setRtIdEditing(false); }}
+            />
+            <button
+              onClick={() => void handleSaveRtId()}
+              disabled={rtIdSaving}
+              className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold disabled:opacity-60 transition-all"
+            >
+              {rtIdSaving ? "Saving…" : "Save"}
+            </button>
+            <button
+              onClick={() => { setRtIdEditing(false); setRtIdInput(String(project?.ahrefs_rank_tracker_project_id ?? "")); }}
+              className="px-3 py-1.5 rounded-lg border border-border-subtle text-text-tertiary text-xs font-bold hover:text-text-secondary transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setRtIdEditing(true)}
+            className="text-xs font-bold text-brand-400 hover:text-brand-300 transition-colors shrink-0"
+          >
+            {project?.ahrefs_rank_tracker_project_id ? "Edit" : "Set ID"}
+          </button>
+        )}
+        <p className="w-full text-[10px] text-text-tertiary -mt-1">
+          Found in Ahrefs → Rank Tracker → your project URL. Pulls top 10 competitor pages from your tracked keywords.
+        </p>
+      </div>
 
       {loading ? (
         <div className="space-y-3">

@@ -75,7 +75,9 @@ async function fetchHtmlWithRetries(url: string, retries = 2, timeoutMs = 10000)
 /**
  * Fetch HTML using Playwright (fallback mechanism).
  */
+let playwrightAvailable = true;
 async function fetchHtmlWithPlaywright(url: string): Promise<string | null> {
+  if (!playwrightAvailable) return null;
   let browser: Browser | null = null;
   try {
     browser = await chromium.launch({ headless: true });
@@ -87,6 +89,15 @@ async function fetchHtmlWithPlaywright(url: string): Promise<string | null> {
     const content = await page.content();
     return content;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // If the browser executable is missing, disable further attempts for this process.
+    if (message.includes('Executable doesn')) {
+      playwrightAvailable = false;
+      console.warn(
+        '[hybridScraper] Playwright not installed (missing browser). Run `npx playwright install chromium` to enable fallback.'
+      );
+      return null;
+    }
     console.error(`[hybridScraper] Playwright fallback failed for ${url}:`, error);
     return null;
   } finally {

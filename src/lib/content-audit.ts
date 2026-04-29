@@ -21,13 +21,16 @@
  *      + LLM quality score. Persist everything in `blog_audits`.
  */
 
-import { hybridReadUrl, type ScrapedPageMarkdown as JinaPage } from '../services/hybridScraper';
+// Hybrid scraper kept for potential fallback, currently unused in Ahrefs-first path.
 import type { BusinessBrief } from './business-brief';
-import { fetchKeywordVitals, type KeywordVitals } from './dataforseo';
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+import {
+  ahrefsAnchors,
+  ahrefsCrawledPages,
+  ahrefsPagesByInternalLinks,
+  ahrefsUrlOrganicKeywords,
+  type AhrefsCrawledPage,
+  type AhrefsUrlKeyword,
+} from './ahrefs';
 
 export type AuditSeverity = 'low' | 'medium' | 'high';
 export type AuditImpact = 'low' | 'medium' | 'high';
@@ -115,6 +118,8 @@ interface StructuralSignals {
   answer_first: boolean;
   has_schema_hints: boolean;
   first_paragraph: string;
+  url_rating: number | null;
+  refdomains: number | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -123,76 +128,61 @@ interface StructuralSignals {
 export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditRecord> {
   const { url, brief, sitePeerUrls, region = 'us', language = 'en' } = input;
 
-  // 1. Pre-flight: is this URL actually reachable? If not, don't waste an LLM
-  //    call — return a focused "this page is broken" result immediately.
-  const pre = await preflight(url);
-  if (pre.status === 'broken') {
-    return brokenUrlRecord(url, pre.reason);
-  }
-  if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
-    // Redirect-to-homepage / redirect-to-unrelated-page is almost always the
-    // user deleting a post and 301-ing to home. Worth flagging as a separate
-    // high-severity issue without charging them for a full LLM audit.
-    const rootHost = (() => {
-      try {
-        return new URL(url).origin + '/';
-      } catch {
-        return '';
-      }
-    })();
-    if (pre.finalUrl === rootHost || pre.finalUrl === rootHost.replace(/\/$/, '')) {
+  // 1. Pre-flight via Ahrefs crawl (preferred). Only fall back to a real fetch
+  //    when Ahrefs has no record for this URL.
+  const ahrefsCrawl = await ahrefsCrawledPages(url);
+  if (ahrefsCrawl) {
+    if (ahrefsCrawl.http_code && (ahrefsCrawl.http_code === 404 || ahrefsCrawl.http_code === 410)) {
+      return brokenUrlRecord(url, `Ahrefs crawl shows HTTP ${ahrefsCrawl.http_code}.`);
+    }
+    if (ahrefsCrawl.redirects_to_target && ahrefsCrawl.redirects_to_target > 0) {
+      return redirectToHomepageRecord(url, url);
+    }
+  } else {
+    // Fallback: lightweight fetch to avoid blind spots if Ahrefs hasn't crawled it yet.
+    const pre = await preflight(url);
+    if (pre.status === 'broken') return brokenUrlRecord(url, pre.reason);
+    if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
       return redirectToHomepageRecord(url, pre.finalUrl);
     }
-    // Otherwise let it proceed and audit the redirect target.
   }
 
-  // 2. Scrape.
-  const page = await hybridReadUrl(url, { timeoutMs: 25_000 });
-  if (!page.ok || page.markdown.length < 400) {
-    return {
-      url,
-      title: extractTitle(page.markdown) || url,
-      word_count: wordCount(page.markdown),
-      scraped_chars: page.length,
-      health_score: 5,
-      severity: 'high',
-      primary_keyword: '',
-      analysis: {
-        ...emptyAnalysis(`Couldn't scrape this page. ${page.error ?? ''}`.trim()),
-        page_status: 'empty',
-      },
-      error: page.error || 'Scrape returned empty or too short.',
-    };
-  }
+  // 2. Ahrefs signals — ranking, anchors, internal links. No body scrape unless
+  //    we truly need it.
+  const [urlKeywords, anchors, internalLinks] = await Promise.all([
+    ahrefsUrlOrganicKeywords(url, region, 40),
+    ahrefsAnchors(url, 25),
+    ahrefsPagesByInternalLinks(url, 1),
+  ]);
 
-  const signals = extractSignals(page);
+  const signals: StructuralSignals = {
+    title: '',
+    word_count: 0,
+    heading_count: 0,
+    h2_count: 0,
+    h3_count: 0,
+    faq_section: false,
+    internal_link_count: internalLinks[0]?.links_to_target ?? 0,
+    external_link_count: 0, // approximated via anchors? anchors cover inbound; outgoing unavailable without scrape
+    answer_first: false,
+    has_schema_hints: false,
+    first_paragraph: '',
+    url_rating: ahrefsCrawl?.url_rating ?? null,
+    refdomains: anchors.reduce((s, a) => s + a.refdomains, 0),
+  };
 
-  // 3. LLM diagnosis (blog standalone).
-  const analysis = await diagnoseWithGemini({ url, page, signals, brief, sitePeerUrls });
+  const analysis = ahrefsOnlyAnalysis(url, urlKeywords);
 
-  // 4. Keyword demand lookup (optional).
-  if (analysis.primary_keyword) {
-    try {
-      const map = await fetchKeywordVitals([analysis.primary_keyword], region, language);
-      const vital = map.get(analysis.primary_keyword.toLowerCase());
-      if (vital) analysis.keyword_demand = toKeywordDemand(vital);
-    } catch {
-      // Non-fatal; just means we won't show demand pills for this row.
-    }
-  }
-
-  // 5. If the LLM produced a plain-language verdict, great; otherwise synth one.
-  if (!analysis.plain_language_verdict) {
-    analysis.plain_language_verdict = synthesizeVerdict(signals, analysis);
-  }
+  // Optional: if you still want content-level checks, fall back to a scrape.
+  // Currently disabled to honor "use Ahrefs instead of fetch/scrape".
 
   const { healthScore, severity } = scoreFromSignals(signals, analysis);
 
   return {
     url,
-    title: signals.title || extractTitle(page.markdown) || url,
+    title: analysis.primary_keyword ? `${analysis.primary_keyword} (Ahrefs)` : url,
     word_count: signals.word_count,
-    scraped_chars: page.length,
+    scraped_chars: 0,
     health_score: healthScore,
     severity,
     primary_keyword: analysis.primary_keyword,
@@ -655,32 +645,25 @@ function scoreFromSignals(
 ): { healthScore: number; severity: AuditSeverity } {
   let score = 100;
 
-  if (signals.word_count < 500) score -= 30;
-  else if (signals.word_count < 900) score -= 15;
+  // Authority proxies
+  if (signals.url_rating != null && signals.url_rating < 10) score -= 10;
+  if (signals.refdomains != null && signals.refdomains < 5) score -= 8;
 
-  if (signals.h2_count < 2) score -= 12;
-  if (!signals.faq_section) score -= 8;
-  if (!signals.answer_first) score -= 10;
-
+  // Internal links
   if (signals.internal_link_count === 0) score -= 15;
   else if (signals.internal_link_count < 2) score -= 8;
-  if (signals.external_link_count === 0) score -= 8;
 
-  if (!signals.has_schema_hints) score -= 4;
-
-  // Penalize a declining keyword trend — the blog might be perfectly written
-  // but the world just stopped searching for it.
+  // Keyword demand / coverage
   const demand = analysis.keyword_demand;
   if (demand) {
-    if (demand.volume === 0) score -= 10;
-    else if (demand.volume < 50) score -= 5;
+    if (demand.volume === 0) score -= 15;
+    else if (demand.volume < 50) score -= 8;
     if (demand.trend_pct <= -25) score -= 10;
     else if (demand.trend_pct <= -10) score -= 5;
   }
 
-  if (typeof analysis.llm_quality_score === 'number') {
-    score = Math.round(score * 0.5 + analysis.llm_quality_score * 0.5);
-  }
+  // Ranking presence
+  if (!analysis.primary_keyword) score -= 15;
 
   const severity: AuditSeverity = analysis.issues.some(i => i.severity === 'high')
     ? 'high'
@@ -701,34 +684,79 @@ function synthesizeVerdict(signals: StructuralSignals, analysis: BlogAuditAnalys
   const parts: string[] = [];
   if (demand) {
     if (demand.volume === 0) {
-      parts.push('No one is searching for this exact phrase in Google right now — the topic may be too niche, seasonal, or we guessed the target keyword wrong.');
+      parts.push('Ahrefs shows zero monthly searches for this phrase — consider retargeting a related keyword with demand.');
     } else if (demand.trend_pct <= -25) {
-      parts.push(`Searches for this keyword are down ${Math.abs(demand.trend_pct)}% — the demand itself is fading, not just your ranking.`);
+      parts.push(`Searches for this keyword are down ${Math.abs(demand.trend_pct)}% — demand itself is fading.`);
     } else if (demand.volume > 500 && demand.trend_pct >= 0) {
-      parts.push(`The keyword still has healthy demand (${demand.volume.toLocaleString()}/mo, trend ${demand.trend_pct >= 0 ? '+' : ''}${demand.trend_pct}%), so traffic IS available if the page is fixed.`);
+      parts.push(`Keyword demand is healthy (${demand.volume.toLocaleString()}/mo, trend ${demand.trend_pct >= 0 ? '+' : ''}${demand.trend_pct}%). Fix on-page issues to capture it.`);
     }
   }
   if (highest) {
-    parts.push(`The biggest single thing to fix: ${highest.label.toLowerCase()} — ${highest.fix}`);
-  } else if (signals.word_count < 700) {
-    parts.push('The post is short — expand to 1,200+ words with concrete examples, then re-check in 4–6 weeks.');
+    parts.push(`Biggest fix: ${highest.label.toLowerCase()} — ${highest.fix}`);
   }
-  return parts.join(' ') || 'No critical issues were flagged. Re-check in a few weeks if traffic is still flat.';
+  return parts.join(' ') || 'No critical issues were flagged. Re-check after internal links and anchors improve.';
 }
 
-function toKeywordDemand(v: KeywordVitals): KeywordDemand {
-  let verdict: KeywordDemand['verdict'] = 'unknown';
-  if (v.volume === 0) verdict = 'unknown';
-  else if (v.volume < 30) verdict = 'niche';
-  else if (v.trend_pct <= -10) verdict = 'declining';
-  else if (v.trend_pct >= 10) verdict = 'trending';
-  else verdict = 'stable';
+function ahrefsOnlyAnalysis(url: string, kws: AhrefsUrlKeyword[]): BlogAuditAnalysis {
+  const primary = kws[0];
+  const issues: BlogIssue[] = [];
+
+  if (!primary) {
+    issues.push({
+      label: 'Not ranking for any keyword',
+      category: 'seo',
+      severity: 'high',
+      detail: 'Ahrefs shows no keywords driving traffic to this URL.',
+      why_it_matters: 'If the page has no ranking keywords, it cannot earn organic traffic.',
+      fix: 'Align the page to a focus keyword with demand and add internal links from related posts.',
+      impact: 'high',
+    });
+  } else {
+    if (primary.position && primary.position > 20) {
+      issues.push({
+        label: 'Ranking too low to get clicks',
+        category: 'seo',
+        severity: 'medium',
+        detail: `Top keyword "${primary.keyword}" ranks around position ${primary.position}.`,
+        why_it_matters: 'Positions beyond page 2 get negligible clicks; the page needs on-page and internal link boosts.',
+        fix: 'Tighten title/H1 to the target keyword and add 2–3 internal links from relevant posts.',
+        impact: 'medium',
+      });
+    }
+    if (primary.volume && primary.volume < 50) {
+      issues.push({
+        label: 'Low-demand keyword',
+        category: 'keyword_demand',
+        severity: 'medium',
+        detail: `"${primary.keyword}" has low monthly searches.`,
+        why_it_matters: 'Even with good rankings, low demand caps traffic.',
+        fix: 'Retarget to a related term with higher volume and intent fit.',
+        impact: 'medium',
+      });
+    }
+  }
+
+  const keywordDemand = primary
+    ? {
+        keyword: primary.keyword,
+        volume: primary.volume,
+        trend_pct: 0,
+        monthly_searches: [],
+        verdict: primary.volume === 0 ? 'unknown' : primary.volume < 30 ? 'niche' : 'stable',
+      }
+    : undefined;
 
   return {
-    keyword: v.keyword,
-    volume: v.volume,
-    trend_pct: v.trend_pct,
-    monthly_searches: v.monthly_searches,
-    verdict,
+    summary: primary ? `Ahrefs: ranks for "${primary.keyword}"` : 'Ahrefs: no ranking keywords found',
+    primary_keyword: primary?.keyword ?? '',
+    secondary_keywords: kws.slice(1, 6).map(k => k.keyword),
+    issues,
+    content_gaps: [],
+    internal_link_opportunities: [],
+    suggested_funnel_stage: '',
+    llm_quality_score: undefined,
+    keyword_demand: keywordDemand,
+    plain_language_verdict: '',
+    page_status: 'ok',
   };
 }

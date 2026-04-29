@@ -126,6 +126,7 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
       rowCount,
       body: json,
     });
+    console.log(`[ahrefs-raw] ${opts.label ?? opts.endpoint}`, JSON.stringify(json, null, 2));
     return json as T;
   } catch (error) {
     const ms = Date.now() - started;
@@ -170,7 +171,6 @@ interface AhrefsCompetitorRow {
   keywords_common?: number | null;
   keywords_competitor?: number | null;
   traffic?: number | null;
-  traffic_merged?: number | null;
 }
 
 /**
@@ -195,8 +195,8 @@ export async function ahrefsOrganicCompetitors(
       date: todayISO(),
       volume_mode: 'monthly',
       limit,
-      order_by: 'traffic_merged:desc',
-      select: 'competitor_domain,domain_rating,keywords_common,keywords_competitor,traffic,traffic_merged',
+      order_by: 'traffic:desc',
+      select: 'competitor_domain,domain_rating,keywords_common,keywords_competitor,traffic',
     },
   });
   if (!json?.competitors) return [];
@@ -207,7 +207,7 @@ export async function ahrefsOrganicCompetitors(
       domain_rating: row.domain_rating ?? null,
       keywords_common: Number(row.keywords_common ?? 0),
       keywords_competitor: Number(row.keywords_competitor ?? 0),
-      traffic: row.traffic ?? row.traffic_merged ?? null,
+      traffic: row.traffic ?? null,
     }))
     .filter(row => row.competitor_domain);
 }
@@ -252,7 +252,8 @@ export async function ahrefsTopPages(
       date: todayISO(),
       volume_mode: 'monthly',
       limit,
-      order_by: 'sum_traffic_merged:desc',
+      // Available columns exclude sum_traffic_*; use UR as a proxy for importance.
+      order_by: 'ur:desc',
       select: 'url,top_keyword,top_keyword_volume,top_keyword_best_position,sum_traffic,value',
     },
   });
@@ -316,7 +317,7 @@ export async function ahrefsOrganicKeywords(
       limit,
       order_by: 'sum_traffic:desc',
       where: 'best_position<=20,volume>=50',
-      select: 'keyword,volume,keyword_difficulty,cpc,best_position,best_position_url,sum_traffic',
+      select: 'keyword,volume,keyword_keyword_difficulty,cpc,best_position,best_position_url,sum_traffic',
     },
   });
   if (!json?.keywords) return [];
@@ -987,6 +988,255 @@ export async function buildKeywordCoverage(
     `[ahrefs] coverage "${focusKeyword}" (${region}) -> ideas=${ideas.length} serp=${serp.length}`
   );
   return { ideas, serp };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// URL-level technical + ranking signals (used by Content Audit)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface AhrefsCrawledPage {
+  url: string;
+  http_code: number | null;
+  last_visited: string | null;
+  redirects_to_target: number | null;
+  canonical_to_target: number | null;
+  url_rating: number | null;
+  links_to_target: number | null;
+  nofollow_to_target: number | null;
+}
+
+interface AhrefsCrawledRow {
+  url_to?: string | null;
+  http_code_target?: number | null;
+  last_visited_target?: string | null;
+  redirects_to_target?: number | null;
+  canonical_to_target?: number | null;
+  url_rating_target?: number | null;
+  links_to_target?: number | null;
+  nofollow_to_target?: number | null;
+}
+
+export async function ahrefsCrawledPages(target: string): Promise<AhrefsCrawledPage | null> {
+  if (!target) return null;
+  const json = await ahrefsGet<{ pages?: AhrefsCrawledRow[] }>({
+    endpoint: '/site-explorer/crawled-pages',
+    label: `crawled-pages ${target}`,
+    query: {
+      target,
+      protocol: 'both',
+      mode: 'exact',
+      select:
+        'url_to,http_code_target,last_visited_target,redirects_to_target,canonical_to_target,url_rating_target,links_to_target,nofollow_to_target',
+      limit: 1,
+    },
+  });
+  const row = json?.pages?.[0];
+  if (!row) return null;
+  return {
+    url: row.url_to ?? target,
+    http_code: row.http_code_target ?? null,
+    last_visited: row.last_visited_target ?? null,
+    redirects_to_target: row.redirects_to_target ?? null,
+    canonical_to_target: row.canonical_to_target ?? null,
+    url_rating: row.url_rating_target ?? null,
+    links_to_target: row.links_to_target ?? null,
+    nofollow_to_target: row.nofollow_to_target ?? null,
+  };
+}
+
+export interface AhrefsUrlKeyword {
+  keyword: string;
+  volume: number;
+  difficulty: number | null;
+  cpc: number | null;
+  position: number | null;
+  best_position_url: string;
+  traffic: number | null;
+}
+
+interface AhrefsUrlKeywordRow {
+  keyword?: string | null;
+  volume?: number | null;
+  keyword_difficulty?: number | null;
+  cpc?: number | null;
+  position?: number | null;
+  best_position_url?: string | null;
+  traffic?: number | null;
+}
+
+export async function ahrefsUrlOrganicKeywords(
+  target: string,
+  region: string,
+  limit = 30
+): Promise<AhrefsUrlKeyword[]> {
+  if (!target) return [];
+  const json = await ahrefsGet<{ keywords?: AhrefsUrlKeywordRow[] }>({
+    endpoint: '/site-explorer/organic-keywords',
+    label: `organic-keywords (url) ${target}`,
+    query: {
+      target,
+      country: ahrefsCountry(region),
+      protocol: 'both',
+      mode: 'exact',
+      date: todayISO(),
+      volume_mode: 'monthly',
+      limit,
+      order_by: 'traffic:desc',
+      select: 'keyword,volume,keyword_difficulty,cpc,position,best_position_url,traffic',
+    },
+  });
+  if (!json?.keywords) return [];
+  return json.keywords
+    .filter(row => Boolean(row.keyword))
+    .map(row => ({
+      keyword: (row.keyword ?? '').trim(),
+      volume: Number(row.volume ?? 0),
+      difficulty: row.keyword_difficulty ?? null,
+      cpc: row.cpc ?? null,
+      position: row.position ?? null,
+      best_position_url: row.best_position_url ?? target,
+      traffic: row.traffic ?? null,
+    }))
+    .filter(row => row.keyword);
+}
+
+export interface AhrefsAnchor {
+  anchor: string;
+  refdomains: number;
+  links: number;
+}
+
+interface AhrefsAnchorRow {
+  anchor?: string | null;
+  refdomains?: number | null;
+  links?: number | null;
+}
+
+export async function ahrefsAnchors(
+  target: string,
+  limit = 20
+): Promise<AhrefsAnchor[]> {
+  if (!target) return [];
+  const json = await ahrefsGet<{ anchors?: AhrefsAnchorRow[] }>({
+    endpoint: '/site-explorer/anchors',
+    label: `anchors ${target}`,
+    query: {
+      target,
+      protocol: 'both',
+      mode: 'exact',
+      select: 'anchor,refdomains,links',
+      order_by: 'links:desc',
+      limit,
+    },
+  });
+  if (!json?.anchors) return [];
+  return json.anchors
+    .filter(a => Boolean(a.anchor))
+    .map(a => ({
+      anchor: a.anchor ?? '',
+      refdomains: Number(a.refdomains ?? 0),
+      links: Number(a.links ?? 0),
+    }))
+    .filter(a => a.anchor);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rank Tracker (free) — competitors overview/pages/stats
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface AhrefsRankTrackerCompetitorKeyword {
+  keyword: string;
+  volume: number | null;
+  competitors: Array<{
+    url: string;
+    position: number | null;
+    traffic: number | null;
+  }>;
+}
+
+export async function ahrefsRankTrackerCompetitorsOverview(params: {
+  projectId: number;
+  date: string;
+  device: 'desktop' | 'mobile';
+  limit?: number;
+}): Promise<AhrefsRankTrackerCompetitorKeyword[]> {
+  const { projectId, date, device, limit = 200 } = params;
+  const json = await ahrefsGet<{
+    keywords?: Array<{
+      keyword?: string | null;
+      volume?: number | null;
+      competitors_list?: Array<{
+        url?: string | null;
+        position?: number | null;
+        traffic?: number | null;
+      }>;
+    }>;
+  }>({
+    endpoint: '/rank-tracker/competitors-overview',
+    label: `rt-competitors-overview ${projectId}`,
+    query: {
+      project_id: projectId,
+      date,
+      device,
+      volume_mode: 'monthly',
+      select: 'keyword,volume,competitors_list.url,competitors_list.position,competitors_list.traffic',
+      limit,
+      order_by: 'volume:desc',
+    },
+  });
+  return (
+    json?.keywords?.map(k => ({
+      keyword: (k.keyword ?? '').trim(),
+      volume: k.volume ?? null,
+      competitors:
+        k.competitors_list?.map(c => ({
+          url: c.url ?? '',
+          position: c.position ?? null,
+          traffic: c.traffic ?? null,
+        })) ?? [],
+    })) ?? []
+  ).filter(k => k.keyword);
+}
+
+export interface AhrefsRankTrackerCompetitorPage {
+  url: string;
+  title: string;
+  traffic: number | null;
+}
+
+export async function ahrefsRankTrackerCompetitorsPages(params: {
+  projectId: number;
+  date: string;
+  device: 'desktop' | 'mobile';
+  limit?: number;
+}): Promise<AhrefsRankTrackerCompetitorPage[]> {
+  const { projectId, date, device, limit = 200 } = params;
+  const json = await ahrefsGet<{
+    ['competitors-pages']?: Array<{
+      url?: string | null;
+      title?: string | null;
+      traffic?: number | null;
+    }>;
+  }>({
+    endpoint: '/rank-tracker/competitors-pages',
+    label: `rt-competitors-pages ${projectId}`,
+    query: {
+      project_id: projectId,
+      date,
+      device,
+      volume_mode: 'monthly',
+      select: 'url,title,traffic',
+      limit,
+      order_by: 'traffic:desc',
+    },
+  });
+  return (
+    json?.['competitors-pages']?.map(p => ({
+      url: p.url ?? '',
+      title: p.title ?? '',
+      traffic: p.traffic ?? null,
+    })) ?? []
+  ).filter(p => p.url);
 }
 
 function mapIdeas(rows: AhrefsIdeaRow[] | undefined): AhrefsKeywordIdea[] {

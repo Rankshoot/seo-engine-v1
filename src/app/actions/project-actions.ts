@@ -14,15 +14,20 @@ export async function createProject(data: {
   target_language: string;
   description: string;
   competitors: string[];
+  ahrefs_rank_tracker_project_id?: number | null;
 }) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
-  const { competitors, ...projectData } = data;
+  const { competitors, ahrefs_rank_tracker_project_id, ...projectData } = data;
 
   const { data: project, error } = await supabaseAdmin
     .from('projects')
-    .insert({ ...projectData, user_id: user.id })
+    .insert({
+      ...projectData,
+      user_id: user.id,
+      ahrefs_rank_tracker_project_id: ahrefs_rank_tracker_project_id ?? null,
+    })
     .select()
     .single();
 
@@ -97,6 +102,7 @@ export async function updateProject(
     target_region: string;
     description: string;
     competitors?: string[];
+    ahrefs_rank_tracker_project_id?: number | null;
   }
 ) {
   const user = await currentUser();
@@ -114,11 +120,15 @@ export async function updateProject(
     return { success: false as const, error: 'Project not found' };
   }
 
-  const { competitors, ...patch } = data;
+  const { competitors, ahrefs_rank_tracker_project_id, ...patch } = data;
 
   const { data: updated, error: updErr } = await supabaseAdmin
     .from('projects')
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({
+      ...patch,
+      ahrefs_rank_tracker_project_id: ahrefs_rank_tracker_project_id ?? null,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', id)
     .eq('user_id', user.id)
     .select()

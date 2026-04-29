@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS projects (
   target_region TEXT NOT NULL DEFAULT 'us',
   target_language TEXT NOT NULL DEFAULT 'en',
   description TEXT DEFAULT '',
+  ahrefs_rank_tracker_project_id BIGINT DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

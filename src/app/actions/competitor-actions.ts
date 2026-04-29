@@ -148,6 +148,14 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
 
   const ownDomain = normalizeDomainInput(project.domain);
   const knownDomains = (project.project_competitors ?? []).map(c => c.domain);
+  let competitorList: Array<{
+    domain: string;
+    rank_score: number;
+    top_url: string;
+    top_title: string;
+  }> = [];
+  const rankingOpportunities: RankingOpportunity[] = [];
+
 
   // ───────────────────────────────────────────────────────────────────────
   // 1b. Competitor discovery — Ahrefs only.
@@ -162,12 +170,6 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
 
   let benchmarkSource: 'ahrefs' = 'ahrefs';
   void benchmarkSource;
-  let competitorList: Array<{
-    domain: string;
-    rank_score: number;
-    top_url: string;
-    top_title: string;
-  }> = [];
 
   if (ownDomain) {
     const ahrefsCompetitors = await ahrefsOrganicCompetitors(
@@ -250,7 +252,6 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   );
 
   const competitorDomains = competitorList.map(c => c.domain);
-  const rankingOpportunities: RankingOpportunity[] = [];
 
   // ───────────────────────────────────────────────────────────────────────
   // 1c. Build ranking opportunities — Ahrefs only.

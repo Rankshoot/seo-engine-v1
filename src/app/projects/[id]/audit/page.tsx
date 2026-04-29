@@ -255,7 +255,7 @@ export default function ContentHealthPage() {
             type="button"
             onClick={() => handleRun(false)}
             disabled={running || (coverage.blogs_audited > 0 && pendingAudits === 0)}
-            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 disabled:opacity-60"
+            className="flex items-center gap-2 rounded-xl bg-brand-500 hover:bg-brand-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 disabled:opacity-60"
           >
             {running ? (
               <>
@@ -497,7 +497,7 @@ export default function ContentHealthPage() {
                           onClick={() => handleRepair(row)}
                           disabled={!!repairing}
                           title="Use AI to rewrite this blog addressing every issue flagged. Opens the repaired draft in the blog editor — you can review and download or schedule it from there."
-                          className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/30 hover:from-brand-400 hover:to-brand-500 disabled:opacity-60"
+                          className="flex items-center gap-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/30 hover:from-brand-400 hover:to-brand-500 disabled:opacity-60"
                         >
                           {repairing === row.url ? (
                             <>
@@ -698,7 +698,7 @@ function StatCard({
 }) {
   return (
     <div
-      className={`rounded-2xl border bg-gradient-to-br ${accent} p-5 ${tooltip ? "cursor-help" : ""}`}
+      className={`rounded-2xl border ${accent} p-5 ${tooltip ? "cursor-help" : ""}`}
       title={tooltip}
     >
       <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>

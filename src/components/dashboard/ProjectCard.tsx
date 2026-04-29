@@ -45,7 +45,7 @@ export default function ProjectCard({ project }: ProjectCardProps) {
           className="glass-card p-6 block hover:border-brand-500/30 transition-all duration-300"
         >
           <div className="flex items-start justify-between mb-4">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-500/20 to-brand-700/20 border border-brand-500/20 flex items-center justify-center text-xl font-black text-brand-400">
+            <div className="w-12 h-12 rounded-2xl bg-brand-500/15 border border-brand-500/20 flex items-center justify-center text-xl font-black text-brand-400">
               {project.name.charAt(0).toUpperCase()}
             </div>
             {/* Space reserved for the kebab button (absolute) + the region pill. */}
@@ -395,7 +395,7 @@ function EditProjectModal({
             <button
               type="submit"
               disabled={saving}
-              className="rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+              className="rounded-xl bg-brand-500 hover:bg-brand-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
             >
               {saving ? "Saving…" : "Save changes"}
             </button>
@@ -477,7 +477,7 @@ function DeleteProjectModal({
             type="button"
             onClick={handleDelete}
             disabled={!matches || deleting}
-            className="rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-rose-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="rounded-xl bg-rose-500 hover:bg-rose-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-rose-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {deleting ? "Deleting…" : "Delete project"}
           </button>

@@ -1,9 +1,16 @@
 import * as cheerio from 'cheerio';
-import { JSDOM } from 'jsdom';
+import { JSDOM, VirtualConsole } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { chromium, type Browser, type Page } from 'playwright';
 import { analyzeWebsiteWithAI, type AIAnalysisResult } from './aiWebsiteAnalyzer';
+
+const quietJsdomConsole = new VirtualConsole();
+quietJsdomConsole.on('jsdomError', error => {
+  const jsdomError = error as Error & { type?: string };
+  if (jsdomError.type === 'css parsing' || /could not parse css stylesheet/i.test(jsdomError.message)) return;
+  console.warn('[hybridScraper] jsdom warning:', error.message);
+});
 
 export interface ScrapedBlogPost {
   url: string;
@@ -161,7 +168,7 @@ function parseWebsiteHtml(html: string, baseUrl: string) {
   });
 
   // Readability extraction
-  const dom = new JSDOM(html, { url: baseUrl });
+  const dom = new JSDOM(html, { url: baseUrl, virtualConsole: quietJsdomConsole });
   const reader = new Readability(dom.window.document);
   const article = reader.parse();
 
@@ -278,7 +285,7 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
       throw new Error(`Failed to fetch HTML for ${url}`);
     }
 
-    const dom = new JSDOM(html, { url });
+    const dom = new JSDOM(html, { url, virtualConsole: quietJsdomConsole });
     const reader = new Readability(dom.window.document);
     const article = reader.parse();
 

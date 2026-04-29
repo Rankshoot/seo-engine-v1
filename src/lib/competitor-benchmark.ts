@@ -61,6 +61,14 @@ export interface DiscoveredCompetitor {
   top_title: string;
 }
 
+export interface KeywordRankingPage {
+  domain: string;
+  url: string;
+  title: string;
+  position: number;
+  matched_benchmarked_competitor: boolean;
+}
+
 function safeHostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
@@ -224,6 +232,71 @@ export async function findCompetitorPages(
     });
 
   return pages;
+}
+
+/** Resolve the actual organic landing page ranking for one keyword. */
+export async function findKeywordRankingPage(
+  keyword: string,
+  opts: {
+    region?: string;
+    language?: string;
+    ownDomain?: string;
+    competitorDomains?: string[];
+    requireCompetitorMatch?: boolean;
+    trace?: BenchmarkTraceEntry[];
+  } = {}
+): Promise<KeywordRankingPage | null> {
+  const cleanKeyword = keyword.trim();
+  if (!cleanKeyword) return null;
+
+  const region = opts.region ?? 'us';
+  const language = opts.language ?? 'en';
+  const ownHost = normalizeDomain(opts.ownDomain ?? '');
+  const competitorHosts = new Set((opts.competitorDomains ?? []).map(normalizeDomain).filter(Boolean));
+  const started = Date.now();
+  const res = await serperSearch(cleanKeyword, region, language);
+  const organic = (res?.organic ?? []) as Array<{ title?: string; link?: string }>;
+
+  const candidates = organic
+    .map((r, idx) => {
+      const url = typeof r.link === 'string' ? r.link : '';
+      const domain = safeHostname(url);
+      return {
+        domain,
+        url,
+        title: typeof r.title === 'string' ? r.title : '',
+        position: idx + 1,
+        matched_benchmarked_competitor: competitorHosts.has(domain),
+      };
+    })
+    .filter(row => {
+      if (!row.url || !row.domain) return false;
+      if (SERP_BOILERPLATE_DOMAINS.has(row.domain)) return false;
+      if (ownHost && (row.domain === ownHost || row.domain.endsWith(`.${ownHost}`))) return false;
+      return true;
+    });
+
+  const preferred = candidates.find(row => row.matched_benchmarked_competitor) ?? (opts.requireCompetitorMatch ? null : candidates[0] ?? null);
+
+  if (opts.trace) {
+    if (preferred) {
+      traceOk(
+        opts.trace,
+        `serper_keyword_url: ${cleanKeyword}`,
+        {
+          position: preferred.position,
+          domain: preferred.domain,
+          matched_benchmarked_competitor: preferred.matched_benchmarked_competitor,
+          ms: Date.now() - started,
+        },
+        preferred.url
+      );
+    } else {
+      traceFail(opts.trace, `serper_keyword_url: ${cleanKeyword}`, 'no clean organic result');
+    }
+  }
+
+  return preferred;
 }
 
 /**

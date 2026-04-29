@@ -130,19 +130,17 @@ export async function discoverKeywords(projectId: string) {
   );
 
   if (!rawKeywords.length) {
-    const firstIdeas = discoveryTrace.find(t => t.label.includes('keyword_ideas'));
-    const parsed = firstIdeas?.parsed as
-      | { status_code?: number; status_message?: string; tasks?: Array<{ status_code?: number; status_message?: string }> }
-      | null
-      | undefined;
-    const apiStatus =
-      parsed?.tasks?.[0]?.status_message ||
-      parsed?.status_message ||
-      (firstIdeas && `HTTP ${firstIdeas.httpStatus}`) ||
-      'no response';
+    const ahrefsErr = discoveryTrace.find(
+      t => t.label.includes('ahrefs') && t.label.includes('error')
+    );
+    const cfgErr = discoveryTrace.find(t => t.label === '(config)');
+    const detail =
+      cfgErr?.fetchError ||
+      ahrefsErr?.fetchError ||
+      'Ahrefs returned 0 rows for these seeds.';
     return {
       success: false,
-      error: `No keywords returned by DataForSEO (${apiStatus}). Open DevTools console for the full trace.`,
+      error: `No keywords returned by Ahrefs (${detail}). Open DevTools console for the full trace.`,
       discoveryTrace,
       briefSummary: briefSummary(brief),
     };
@@ -276,21 +274,92 @@ function briefSummary(brief: BusinessBrief | undefined) {
   };
 }
 
-export async function getKeywords(projectId: string) {
+export async function getKeywords(
+  projectId: string,
+  opts: { limit?: number; offset?: number; includeApproved?: boolean } = {}
+) {
   const user = await currentUser();
-  if (!user) return { success: false, error: 'Not authenticated', data: [] as Keyword[] };
+  if (!user)
+    return {
+      success: false,
+      error: 'Not authenticated',
+      data: [] as Keyword[],
+      total: 0,
+    };
+
+  // Approved/rejected rows are always returned so the existing UI selection
+  // state survives. The `limit/offset` only paginates pending rows.
+  const includeApproved = opts.includeApproved !== false;
+  const limit = Math.max(1, Math.min(opts.limit ?? 20, 200));
+  const offset = Math.max(0, opts.offset ?? 0);
+
+  // Total pending count — drives the "Load more" affordance in the UI.
+  const { count } = await supabaseAdmin
+    .from('keywords')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId);
+
+  const pendingPromise = supabaseAdmin
+    .from('keywords')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('status', 'pending')
+    .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
+    .order('volume', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  const lockedPromise = includeApproved
+    ? supabaseAdmin
+        .from('keywords')
+        .select('*')
+        .eq('project_id', projectId)
+        .neq('status', 'pending')
+        .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
+        .order('volume', { ascending: false })
+    : Promise.resolve({ data: [], error: null } as { data: unknown[]; error: { message: string } | null });
+
+  const [pendingRes, lockedRes] = await Promise.all([pendingPromise, lockedPromise]);
+  if (pendingRes.error)
+    return { success: false, error: pendingRes.error.message, data: [] as Keyword[], total: 0 };
+  if (lockedRes.error)
+    return { success: false, error: lockedRes.error.message, data: [] as Keyword[], total: 0 };
+
+  const data = [...(lockedRes.data as Keyword[] ?? []), ...(pendingRes.data as Keyword[] ?? [])];
+  return { success: true, data, total: count ?? data.length };
+}
+
+/**
+ * Pagination helper for the "Load more" button on the keywords screen. Returns
+ * the next N pending keywords past `offset`, sorted by analysis score.
+ */
+export async function loadMoreKeywords(
+  projectId: string,
+  offset: number,
+  limit: number = 20
+) {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: [] as Keyword[], total: 0 };
+
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const safeOffset = Math.max(0, offset);
+
+  const { count } = await supabaseAdmin
+    .from('keywords')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId)
+    .eq('status', 'pending');
 
   const { data, error } = await supabaseAdmin
     .from('keywords')
     .select('*')
     .eq('project_id', projectId)
-    // Sort by the new composite analysis score; rows that were written before
-    // the new column existed will have 0 and simply fall to the bottom.
+    .eq('status', 'pending')
     .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
-    .order('volume', { ascending: false });
+    .order('volume', { ascending: false })
+    .range(safeOffset, safeOffset + safeLimit - 1);
 
-  if (error) return { success: false, error: error.message, data: [] as Keyword[] };
-  return { success: true, data: data as Keyword[] };
+  if (error) return { success: false, error: error.message, data: [] as Keyword[], total: 0 };
+  return { success: true, data: (data ?? []) as Keyword[], total: count ?? 0 };
 }
 
 export async function updateKeywordStatus(keywordId: string, status: KeywordStatus) {

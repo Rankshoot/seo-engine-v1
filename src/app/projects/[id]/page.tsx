@@ -53,7 +53,7 @@ export default async function ProjectOverviewPage({ params }: { params: Promise<
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {statCards.map(stat => (
-          <div key={stat.label} className={`p-6 rounded-2xl bg-gradient-to-br ${stat.color} border`}>
+          <div key={stat.label} className={`p-6 rounded-2xl ${stat.color} border`}>
             <p className="text-xs font-bold text-text-tertiary uppercase tracking-widest mb-2">{stat.label}</p>
             <p className="text-4xl font-black text-text-primary">{stat.value}</p>
             <p className="text-xs text-text-tertiary mt-1">{stat.sub}</p>

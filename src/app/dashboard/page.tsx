@@ -32,7 +32,7 @@ export default async function DashboardPage() {
 
           <Link
             href="/projects/new"
-            className="inline-flex items-center gap-2 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-brand-500 to-brand-600 text-white font-bold shadow-lg shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200"
+            className="inline-flex items-center gap-2 px-6 py-3.5 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
             New Project
@@ -48,12 +48,12 @@ export default async function DashboardPage() {
                 <p className="text-4xl font-black text-text-primary">{totalProjects}</p>
                 <p className="text-xs text-text-tertiary mt-1">SEO campaigns</p>
               </div>
-              <div className="glass-card p-6 bg-gradient-to-br from-brand-500/5 to-transparent">
+              <div className="glass-card p-6 bg-brand-500/8">
                 <p className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Automation Status</p>
                 <p className="text-lg font-black text-brand-400">Active</p>
                 <p className="text-xs text-text-tertiary mt-1">Keyword data and AI drafts</p>
               </div>
-              <div className="glass-card p-6 bg-gradient-to-br from-accent-500/5 to-transparent">
+              <div className="glass-card p-6 bg-accent-500/8">
                 <p className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Workflow</p>
                 <p className="text-lg font-black text-accent-400">Ready</p>
                 <p className="text-xs text-text-tertiary mt-1">Keywords → Calendar → Blogs</p>
@@ -101,7 +101,7 @@ export default async function DashboardPage() {
             </div>
             <Link
               href="/projects/new"
-              className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-brand-500 to-brand-600 text-white font-bold shadow-lg shadow-brand-500/20 hover:-translate-y-0.5 transition-all"
+              className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/20 hover:-translate-y-0.5 transition-all"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
               Create First Project

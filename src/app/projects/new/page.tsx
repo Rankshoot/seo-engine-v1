@@ -173,7 +173,7 @@ export default function NewProjectPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-4 rounded-2xl bg-gradient-to-r from-brand-500 to-brand-600 text-white font-bold text-base shadow-lg shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+            className="w-full py-4 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-base shadow-lg shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-3"
           >
             {loading ? (
               <>

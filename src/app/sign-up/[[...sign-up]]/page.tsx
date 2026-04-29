@@ -25,7 +25,7 @@ export default function SignUpPage() {
         {/* Logo */}
         <div className="text-center mb-8 animate-fade-in-up">
           <a href="/" className="inline-flex items-center gap-3 text-xl font-bold text-text-primary">
-            <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
+            <span className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
               ⚡
             </span>
             SerpCraft

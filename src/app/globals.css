@@ -131,14 +131,16 @@
 
 /* ===== UTILITY COMPONENTS ===== */
 @layer components {
+  /* Solid-color replacements for the legacy `.gradient-text` and
+     `.gradient-text-warm` helpers. We keep the class names so existing
+     markup still picks up the styling, but render them as a single brand
+     hue (cool / warm) per the no-gradient design rule. */
   .gradient-text {
-    @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, var(--color-brand-400), var(--color-cyan-400), var(--color-accent-400));
+    color: var(--color-brand-300);
   }
 
   .gradient-text-warm {
-    @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, var(--color-warm-400), var(--color-rose-400), var(--color-brand-400));
+    color: var(--color-warm-300);
   }
 
   .glass-card {
@@ -169,14 +171,14 @@
     position: absolute;
     inset: -1px;
     border-radius: inherit;
-    background: linear-gradient(135deg, var(--color-brand-500), transparent, var(--color-accent-500));
+    background: var(--color-brand-500);
     opacity: 0;
     z-index: -1;
     transition: opacity 0.25s ease;
   }
 
   .glow-effect:hover::after {
-    opacity: 0.15;
+    opacity: 0.18;
   }
 
   /* Clerk overrides for dark theme */
@@ -218,11 +220,11 @@
   }
 
   .cl-formButtonPrimary {
-    background: linear-gradient(135deg, var(--color-brand-500), var(--color-brand-600)) !important;
+    background: var(--color-brand-500) !important;
   }
 
   .cl-formButtonPrimary:hover {
-    background: linear-gradient(135deg, var(--color-brand-400), var(--color-brand-500)) !important;
+    background: var(--color-brand-400) !important;
   }
 
   .cl-footerActionLink {

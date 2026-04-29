@@ -72,7 +72,7 @@ export default function LandingPage() {
         <div className="max-w-[1200px] mx-auto px-6 flex items-center justify-between">
           {/* Logo */}
           <a href="/" className="flex items-center gap-3 font-bold text-xl tracking-tight" id="logo">
-            <span className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
+            <span className="w-9 h-9 rounded-lg bg-brand-600 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
               ⚡
             </span>
             SerpCraft
@@ -91,12 +91,12 @@ export default function LandingPage() {
               <a href="/sign-in" className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors" id="nav-login">
                 Log In
               </a>
-              <a href="/sign-up" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 text-white text-sm font-semibold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200" id="nav-get-started">
+              <a href="/sign-up" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200" id="nav-get-started">
                 Get Started Free {Icon.arrowRight}
               </a>
             </SignedOut>
             <SignedIn>
-              <a href="/dashboard" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 text-white text-sm font-semibold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200">
+              <a href="/dashboard" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200">
                 Dashboard {Icon.arrowRight}
               </a>
               <UserButton />
@@ -123,12 +123,12 @@ export default function LandingPage() {
               <div className="pt-3 border-t border-border-subtle flex flex-col gap-2">
                 <SignedOut>
                   <a href="/sign-in" className="py-2 text-sm font-medium text-text-secondary">Log In</a>
-                  <a href="/sign-up" className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 text-white text-sm font-semibold">
+                  <a href="/sign-up" className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold">
                     Get Started Free
                   </a>
                 </SignedOut>
                 <SignedIn>
-                  <a href="/dashboard" className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 text-white text-sm font-semibold">
+                  <a href="/dashboard" className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold">
                     Go to Dashboard
                   </a>
                 </SignedIn>
@@ -182,7 +182,7 @@ export default function LandingPage() {
           <div className="animate-fade-in-up delay-300 flex items-center justify-center gap-4 flex-wrap">
             <a
               href="/sign-up"
-              className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 text-white font-semibold text-base shadow-lg shadow-brand-500/25 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-brand-500/30 transition-all duration-200"
+              className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold text-base shadow-lg shadow-brand-500/25 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-brand-500/30 transition-all duration-200"
               id="hero-cta"
             >
               {Icon.zap} Start Automating SEO
@@ -234,7 +234,7 @@ export default function LandingPage() {
           {/* Steps */}
           <div className="relative grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* Connector line (desktop only) */}
-            <div className="hidden lg:block absolute top-[60px] left-[12.5%] w-[75%] h-0.5 bg-gradient-to-r from-brand-500 via-cyan-400 via-accent-400 to-yellow-400 opacity-30" />
+            <div className="hidden lg:block absolute top-[60px] left-[12.5%] w-[75%] h-0.5 bg-border-strong opacity-50" />
 
             {[
               { num: "1", title: "Define Your Niche", desc: "Enter your industry, domain, target region, and optionally competitor websites.", colors: "bg-brand-500/15 text-brand-400 border-brand-500" },
@@ -280,7 +280,7 @@ export default function LandingPage() {
                 className="group relative overflow-hidden p-8 rounded-2xl bg-glass border border-border-subtle hover:border-border-default hover:-translate-y-1 hover:shadow-xl transition-all duration-300"
               >
                 {/* Top line glow */}
-                <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-brand-500 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="absolute top-0 left-0 right-0 h-0.5 bg-brand-500/40 opacity-0 group-hover:opacity-100 transition-opacity" />
 
                 <div className={`w-12 h-12 rounded-xl ${featureColors[feat.color]?.bg} flex items-center justify-center mb-5`}>
                   {feat.icon}
@@ -415,9 +415,9 @@ export default function LandingPage() {
       {/* ===== CTA ===== */}
       <section className="py-24 relative" id="cta">
         <div className="max-w-[1200px] mx-auto px-6">
-          <div className="relative text-center py-16 px-8 rounded-2xl bg-gradient-to-br from-brand-500/8 to-accent-500/4 border border-border-subtle overflow-hidden">
+          <div className="relative text-center py-16 px-8 rounded-2xl bg-brand-500/8 border border-border-subtle overflow-hidden">
             {/* Top line */}
-            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-brand-400 to-transparent" />
+            <div className="absolute top-0 left-0 right-0 h-px bg-brand-400/40" />
 
             <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight mb-4">
               Ready to{" "}
@@ -430,7 +430,7 @@ export default function LandingPage() {
             </p>
             <a
               href="/sign-up"
-              className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 text-white font-semibold text-base shadow-lg shadow-brand-500/25 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 hover:shadow-xl transition-all duration-200"
+              className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold text-base shadow-lg shadow-brand-500/25 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 hover:shadow-xl transition-all duration-200"
               id="cta-button"
             >
               {Icon.zap} Get Started — It&apos;s Free
@@ -446,7 +446,7 @@ export default function LandingPage() {
             {/* Brand */}
             <div className="max-w-[300px]">
               <div className="flex items-center gap-3 font-bold text-lg mb-4">
-                <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-sm shadow-[0_0_15px_rgba(99,102,241,0.3)]">
+                <span className="w-7 h-7 rounded-lg bg-brand-600 flex items-center justify-center text-sm shadow-[0_0_15px_rgba(99,102,241,0.3)]">
                   ⚡
                 </span>
                 SerpCraft

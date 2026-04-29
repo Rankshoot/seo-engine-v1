@@ -547,7 +547,7 @@ function RepairBanner({
   const [open, setOpen] = useState(repairNotes.length > 0);
 
   return (
-    <div className="rounded-2xl border border-brand-500/30 bg-gradient-to-r from-brand-500/10 to-accent-500/10 px-5 py-4">
+    <div className="rounded-2xl border border-brand-500/30 bg-brand-500/8 px-5 py-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-500/20 text-brand-400">

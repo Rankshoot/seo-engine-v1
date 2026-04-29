@@ -2,11 +2,15 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { discoverCompetitorGapKeywords, type CompetitorGapKeyword } from '@/lib/research';
+import type { CompetitorGapKeyword } from '@/lib/research';
 import { analyzeKeywordGapStrategy } from '@/lib/gemini';
 import { fetchKeywordVitals } from '@/lib/dataforseo';
-import { discoverCompetitors, type BenchmarkTraceEntry } from '@/lib/competitor-benchmark';
-import { getBusinessBrief } from '@/app/actions/brief-actions';
+import {
+  ahrefsOrganicCompetitors,
+  ahrefsOrganicKeywords,
+  isAhrefsConfigured,
+} from '@/lib/ahrefs';
+import type { BenchmarkTraceEntry } from '@/lib/competitor-benchmark';
 import type { Project, ProjectCompetitor } from '@/lib/types';
 
 export interface FindCompetitorGapsResult {
@@ -18,65 +22,43 @@ export interface FindCompetitorGapsResult {
 }
 
 /**
- * When the project has no competitors on file, rank the top-of-SERP domains
- * for the project's seed keywords (business-brief seeds if we have them, else
- * niche-based fallbacks) and persist them into `project_competitors` so the
- * rest of the gap-analysis + benchmarking pipeline has something to chew on.
- *
- * Returns the freshly-persisted ProjectCompetitor rows.
+ * When the project has no competitors on file, ask Ahrefs Site Explorer for
+ * the user's organic competitors and persist them into `project_competitors`
+ * so the rest of the gap-analysis pipeline has something to chew on.
  */
 async function autoDiscoverProjectCompetitors(
   project: Project,
 ): Promise<ProjectCompetitor[]> {
-  const briefRes = await getBusinessBrief(project.id);
+  if (!isAhrefsConfigured()) {
+    console.warn('[auto-discover-competitors] AHREFS_API_KEY missing — cannot discover competitors.');
+    return [];
+  }
 
-  // Stack multiple seed sources so we have real coverage even when the
-  // business brief is missing or the niche is a single narrow phrase.
-  const niche = (project.niche || '').trim();
-  const audience = (project.target_audience || '').trim();
-  const seedSet = new Set<string>();
-  for (const phrase of briefRes.brief?.seed_phrases ?? []) {
-    const p = (phrase || '').trim();
-    if (p) seedSet.add(p);
-  }
-  if (niche) {
-    seedSet.add(niche);
-    seedSet.add(`best ${niche}`);
-    seedSet.add(`top ${niche}`);
-    seedSet.add(`${niche} tools`);
-    seedSet.add(`${niche} platform`);
-    seedSet.add(`${niche} software`);
-    if (audience) seedSet.add(`${niche} for ${audience}`);
-  }
-  const seeds = [...seedSet].filter(Boolean);
+  const ownDomain = (project.domain || '').trim();
+  if (!ownDomain) return [];
 
   const trace: BenchmarkTraceEntry[] = [];
-
-  const discovered = await discoverCompetitors(seeds, {
-    region: project.target_region,
-    language: project.target_language,
-    ownDomain: project.domain,
-    maxSeeds: 8,
-    maxCompetitors: 5,
-    trace,
+  const discovered = await ahrefsOrganicCompetitors(
+    ownDomain,
+    project.target_region,
+    8
+  );
+  trace.push({
+    label: 'ahrefs_organic_competitors',
+    ok: true,
+    info: { domain: ownDomain, returned: discovered.length },
   });
 
-  // Surface the full Serper trace in server logs so we can diagnose empty
-  // discovery runs (missing API key, zero organic results, all-boilerplate
-  // SERP, etc.) without requiring a fresh deploy.
   console.log(
     '[auto-discover-competitors]',
     JSON.stringify(
       {
         project_id: project.id,
-        niche,
+        ownDomain,
         region: project.target_region,
-        language: project.target_language,
-        serper_key_present: Boolean(process.env.SERPER_API_KEY),
-        seed_count: seeds.length,
-        seeds,
+        ahrefs_configured: true,
         found: discovered.length,
-        domains: discovered.map(d => d.domain),
+        domains: discovered.map(c => c.competitor_domain),
         trace,
       },
       null,
@@ -86,16 +68,16 @@ async function autoDiscoverProjectCompetitors(
 
   if (!discovered.length) return [];
 
-  // Insert-or-ignore: a stray duplicate (from a race with the full benchmark
-  // run) shouldn't fail the gap lookup, so we swallow that specific case.
-  const rows = discovered.map(d => ({ project_id: project.id, domain: d.domain }));
+  const rows = discovered.map(c => ({
+    project_id: project.id,
+    domain: c.competitor_domain,
+  }));
   const { data: inserted, error } = await supabaseAdmin
     .from('project_competitors')
     .upsert(rows, { onConflict: 'project_id,domain', ignoreDuplicates: true })
     .select();
 
   if (error || !inserted?.length) {
-    // Fall back to a plain read — duplicates mean rows already exist.
     const { data: existing } = await supabaseAdmin
       .from('project_competitors')
       .select('*')
@@ -123,15 +105,13 @@ export async function findCompetitorGaps(projectId: string): Promise<FindCompeti
   let autoDiscoveredCompetitors: string[] | undefined;
 
   if (!competitors.length) {
-    // No competitors on file — mine real SERP competitors from Serper based on
-    // the project's niche/business-brief seeds and persist them, so the rest
-    // of the gap pipeline (and every future run) has something to work with.
+    // No competitors on file — discover them via Ahrefs organic-competitors.
     const discovered = await autoDiscoverProjectCompetitors(project);
     if (!discovered.length) {
       return {
         success: false,
         error:
-          "We couldn't auto-discover competitors from search for this niche. Try adding a couple of known competitors on the project overview and re-run.",
+          "Ahrefs returned 0 organic competitors for this domain. Add a couple of known competitors on the project overview and re-run.",
         data: [],
       };
     }
@@ -139,37 +119,59 @@ export async function findCompetitorGaps(projectId: string): Promise<FindCompeti
     autoDiscoveredCompetitors = discovered.map(c => c.domain);
   }
 
+  if (!isAhrefsConfigured()) {
+    return {
+      success: false,
+      error: 'AHREFS_API_KEY is not configured — Ahrefs is now the only data source for gap analysis.',
+      data: [],
+    };
+  }
+
   const { data: existingKws } = await supabaseAdmin
     .from('keywords')
     .select('keyword')
     .eq('project_id', projectId);
 
-  const existingKeywords = (existingKws ?? []).map(k => k.keyword);
-  const competitorDomains = competitors.map(c => c.domain);
-
-  const gaps = await discoverCompetitorGapKeywords(
-    competitorDomains,
-    project.niche,
-    existingKeywords
+  const existingSet = new Set(
+    (existingKws ?? []).map(k => (k.keyword || '').toLowerCase().trim())
   );
 
-  // AGENTS.md rule: never fake metrics. Hydrate real monthly volume for every
-  // mined gap via DataForSEO `keyword_overview/live` (one call covers up to
-  // 700 phrases). Rows where DataForSEO has no match keep volume 0 so the UI
-  // renders an honest "—" instead of a random placeholder.
-  if (gaps.length) {
-    const vitals = await fetchKeywordVitals(
-      gaps.map(g => g.keyword),
-      project.target_region,
-      project.target_language
-    );
-    for (const g of gaps) {
-      const v = vitals.get(g.keyword.toLowerCase());
-      if (v) g.estimatedVolume = v.volume;
+  // Mine each competitor's top organic keywords + ranking URLs directly from
+  // Ahrefs Site Explorer — this is what powers the "Ranking page" link the
+  // gap dashboard now shows for every keyword.
+  const gaps: CompetitorGapKeyword[] = [];
+  const seen = new Set<string>();
+  for (const competitor of competitors.slice(0, 5)) {
+    try {
+      const rows = await ahrefsOrganicKeywords(
+        competitor.domain,
+        project.target_region,
+        50
+      );
+      for (const row of rows) {
+        const kwLower = row.keyword.toLowerCase().trim();
+        if (!kwLower || seen.has(kwLower) || existingSet.has(kwLower)) continue;
+        seen.add(kwLower);
+        gaps.push({
+          keyword: row.keyword,
+          competitorDomain: competitor.domain,
+          sourceTitle: `${competitor.domain} ranks #${row.best_position ?? '?'} for "${row.keyword}"`,
+          sourceUrl: row.best_position_url || `https://${competitor.domain}`,
+          estimatedVolume: row.volume || 0,
+        });
+      }
+    } catch (e) {
+      console.warn(`[gaps] ahrefs organic-keywords for ${competitor.domain} failed:`, e);
     }
   }
 
-  return { success: true, data: gaps, autoDiscoveredCompetitors };
+  // Volume already comes back from organic-keywords; no second call needed.
+  const finalGaps = gaps
+    .sort((a, b) => b.estimatedVolume - a.estimatedVolume)
+    .slice(0, 60);
+
+  void fetchKeywordVitals;
+  return { success: true, data: finalGaps, autoDiscoveredCompetitors };
 }
 
 export async function analyzeKeywordGapsAction(projectId: string, gaps: CompetitorGapKeyword[]) {

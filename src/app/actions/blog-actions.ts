@@ -2,8 +2,9 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { generateBlogPost, geminiGenerate } from '@/lib/gemini';
+import { generateBlogPost, geminiGenerate, type AhrefsBlogContext } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
+import { buildKeywordCoverage } from '@/lib/ahrefs';
 import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
@@ -46,6 +47,39 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       console.warn('Research step failed, proceeding without context:', e);
     }
 
+    // Ahrefs Keywords-Explorer coverage — matching-terms + related-terms +
+    // search-suggestions for the focus keyword, plus the live top-10 SERP.
+    // This is now the primary source of "what to cover" — research stays as
+    // a Serper-powered freshness layer (PAA, news, videos).
+    let ahrefsContext: AhrefsBlogContext | null = null;
+    try {
+      const coverage = await buildKeywordCoverage(
+        entry.focus_keyword,
+        project.target_region
+      );
+      ahrefsContext = {
+        ideas: coverage.ideas.map(i => ({
+          keyword: i.keyword,
+          volume: i.volume,
+          difficulty: i.difficulty,
+          cpc: i.cpc,
+        })),
+        serp: coverage.serp.map(p => ({
+          position: p.position,
+          url: p.url,
+          title: p.title,
+          domain: p.domain,
+          domain_rating: p.domain_rating,
+          traffic: p.traffic,
+        })),
+      };
+      console.log(
+        `[blog] Ahrefs coverage for "${entry.focus_keyword}": ideas=${ahrefsContext.ideas.length} serp=${ahrefsContext.serp.length}`
+      );
+    } catch (e) {
+      console.warn('Ahrefs coverage step failed, proceeding without it:', e);
+    }
+
     let existingBlogs: { title: string; slug: string; target_keyword: string }[] = [];
     try {
       const { data: blogs } = await supabaseAdmin
@@ -80,7 +114,8 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       wordCount,
       research ?? undefined,
       existingBlogs,
-      brief
+      brief,
+      ahrefsContext ?? undefined,
     );
     const images = await generateBlogImages({
       title: blogData.title,

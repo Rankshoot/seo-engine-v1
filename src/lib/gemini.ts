@@ -5,6 +5,7 @@ import type { BusinessBrief } from './business-brief';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+const POLLINATIONS_CHAT_URL = 'https://gen.pollinations.ai/v1/chat/completions';
 
 function normalizeHost(domain: string): string {
   return domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
@@ -15,6 +16,43 @@ function safeHost(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Render the Ahrefs Keywords-Explorer + SERP context into a prompt-ready
+ * block. Kept here (not in research.ts) so the gemini prompt is the single
+ * place that decides how Ahrefs data influences the article.
+ */
+function formatAhrefsContextForPrompt(ctx: {
+  ideas: Array<{ keyword: string; volume: number; difficulty: number | null; cpc: number | null }>;
+  serp: Array<{ position: number; url: string; title: string; domain: string; domain_rating: number | null; traffic: number | null }>;
+}): string {
+  const lines: string[] = [];
+  lines.push('=== AHREFS CONTEXT (real Keywords-Explorer + SERP data — use to expand topical coverage) ===\n');
+
+  if (ctx.ideas.length) {
+    lines.push('ADJACENT QUERIES TO ANSWER (from matching-terms + related-terms + search-suggestions):');
+    lines.push('Each is a real search with monthly Google volume. Answer at least 6 of these naturally inside the article body or FAQ — do NOT just append them as a bulleted list.');
+    ctx.ideas.slice(0, 24).forEach(k => {
+      const kdLabel = k.difficulty != null ? ` · KD ${k.difficulty}` : '';
+      lines.push(`• "${k.keyword}" — ${k.volume.toLocaleString()} searches/mo${kdLabel}`);
+    });
+    lines.push('');
+  }
+
+  if (ctx.serp.length) {
+    lines.push('LIVE TOP-10 SERP (Ahrefs):');
+    lines.push('These are the pages currently winning for the target keyword. Beat them by going deeper on whatever they cover, AND covering at least one angle they miss.');
+    ctx.serp.slice(0, 10).forEach(p => {
+      const dr = p.domain_rating != null ? ` · DR ${Math.round(p.domain_rating)}` : '';
+      const traffic = p.traffic ? ` · ~${p.traffic.toLocaleString()} mo traffic` : '';
+      lines.push(`#${p.position} — "${p.title}" — ${p.domain}${dr}${traffic}`);
+    });
+    lines.push('');
+  }
+
+  lines.push('=== END AHREFS CONTEXT ===');
+  return lines.join('\n');
 }
 
 export async function geminiGenerate(prompt: string, retries = 3): Promise<string> {
@@ -33,10 +71,9 @@ export async function geminiGenerate(prompt: string, retries = 3): Promise<strin
       });
 
       if (res.status === 429) {
-        const wait = (attempt + 1) * 20;
-        console.warn(`Gemini 429 — waiting ${wait}s (attempt ${attempt + 1}/${retries})`);
-        await new Promise(r => setTimeout(r, wait * 1000));
-        continue;
+        const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached');
+        if (fallback) return fallback;
+        throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
       }
 
       if (!res.ok) {
@@ -56,6 +93,40 @@ export async function geminiGenerate(prompt: string, retries = 3): Promise<strin
   throw new Error('Gemini failed after all retries');
 }
 
+async function pollinationsGeminiFallback(prompt: string, reason: string): Promise<string | null> {
+  const apiKey = process.env.POLLINATIONS_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    console.warn(`${reason}; using Pollinations Gemini fallback.`);
+    const res = await fetch(POLLINATIONS_CHAT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: process.env.POLLINATIONS_TEXT_MODEL || 'gemini-fast',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.75,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => '');
+      console.warn(`Pollinations fallback failed (${res.status}): ${err.slice(0, 200)}`);
+      return null;
+    }
+
+    const json = await res.json();
+    const text = json?.choices?.[0]?.message?.content;
+    return typeof text === 'string' && text.trim() ? text : null;
+  } catch (error) {
+    console.warn('Pollinations fallback failed:', error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
 export interface GeneratedBlog {
   title: string;
   content: string;
@@ -67,13 +138,33 @@ export interface GeneratedBlog {
   internal_links: string[];
 }
 
+export interface AhrefsBlogContext {
+  /** Up to ~30 adjacent keywords from matching/related/search-suggestions, dedup'd & sorted by volume. */
+  ideas: Array<{
+    keyword: string;
+    volume: number;
+    difficulty: number | null;
+    cpc: number | null;
+  }>;
+  /** Top 10 SERP positions (Ahrefs) — gives the writer real competitor titles + DR. */
+  serp: Array<{
+    position: number;
+    url: string;
+    title: string;
+    domain: string;
+    domain_rating: number | null;
+    traffic: number | null;
+  }>;
+}
+
 export async function generateBlogPost(
   entry: CalendarEntry,
   project: Project,
   wordCount: number = 2500,
   research?: ResearchContext,
   existingBlogs?: Array<{ title: string; slug: string; target_keyword: string }>,
-  brief?: BusinessBrief | null
+  brief?: BusinessBrief | null,
+  ahrefsContext?: AhrefsBlogContext | null
 ): Promise<GeneratedBlog> {
   const secondaryKw = entry.secondary_keywords?.length
     ? entry.secondary_keywords.join(', ')
@@ -123,6 +214,14 @@ export async function generateBlogPost(
   // Research context block
   const researchBlock = research ? formatResearchForPrompt(research) : '';
 
+  // Ahrefs Keywords-Explorer context. Lets the writer see exactly which
+  // adjacent searches it must answer (matching+related+suggestions) AND what
+  // already ranks in the top 10 (live SERP). Captures real search volume so
+  // the article picks up the long tail naturally.
+  const ahrefsBlock = ahrefsContext && (ahrefsContext.ideas.length || ahrefsContext.serp.length)
+    ? formatAhrefsContextForPrompt(ahrefsContext)
+    : '';
+
   const prompt = `You are a world-class SEO + GEO content writer. Write a comprehensive, deeply researched blog post that ranks in Google AND gets cited by AI answer engines (AI Overviews, Perplexity, ChatGPT).
 
 TARGET KEYWORD: "${entry.focus_keyword}"
@@ -137,6 +236,8 @@ ${briefBlock}${internalLinksBlock}
 
 ${researchBlock}
 
+${ahrefsBlock}
+
 WRITING RULES (SEO + GEO 2026):
 1. Hook = real scenario, stat, or provocative question. NEVER "In today's world" / "In recent years".
 2. Put a direct, one-paragraph answer to the query in the first 80 words (this is what AI Overviews extract).
@@ -149,6 +250,7 @@ WRITING RULES (SEO + GEO 2026):
 9. 2–4 INTERNAL links from the pools above, placed where they genuinely help. Do NOT invent internal URLs.
 10. H2 for main sections, H3 for subsections. Short paragraphs (max 3–4 sentences).
 11. Do NOT include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
+12. AHREFS COVERAGE — answer at least 6 of the "adjacent queries" in AHREFS CONTEXT below as natural sentences or sub-sections (not as a list); they have real monthly volume and will pick up the long tail.
 
 ARTICLE STRUCTURE (adapt for "${entry.article_type}"):
 # [Compelling H1 — use or improve "${entry.title}"]

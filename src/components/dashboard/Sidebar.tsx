@@ -24,7 +24,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="p-8">
         <Link href="/" className="flex items-center gap-3 font-bold text-xl tracking-tight">
-          <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
+          <span className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
             ⚡
           </span>
           SerpCraft

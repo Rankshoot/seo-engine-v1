@@ -9,6 +9,7 @@ import { Keyword, KeywordStatus } from "@/lib/types";
 import {
   discoverKeywords,
   getKeywords,
+  loadMoreKeywords,
   updateKeywordStatus,
   bulkUpdateKeywordStatus,
   deleteAllKeywords,
@@ -27,6 +28,7 @@ import {
 } from "@/app/actions/research-actions";
 import { generateBlogFromOpportunity } from "@/app/actions/competitor-actions";
 import type { CompetitorGapKeyword } from "@/lib/research";
+import { TableSkeleton } from "@/components/Skeleton";
 
 const STATUS_COLORS: Record<KeywordStatus, string> = {
   approved: "bg-accent-500/10 text-accent-400 border-accent-500/20",
@@ -80,17 +82,38 @@ export default function KeywordsPage() {
   const [refreshingBrief, setRefreshingBrief] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
 
+  // Pagination — show 20 high-quality Ahrefs keywords first, expand on demand.
+  const PAGE_SIZE = 20;
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+
   const step1Done = keywords.length > 0;
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await getKeywords(projectId);
+    const res = await getKeywords(projectId, { limit: PAGE_SIZE, offset: 0 });
     if (res.success) {
       setKeywords(res.data);
       setSelected(new Set(res.data.filter(k => k.status === "approved").map(k => k.id)));
+      setPendingTotal(res.total ?? res.data.length);
     }
     setLoading(false);
   }, [projectId]);
+
+  const handleLoadMore = useCallback(async () => {
+    setLoadingMore(true);
+    const currentPending = keywords.filter(k => k.status === "pending").length;
+    const res = await loadMoreKeywords(projectId, currentPending, PAGE_SIZE);
+    if (res.success) {
+      setKeywords(prev => {
+        const seen = new Set(prev.map(k => k.id));
+        const fresh = res.data.filter(k => !seen.has(k.id));
+        return [...prev, ...fresh];
+      });
+      setPendingTotal(res.total ?? pendingTotal);
+    }
+    setLoadingMore(false);
+  }, [projectId, keywords, pendingTotal]);
 
   const loadBrief = useCallback(async () => {
     const res = await getBusinessBrief(projectId);
@@ -398,7 +421,7 @@ export default function KeywordsPage() {
           {counts.approved >= 5 && (
             <Link
               href={`/projects/${projectId}/calendar`}
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white text-xs font-bold shadow-md shadow-accent-500/20 hover:-translate-y-0.5 transition-all inline-flex items-center gap-2"
+              className="px-5 py-2.5 rounded-xl bg-accent-500 hover:bg-accent-600 text-white text-xs font-bold shadow-md shadow-accent-500/20 hover:-translate-y-0.5 transition-all inline-flex items-center gap-2"
             >
               Calendar
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -409,7 +432,7 @@ export default function KeywordsPage() {
           <button
             onClick={handleDiscover}
             disabled={discovering}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 text-white text-xs font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 flex items-center gap-2"
+            className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 flex items-center gap-2"
           >
             {discovering ? (
               <>
@@ -629,7 +652,7 @@ export default function KeywordsPage() {
               </div>
               <div className="h-2 min-w-[120px] flex-1 overflow-hidden rounded-full bg-surface-elevated">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-accent-500 to-accent-400 transition-all"
+                  className="h-full rounded-full bg-accent-500 transition-all"
                   style={{ width: `${Math.min((counts.approved / keywords.length) * 100, 100)}%` }}
                 />
               </div>
@@ -718,10 +741,8 @@ export default function KeywordsPage() {
           )}
 
           {loading ? (
-            <div className="space-y-3">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="h-16 w-full animate-pulse rounded-2xl border border-border-subtle bg-surface-secondary/50" />
-              ))}
+            <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30">
+              <TableSkeleton rows={8} columns={6} />
             </div>
           ) : filtered.length > 0 ? (
             <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30 backdrop-blur-md">
@@ -944,6 +965,27 @@ export default function KeywordsPage() {
                   </tbody>
                 </table>
               </div>
+              {(() => {
+                const pendingShown = keywords.filter(k => k.status === "pending").length;
+                if (pendingTotal <= pendingShown) return null;
+                return (
+                  <div className="flex flex-col items-center gap-2 border-t border-border-subtle px-4 py-5">
+                    <button
+                      type="button"
+                      onClick={handleLoadMore}
+                      disabled={loadingMore}
+                      className="rounded-xl border border-border-strong bg-surface-elevated px-6 py-2.5 text-sm font-semibold text-text-secondary transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {loadingMore
+                        ? "Loading more keywords…"
+                        : `Load more (${pendingTotal - pendingShown} remaining)`}
+                    </button>
+                    <span className="text-[11px] text-text-tertiary">
+                      Showing top {pendingShown} of {pendingTotal} Ahrefs-scored keywords
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             !discovering && (
@@ -956,7 +998,7 @@ export default function KeywordsPage() {
                 <button
                   type="button"
                   onClick={handleDiscover}
-                  className="rounded-2xl bg-gradient-to-r from-brand-500 to-brand-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-brand-500/20 hover:-translate-y-0.5"
+                  className="rounded-2xl bg-brand-500 hover:bg-brand-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-brand-500/20 hover:-translate-y-0.5"
                 >
                   Discover keywords
                 </button>
@@ -974,7 +1016,7 @@ export default function KeywordsPage() {
             </div>
           ) : (
             <>
-              <div className="glass-card border-cyan-500/10 bg-gradient-to-br from-cyan-500/5 to-transparent p-6">
+              <div className="glass-card border-cyan-500/10 bg-cyan-500/8 p-6">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h3 className="mb-1 font-bold text-text-primary">Competitor keyword gap scan</h3>
@@ -1045,7 +1087,7 @@ export default function KeywordsPage() {
                   type="button"
                   onClick={handleFindGaps}
                   disabled={gapLoading || !step1Done}
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-600 px-6 py-2.5 text-xs font-bold text-white shadow-md shadow-cyan-500/20 transition-all hover:from-cyan-400 hover:to-cyan-500 disabled:opacity-60"
+                  className="flex items-center gap-2 rounded-xl bg-cyan-500 hover:bg-cyan-600 px-6 py-2.5 text-xs font-bold text-white shadow-md shadow-cyan-500/20 transition-all hover:bg-cyan-400 disabled:opacity-60"
                 >
                   {gapLoading ? (
                     <>
@@ -1068,7 +1110,7 @@ export default function KeywordsPage() {
                     type="button"
                     onClick={handleImportGaps}
                     disabled={importing}
-                    className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-accent-500/20 transition-all hover:-translate-y-0.5 disabled:opacity-60"
+                    className="flex items-center gap-2 rounded-xl bg-accent-500 hover:bg-accent-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-accent-500/20 transition-all hover:-translate-y-0.5 disabled:opacity-60"
                   >
                     {importing ? "Importing…" : `Import ${selectedGapKeys.size} into keyword list`}
                   </button>
@@ -1163,7 +1205,7 @@ export default function KeywordsPage() {
                                     type="button"
                                     onClick={() => handleGenerateBlogFromGap(gap.keyword)}
                                     disabled={generatingGapKeyword === gap.keyword}
-                                    className="rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                                    className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
                                   >
                                     {generatingGapKeyword === gap.keyword ? "Queuing…" : "Generate blog"}
                                   </button>
@@ -1207,7 +1249,7 @@ export default function KeywordsPage() {
                     <button
                       type="button"
                       onClick={handleApproveCluster}
-                      className="rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-accent-500/20 hover:-translate-y-0.5"
+                      className="rounded-xl bg-accent-500 hover:bg-accent-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-accent-500/20 hover:-translate-y-0.5"
                     >
                       Approve cluster &amp; open calendar ({clusterPick.size} selected)
                     </button>

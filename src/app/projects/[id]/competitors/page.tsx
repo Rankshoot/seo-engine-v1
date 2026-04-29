@@ -29,6 +29,16 @@ function formatTrend(trend: string, pct: number) {
   return trend;
 }
 
+function compactUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    const path = `${parsed.pathname}${parsed.search}`.replace(/\/$/, "");
+    return path && path !== "/" ? path : parsed.hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
 function scoreColor(score: number) {
   if (score >= 70) return "text-accent-400 border-accent-500/20 bg-accent-500/10";
   if (score >= 50) return "text-yellow-400 border-yellow-500/20 bg-yellow-500/10";
@@ -105,7 +115,7 @@ export default function CompetitorsPage() {
 
   const filteredGaps = useMemo(() => {
     const list = gapFilter === "all" ? gaps : gaps.filter(g => g.gap_type === gapFilter);
-    return [...list].sort((a, b) => b.opportunity_score - a.opportunity_score);
+    return [...list].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score);
   }, [gaps, gapFilter]);
 
   const gapCounts = useMemo(() => {
@@ -115,7 +125,7 @@ export default function CompetitorsPage() {
   }, [gaps]);
 
   const topOpportunities = useMemo(
-    () => [...gaps].sort((a, b) => b.opportunity_score - a.opportunity_score).slice(0, 12),
+    () => [...gaps].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score).slice(0, 12),
     [gaps]
   );
 
@@ -148,7 +158,7 @@ export default function CompetitorsPage() {
           <button
             onClick={handleRun}
             disabled={running}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-600 text-white text-xs font-bold shadow-md shadow-cyan-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60 flex items-center gap-2"
+            className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold shadow-md shadow-cyan-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60 flex items-center gap-2"
           >
             {running ? (
               <>
@@ -195,7 +205,7 @@ export default function CompetitorsPage() {
           <button
             onClick={handleRun}
             disabled={running}
-            className="rounded-2xl bg-gradient-to-r from-cyan-500 to-cyan-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-cyan-500/20 hover:-translate-y-0.5 disabled:opacity-60"
+            className="rounded-2xl bg-cyan-500 hover:bg-cyan-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-cyan-500/20 hover:-translate-y-0.5 disabled:opacity-60"
           >
             {running ? "Benchmarking…" : "Run benchmark"}
           </button>
@@ -341,7 +351,7 @@ function OpportunityDashboard({
   return (
     <div className="space-y-4">
       {averages?.recommendations?.length ? (
-        <div className="glass-card border-cyan-500/10 bg-gradient-to-br from-cyan-500/5 to-transparent p-5">
+        <div className="glass-card border-cyan-500/10 bg-cyan-500/8 p-5">
           <h3 className="font-bold text-text-primary mb-2">Content benchmark recommendations</h3>
           <ul className="space-y-1 text-sm text-text-secondary">
             {averages.recommendations.map((r, i) => (
@@ -370,7 +380,7 @@ function OpportunityDashboard({
                   <th className="px-4 py-3 text-center">Trend</th>
                   <th className="px-4 py-3 text-center">Weakness</th>
                   <th className="px-4 py-3 text-center">Opportunity</th>
-                  <th className="px-4 py-3">Top competitor</th>
+                  <th className="px-4 py-3">Ranking page</th>
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
@@ -423,9 +433,10 @@ function OpportunityDashboard({
                           href={g.top_competitor_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[11px] text-brand-400 hover:underline"
+                          title={g.top_competitor_url}
+                          className="block truncate text-[11px] text-brand-400 hover:underline"
                         >
-                          Open page ↗
+                          {compactUrl(g.top_competitor_url)} ↗
                         </a>
                       ) : null}
                     </td>
@@ -434,7 +445,7 @@ function OpportunityDashboard({
                         type="button"
                         onClick={() => onGenerateBlog(g.keyword)}
                         disabled={generatingKeyword === g.keyword}
-                        className="rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                        className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
                       >
                         {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
                       </button>
@@ -625,7 +636,7 @@ function KeywordGapTable({
                   <th className="px-4 py-3 text-right">Volume</th>
                   <th className="px-4 py-3 text-center">Trend</th>
                   <th className="px-4 py-3 text-center">Score</th>
-                  <th className="px-4 py-3">Source</th>
+                  <th className="px-4 py-3">Ranking page</th>
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
@@ -660,9 +671,10 @@ function KeywordGapTable({
                           href={g.top_competitor_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[11px] text-brand-400 hover:underline"
+                          title={g.top_competitor_url}
+                          className="block truncate text-[11px] text-brand-400 hover:underline"
                         >
-                          Open ↗
+                          {compactUrl(g.top_competitor_url)} ↗
                         </a>
                       ) : null}
                     </td>
@@ -671,7 +683,7 @@ function KeywordGapTable({
                         type="button"
                         onClick={() => onGenerateBlog(g.keyword)}
                         disabled={generatingKeyword === g.keyword}
-                        className="rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                        className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
                       >
                         {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
                       </button>

@@ -7,6 +7,12 @@ import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { crawlWebsite, type WebsiteCrawlResult } from '@/lib/websiteCrawler';
+import {
+  runKeywordDiscovery,
+  type DiscoveryResult,
+  type KeywordCandidate,
+} from '@/lib/keyword-discovery';
+import { enrichKeywordInBackground } from '@/lib/keyword-modal';
 
 type KeywordCalendarSeed = {
   id: string;
@@ -28,6 +34,229 @@ function aiScore(volume: number, kd: number, intent: string = ''): number {
     intent === 'informational' ? 6 :
     intent === 'navigational' ? 2 : 0;
   return Math.round(volScore + kdScore + intentBonus);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// runKeywordDiscoveryPipeline
+//
+// Site-Explorer-driven discovery (own organic + competitor gap + quick wins),
+// scored deterministically and persisted to `keywords`. Caps output at 50.
+//
+// This is **independent** from the legacy seed-driven `discoverKeywords` flow
+// above — both can coexist. The wiring decision (which one the keywords page
+// calls) is a follow-up; this action is intentionally additive so we don't
+// destabilise the production keywords page in a single PR.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface RunDiscoveryResponse {
+  success: boolean;
+  error?: string;
+  /** How many rows we just inserted into `keywords`. */
+  inserted: number;
+  /** Keywords that were already in the project and got skipped. */
+  duplicates_skipped: number;
+  /** Total candidates the pipeline returned (before duplicate filtering). */
+  candidates_returned: number;
+  /** Per-step trace — `console.log` it from the client for debugging. */
+  trace?: DiscoveryResult['trace'];
+  /** Funnel summary metadata. */
+  meta?: DiscoveryResult['meta'];
+}
+
+export async function runKeywordDiscoveryPipeline(
+  projectId: string,
+  opts: { topN?: number } = {}
+): Promise<RunDiscoveryResponse> {
+  const user = await currentUser();
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+    };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain, company, niche, target_audience, target_region, target_language')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) {
+    return {
+      success: false,
+      error: 'Project not found',
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+    };
+  }
+
+  console.log('[discovery] pipeline start', {
+    projectId,
+    domain: project.domain,
+    region: project.target_region,
+    niche: project.niche,
+  });
+
+  let result: DiscoveryResult;
+  try {
+    result = await runKeywordDiscovery({
+      domain: project.domain ?? '',
+      region: project.target_region ?? 'us',
+      niche: project.niche ?? '',
+      audience: project.target_audience ?? '',
+      brand: project.company ?? '',
+      topN: opts.topN ?? 50,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[discovery] pipeline crashed:', message);
+    return {
+      success: false,
+      error: `Pipeline crashed: ${message}`,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+    };
+  }
+
+  if (result.fatal_error) {
+    return {
+      success: false,
+      error: result.fatal_error,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  if (!result.candidates.length) {
+    console.warn('[discovery] pipeline returned 0 candidates');
+    return {
+      success: true,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  // 12. Avoid duplicates already on this project. We pre-filter in JS so the
+  //     trace stays accurate, AND rely on the unique (project_id, keyword)
+  //     constraint as a belt-and-braces safety net.
+  const { data: existingRows, error: existingErr } = await supabaseAdmin
+    .from('keywords')
+    .select('keyword')
+    .eq('project_id', projectId);
+  if (existingErr) {
+    console.error('[discovery] failed to load existing keywords:', existingErr.message);
+    return {
+      success: false,
+      error: existingErr.message,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: result.candidates.length,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  const existingSet = new Set(
+    (existingRows ?? []).map(r => (r.keyword ?? '').trim().toLowerCase())
+  );
+
+  const fresh = result.candidates.filter(c => !existingSet.has(c.keyword));
+  const duplicatesSkipped = result.candidates.length - fresh.length;
+  console.log('[discovery] dedupe', {
+    candidates_returned: result.candidates.length,
+    duplicates_skipped: duplicatesSkipped,
+    fresh: fresh.length,
+  });
+
+  if (!fresh.length) {
+    return {
+      success: true,
+      inserted: 0,
+      duplicates_skipped: duplicatesSkipped,
+      candidates_returned: result.candidates.length,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  const rows = fresh.map(c => candidateToRow(projectId, c));
+
+  const { data: inserted, error: insErr } = await supabaseAdmin
+    .from('keywords')
+    .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+    .select('id');
+
+  if (insErr) {
+    console.error('[discovery] insert failed:', insErr.message);
+    return {
+      success: false,
+      error: insErr.message,
+      inserted: 0,
+      duplicates_skipped: duplicatesSkipped,
+      candidates_returned: result.candidates.length,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  const insertedCount = inserted?.length ?? 0;
+  console.log('[discovery] pipeline done', {
+    inserted: insertedCount,
+    duplicates_skipped: duplicatesSkipped,
+    final_count: result.meta.final_count,
+  });
+
+  return {
+    success: true,
+    inserted: insertedCount,
+    duplicates_skipped: duplicatesSkipped,
+    candidates_returned: result.candidates.length,
+    trace: result.trace,
+    meta: result.meta,
+  };
+}
+
+function candidateToRow(projectId: string, c: KeywordCandidate) {
+  // CPC arrives in cents from Ahrefs. The product convention is to keep raw
+  // Ahrefs values where possible, but the existing `keywords.cpc NUMERIC(10,2)`
+  // column has historically stored DOLLARS (legacy DataForSEO path). Convert
+  // here to keep the column's meaning consistent across both pipelines.
+  const cpcDollars = c.cpc != null ? Math.round(c.cpc) / 100 : 0;
+  return {
+    project_id: projectId,
+    keyword: c.keyword,
+    volume: Math.max(0, Math.round(c.volume || 0)),
+    kd: c.difficulty != null ? Math.round(c.difficulty) : 0,
+    cpc: cpcDollars,
+    intent: c.intent || null,
+    intents: c.intents ?? {},
+    parent_topic: c.parent_topic ?? '',
+    traffic_potential: c.traffic_potential != null ? Math.round(c.traffic_potential) : 0,
+    source_type: c.source_type,
+    source_competitors: c.source_competitors,
+    source_urls: c.source_urls,
+    // Backfill the legacy single-string columns so the existing keywords UI
+    // (which reads `gap_competitor` + `source_url`) stays meaningful.
+    gap_competitor: c.source_type === 'competitor_gap' ? (c.source_competitors[0] ?? '') : '',
+    source_url: c.source_type === 'competitor_gap' ? (c.source_urls[0] ?? '') : '',
+    ai_score: c.ai_score,
+    keyword_analysis_score: c.analysis_score,
+    relevance_score: c.relevance_score,
+    business_fit_score: 0,
+    status: 'pending' as const,
+  };
 }
 
 export async function discoverKeywords(projectId: string) {
@@ -384,6 +613,11 @@ export async function updateKeywordStatus(keywordId: string, status: KeywordStat
   if (status === 'approved') {
     const placed = await ensureCalendarEntryForKeyword(keyword as KeywordCalendarSeed);
     if (!placed.success) return placed;
+    // Fire-and-forget: warm the modal cache so the blog pipeline + the
+    // keyword drilldown both have ideas/overview ready when the user clicks.
+    // Errors are swallowed inside `enrichKeywordInBackground`; the user
+    // never waits for Ahrefs here.
+    void enrichKeywordInBackground(keywordId);
   }
   return { success: true };
 }
@@ -412,6 +646,12 @@ export async function bulkUpdateKeywordStatus(keywordIds: string[], status: Keyw
   if (status === 'approved') {
     const placed = await ensureCalendarEntriesForKeywords((keywords ?? []) as KeywordCalendarSeed[]);
     if (!placed.success) return placed;
+    // Fire-and-forget warming for every newly approved keyword. Each call is
+    // self-contained and swallows its own errors, so a single failure can't
+    // poison the whole bulk approval.
+    for (const id of keywordIds) {
+      void enrichKeywordInBackground(id);
+    }
   }
   return { success: true };
 }

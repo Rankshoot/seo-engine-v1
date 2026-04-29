@@ -56,9 +56,16 @@ interface AhrefsRequestOptions {
  * otherwise returns null and prints a clear log line.
  */
 async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | null> {
+  const tag = opts.label ?? opts.endpoint;
   const key = getApiKey();
   if (!key) {
-    console.warn(`[ahrefs] ${opts.label ?? opts.endpoint} skipped — AHREFS_API_KEY missing`);
+    console.warn(`[ahrefs] ${tag} skipped — AHREFS_API_KEY missing`);
+    console.log('[ahrefs:request]', {
+      endpoint: opts.endpoint,
+      label: opts.label,
+      query: opts.query,
+      skipped: 'no_api_key',
+    });
     return null;
   }
 
@@ -68,6 +75,13 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
     params.set(k, String(v));
   }
   const url = `${AHREFS_BASE_URL}${opts.endpoint}?${params.toString()}`;
+
+  console.log('[ahrefs:request]', {
+    endpoint: opts.endpoint,
+    label: opts.label,
+    query: opts.query,
+    url,
+  });
 
   const started = Date.now();
   const controller = new AbortController();
@@ -88,21 +102,41 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       console.warn(
-        `[ahrefs] ${opts.label ?? opts.endpoint} -> ${res.status} ${res.statusText} in ${ms}ms ${body.slice(0, 200)}`
+        `[ahrefs] ${tag} -> ${res.status} ${res.statusText} in ${ms}ms ${body.slice(0, 200)}`
       );
+      console.log('[ahrefs:response:error]', {
+        endpoint: opts.endpoint,
+        label: opts.label,
+        status: res.status,
+        statusText: res.statusText,
+        ms,
+        bodyText: body,
+      });
       return null;
     }
 
     const json = (await res.json()) as Record<string, unknown>;
     const rowCount = primaryArrayLength(json);
-    console.log(
-      `[ahrefs] ${opts.label ?? opts.endpoint} -> ${res.status} ${rowCount} rows in ${ms}ms`
-    );
+    console.log(`[ahrefs] ${tag} -> ${res.status} ${rowCount} rows in ${ms}ms`);
+    console.log('[ahrefs:response]', {
+      endpoint: opts.endpoint,
+      label: opts.label,
+      status: res.status,
+      ms,
+      rowCount,
+      body: json,
+    });
     return json as T;
   } catch (error) {
     const ms = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[ahrefs] ${opts.label ?? opts.endpoint} ERROR in ${ms}ms ${message}`);
+    console.warn(`[ahrefs] ${tag} ERROR in ${ms}ms ${message}`);
+    console.log('[ahrefs:response:network_error]', {
+      endpoint: opts.endpoint,
+      label: opts.label,
+      ms,
+      error: message,
+    });
     return null;
   } finally {
     clearTimeout(timer);
@@ -184,6 +218,7 @@ export interface AhrefsTopPage {
   top_keyword_volume: number | null;
   top_keyword_best_position: number | null;
   sum_traffic: number;
+  /** Ahrefs estimated paid traffic value in **cents** — convert at UI/format layer. */
   value: number | null;
 }
 
@@ -238,7 +273,9 @@ export async function ahrefsTopPages(
 export interface AhrefsOrganicKeyword {
   keyword: string;
   volume: number;
-  difficulty: number | null;
+  /** Site Explorer / organic-keywords exposes KD as `keyword_difficulty`. */
+  keyword_difficulty: number | null;
+  /** CPC is returned in **cents** by Ahrefs — convert at the UI/format layer. */
   cpc: number | null;
   best_position: number | null;
   best_position_url: string;
@@ -248,7 +285,7 @@ export interface AhrefsOrganicKeyword {
 interface AhrefsOrganicKeywordRow {
   keyword?: string | null;
   volume?: number | null;
-  difficulty?: number | null;
+  keyword_difficulty?: number | null;
   cpc?: number | null;
   best_position?: number | null;
   best_position_url?: string | null;
@@ -279,7 +316,7 @@ export async function ahrefsOrganicKeywords(
       limit,
       order_by: 'sum_traffic:desc',
       where: 'best_position<=20,volume>=50',
-      select: 'keyword,volume,difficulty,cpc,best_position,best_position_url,sum_traffic',
+      select: 'keyword,volume,keyword_difficulty,cpc,best_position,best_position_url,sum_traffic',
     },
   });
   if (!json?.keywords) return [];
@@ -288,7 +325,7 @@ export async function ahrefsOrganicKeywords(
     .map(row => ({
       keyword: (row.keyword ?? '').trim(),
       volume: Number(row.volume ?? 0),
-      difficulty: row.difficulty ?? null,
+      keyword_difficulty: row.keyword_difficulty ?? null,
       cpc: row.cpc ?? null,
       best_position: row.best_position ?? null,
       best_position_url: row.best_position_url ?? '',
@@ -304,11 +341,32 @@ export async function ahrefsOrganicKeywords(
 export interface AhrefsKeywordOverviewRow {
   keyword: string;
   volume: number;
+  /** Keywords-Explorer / overview exposes KD as `difficulty`. */
   difficulty: number | null;
+  /** Ahrefs returns CPC in **cents** — convert at UI/format layer. */
   cpc: number | null;
   intents: AhrefsIntentObject | null;
   parent_topic: string | null;
   traffic_potential: number | null;
+}
+
+/**
+ * One SERP feature surfaced by Ahrefs Keywords-Explorer / overview for a
+ * keyword (featured snippet, PAA, video carousel, image pack, …). Extra
+ * Ahrefs-specific keys are tolerated via the index signature.
+ */
+export interface AhrefsSerpFeature {
+  type: string;
+  position?: number | null;
+  url?: string | null;
+  title?: string | null;
+  [key: string]: unknown;
+}
+
+/** Detailed overview row — the bulk variant doesn't request these to keep cost down. */
+export interface AhrefsKeywordOverviewDetailRow extends AhrefsKeywordOverviewRow {
+  global_volume: number | null;
+  serp_features: AhrefsSerpFeature[] | null;
 }
 
 export interface AhrefsIntentObject {
@@ -374,10 +432,61 @@ export async function ahrefsKeywordOverview(
   return out;
 }
 
+/**
+ * Single-keyword overview with the richer select list — adds `global_volume`
+ * and `serp_features` on top of the bulk function. Used by the keyword-modal
+ * route, where one extra column or two is fine; the bulk function stays lean.
+ */
+export async function ahrefsKeywordOverviewDetail(
+  keyword: string,
+  region: string
+): Promise<AhrefsKeywordOverviewDetailRow | null> {
+  const cleaned = keyword.trim().toLowerCase();
+  if (!cleaned) return null;
+  const json = await ahrefsGet<{
+    keywords?: Array<{
+      keyword?: string | null;
+      volume?: number | null;
+      global_volume?: number | null;
+      difficulty?: number | null;
+      cpc?: number | null;
+      intents?: AhrefsIntentObject | null;
+      parent_topic?: string | null;
+      traffic_potential?: number | null;
+      serp_features?: AhrefsSerpFeature[] | null;
+    }>;
+  }>({
+    endpoint: '/keywords-explorer/overview',
+    label: `keywords-explorer/overview/detail "${cleaned}" (${region})`,
+    query: {
+      country: ahrefsCountry(region),
+      keywords: cleaned,
+      select:
+        'keyword,volume,global_volume,difficulty,cpc,intents,parent_topic,traffic_potential,serp_features',
+      limit: 1,
+    },
+  });
+  const row = json?.keywords?.[0];
+  if (!row) return null;
+  return {
+    keyword: (row.keyword ?? cleaned).toLowerCase(),
+    volume: Number(row.volume ?? 0),
+    global_volume: row.global_volume ?? null,
+    difficulty: row.difficulty ?? null,
+    cpc: row.cpc ?? null,
+    intents: row.intents ?? null,
+    parent_topic: row.parent_topic ?? null,
+    traffic_potential: row.traffic_potential ?? null,
+    serp_features: row.serp_features ?? null,
+  };
+}
+
 export interface AhrefsKeywordIdea {
   keyword: string;
   volume: number;
+  /** Keywords-Explorer endpoints expose KD as `difficulty`. */
   difficulty: number | null;
+  /** Ahrefs returns CPC in **cents** — convert at UI/format layer. */
   cpc: number | null;
   intents: AhrefsIntentObject | null;
 }
@@ -472,6 +581,218 @@ export async function ahrefsSearchSuggestions(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Single-seed Keywords Explorer variants — used by blog generation.
+//
+// These return their own arrays (one per Ahrefs UI tab). They are NOT merged
+// into a single ideas pool because each tab carries different editorial
+// signal: "matching" terms drive H2 outline, "questions" drive FAQ JSON-LD,
+// "also rank for" drives entity coverage, "also talk about" drives related
+// concepts. The blog pipeline stores each list separately.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Matching terms — every keyword that contains the seed phrase. Maps to the
+ * "Matching terms → All" tab in Ahrefs Keywords Explorer.
+ */
+export async function ahrefsMatchingTermsAll(
+  seed: string,
+  region: string,
+  limit = 100
+): Promise<AhrefsKeywordIdea[]> {
+  const cleaned = seed.trim().toLowerCase();
+  if (!cleaned) return [];
+  const json = await ahrefsGet<{ keywords?: AhrefsIdeaRow[] }>({
+    endpoint: '/keywords-explorer/matching-terms',
+    label: `matching-terms/all "${cleaned}" (${region})`,
+    query: {
+      country: ahrefsCountry(region),
+      keywords: cleaned,
+      select: 'keyword,volume,difficulty,cpc,intents',
+      limit,
+      match_mode: 'terms',
+      terms: 'all',
+      order_by: 'volume:desc',
+    },
+  });
+  return mapIdeas(json?.keywords);
+}
+
+/**
+ * Matching terms filtered to question-style keywords ("how / what / why /
+ * when / where / who / which / can / should / does"). Maps to the
+ * "Matching terms → Questions" tab. Drives FAQ blocks + FAQPage JSON-LD.
+ */
+export async function ahrefsMatchingTermsQuestions(
+  seed: string,
+  region: string,
+  limit = 100
+): Promise<AhrefsKeywordIdea[]> {
+  const cleaned = seed.trim().toLowerCase();
+  if (!cleaned) return [];
+  const json = await ahrefsGet<{ keywords?: AhrefsIdeaRow[] }>({
+    endpoint: '/keywords-explorer/matching-terms',
+    label: `matching-terms/questions "${cleaned}" (${region})`,
+    query: {
+      country: ahrefsCountry(region),
+      keywords: cleaned,
+      select: 'keyword,volume,difficulty,cpc,intents',
+      limit,
+      match_mode: 'terms',
+      terms: 'questions',
+      order_by: 'volume:desc',
+    },
+  });
+  return mapIdeas(json?.keywords);
+}
+
+/**
+ * "Also rank for" — keywords that the top-10 SERP pages for the seed also
+ * rank for. Maps to the "Related terms → Also rank for" tab. Best signal
+ * for the entities/topics a competing article must cover to compete.
+ */
+export async function ahrefsRelatedAlsoRankFor(
+  seed: string,
+  region: string,
+  limit = 100
+): Promise<AhrefsKeywordIdea[]> {
+  const cleaned = seed.trim().toLowerCase();
+  if (!cleaned) return [];
+  const json = await ahrefsGet<{ keywords?: AhrefsIdeaRow[] }>({
+    endpoint: '/keywords-explorer/related-terms',
+    label: `related-terms/also-rank-for "${cleaned}" (${region})`,
+    query: {
+      country: ahrefsCountry(region),
+      keywords: cleaned,
+      select: 'keyword,volume,difficulty,cpc,intents',
+      limit,
+      view_for: 'top_10',
+      match_against: 'also-rank-for',
+      order_by: 'volume:desc',
+    },
+  });
+  return mapIdeas(json?.keywords);
+}
+
+/**
+ * "Also talk about" — keywords those top-10 SERP pages mention in their body
+ * copy (vs. rank for). Maps to "Related terms → Also talk about". Best
+ * signal for the secondary keywords / synonyms an article should weave in.
+ */
+export async function ahrefsRelatedAlsoTalkAbout(
+  seed: string,
+  region: string,
+  limit = 100
+): Promise<AhrefsKeywordIdea[]> {
+  const cleaned = seed.trim().toLowerCase();
+  if (!cleaned) return [];
+  const json = await ahrefsGet<{ keywords?: AhrefsIdeaRow[] }>({
+    endpoint: '/keywords-explorer/related-terms',
+    label: `related-terms/also-talk-about "${cleaned}" (${region})`,
+    query: {
+      country: ahrefsCountry(region),
+      keywords: cleaned,
+      select: 'keyword,volume,difficulty,cpc,intents',
+      limit,
+      view_for: 'top_10',
+      match_against: 'also-talk-about',
+      order_by: 'volume:desc',
+    },
+  });
+  return mapIdeas(json?.keywords);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Volume history + volume by country — historical and geographic demand.
+// Both return their own typed arrays; they are NEVER merged into the ideas
+// pool. Stored separately to power "demand is rising / dying" + region maps.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface AhrefsVolumeHistoryPoint {
+  /** ISO date string (Ahrefs returns month-anchored values, e.g. `2026-01-01`). */
+  date: string;
+  volume: number;
+}
+
+interface AhrefsVolumeHistoryRow {
+  date?: string | null;
+  volume?: number | null;
+}
+
+/**
+ * Per-month historical search volume for one keyword. `dateFrom` / `dateTo`
+ * are optional ISO `YYYY-MM-DD` strings; when omitted the Ahrefs API returns
+ * its full available history.
+ */
+export async function ahrefsVolumeHistory(
+  keyword: string,
+  region: string,
+  dateFrom?: string,
+  dateTo?: string
+): Promise<AhrefsVolumeHistoryPoint[]> {
+  const cleaned = keyword.trim().toLowerCase();
+  if (!cleaned) return [];
+  const json = await ahrefsGet<{ metrics?: AhrefsVolumeHistoryRow[] }>({
+    endpoint: '/keywords-explorer/volume-history',
+    label: `volume-history "${cleaned}" (${region})`,
+    query: {
+      country: ahrefsCountry(region),
+      keyword: cleaned,
+      date_from: dateFrom,
+      date_to: dateTo,
+      select: 'date,volume',
+    },
+  });
+  if (!json?.metrics) return [];
+  return json.metrics
+    .filter(row => Boolean(row.date))
+    .map(row => ({
+      date: (row.date ?? '').slice(0, 10),
+      volume: Number(row.volume ?? 0),
+    }));
+}
+
+export interface AhrefsVolumeByCountryRow {
+  /** Lowercase ISO-2 country code, e.g. `us`, `gb`, `in`. */
+  country: string;
+  volume: number;
+}
+
+interface AhrefsVolumeByCountryRawRow {
+  country?: string | null;
+  volume?: number | null;
+}
+
+/**
+ * Country-by-country search volume for one keyword. Useful for telling the
+ * user "this term gets X searches in the US, Y in the UK" before they pick
+ * a target region.
+ */
+export async function ahrefsVolumeByCountry(
+  keyword: string,
+  limit = 25
+): Promise<AhrefsVolumeByCountryRow[]> {
+  const cleaned = keyword.trim().toLowerCase();
+  if (!cleaned) return [];
+  const json = await ahrefsGet<{ metrics?: AhrefsVolumeByCountryRawRow[] }>({
+    endpoint: '/keywords-explorer/volume-by-country',
+    label: `volume-by-country "${cleaned}"`,
+    query: {
+      keyword: cleaned,
+      select: 'country,volume',
+      limit,
+      order_by: 'volume:desc',
+    },
+  });
+  if (!json?.metrics) return [];
+  return json.metrics
+    .filter(row => Boolean(row.country))
+    .map(row => ({
+      country: (row.country ?? '').toLowerCase(),
+      volume: Number(row.volume ?? 0),
+    }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SERP Overview
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -498,10 +819,14 @@ interface AhrefsSerpRow {
 }
 
 /**
- * Top 10 Ahrefs-tracked SERP positions for one keyword. Replaces Serper-based
+ * Top-N Ahrefs-tracked SERP positions for one keyword. Replaces Serper-based
  * SERP lookups everywhere we used to call `serperSearch`. Each row carries DR,
  * UR, traffic and referring-domain count so we can score competition without
  * a second roundtrip.
+ *
+ * The Ahrefs API uses `top_positions` (not `limit`) to control how many
+ * SERP rows come back. The `limit` argument name is preserved for backward
+ * compatibility with existing callers but is sent as `top_positions`.
  */
 export async function ahrefsSerpOverview(
   keyword: string,
@@ -517,7 +842,7 @@ export async function ahrefsSerpOverview(
       keyword: keyword.trim(),
       date: todayISO(),
       select: 'position,url,title,domain,domain_rating,url_rating,traffic,refdomains',
-      limit,
+      top_positions: limit,
     },
   });
   if (!json?.positions) return [];
@@ -680,4 +1005,17 @@ function mapIdeas(rows: AhrefsIdeaRow[] | undefined): AhrefsKeywordIdea[] {
 
 export function isAhrefsConfigured(): boolean {
   return Boolean(getApiKey());
+}
+
+/**
+ * UI/formatting helper. Ahrefs returns monetary fields (CPC, page `value`,
+ * etc.) as integer cents. We deliberately keep the **raw** cents value on
+ * every type/storage row so we never lose precision, and we convert to
+ * dollars only when rendering. Returns `null` for missing / non-finite input.
+ */
+export function ahrefsCentsToDollars(cents: number | null | undefined): number | null {
+  if (cents === null || cents === undefined) return null;
+  const n = Number(cents);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n) / 100;
 }

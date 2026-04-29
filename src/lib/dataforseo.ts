@@ -1712,7 +1712,7 @@ export async function discoverKeywordsForProject(
               keyword: r.keyword,
               volume: r.volume,
               cpc: r.cpc,
-              difficulty: r.difficulty,
+              difficulty: r.keyword_difficulty,
               intents: null,
               parent_topic: null,
               traffic_potential: null,

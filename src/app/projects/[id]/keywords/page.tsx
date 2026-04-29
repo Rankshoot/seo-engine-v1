@@ -29,6 +29,7 @@ import {
 import { generateBlogFromOpportunity } from "@/app/actions/competitor-actions";
 import type { CompetitorGapKeyword } from "@/lib/research";
 import { TableSkeleton } from "@/components/Skeleton";
+import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 
 const STATUS_COLORS: Record<KeywordStatus, string> = {
   approved: "bg-accent-500/10 text-accent-400 border-accent-500/20",
@@ -86,6 +87,15 @@ export default function KeywordsPage() {
   const PAGE_SIZE = 20;
   const [pendingTotal, setPendingTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Keyword drilldown modal. Stored as id (not a `Keyword` object) so the
+  // modal always reflects the latest row state — including approve/reject
+  // updates that happen via `handleStatusUpdate`.
+  const [modalKeywordId, setModalKeywordId] = useState<string | null>(null);
+  const modalKeyword = useMemo(
+    () => keywords.find(k => k.id === modalKeywordId) ?? null,
+    [keywords, modalKeywordId]
+  );
 
   const step1Done = keywords.length > 0;
 
@@ -783,7 +793,8 @@ export default function KeywordsPage() {
                     {filtered.map(kw => (
                       <tr
                         key={kw.id}
-                        onClick={() => toggleSelect(kw.id)}
+                        onClick={() => setModalKeywordId(kw.id)}
+                        title="Click to open detailed keyword analysis"
                         className={`cursor-pointer transition-all duration-200 ease-out hover:bg-white/[0.035] ${
                           selected.has(kw.id)
                             ? "bg-brand-500/8 shadow-[inset_3px_0_0_rgba(99,102,241,0.8)]"
@@ -1276,6 +1287,14 @@ export default function KeywordsPage() {
           )}
         </div>
       )}
+
+      <KeywordDetailModal
+        open={!!modalKeyword}
+        projectId={projectId}
+        keyword={modalKeyword}
+        onClose={() => setModalKeywordId(null)}
+        onStatusChange={handleStatusUpdate}
+      />
     </div>
   );
 }

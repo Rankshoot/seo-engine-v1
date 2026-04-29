@@ -286,7 +286,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
       rankingOpportunities.push({
         keyword,
         volume: row.volume || 0,
-        kd: row.difficulty ?? 0,
+        kd: row.keyword_difficulty ?? 0,
         trend: '+0%',
         trend_pct: 0,
         gap_type: classifyGap(keyword, userKwIndex),

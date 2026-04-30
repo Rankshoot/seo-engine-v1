@@ -1,28 +1,57 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { Project } from "@/lib/types";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const Icon = {
-  grid: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>,
-  search: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>,
-  calendar: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>,
-  fileText: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><line x1="10" x2="8" y1="9" y2="9"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/></svg>,
-  target: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>,
-  arrowLeft: <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>,
-  home: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+  grid: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>,
+  search: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>,
+  calendar: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>,
+  fileText: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><line x1="10" x2="8" y1="9" y2="9"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/></svg>,
+  target: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>,
+  arrowLeft: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>,
+  chevronDown: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
+  chevronRight: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
+  chevronLeft: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
+  check: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>,
 };
 
 interface ProjectSidebarProps {
   project: Project;
   stats?: { approvedKeywords: number; calendarEntries: number; blogsGenerated: number };
+  allProjects: Project[];
+  isCollapsed: boolean;
+  setIsCollapsed: (val: boolean) => void;
 }
 
-export default function ProjectSidebar({ project, stats }: ProjectSidebarProps) {
+export default function ProjectSidebar({ 
+  project, 
+  stats, 
+  allProjects,
+  isCollapsed,
+  setIsCollapsed
+}: ProjectSidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const base = `/projects/${project.id}`;
+  
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const navItems = [
     { icon: Icon.grid, label: "Overview", href: base },
@@ -30,7 +59,7 @@ export default function ProjectSidebar({ project, stats }: ProjectSidebarProps) 
       icon: Icon.search,
       label: "Keywords",
       href: `${base}/keywords`,
-      badge: stats?.approvedKeywords ? `${stats.approvedKeywords} approved` : undefined,
+      badge: stats?.approvedKeywords ? `${stats.approvedKeywords}` : undefined,
     },
     {
       icon: Icon.target,
@@ -41,13 +70,13 @@ export default function ProjectSidebar({ project, stats }: ProjectSidebarProps) 
       icon: Icon.calendar,
       label: "Calendar",
       href: `${base}/calendar`,
-      badge: stats?.calendarEntries ? `${stats.calendarEntries} entries` : undefined,
+      badge: stats?.calendarEntries ? `${stats.calendarEntries}` : undefined,
     },
     {
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
-      badge: stats?.blogsGenerated ? `${stats.blogsGenerated} generated` : undefined,
+      badge: stats?.blogsGenerated ? `${stats.blogsGenerated}` : undefined,
     },
   ];
 
@@ -55,81 +84,209 @@ export default function ProjectSidebar({ project, stats }: ProjectSidebarProps) 
     href === base ? pathname === base : pathname.startsWith(href);
 
   return (
-    <aside className="w-[280px] h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-secondary/50 backdrop-blur-xl flex flex-col z-[60]">
-      {/* Logo */}
-      <div className="p-6 pb-4">
-        <Link href="/" className="flex items-center gap-3 font-bold text-xl tracking-tight mb-6">
-          <span className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
-            ⚡
-          </span>
-          SerpCraft
-        </Link>
+    <aside 
+      className={`h-screen fixed left-0 top-0 border-r rounded-r-lg border-border-subtle bg-surface-secondary flex flex-col z-60 transition-all duration-300 ease-in-out ${
+        isCollapsed ? "w-[80px]" : "w-[280px]"
+      }`}
+    >
+      {/* Logo & Toggle Header */}
+      <div className={`p-6 pb-4 flex flex-col transition-all duration-300 ease-in-out ${isCollapsed ? "items-center px-2" : ""}`}>
+        <div className={`flex items-center ${isCollapsed ? "justify-center" : "justify-between"} mb-8 relative group w-full`}>
+          <Link 
+            href="/" 
+            className={`flex items-center font-medium tracking-tight font-display text-text-primary transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-100 group-hover:opacity-0" : ""}`}
+          >
+            <span className="w-8 h-8 shrink-0 rounded-[8px] bg-brand-primary flex items-center justify-center text-[14px] text-brand-on-primary">
+              ⚡
+            </span>
+            <span className={`text-[20px] whitespace-nowrap overflow-hidden transition-all duration-300 ease-in-out ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
+              SerpCraft
+            </span>
+          </Link>
 
-        {/* Project badge */}
-        <div className="p-3 rounded-xl bg-brand-500/10 border border-brand-500/20">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-brand-400 mb-1">Current Project</p>
-          <p className="text-sm font-bold text-text-primary truncate">{project.name}</p>
-          <p className="text-[10px] text-text-tertiary truncate">{project.domain}</p>
+          {isCollapsed ? (
+            <button
+              onClick={() => setIsCollapsed(false)}
+              className="absolute inset-0 m-auto w-8 h-8 flex items-center justify-center rounded-[8px] bg-surface-elevated border border-border-subtle text-text-primary shadow-sm opacity-0 group-hover:opacity-100 transition-all duration-200 scale-90 group-hover:scale-100 z-10"
+              title="Expand sidebar"
+            >
+              {Icon.chevronRight}
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsCollapsed(true)}
+              className="p-1.5 rounded-[8px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors shrink-0"
+              title="Collapse sidebar"
+            >
+              {Icon.chevronLeft}
+            </button>
+          )}
+        </div>
+
+        {/* Project badge / Dropdown */}
+        <div className="relative w-full" ref={dropdownRef}>
+          <button 
+            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            className={`w-full relative flex items-center text-left rounded-[12px] bg-surface-elevated border border-border-subtle shadow-sm hover:border-brand-action/30 transition-all duration-300 ease-in-out overflow-hidden ${
+              isCollapsed ? "h-[56px]" : "h-[88px]"
+            }`}
+          >
+            {/* Expanded Content */}
+            <div className={`absolute inset-0 p-4 flex items-center justify-between transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-0 translate-x-[-20px] pointer-events-none" : "opacity-100 translate-x-0"}`}>
+              <div className="flex-1 min-w-0 pr-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1.5">Current Project</p>
+                <p className="text-[14px] font-medium text-text-primary truncate">{project.name}</p>
+                <p className="text-[12px] text-text-tertiary truncate font-mono mt-0.5">{project.domain}</p>
+              </div>
+              <div className={`text-text-tertiary transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`}>
+                {Icon.chevronDown}
+              </div>
+            </div>
+
+            {/* Collapsed Content */}
+            <div className={`absolute inset-0 p-2 flex items-center justify-center transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-100 translate-x-0" : "opacity-0 translate-x-[20px] pointer-events-none"}`}>
+              <div className="w-10 h-10 rounded-[8px] bg-surface-tertiary flex items-center justify-center text-[16px] font-bold text-text-primary uppercase">
+                {project.name.charAt(0)}
+              </div>
+            </div>
+          </button>
+
+          {/* Dropdown Menu */}
+          {isDropdownOpen && (
+            <div className={`absolute top-full left-0 mt-2 bg-surface-elevated border border-border-subtle rounded-[12px] shadow-sm overflow-hidden z-50 py-2 ${
+              isCollapsed ? "w-[240px] left-full ml-2 top-0 mt-0" : "w-full"
+            }`}>
+              <div className="px-3 pb-2 mb-2 border-b border-border-subtle">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Switch Project</p>
+              </div>
+              <div className="max-h-[240px] overflow-y-auto">
+                {allProjects.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => {
+                      setIsDropdownOpen(false);
+                      router.push(`/projects/${p.id}`);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 hover:bg-surface-hover transition-colors text-left"
+                  >
+                    <div className="flex-1 min-w-0 pr-3">
+                      <p className={`text-[13px] font-medium truncate ${p.id === project.id ? "text-brand-action" : "text-text-primary"}`}>
+                        {p.name}
+                      </p>
+                      <p className="text-[11px] text-text-tertiary truncate font-mono">{p.domain}</p>
+                    </div>
+                    {p.id === project.id && (
+                      <span className="text-brand-action shrink-0">{Icon.check}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div className="px-3 pt-2 mt-2 border-t border-border-subtle">
+                <Link 
+                  href="/projects"
+                  onClick={() => setIsDropdownOpen(false)}
+                  className="flex items-center gap-2 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors py-1"
+                >
+                  {Icon.grid} View all projects
+                </Link>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Project Nav */}
-      <nav className="flex-1 px-4 overflow-y-auto">
-        <p className="text-[9px] font-bold uppercase tracking-widest text-text-tertiary px-4 mb-2">Project</p>
-        <ul className="space-y-1 mb-6">
+      <nav className={`flex-1 overflow-y-auto transition-all duration-300 ease-in-out ${isCollapsed ? "px-2" : "px-4"}`}>
+        <p className={`text-[12px] font-bold uppercase tracking-widest text-text-tertiary mb-4 mt-2 transition-all duration-300 ease-in-out overflow-hidden whitespace-nowrap ${isCollapsed ? "max-h-0 opacity-0 m-0" : "max-h-[20px] opacity-100 px-4"}`}>
+          Project
+        </p>
+        <ul className="space-y-1.5 mb-6">
           {navItems.map((item) => {
             const active = isActive(item.href);
             return (
               <li key={item.label}>
                 <Link
                   href={item.href}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200
+                  className={`flex items-center rounded-[8px] text-[14px] font-medium transition-all duration-300 ease-in-out group relative
+                    ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
                     ${active
-                      ? "bg-brand-500/10 text-brand-400 shadow-[inset_0_0_0_1px_rgba(99,102,241,0.2)]"
-                      : "text-text-tertiary hover:text-text-secondary hover:bg-glass"}`}
+                      ? "bg-surface-elevated text-brand-action border border-border-subtle shadow-sm"
+                      : "text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"}`}
                 >
-                  <span className={active ? "text-brand-400" : "text-text-tertiary"}>{item.icon}</span>
-                  <span className="flex-1">{item.label}</span>
-                  {item.badge && (
-                    <span className="text-[9px] font-bold bg-surface-elevated px-2 py-0.5 rounded-full text-text-tertiary">
-                      {item.badge}
-                    </span>
+                  <span className={`shrink-0 transition-colors duration-300 ${active ? "text-brand-action" : "text-text-tertiary group-hover:text-text-primary"}`}>
+                    {item.icon}
+                  </span>
+                  
+                  <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden flex-1 ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
+                    {item.label}
+                  </span>
+                  
+                  <span className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[100px] opacity-100 ml-2"}`}>
+                    {item.badge && (
+                      <span className="text-[10px] font-medium bg-surface-tertiary px-2 py-0.5 rounded-[4px] text-text-secondary border border-border-subtle">
+                        {item.badge}
+                      </span>
+                    )}
+                  </span>
+
+                  {/* Tooltip for collapsed state */}
+                  {isCollapsed && (
+                    <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
+                      {item.label}
+                      {item.badge && <span className="ml-2 text-text-tertiary">({item.badge})</span>}
+                    </div>
                   )}
-                  {active && <div className="w-1.5 h-1.5 rounded-full bg-brand-400 shadow-[0_0_10px_rgba(99,102,241,0.5)]" />}
                 </Link>
               </li>
             );
           })}
         </ul>
 
-        <div className="border-t border-border-subtle pt-4">
-          <p className="text-[9px] font-bold uppercase tracking-widest text-text-tertiary px-4 mb-2">Navigate</p>
-          <ul className="space-y-1">
+        <div className={`border-t border-border-subtle pt-6 transition-all duration-300 ease-in-out ${isCollapsed ? "flex justify-center" : ""}`}>
+          <ul className="space-y-1.5 w-full">
             <li>
-              <Link href="/projects" className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-text-tertiary hover:text-text-secondary hover:bg-glass transition-all">
-                {Icon.arrowLeft}
-                All Projects
-              </Link>
-            </li>
-            <li>
-              <Link href="/dashboard" className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-text-tertiary hover:text-text-secondary hover:bg-glass transition-all">
-                {Icon.home}
-                Dashboard
+              <Link 
+                href="/projects" 
+                className={`flex items-center rounded-[8px] text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all duration-300 ease-in-out border border-transparent group relative
+                  ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
+                `}
+              >
+                <span className="text-text-tertiary group-hover:text-text-primary transition-colors shrink-0">
+                  {Icon.arrowLeft}
+                </span>
+                
+                <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
+                  All Projects
+                </span>
+                
+                {isCollapsed && (
+                  <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
+                    All Projects
+                  </div>
+                )}
               </Link>
             </li>
           </ul>
         </div>
       </nav>
 
-      {/* User */}
-      <div className="p-6 border-t border-border-subtle">
-        <div className="flex items-center justify-between p-3 rounded-2xl bg-glass border border-border-subtle">
-          <div className="flex items-center gap-3 overflow-hidden">
-            <UserButton appearance={{ elements: { avatarBox: "w-9 h-9 rounded-xl" } }} />
-            <div className="flex flex-col overflow-hidden">
-              <span className="text-xs font-semibold text-text-primary truncate">Account</span>
-              <span className="text-[10px] text-text-tertiary truncate leading-none">Manage profile</span>
+      {/* Footer Actions (User) */}
+      <div className="p-4 border-t border-border-subtle flex flex-col gap-2">
+        {/* User & Theme */}
+        <div className={`flex items-center rounded-[12px] bg-surface-elevated border border-border-subtle shadow-sm transition-all duration-300 ease-in-out ${
+          isCollapsed ? "p-2 flex-col gap-3" : "p-4 justify-between"
+        }`}>
+          <div className={`flex items-center overflow-hidden transition-all duration-300 ease-in-out ${isCollapsed ? "justify-center gap-0" : "gap-3"}`}>
+            <div className="shrink-0 transition-all duration-300 ease-in-out">
+              <UserButton appearance={{ elements: { avatarBox: isCollapsed ? "w-8 h-8 rounded-[8px] transition-all" : "w-10 h-10 rounded-[8px] transition-all" } }} />
             </div>
+            <div className={`flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${isCollapsed ? "max-w-0 opacity-0" : "max-w-[120px] opacity-100"}`}>
+              <span className="text-[14px] font-medium text-text-primary truncate">Account</span>
+              <span className="text-[12px] text-text-tertiary truncate leading-none mt-0.5">Manage profile</span>
+            </div>
+          </div>
+          <div className={`transition-all duration-300 ease-in-out flex justify-center ${isCollapsed ? "w-full border-t border-border-subtle pt-3" : ""}`}>
+            <ThemeToggle />
           </div>
         </div>
       </div>

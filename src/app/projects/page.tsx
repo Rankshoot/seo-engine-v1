@@ -13,61 +13,69 @@ export default async function ProjectsPage() {
   const { data: projects } = await getProjects();
 
   return (
-    <div className="min-h-screen bg-surface-primary flex">
+    <div className="min-h-screen flex bg-surface-primary">
       <Sidebar />
-      <main className="flex-1 ml-[280px] p-10">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-10">
-          <div>
-            <h1 className="text-4xl font-black tracking-tight text-text-primary mb-1">
-              Your <span className="gradient-text">Projects</span>
-            </h1>
-            <p className="text-text-tertiary">Each project is a separate SEO campaign with its own keywords, calendar, and blogs.</p>
-          </div>
-          <Link
-            href="/projects/new"
-            className="inline-flex items-center gap-2 px-6 py-3.5 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-            New Project
-          </Link>
-        </div>
-
-        {/* Grid */}
-        {projects.length > 0 ? (
-          <div className="grid grid-cols-1 items-stretch md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {projects.map(project => (
-              <ProjectCard key={project.id} project={project} />
-            ))}
-            {/* Add Project Card */}
-            <Link
-              href="/projects/new"
-              className={`border-2 border-dashed border-border-subtle rounded-2xl p-8 flex flex-col items-center justify-center gap-3 text-text-tertiary hover:border-brand-500/40 hover:text-brand-400 transition-all group ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}
-            >
-              <div className="w-12 h-12 rounded-2xl border-2 border-dashed border-current flex items-center justify-center group-hover:scale-110 transition-transform">
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-              </div>
-              <span className="text-sm font-bold">New Project</span>
-            </Link>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-32 text-center">
-            <div className="w-24 h-24 rounded-3xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-4xl mb-6">
-              🚀
+      <main className="flex-1 min-w-0 ml-[280px] p-6 lg:p-8">
+        <div className="space-y-10 pb-16">
+          {/* Header */}
+          <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col md:flex-row md:items-end justify-between gap-6">
+            <div>
+              <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
+                Projects
+              </h1>
+              <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
+                Each project is a separate SEO campaign with its own keywords, calendar, and blogs.
+              </p>
             </div>
-            <h2 className="text-2xl font-black text-text-primary mb-3">Create your first project</h2>
-            <p className="text-text-tertiary max-w-md mb-8">
-              A project holds everything for one SEO campaign — keywords, a 30-day content calendar, and AI-generated blogs ready to download.
-            </p>
             <Link
               href="/projects/new"
-              className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/20 hover:-translate-y-0.5 transition-all"
+              className="inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-5 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 shrink-0"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-              Create Project
+              New Project
             </Link>
           </div>
-        )}
+
+          {/* Grid */}
+          {projects.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {projects.map(project => (
+                <ProjectCard key={project.id} project={project} />
+              ))}
+              {/* Add Project Card */}
+              <Link
+                href="/projects/new"
+                className={`rounded-[16px] border border-dashed border-border-strong bg-surface-secondary flex flex-col items-center justify-center gap-4 text-text-tertiary hover:border-brand-action hover:text-brand-action transition-all group ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}
+              >
+                <div className="w-12 h-12 rounded-[8px] flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                  </svg>
+                </div>
+                <span className="text-[14px] font-medium">Create New Project</span>
+              </Link>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-24 text-center rounded-[22px] bg-surface-secondary border border-border-subtle">
+              <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary mb-6 border border-border-subtle">
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              </div>
+              <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary mb-4 font-display">
+                Create your first project
+              </h2>
+              <p className="text-[14px] text-text-tertiary max-w-md mb-8">
+                A project holds everything for one SEO campaign — keywords, a 30-day content calendar, and AI-generated blogs ready to download.
+              </p>
+              <Link
+                href="/projects/new"
+                className="inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+              >
+                Create Project
+              </Link>
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );

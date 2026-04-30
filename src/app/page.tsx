@@ -96,8 +96,8 @@ export default function LandingPage() {
               </a>
             </SignedOut>
             <SignedIn>
-              <a href="/dashboard" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200">
-                Dashboard {Icon.arrowRight}
+              <a href="/projects" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 hover:-translate-y-0.5 transition-all duration-200">
+                My Projects {Icon.arrowRight}
               </a>
               <UserButton />
             </SignedIn>
@@ -128,8 +128,8 @@ export default function LandingPage() {
                   </a>
                 </SignedOut>
                 <SignedIn>
-                  <a href="/dashboard" className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold">
-                    Go to Dashboard
+                  <a href="/projects" className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold">
+                    My Projects
                   </a>
                 </SignedIn>
               </div>
@@ -460,7 +460,7 @@ export default function LandingPage() {
 
             {/* Links */}
             {[
-              { heading: "Product", links: [{ label: "Features", href: "#features" }, { label: "How It Works", href: "#how-it-works" }, { label: "Preview", href: "#preview" }, { label: "Dashboard", href: "/dashboard" }] },
+              { heading: "Product", links: [{ label: "Features", href: "#features" }, { label: "How It Works", href: "#how-it-works" }, { label: "Preview", href: "#preview" }, { label: "My Projects", href: "/projects" }] },
               { heading: "Resources", links: [{ label: "Documentation", href: "#" }, { label: "API Reference", href: "#" }, { label: "Blog", href: "#" }, { label: "Changelog", href: "#" }] },
               { heading: "Company", links: [{ label: "About", href: "#" }, { label: "Privacy Policy", href: "#" }, { label: "Terms of Service", href: "#" }, { label: "Contact", href: "#" }] },
             ].map((col) => (

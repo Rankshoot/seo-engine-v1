@@ -23,6 +23,7 @@
 
 // Hybrid scraper kept for potential fallback, currently unused in Ahrefs-first path.
 import type { BusinessBrief } from './business-brief';
+import type { ScrapedPageMarkdown as JinaPage } from '@/services/hybridScraper';
 import {
   ahrefsAnchors,
   ahrefsCrawledPages,
@@ -35,6 +36,9 @@ import {
 export type AuditSeverity = 'low' | 'medium' | 'high';
 export type AuditImpact = 'low' | 'medium' | 'high';
 export type IssueCategory = 'technical' | 'seo' | 'content' | 'keyword_demand' | 'ux';
+
+const GEMINI_AUDIT_URL =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
 
 export interface BlogIssue {
   /** Plain-language label (<=6 words). No jargon. */
@@ -357,6 +361,8 @@ function extractSignals(page: JinaPage): StructuralSignals {
     answer_first: answerFirst,
     has_schema_hints: hasSchemaHints,
     first_paragraph: firstParagraph.slice(0, 500),
+    url_rating: null,
+    refdomains: null,
   };
 }
 
@@ -409,7 +415,8 @@ interface DiagnoseInput {
 async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalysis> {
   const { url, page, signals, brief, sitePeerUrls } = input;
 
-  if (!GEMINI_API_KEY) {
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!geminiKey) {
     return emptyAnalysis('GEMINI_API_KEY missing; skipping LLM diagnosis.');
   }
 
@@ -494,11 +501,11 @@ RULES:
 Return ONLY the JSON object.`;
 
   try {
-    const res = await fetch(GEMINI_URL, {
+    const res = await fetch(GEMINI_AUDIT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-goog-api-key': GEMINI_API_KEY,
+        'X-goog-api-key': geminiKey,
       },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
@@ -736,13 +743,17 @@ function ahrefsOnlyAnalysis(url: string, kws: AhrefsUrlKeyword[]): BlogAuditAnal
     }
   }
 
-  const keywordDemand = primary
+  const keywordDemand: KeywordDemand | undefined = primary
     ? {
         keyword: primary.keyword,
         volume: primary.volume,
         trend_pct: 0,
         monthly_searches: [],
-        verdict: primary.volume === 0 ? 'unknown' : primary.volume < 30 ? 'niche' : 'stable',
+        verdict: (primary.volume === 0
+          ? 'unknown'
+          : primary.volume < 30
+            ? 'niche'
+            : 'stable') as KeywordDemand['verdict'],
       }
     : undefined;
 

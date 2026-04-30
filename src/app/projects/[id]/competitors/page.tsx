@@ -10,6 +10,7 @@ import {
   type BenchmarkState,
 } from "@/app/actions/competitor-actions";
 import { getProject, updateProject } from "@/app/actions/project-actions";
+import { projectDomainHost } from "@/lib/project-domain-host";
 import type {
   Competitor,
   CompetitorKeyword,
@@ -17,6 +18,56 @@ import type {
   KeywordGap,
   Project,
 } from "@/lib/types";
+
+function logoUrlCandidates(host: string): string[] {
+  if (!host) return [];
+  return [
+    `https://logo.clearbit.com/${encodeURIComponent(host)}`,
+    `https://icons.duckduckgo.com/ip3/${encodeURIComponent(host)}.ico`,
+    `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`,
+  ];
+}
+
+function DomainLogo({ domain }: { domain: string }) {
+  const host = useMemo(() => projectDomainHost(domain), [domain]);
+  const sources = useMemo(() => logoUrlCandidates(host), [host]);
+  const [index, setIndex] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setIndex(0);
+    setFailed(false);
+  }, [host]);
+
+  const letter = (domain || "?").charAt(0).toUpperCase();
+
+  if (!host || failed) {
+    return (
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-zinc-700 to-zinc-900 text-sm font-bold text-zinc-200 ring-1 ring-inset ring-white/10">
+        {letter}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white ring-1 ring-inset ring-zinc-200/80 shadow-sm">
+      <img
+        key={`${host}-${index}`}
+        src={sources[index]}
+        alt=""
+        width={28}
+        height={28}
+        loading="lazy"
+        decoding="async"
+        className="h-7 w-7 object-contain"
+        onError={() => {
+          if (index < sources.length - 1) setIndex(i => i + 1);
+          else setFailed(true);
+        }}
+      />
+    </div>
+  );
+}
 
 type TabId = "competitors" | "gaps" | "opportunities";
 
@@ -567,9 +618,7 @@ function CompetitorList({
               className="w-full flex flex-wrap items-center justify-between gap-3 p-4 text-left hover:bg-white/[0.02] transition-colors"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-cyan-500/15 text-cyan-400 text-xs font-black">
-                  {c.rank_score}
-                </span>
+                <DomainLogo domain={c.domain} />
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-text-primary truncate">{c.domain}</p>
                   <p className="text-[11px] text-text-tertiary truncate">

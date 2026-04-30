@@ -2,6 +2,16 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
+import {
+  ahrefsDomainOverview,
+  ahrefsOrganicCompetitors,
+  ahrefsTopPages,
+  isAhrefsConfigured,
+  type AhrefsCompetitor,
+  type AhrefsDomainOverview,
+  type AhrefsTopPage,
+} from '@/lib/ahrefs';
+import { normalizeDomain } from '@/lib/keyword-discovery';
 import { Project } from '@/lib/types';
 
 export async function createProject(data: {
@@ -172,5 +182,121 @@ export async function getProjectStats(projectId: string) {
       calendarEntries: calendar.length,
       blogsGenerated: blogs.filter(b => ['generated', 'approved', 'published'].includes(b.status)).length,
     },
+  };
+}
+
+/** Client can `console.log` this after paid Ahrefs calls (see AGENTS.md). */
+export type SiteExplorerTraceEntry = { step: string; ok: boolean; detail?: string };
+
+export type ProjectSiteExplorerData = {
+  project: Project;
+  /** Bare hostname passed to Ahrefs Site Explorer. */
+  target: string;
+  ahrefsConfigured: boolean;
+  overview: AhrefsDomainOverview | null;
+  competitors: AhrefsCompetitor[];
+  topPages: AhrefsTopPage[];
+};
+
+/**
+ * Ahrefs Site Explorer snapshot for the project overview: domain metrics,
+ * organic competitors (overlap + totals), and top pages. Safe when API key
+ * is missing — returns empty metrics with `ahrefsConfigured: false`.
+ */
+export async function getProjectSiteExplorerSnapshot(projectId: string): Promise<
+  | { success: true; data: ProjectSiteExplorerData; trace: SiteExplorerTraceEntry[] }
+  | { success: false; error: string; data: null; trace: SiteExplorerTraceEntry[] }
+> {
+  const trace: SiteExplorerTraceEntry[] = [];
+  const user = await currentUser();
+  if (!user) {
+    return { success: false, error: 'Not authenticated', data: null, trace };
+  }
+
+  const { data: project, error } = await supabaseAdmin
+    .from('projects')
+    .select('*, project_competitors(*)')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (error || !project) {
+    trace.push({ step: 'load_project', ok: false, detail: error?.message ?? 'not found' });
+    return { success: false, error: 'Project not found', data: null, trace };
+  }
+
+  const p = project as Project;
+  const target = normalizeDomain(p.domain);
+  const region = p.target_region || 'us';
+
+  trace.push({ step: 'normalize_domain', ok: Boolean(target), detail: target || '(empty)' });
+
+  if (!isAhrefsConfigured()) {
+    trace.push({ step: 'ahrefs_config', ok: false, detail: 'AHREFS_API_KEY not set' });
+    return {
+      success: true,
+      data: {
+        project: p,
+        target: target || p.domain,
+        ahrefsConfigured: false,
+        overview: null,
+        competitors: [],
+        topPages: [],
+      },
+      trace,
+    };
+  }
+
+  if (!target) {
+    trace.push({ step: 'ahrefs_skip', ok: false, detail: 'No valid domain' });
+    return {
+      success: true,
+      data: {
+        project: p,
+        target: '',
+        ahrefsConfigured: true,
+        overview: null,
+        competitors: [],
+        topPages: [],
+      },
+      trace,
+    };
+  }
+
+  const [overview, competitors, topPages] = await Promise.all([
+    ahrefsDomainOverview(target, region),
+    ahrefsOrganicCompetitors(target, region, 40),
+    ahrefsTopPages(target, region, 8),
+  ]);
+
+  trace.push({
+    step: 'site_explorer_metrics',
+    ok: overview != null,
+    detail: overview
+      ? `DR=${overview.domain_rating ?? '—'} organic_kw=${overview.organic_keywords ?? '—'}`
+      : 'null',
+  });
+  trace.push({
+    step: 'organic_competitors',
+    ok: competitors.length > 0,
+    detail: `${competitors.length} rows for ${target} (${region})`,
+  });
+  trace.push({
+    step: 'top_pages',
+    ok: topPages.length > 0,
+    detail: `${topPages.length} rows`,
+  });
+
+  return {
+    success: true,
+    data: {
+      project: p,
+      target,
+      ahrefsConfigured: true,
+      overview,
+      competitors,
+      topPages,
+    },
+    trace,
   };
 }

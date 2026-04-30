@@ -3,6 +3,7 @@ import { currentUser } from "@clerk/nextjs/server";
 import Link from "next/link";
 import Sidebar from "@/components/dashboard/Sidebar";
 import ProjectCard from "@/components/dashboard/ProjectCard";
+import { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashboard/project-card-layout";
 import { getProjects } from "@/app/actions/project-actions";
 
 export default async function ProjectsPage() {
@@ -34,14 +35,14 @@ export default async function ProjectsPage() {
 
         {/* Grid */}
         {projects.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 items-stretch md:grid-cols-2 lg:grid-cols-3 gap-6">
             {projects.map(project => (
               <ProjectCard key={project.id} project={project} />
             ))}
             {/* Add Project Card */}
             <Link
               href="/projects/new"
-              className="border-2 border-dashed border-border-subtle rounded-3xl p-8 flex flex-col items-center justify-center gap-3 text-text-tertiary hover:border-brand-500/40 hover:text-brand-400 transition-all group min-h-[200px]"
+              className={`border-2 border-dashed border-border-subtle rounded-2xl p-8 flex flex-col items-center justify-center gap-3 text-text-tertiary hover:border-brand-500/40 hover:text-brand-400 transition-all group ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}
             >
               <div className="w-12 h-12 rounded-2xl border-2 border-dashed border-current flex items-center justify-center group-hover:scale-110 transition-transform">
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>

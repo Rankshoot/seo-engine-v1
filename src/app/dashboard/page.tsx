@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getProjects } from "@/app/actions/project-actions";
 import ProjectCard from "@/components/dashboard/ProjectCard";
+import { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashboard/project-card-layout";
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -12,8 +13,7 @@ export default async function DashboardPage() {
   const displayName = user.firstName || user.emailAddresses[0]?.emailAddress?.split("@")[0] || "User";
   const { data: projects } = await getProjects();
 
-  const totalProjects = projects.length;
-  const hasProjects = totalProjects > 0;
+  const hasProjects = projects.length > 0;
 
   return (
     <div className="min-h-screen bg-surface-primary flex">
@@ -41,40 +41,20 @@ export default async function DashboardPage() {
 
         {hasProjects ? (
           <>
-            {/* Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-              <div className="glass-card p-6">
-                <p className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Total Projects</p>
-                <p className="text-4xl font-black text-text-primary">{totalProjects}</p>
-                <p className="text-xs text-text-tertiary mt-1">SEO campaigns</p>
-              </div>
-              <div className="glass-card p-6 bg-brand-500/8">
-                <p className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Automation Status</p>
-                <p className="text-lg font-black text-brand-400">Active</p>
-                <p className="text-xs text-text-tertiary mt-1">Keyword data and AI drafts</p>
-              </div>
-              <div className="glass-card p-6 bg-accent-500/8">
-                <p className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Workflow</p>
-                <p className="text-lg font-black text-accent-400">Ready</p>
-                <p className="text-xs text-text-tertiary mt-1">Keywords → Calendar → Blogs</p>
-              </div>
-            </div>
-
             {/* Projects */}
             <div>
               <div className="flex items-center justify-between mb-6">
                 <h2 className="font-bold text-text-primary">Your Projects</h2>
-                <Link href="/projects" className="text-xs font-bold text-brand-400 hover:underline">View all</Link>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                {projects.slice(0, 6).map(project => (
+              <div className="grid grid-cols-1 items-stretch md:grid-cols-2 xl:grid-cols-3 gap-5">
+                {projects.map(project => (
                   <ProjectCard key={project.id} project={project} />
                 ))}
 
                 <Link
                   href="/projects/new"
-                  className="border-2 border-dashed border-border-subtle rounded-3xl p-5 flex flex-col items-center justify-center gap-2 text-text-tertiary hover:border-brand-500/40 hover:text-brand-400 transition-all group min-h-[130px]"
+                  className={`border-2 border-dashed border-border-subtle rounded-2xl p-5 flex flex-col items-center justify-center gap-2 text-text-tertiary hover:border-brand-500/40 hover:text-brand-400 transition-all group ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}
                 >
                   <div className="w-10 h-10 rounded-xl border-2 border-dashed border-current flex items-center justify-center group-hover:scale-110 transition-transform">
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>

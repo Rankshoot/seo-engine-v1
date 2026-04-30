@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Project, ProjectCompetitor, TARGET_REGIONS } from "@/lib/types";
+import { projectDomainHost } from "@/lib/project-domain-host";
+import { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashboard/project-card-layout";
 import {
   deleteProject,
   getProject,
@@ -12,6 +14,131 @@ import {
 
 interface ProjectCardProps {
   project: Project;
+}
+
+function logoUrlCandidates(host: string): string[] {
+  if (!host) return [];
+  return [
+    `https://logo.clearbit.com/${encodeURIComponent(host)}`,
+    `https://icons.duckduckgo.com/ip3/${encodeURIComponent(host)}.ico`,
+    `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`,
+  ];
+}
+
+function ProjectDomainLogo({
+  domain,
+  fallbackLetter,
+}: {
+  domain: string;
+  fallbackLetter: string;
+}) {
+  const host = useMemo(() => projectDomainHost(domain), [domain]);
+  const sources = useMemo(() => logoUrlCandidates(host), [host]);
+  const [index, setIndex] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setIndex(0);
+    setFailed(false);
+  }, [host]);
+
+  const letter = (fallbackLetter || "?").charAt(0).toUpperCase();
+
+  if (!host || failed) {
+    return (
+      <div
+        className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-zinc-700 to-zinc-900 text-lg font-bold tracking-tight text-zinc-200 ring-1 ring-inset ring-white/10"
+        aria-hidden
+      >
+        {letter}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white ring-1 ring-inset ring-zinc-200/80 shadow-sm"
+      aria-hidden
+    >
+      <img
+        key={`${host}-${index}`}
+        src={sources[index]}
+        alt=""
+        width={44}
+        height={44}
+        loading="lazy"
+        decoding="async"
+        className="h-9 w-9 object-contain"
+        onError={() => {
+          if (index < sources.length - 1) setIndex(i => i + 1);
+          else setFailed(true);
+        }}
+      />
+    </div>
+  );
+}
+
+function regionLabel(code: string): string {
+  const row = TARGET_REGIONS.find(r => r.code === code.toLowerCase());
+  return row?.name ?? code.toUpperCase();
+}
+
+/** ISO 3166-1 alpha-2 for flagcdn (UK → gb). */
+function regionToFlagIso(regionCode: string): string | null {
+  const c = regionCode.trim().toLowerCase();
+  const known = new Set<string>(TARGET_REGIONS.map(r => r.code as string));
+  if (!known.has(c)) return null;
+  return c === "uk" ? "gb" : c;
+}
+
+/** Short label under flag (e.g. US, UAE). */
+function regionShortLabel(regionCode: string): string {
+  const c = regionCode.trim().toLowerCase();
+  const short: Record<string, string> = {
+    us: "US",
+    uk: "UK",
+    in: "IN",
+    au: "AU",
+    ca: "CA",
+    de: "DE",
+    fr: "FR",
+    sg: "SG",
+    ae: "UAE",
+    nz: "NZ",
+  };
+  return short[c] ?? regionCode.slice(0, 3).toUpperCase();
+}
+
+function RegionBelowAvatar({ regionCode }: { regionCode: string }) {
+  const iso = regionToFlagIso(regionCode);
+  const short = regionShortLabel(regionCode);
+  const full = regionLabel(regionCode);
+  return (
+    <div className="flex flex-col items-center gap-1" title={full}>
+      {iso ? (
+        <img
+          src={`https://flagcdn.com/w40/${iso}.png`}
+          srcSet={`https://flagcdn.com/w20/${iso}.png 1x, https://flagcdn.com/w40/${iso}.png 2x`}
+          width={22}
+          height={16}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="h-4 w-[22px] rounded-sm object-cover shadow-sm ring-1 ring-black/25 dark:ring-white/15"
+          onError={e => {
+            (e.target as HTMLImageElement).style.visibility = "hidden";
+          }}
+        />
+      ) : (
+        <span className="flex h-4 w-[22px] items-center justify-center rounded-sm bg-surface-elevated text-[8px] font-bold text-text-tertiary ring-1 ring-border-subtle">
+          {short.slice(0, 2)}
+        </span>
+      )}
+      <span className="max-w-[52px] truncate text-center text-[9px] font-bold uppercase tracking-wide text-text-tertiary">
+        {short}
+      </span>
+    </div>
+  );
 }
 
 export default function ProjectCard({ project }: ProjectCardProps) {
@@ -37,51 +164,77 @@ export default function ProjectCard({ project }: ProjectCardProps) {
     };
   }, [menuOpen]);
 
+  const host = projectDomainHost(project.domain);
+  const companyLine =
+    project.company?.trim() &&
+    project.company.trim().toLowerCase() !== project.name.trim().toLowerCase()
+      ? project.company.trim()
+      : null;
+  const descRaw = project.description?.trim() ?? "";
+  const descriptionSnippet =
+    descRaw.length > 120 ? `${descRaw.slice(0, 120)}…` : descRaw;
+
+  const metaBlock =
+    descriptionSnippet ||
+    (project.target_audience?.trim()
+      ? `Audience — ${project.target_audience.trim()}`
+      : "");
+
   return (
     <>
-      <div className="relative group">
+      <div className={`relative group ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}>
         <Link
           href={`/projects/${project.id}`}
-          className="glass-card p-6 block hover:border-brand-500/30 transition-all duration-300"
+          className={`group/card relative flex ${PROJECT_CARD_GRID_HEIGHT_CLASS} flex-col overflow-hidden rounded-2xl border border-border-subtle/90 bg-gradient-to-b from-surface-elevated/40 via-surface-secondary/80 to-surface-secondary p-5 shadow-sm shadow-black/20 transition-all duration-300 hover:-translate-y-0.5 hover:border-border-default hover:shadow-lg hover:shadow-black/30`}
         >
-          <div className="flex items-start justify-between mb-4">
-            <div className="w-12 h-12 rounded-2xl bg-brand-500/15 border border-brand-500/20 flex items-center justify-center text-xl font-black text-brand-400">
-              {project.name.charAt(0).toUpperCase()}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/12 to-transparent opacity-0 transition-opacity duration-300 group-hover/card:opacity-100" />
+
+          <div className="flex min-h-0 flex-1 gap-4">
+            <div className="flex w-[52px] shrink-0 flex-col items-center gap-2">
+              <ProjectDomainLogo domain={project.domain} fallbackLetter={project.company || project.name} />
+              <RegionBelowAvatar regionCode={project.target_region} />
             </div>
-            {/* Space reserved for the kebab button (absolute) + the region pill. */}
-            <span className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary bg-surface-elevated px-2 py-1 rounded-lg mr-10">
-              {project.target_region.toUpperCase()}
-            </span>
+
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col pr-9">
+              <h3 className="text-[15px] font-bold leading-snug tracking-tight text-text-primary transition-colors group-hover/card:text-brand-300">
+                {project.name}
+              </h3>
+
+              {companyLine ? (
+                <p className="mt-0.5 truncate text-xs font-medium text-text-secondary">{companyLine}</p>
+              ) : null}
+
+              <p className="mt-1 font-mono text-[11px] leading-relaxed text-text-tertiary" title={project.domain}>
+                {host || project.domain}
+              </p>
+
+              <p className="mt-2 line-clamp-2 min-h-10 text-xs leading-relaxed text-text-tertiary/90">
+                {project.niche}
+              </p>
+
+              {/* <p
+                className={`mt-2 line-clamp-3 min-h-16.5 border-l-2 border-brand-500/35 pl-2.5 text-[11px] leading-relaxed ${
+                  metaBlock ? "text-text-tertiary/85" : "text-text-tertiary/35"
+                }`}
+              >
+                {metaBlock || "\u00a0"}
+              </p> */}
+            </div>
           </div>
 
-          <h3 className="text-base font-bold text-text-primary group-hover:text-brand-400 transition-colors mb-1">
-            {project.name}
-          </h3>
-          <p className="text-xs text-text-tertiary mb-1">{project.domain}</p>
-          <p className="text-xs text-text-tertiary/70 line-clamp-2">{project.niche}</p>
-
-          <div className="mt-4 pt-4 border-t border-border-subtle flex items-center justify-between">
-            <span className="text-[10px] text-text-tertiary">
+          <div className="mt-auto flex shrink-0 items-center justify-between border-t border-border-subtle/80 pt-3">
+            <span className="text-[11px] text-text-tertiary">
+              Added{" "}
               {new Date(project.created_at).toLocaleDateString("en-US", {
                 month: "short",
                 day: "numeric",
                 year: "numeric",
               })}
             </span>
-            <span className="text-[10px] font-bold text-brand-400 group-hover:translate-x-1 transition-transform inline-flex items-center gap-1">
-              Open
-              <svg
-                className="w-3 h-3"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2.5}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"
-                />
+            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-400 transition-transform group-hover/card:translate-x-0.5">
+              Open workspace
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
             </span>
           </div>

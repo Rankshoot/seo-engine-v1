@@ -194,7 +194,7 @@ function rootHost(host: string): string {
 // Composite score:
 //   keywords_common      ×  40%
 //   log(traffic)         ×  25%
-//   log(keywords_competitor) × 20%
+//   log(keywords_competitor) × 20%   // Ahrefs: keywords only THEY rank for (not their total)
 //   domain-rating credit ×  15%   (DR<10 = 0, DR>=50 = full)
 // Domains in COMPETITOR_BLOCKLIST and the target itself are dropped.
 // ─────────────────────────────────────────────────────────────────────────────

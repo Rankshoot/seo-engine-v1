@@ -2,10 +2,10 @@
  * Ahrefs API v3 client.
  *
  * This is the primary SEO data source for the platform. It powers:
- *   • Competitor discovery (Site Explorer / organic-competitors)
- *   • Per-competitor ranking pages with exact URL + keyword + volume
+ *   â€¢ Competitor discovery (Site Explorer / organic-competitors)
+ *   â€¢ Per-competitor ranking pages with exact URL + keyword + volume
  *     (Site Explorer / organic-keywords + top-pages)
- *   • Keyword research (Keywords Explorer / overview + matching-terms +
+ *   â€¢ Keyword research (Keywords Explorer / overview + matching-terms +
  *     related-terms)
  *
  * Falls back to the existing DataForSEO + Serper code paths when AHREFS_API_KEY
@@ -38,6 +38,11 @@ function ahrefsCountry(regionCode: string): string {
   return code === 'uk' ? 'gb' : code;
 }
 
+/**
+ * Returns today's date in UTC as YYYY-MM-DD.
+ * The Ahrefs Site Explorer UI sends today's UTC date â€” verified by comparing
+ * the browser Network tab against our server requests.
+ */
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -59,7 +64,7 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
   const tag = opts.label ?? opts.endpoint;
   const key = getApiKey();
   if (!key) {
-    console.warn(`[ahrefs] ${tag} skipped — AHREFS_API_KEY missing`);
+    console.warn(`[ahrefs] ${tag} skipped â€” AHREFS_API_KEY missing`);
     console.log('[ahrefs:request]', {
       endpoint: opts.endpoint,
       label: opts.label,
@@ -152,16 +157,28 @@ function primaryArrayLength(json: Record<string, unknown>): number {
   return 0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Site Explorer
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsCompetitor {
   competitor_domain: string;
   domain_rating: number | null;
+  /** Keywords both you and the competitor rank for (Ahrefs â€œCommon keywordsâ€). */
   keywords_common: number;
+  /**
+   * Keywords the competitor ranks for that **you do not** â€” not their total
+   * organic keyword count. See `ahrefsCompetitorOrganicTotal`.
+   */
   keywords_competitor: number;
+  /** Keywords you rank for that the competitor does not. */
+  keywords_target: number;
+  /** Ahrefs â€œShareâ€ % (same as Site Explorer table). */
+  share: number | null;
   traffic: number | null;
+  /** Estimated monthly value of organic traffic, USD cents. */
+  value: number | null;
+  pages: number | null;
 }
 
 interface AhrefsCompetitorRow {
@@ -170,12 +187,26 @@ interface AhrefsCompetitorRow {
   domain_rating?: number | null;
   keywords_common?: number | null;
   keywords_competitor?: number | null;
+  keywords_target?: number | null;
+  share?: number | null;
   traffic?: number | null;
+  value?: number | null;
+  pages?: number | null;
+}
+
+/** Ahrefs UI column â€œCompetitorâ€™s keywordsâ€ = common + competitor-only. */
+export function ahrefsCompetitorOrganicTotal(c: AhrefsCompetitor): number {
+  return Math.max(0, (c.keywords_common ?? 0) + (c.keywords_competitor ?? 0));
+}
+
+/** Ahrefs UI column â€œTargetâ€™s keywordsâ€ = common + target-only. */
+export function ahrefsTargetOrganicTotal(c: AhrefsCompetitor): number {
+  return Math.max(0, (c.keywords_common ?? 0) + (c.keywords_target ?? 0));
 }
 
 /**
  * Returns competitor domains for a target site, sorted by `traffic_merged`.
- * Uses the live Ahrefs SERP overlap index — much more accurate than seed-based
+ * Uses the live Ahrefs SERP overlap index â€” much more accurate than seed-based
  * Serper SERP scraping.
  */
 export async function ahrefsOrganicCompetitors(
@@ -190,13 +221,15 @@ export async function ahrefsOrganicCompetitors(
     query: {
       target,
       country: ahrefsCountry(region),
-      protocol: 'both',
-      mode: 'subdomains',
+      // No mode param -> Ahrefs defaults to subdomains (same as Site Explorer UI).
       date: todayISO(),
       volume_mode: 'monthly',
       limit,
       order_by: 'traffic:desc',
-      select: 'competitor_domain,domain_rating,keywords_common,keywords_competitor,traffic',
+      // select matches Ahrefs Site Explorer UI Network tab exactly.
+      select:
+        'keywords_competitor,keywords_common,keywords_target,share,domain_rating,traffic,value,pages,group_mode,competitor_domain,competitor_url',
+
     },
   });
   if (!json?.competitors) return [];
@@ -207,7 +240,11 @@ export async function ahrefsOrganicCompetitors(
       domain_rating: row.domain_rating ?? null,
       keywords_common: Number(row.keywords_common ?? 0),
       keywords_competitor: Number(row.keywords_competitor ?? 0),
+      keywords_target: Number(row.keywords_target ?? 0),
+      share: row.share != null && Number.isFinite(Number(row.share)) ? Number(row.share) : null,
       traffic: row.traffic ?? null,
+      value: row.value != null && Number.isFinite(Number(row.value)) ? Number(row.value) : null,
+      pages: row.pages != null && Number.isFinite(Number(row.pages)) ? Number(row.pages) : null,
     }))
     .filter(row => row.competitor_domain);
 }
@@ -218,7 +255,7 @@ export interface AhrefsTopPage {
   top_keyword_volume: number | null;
   top_keyword_best_position: number | null;
   sum_traffic: number;
-  /** Ahrefs estimated paid traffic value in **cents** — convert at UI/format layer. */
+  /** Ahrefs estimated paid traffic value in **cents** â€” convert at UI/format layer. */
   value: number | null;
 }
 
@@ -276,7 +313,7 @@ export interface AhrefsOrganicKeyword {
   volume: number;
   /** Site Explorer / organic-keywords exposes KD as `keyword_difficulty`. */
   keyword_difficulty: number | null;
-  /** CPC is returned in **cents** by Ahrefs — convert at the UI/format layer. */
+  /** CPC is returned in **cents** by Ahrefs â€” convert at the UI/format layer. */
   cpc: number | null;
   best_position: number | null;
   best_position_url: string;
@@ -295,7 +332,7 @@ interface AhrefsOrganicKeywordRow {
 
 /**
  * Every keyword the target domain ranks for in the top 50 organic results,
- * sorted by traffic. Each row already includes the exact ranking page URL —
+ * sorted by traffic. Each row already includes the exact ranking page URL â€”
  * this is what we use for "Ranking page" links in the gap dashboard.
  */
 export async function ahrefsOrganicKeywords(
@@ -335,16 +372,16 @@ export async function ahrefsOrganicKeywords(
     .filter(row => row.keyword && row.best_position_url);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Keywords Explorer
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsKeywordOverviewRow {
   keyword: string;
   volume: number;
   /** Keywords-Explorer / overview exposes KD as `difficulty`. */
   difficulty: number | null;
-  /** Ahrefs returns CPC in **cents** — convert at UI/format layer. */
+  /** Ahrefs returns CPC in **cents** â€” convert at UI/format layer. */
   cpc: number | null;
   intents: AhrefsIntentObject | null;
   parent_topic: string | null;
@@ -353,7 +390,7 @@ export interface AhrefsKeywordOverviewRow {
 
 /**
  * One SERP feature surfaced by Ahrefs Keywords-Explorer / overview for a
- * keyword (featured snippet, PAA, video carousel, image pack, …). Extra
+ * keyword (featured snippet, PAA, video carousel, image pack, â€¦). Extra
  * Ahrefs-specific keys are tolerated via the index signature.
  */
 export interface AhrefsSerpFeature {
@@ -364,7 +401,7 @@ export interface AhrefsSerpFeature {
   [key: string]: unknown;
 }
 
-/** Detailed overview row — the bulk variant doesn't request these to keep cost down. */
+/** Detailed overview row â€” the bulk variant doesn't request these to keep cost down. */
 export interface AhrefsKeywordOverviewDetailRow extends AhrefsKeywordOverviewRow {
   global_volume: number | null;
   serp_features: AhrefsSerpFeature[] | null;
@@ -434,7 +471,7 @@ export async function ahrefsKeywordOverview(
 }
 
 /**
- * Single-keyword overview with the richer select list — adds `global_volume`
+ * Single-keyword overview with the richer select list â€” adds `global_volume`
  * and `serp_features` on top of the bulk function. Used by the keyword-modal
  * route, where one extra column or two is fine; the bulk function stays lean.
  */
@@ -487,7 +524,7 @@ export interface AhrefsKeywordIdea {
   volume: number;
   /** Keywords-Explorer endpoints expose KD as `difficulty`. */
   difficulty: number | null;
-  /** Ahrefs returns CPC in **cents** — convert at UI/format layer. */
+  /** Ahrefs returns CPC in **cents** â€” convert at UI/format layer. */
   cpc: number | null;
   intents: AhrefsIntentObject | null;
 }
@@ -581,19 +618,19 @@ export async function ahrefsSearchSuggestions(
   return mapIdeas(json?.keywords);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Single-seed Keywords Explorer variants — used by blog generation.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Single-seed Keywords Explorer variants â€” used by blog generation.
 //
 // These return their own arrays (one per Ahrefs UI tab). They are NOT merged
 // into a single ideas pool because each tab carries different editorial
 // signal: "matching" terms drive H2 outline, "questions" drive FAQ JSON-LD,
 // "also rank for" drives entity coverage, "also talk about" drives related
 // concepts. The blog pipeline stores each list separately.
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
- * Matching terms — every keyword that contains the seed phrase. Maps to the
- * "Matching terms → All" tab in Ahrefs Keywords Explorer.
+ * Matching terms â€” every keyword that contains the seed phrase. Maps to the
+ * "Matching terms â†’ All" tab in Ahrefs Keywords Explorer.
  */
 export async function ahrefsMatchingTermsAll(
   seed: string,
@@ -621,7 +658,7 @@ export async function ahrefsMatchingTermsAll(
 /**
  * Matching terms filtered to question-style keywords ("how / what / why /
  * when / where / who / which / can / should / does"). Maps to the
- * "Matching terms → Questions" tab. Drives FAQ blocks + FAQPage JSON-LD.
+ * "Matching terms â†’ Questions" tab. Drives FAQ blocks + FAQPage JSON-LD.
  */
 export async function ahrefsMatchingTermsQuestions(
   seed: string,
@@ -647,8 +684,8 @@ export async function ahrefsMatchingTermsQuestions(
 }
 
 /**
- * "Also rank for" — keywords that the top-10 SERP pages for the seed also
- * rank for. Maps to the "Related terms → Also rank for" tab. Best signal
+ * "Also rank for" â€” keywords that the top-10 SERP pages for the seed also
+ * rank for. Maps to the "Related terms â†’ Also rank for" tab. Best signal
  * for the entities/topics a competing article must cover to compete.
  */
 export async function ahrefsRelatedAlsoRankFor(
@@ -675,8 +712,8 @@ export async function ahrefsRelatedAlsoRankFor(
 }
 
 /**
- * "Also talk about" — keywords those top-10 SERP pages mention in their body
- * copy (vs. rank for). Maps to "Related terms → Also talk about". Best
+ * "Also talk about" â€” keywords those top-10 SERP pages mention in their body
+ * copy (vs. rank for). Maps to "Related terms â†’ Also talk about". Best
  * signal for the secondary keywords / synonyms an article should weave in.
  */
 export async function ahrefsRelatedAlsoTalkAbout(
@@ -702,11 +739,11 @@ export async function ahrefsRelatedAlsoTalkAbout(
   return mapIdeas(json?.keywords);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Volume history + volume by country — historical and geographic demand.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Volume history + volume by country â€” historical and geographic demand.
 // Both return their own typed arrays; they are NEVER merged into the ideas
 // pool. Stored separately to power "demand is rising / dying" + region maps.
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsVolumeHistoryPoint {
   /** ISO date string (Ahrefs returns month-anchored values, e.g. `2026-01-01`). */
@@ -793,9 +830,9 @@ export async function ahrefsVolumeByCountry(
     }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // SERP Overview
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsSerpPosition {
   position: number;
@@ -861,9 +898,9 @@ export async function ahrefsSerpOverview(
     }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Site Explorer: extra page-quality signals
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsInternalLinkPage {
   url: string;
@@ -881,7 +918,7 @@ interface AhrefsInternalLinkRow {
 
 /**
  * Pages on a domain that have the most internal links pointing TO them.
- * Used to discover the user's own pillar pages — perfect anchors for new
+ * Used to discover the user's own pillar pages â€” perfect anchors for new
  * blog internal-link suggestions.
  */
 export async function ahrefsPagesByInternalLinks(
@@ -912,7 +949,7 @@ export async function ahrefsPagesByInternalLinks(
     }));
 }
 
-/** Site Explorer overview — domain-rating + organic-keywords + traffic snapshot. */
+/** Site Explorer overview â€” domain-rating + organic-keywords + traffic snapshot. */
 export interface AhrefsDomainOverview {
   domain_rating: number | null;
   organic_traffic: number | null;
@@ -925,7 +962,17 @@ export async function ahrefsDomainOverview(
   region: string
 ): Promise<AhrefsDomainOverview | null> {
   if (!target) return null;
-  const json = await ahrefsGet<{ metrics?: { domain_rating?: number | null; organic_traffic?: number | null; organic_keywords?: number | null; refdomains?: number | null }[] }>({
+  // The /site-explorer/metrics response returns `metrics` as a plain object,
+  // not an array. Correct field names: org_traffic, org_keywords (not
+  // organic_traffic / organic_keywords which the API does not recognise).
+  const json = await ahrefsGet<{
+    metrics?: {
+      domain_rating?: number | null;
+      org_traffic?: number | null;
+      org_keywords?: number | null;
+      refdomains?: number | null;
+    };
+  }>({
     endpoint: '/site-explorer/metrics',
     label: `metrics ${target} (${region})`,
     query: {
@@ -935,25 +982,25 @@ export async function ahrefsDomainOverview(
       mode: 'subdomains',
       date: todayISO(),
       volume_mode: 'monthly',
-      select: 'domain_rating,organic_traffic,organic_keywords,refdomains',
+      select: 'domain_rating,org_traffic,org_keywords,refdomains',
     },
   });
-  const row = json?.metrics?.[0];
+  const row = json?.metrics;
   if (!row) return null;
   return {
     domain_rating: row.domain_rating ?? null,
-    organic_traffic: row.organic_traffic ?? null,
-    organic_keywords: row.organic_keywords ?? null,
+    organic_traffic: row.org_traffic ?? null,
+    organic_keywords: row.org_keywords ?? null,
     refdomains: row.refdomains ?? null,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Coverage helper — used by blog generation. Returns the union of matching,
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Coverage helper â€” used by blog generation. Returns the union of matching,
 // related and search-suggestion results for a single focus keyword, deduped
 // and sorted by volume. The blog prompt uses this list to know which adjacent
 // queries the article should cover.
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsKeywordCoverage {
   /** All candidate keywords found via matching/related/suggestions, sorted desc by volume. */
@@ -990,9 +1037,9 @@ export async function buildKeywordCoverage(
   return { ideas, serp };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // URL-level technical + ranking signals (used by Content Audit)
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsCrawledPage {
   url: string;
@@ -1140,9 +1187,9 @@ export async function ahrefsAnchors(
     .filter(a => a.anchor);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rank Tracker (free) — competitors overview/pages/stats
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Rank Tracker (free) â€” competitors overview/pages/stats
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AhrefsRankTrackerCompetitorKeyword {
   keyword: string;
@@ -1269,3 +1316,4 @@ export function ahrefsCentsToDollars(cents: number | null | undefined): number |
   if (!Number.isFinite(n)) return null;
   return Math.round(n) / 100;
 }
+

@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { generateBlogPost, geminiGenerate, type AhrefsBlogContext } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
-import { buildKeywordCoverage } from '@/lib/ahrefs';
+import { buildKeywordCoverage, ahrefsMatchingTermsAll, ahrefsMatchingTermsQuestions } from '@/lib/ahrefs';
 import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
@@ -47,16 +47,18 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       console.warn('Research step failed, proceeding without context:', e);
     }
 
-    // Ahrefs Keywords-Explorer coverage — matching-terms + related-terms +
-    // search-suggestions for the focus keyword, plus the live top-10 SERP.
-    // This is now the primary source of "what to cover" — research stays as
-    // a Serper-powered freshness layer (PAA, news, videos).
+    // Ahrefs Keywords-Explorer coverage — three concurrent calls:
+    //   (a) combined ideas (matching + related + suggestions) for topical coverage
+    //   (b) "Matching terms → All"  tab → H2 section seeds (secondary keywords)
+    //   (c) "Matching terms → Questions" tab → FAQ seeds
+    //   (d) live top-10 SERP via buildKeywordCoverage
     let ahrefsContext: AhrefsBlogContext | null = null;
     try {
-      const coverage = await buildKeywordCoverage(
-        entry.focus_keyword,
-        project.target_region
-      );
+      const [coverage, matchingTerms, questions] = await Promise.all([
+        buildKeywordCoverage(entry.focus_keyword, project.target_region),
+        ahrefsMatchingTermsAll(entry.focus_keyword, project.target_region, 50),
+        ahrefsMatchingTermsQuestions(entry.focus_keyword, project.target_region, 30),
+      ]);
       ahrefsContext = {
         ideas: coverage.ideas.map(i => ({
           keyword: i.keyword,
@@ -72,9 +74,19 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
           domain_rating: p.domain_rating,
           traffic: p.traffic,
         })),
+        matchingTerms: matchingTerms.map(k => ({
+          keyword: k.keyword,
+          volume: k.volume,
+          difficulty: k.difficulty,
+        })),
+        questions: questions.map(k => ({
+          keyword: k.keyword,
+          volume: k.volume,
+          difficulty: k.difficulty,
+        })),
       };
       console.log(
-        `[blog] Ahrefs coverage for "${entry.focus_keyword}": ideas=${ahrefsContext.ideas.length} serp=${ahrefsContext.serp.length}`
+        `[blog] Ahrefs for "${entry.focus_keyword}": ideas=${ahrefsContext.ideas.length} terms=${ahrefsContext.matchingTerms?.length ?? 0} questions=${ahrefsContext.questions?.length ?? 0} serp=${ahrefsContext.serp.length}`
       );
     } catch (e) {
       console.warn('Ahrefs coverage step failed, proceeding without it:', e);

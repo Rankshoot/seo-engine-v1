@@ -5,6 +5,7 @@ import type { BusinessBrief } from './business-brief';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+const POLLINATIONS_CHAT_URL = 'https://gen.pollinations.ai/v1/chat/completions';
 
 function normalizeHost(domain: string): string {
   return domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
@@ -15,6 +16,43 @@ function safeHost(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Render the Ahrefs Keywords-Explorer + SERP context into a prompt-ready
+ * block. Kept here (not in research.ts) so the gemini prompt is the single
+ * place that decides how Ahrefs data influences the article.
+ */
+function formatAhrefsContextForPrompt(ctx: {
+  ideas: Array<{ keyword: string; volume: number; difficulty: number | null; cpc: number | null }>;
+  serp: Array<{ position: number; url: string; title: string; domain: string; domain_rating: number | null; traffic: number | null }>;
+}): string {
+  const lines: string[] = [];
+  lines.push('=== AHREFS CONTEXT (real Keywords-Explorer + SERP data — use to expand topical coverage) ===\n');
+
+  if (ctx.ideas.length) {
+    lines.push('ADJACENT QUERIES TO ANSWER (from matching-terms + related-terms + search-suggestions):');
+    lines.push('Each is a real search with monthly Google volume. Answer at least 6 of these naturally inside the article body or FAQ — do NOT just append them as a bulleted list.');
+    ctx.ideas.slice(0, 24).forEach(k => {
+      const kdLabel = k.difficulty != null ? ` · KD ${k.difficulty}` : '';
+      lines.push(`• "${k.keyword}" — ${k.volume.toLocaleString()} searches/mo${kdLabel}`);
+    });
+    lines.push('');
+  }
+
+  if (ctx.serp.length) {
+    lines.push('LIVE TOP-10 SERP (Ahrefs):');
+    lines.push('These are the pages currently winning for the target keyword. Beat them by going deeper on whatever they cover, AND covering at least one angle they miss.');
+    ctx.serp.slice(0, 10).forEach(p => {
+      const dr = p.domain_rating != null ? ` · DR ${Math.round(p.domain_rating)}` : '';
+      const traffic = p.traffic ? ` · ~${p.traffic.toLocaleString()} mo traffic` : '';
+      lines.push(`#${p.position} — "${p.title}" — ${p.domain}${dr}${traffic}`);
+    });
+    lines.push('');
+  }
+
+  lines.push('=== END AHREFS CONTEXT ===');
+  return lines.join('\n');
 }
 
 export async function geminiGenerate(prompt: string, retries = 3): Promise<string> {
@@ -33,10 +71,9 @@ export async function geminiGenerate(prompt: string, retries = 3): Promise<strin
       });
 
       if (res.status === 429) {
-        const wait = (attempt + 1) * 20;
-        console.warn(`Gemini 429 — waiting ${wait}s (attempt ${attempt + 1}/${retries})`);
-        await new Promise(r => setTimeout(r, wait * 1000));
-        continue;
+        const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached');
+        if (fallback) return fallback;
+        throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
       }
 
       if (!res.ok) {
@@ -56,6 +93,40 @@ export async function geminiGenerate(prompt: string, retries = 3): Promise<strin
   throw new Error('Gemini failed after all retries');
 }
 
+async function pollinationsGeminiFallback(prompt: string, reason: string): Promise<string | null> {
+  const apiKey = process.env.POLLINATIONS_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    console.warn(`${reason}; using Pollinations Gemini fallback.`);
+    const res = await fetch(POLLINATIONS_CHAT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: process.env.POLLINATIONS_TEXT_MODEL || 'gemini-fast',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.75,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => '');
+      console.warn(`Pollinations fallback failed (${res.status}): ${err.slice(0, 200)}`);
+      return null;
+    }
+
+    const json = await res.json();
+    const text = json?.choices?.[0]?.message?.content;
+    return typeof text === 'string' && text.trim() ? text : null;
+  } catch (error) {
+    console.warn('Pollinations fallback failed:', error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
 export interface GeneratedBlog {
   title: string;
   content: string;
@@ -67,18 +138,52 @@ export interface GeneratedBlog {
   internal_links: string[];
 }
 
+export interface AhrefsBlogContext {
+  /** All adjacent keywords from matching/related/search-suggestions, dedup'd & sorted by volume. */
+  ideas: Array<{
+    keyword: string;
+    volume: number;
+    difficulty: number | null;
+    cpc: number | null;
+  }>;
+  /** Top 10 SERP positions (Ahrefs) — gives the writer real competitor titles + DR. */
+  serp: Array<{
+    position: number;
+    url: string;
+    title: string;
+    domain: string;
+    domain_rating: number | null;
+    traffic: number | null;
+  }>;
+  /**
+   * Ahrefs "Matching terms → All" tab for the focus keyword.
+   * These are terms that contain the seed phrase — used as H2 section seeds.
+   */
+  matchingTerms?: Array<{
+    keyword: string;
+    volume: number;
+    difficulty: number | null;
+  }>;
+  /**
+   * Ahrefs "Matching terms → Questions" tab for the focus keyword.
+   * Question-style keywords (how/what/why/when…) — used to seed FAQ blocks.
+   */
+  questions?: Array<{
+    keyword: string;
+    volume: number;
+    difficulty: number | null;
+  }>;
+}
+
 export async function generateBlogPost(
   entry: CalendarEntry,
   project: Project,
   wordCount: number = 2500,
   research?: ResearchContext,
   existingBlogs?: Array<{ title: string; slug: string; target_keyword: string }>,
-  brief?: BusinessBrief | null
+  brief?: BusinessBrief | null,
+  ahrefsContext?: AhrefsBlogContext | null
 ): Promise<GeneratedBlog> {
-  const secondaryKw = entry.secondary_keywords?.length
-    ? entry.secondary_keywords.join(', ')
-    : 'none';
-
   // Internal linking pool:
   //   (a) Pages from the user's actual website (from the Business Brief's
   //       `internal_link_candidates` — their real marketing pages + blog posts
@@ -123,62 +228,198 @@ export async function generateBlogPost(
   // Research context block
   const researchBlock = research ? formatResearchForPrompt(research) : '';
 
-  const prompt = `You are a world-class SEO + GEO content writer. Write a comprehensive, deeply researched blog post that ranks in Google AND gets cited by AI answer engines (AI Overviews, Perplexity, ChatGPT).
+  // Ahrefs Keywords-Explorer context. Lets the writer see exactly which
+  // adjacent searches it must answer (matching+related+suggestions) AND what
+  // already ranks in the top 10 (live SERP). Captures real search volume so
+  // the article picks up the long tail naturally.
+  const ahrefsBlock = ahrefsContext && (ahrefsContext.ideas.length || ahrefsContext.serp.length)
+    ? formatAhrefsContextForPrompt(ahrefsContext)
+    : '';
 
-TARGET KEYWORD: "${entry.focus_keyword}"
-ARTICLE TITLE: "${entry.title}"
-ARTICLE TYPE: ${entry.article_type}
+  // Build the ordered H2 list.
+  // Priority: Ahrefs "Matching terms → All" tab > entry.secondary_keywords > fallback instruction.
+  // We take the top 10 by volume so the LLM gets the most-searched sub-topics first.
+  const termsMatchList = ahrefsContext?.matchingTerms?.length
+    ? ahrefsContext.matchingTerms
+        .slice(0, 10)
+        .map((k, i) => `${i + 1}. ${k.keyword}${k.volume ? ` (${k.volume.toLocaleString()} searches/mo)` : ''}`)
+        .join('\n')
+    : entry.secondary_keywords?.length
+      ? entry.secondary_keywords
+          .slice(0, 10)
+          .map((kw, i) => `${i + 1}. ${kw}`)
+          .join('\n')
+      : 'none — derive 7–8 topically relevant H2s from the primary keyword';
+
+  // Build FAQ seed list.
+  // Priority: Ahrefs "Matching terms → Questions" tab > Serper PAA > fallback instruction.
+  const ahrefsQuestions = ahrefsContext?.questions?.length
+    ? ahrefsContext.questions
+        .slice(0, 10)
+        .map(k => `• ${k.keyword}${k.volume ? ` (${k.volume.toLocaleString()} searches/mo)` : ''}`)
+        .join('\n')
+    : '';
+
+  const paaQuestions = research?.peopleAlsoAsk?.length
+    ? research.peopleAlsoAsk
+        .slice(0, 7)
+        .map(q => `• ${q.question}${q.answer ? `\n  Hint: ${q.answer}` : ''}`)
+        .join('\n')
+    : '';
+
+  // Combine: Ahrefs questions first (real volume), then PAA (freshness/context).
+  const faqSeeds = [ahrefsQuestions, paaQuestions].filter(Boolean).join('\n') ||
+    'none available — use the most common search questions around this topic';
+
+  const prompt = `You are an expert SEO content strategist and writer. Your job is to produce a blog post that ranks in Google, gets cited by AI Overviews, and converts readers for ${project.company}.
+
+Follow the 5-step blog-creation process below exactly. Think through each step before writing.
+
+════════════════════════════════════════
+INPUTS
+════════════════════════════════════════
+PRIMARY KEYWORD: "${entry.focus_keyword}"
+ARTICLE TITLE:   "${entry.title}"
+ARTICLE TYPE:    ${entry.article_type}
 TARGET AUDIENCE: ${project.target_audience}
-INDUSTRY/NICHE: ${project.niche}
-COMPANY: ${project.company} (${project.domain})
-SECONDARY KEYWORDS: ${secondaryKw}
-WORD COUNT: ~${wordCount} words
+INDUSTRY/NICHE:  ${project.niche}
+COMPANY:         ${project.company} (${project.domain})
+WORD COUNT:      ~${wordCount} words
 ${briefBlock}${internalLinksBlock}
+
+SECONDARY KEYWORDS / TERMS MATCH (from Ahrefs — these become your H2 topics):
+${termsMatchList}
+
+QUESTIONS FROM AHREFS + PEOPLE ALSO ASK (use 3–4 verbatim in the FAQ section):
+${faqSeeds}
 
 ${researchBlock}
 
-WRITING RULES (SEO + GEO 2026):
-1. Hook = real scenario, stat, or provocative question. NEVER "In today's world" / "In recent years".
-2. Put a direct, one-paragraph answer to the query in the first 80 words (this is what AI Overviews extract).
-3. Target keyword must appear in the first 100 words naturally.
-4. Write like a subject-matter expert from ${project.company} — specific, actionable, no fluff. Reference the company's products/entities from COMPANY CONTEXT when it genuinely helps the reader, never as a pitch.
-5. Use research context above to add real data points, cite sources with inline links [anchor](url).
-6. Cover what competitors miss — go deeper on at least 2 sections.
-7. Include People-Also-Ask-style questions as an FAQ section (5–7 Qs).
-8. 3–5 external links to authoritative sources from the research block.
-9. 2–4 INTERNAL links from the pools above, placed where they genuinely help. Do NOT invent internal URLs.
-10. H2 for main sections, H3 for subsections. Short paragraphs (max 3–4 sentences).
+${ahrefsBlock}
 
-ARTICLE STRUCTURE (adapt for "${entry.article_type}"):
-# [Compelling H1 — use or improve "${entry.title}"]
+════════════════════════════════════════
+STEP 1 — DECIDE H2 STRUCTURE
+════════════════════════════════════════
+Using the SECONDARY KEYWORDS / TERMS MATCH list above (real Ahrefs data sorted by search volume), select the 7–10 most search-intent-relevant ones and convert each into a clear, SEO-friendly H2 heading.
+Rules for H2 headings:
+• Use plain, direct language — no "navigating", "nuances", "at a glance", "unlocking", "delving", "comprehensive", "in today's world", or any GPT-style filler.
+• Each H2 must answer a specific reader question or address a specific subtopic.
+• Write headings as short noun phrases or direct questions (e.g. "How to Hire AI Engineers", "AI Engineer Salary in 2024", "Top Skills Every AI Engineer Needs").
+• Keep them under 8 words where possible.
 
-[Hook — 2-3 sentences]
+════════════════════════════════════════
+STEP 2 — MAP QUESTIONS TO FAQ
+════════════════════════════════════════
+From the QUESTIONS FROM AHREFS + PEOPLE ALSO ASK list above, pick 3–4 of the highest-volume questions for the FAQ section. Add 3–6 more common questions around this topic so the FAQ has 7–10 questions total.
+Each FAQ answer must be:
+• Crisp and ≤50 words.
+• Answer-first (first sentence directly answers the question).
+• Written in active voice.
 
-[Answer-first paragraph — directly answers the target keyword in ≤80 words, keyword in first 100 words]
+════════════════════════════════════════
+STEP 3 — AUTHORITY-BUILDING SECTIONS FOR ${project.company}
+════════════════════════════════════════
+Based on the primary keyword and the company's niche (${project.niche}), identify 2–4 H2 sections that let ${project.company} demonstrate expertise subtly.
+Think: what challenges, solutions, strategies, or industry insights can you include that naturally lead the reader toward ${project.company}'s value — without a sales pitch?
+Examples of authority angles: hiring/operational challenges, step-by-step solutions, industry-specific use cases, data-backed trends the company solves for.
+Weave ${project.company} mentions naturally (1–2 times max in the full body), tied to a genuine insight or solution.
 
-## [Section 1 — core topic]
+════════════════════════════════════════
+STEP 4 — DESIGN THE FULL SEO STRUCTURE
+════════════════════════════════════════
+Combine the H2s from Step 1 + authority sections from Step 3 into a final outline. The structure must:
+• Fulfil informational search intent (the reader leaves knowing the topic deeply).
+• Flow logically: define → explain → apply → evaluate → act.
+• Not sound like an ad. Mention ${project.company} only where it adds real value.
+• Include a FAQPage section (from Step 2) before the Conclusion.
 
-## [Section 2 — deeper dive]
+════════════════════════════════════════
+STEP 5 — WRITE THE FULL BLOG
+════════════════════════════════════════
+Now write the complete blog post using the structure from Step 4.
 
-## [Section 3 — practical/actionable]
+WRITING RULES — follow every rule without exception:
 
-## [Section 4 if word count allows]
+INTRO (first ~150 words):
+• Open with 1 real, cited data point from a credible source (Gartner, Deloitte, McKinsey, LinkedIn, SHRM, Accenture, EY, Statista, World Economic Forum, or a peer-reviewed source). Format: stat + source inline link.
+• Follow immediately with an answer-first paragraph (≤80 words) that directly answers the primary keyword query. This is extracted by AI Overviews — make it self-contained.
+• Primary keyword must appear in the first 100 words naturally.
+• NEVER start with "In today's world", "In recent years", "As we navigate", or any vague scene-setter.
+
+EACH H2 SECTION:
+• Open with a snippet-friendly paragraph of exactly 40–50 words that directly answers what the H2 promises. This paragraph alone must make sense if pulled out of context.
+• Follow with deeper content: mix of short paragraphs (3–4 lines, 10–12 words per sentence) + bullet lists + tables where comparisons or data are present.
+• Use transition words — "because", "for example", "however", "as a result", "in contrast", "specifically" — to connect sentences and paragraphs naturally.
+
+SENTENCE & PARAGRAPH STYLE:
+• Sentences: 10–12 words average. Break any sentence over 20 words into two.
+• Paragraphs: 3–4 lines max. One idea per paragraph.
+• Active voice throughout. Passive voice is only acceptable for citing sources.
+• Simple, jargon-free language. If a technical term is unavoidable, define it in the same sentence.
+
+IMAGES (add 2–3 image placeholders using this exact format, placed at logical section breaks):
+![Image: descriptive alt text explaining what the image should show](IMAGE_PLACEHOLDER)
+
+LINKS:
+• External links: cite ONLY credible institutional reports and research (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Do NOT link to competitor blogs, Medium posts, or generic websites.
+• Internal links: 2–4 from the INTERNAL LINKING pools above. Place them where they genuinely help the reader — not just appended. Do NOT invent internal URLs.
+• Format all links as [anchor text](url).
+
+CONTENT QUALITY:
+• Cover at least one angle that the top-ranking competitor pages miss.
+• Back every claim with data. If no data is available from context, use hedged language ("research suggests", "industry estimates").
+• Do NOT keyword-stuff. Each secondary keyword should appear once naturally in its corresponding section.
+• Do NOT include schema JSON-LD, raw HTML, or code blocks in the article body.
+
+════════════════════════════════════════
+OUTPUT FORMAT
+════════════════════════════════════════
+
+# [Compelling H1 — improve "${entry.title}" if needed, include primary keyword]
+
+[Opening data point with inline citation link]
+
+[Answer-first paragraph — ≤80 words, primary keyword in first 100 words total]
+
+## [H2 from Step 1/3]
+[40–50 word snippet paragraph]
+[Deeper paragraphs, bullets, or table]
+
+## [H2 from Step 1/3]
+[40–50 word snippet paragraph]
+[Deeper paragraphs, bullets, or table]
+
+![Image: alt text](IMAGE_PLACEHOLDER)
+
+## [H2 — authority-building section for ${project.company}]
+[40–50 word snippet paragraph]
+[Content that demonstrates ${project.company}'s expertise, no hard sell]
+
+## [Continue sections…]
+
+![Image: alt text](IMAGE_PLACEHOLDER)
 
 ## Frequently Asked Questions
-### [Q from People Also Ask or common search question]
-[Answer — 2–4 sentences, answer-first]
-### [Q2]
-[Answer]
-...5-7 FAQs total
+
+### [Question 1 — from PAA]
+[Answer ≤50 words, answer-first]
+
+### [Question 2 — from PAA]
+[Answer ≤50 words]
+
+### [Question 3 — from PAA or common search]
+[Answer ≤50 words]
+
+[…7–10 FAQs total]
 
 ## Conclusion
-[Strong, actionable closing]
+[Strong, actionable closing — 3–5 sentences. End with a subtle pointer to ${project.company} if relevant.]
 
-FORMAT: Valid Markdown only. Use [text](url) for all links. Never output HTML.
+FORMAT: Valid Markdown only. Use [text](url) for all links. Never output raw HTML.
 
-After article, output EXACTLY:
+After the article, output EXACTLY this block (no extra text):
 ---META---
-{"meta_description":"150–160 chars with target keyword","slug":"url-slug-from-title","external_links":["url1","url2"],"internal_links":["url-or-slug-1","url-or-slug-2"]}`;
+{"meta_description":"150–160 chars including primary keyword","slug":"url-slug-from-title","external_links":["url1","url2"],"internal_links":["url-or-slug-1","url-or-slug-2"]}`;
 
   const text = await geminiGenerate(prompt);
 
@@ -424,6 +665,7 @@ IMPORTANT RULES:
 - Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
 - Do not change the meta description unless META_NEEDS_REPAIR is true. If false and you cannot see the original meta description, return a neutral summary that matches the original page, not a new angle.
 - Output must be valid Markdown. No HTML.
+- Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
 - Start with an H1 (# Title).
 - Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.

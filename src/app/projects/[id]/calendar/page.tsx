@@ -142,7 +142,7 @@ export default function CalendarPage() {
           <button
             onClick={handleGenerate}
             disabled={generating}
-            className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 text-white text-xs font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-6 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {generating ? (
               <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Generating...</>
@@ -205,7 +205,7 @@ export default function CalendarPage() {
               <p className="text-xl font-black text-accent-400">{generatedCount} <span className="text-sm font-normal text-text-tertiary">/ {entries.length}</span></p>
             </div>
             <div className="flex-1 h-2 bg-surface-elevated rounded-full overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-accent-500 to-accent-400 rounded-full transition-all" style={{ width: `${(generatedCount / entries.length) * 100}%` }} />
+              <div className="h-full bg-accent-500 rounded-full transition-all" style={{ width: `${(generatedCount / entries.length) * 100}%` }} />
             </div>
             <Link href={`/projects/${projectId}/blogs`} className="shrink-0 text-xs font-bold text-brand-400 hover:underline">
               Go to Blogs →

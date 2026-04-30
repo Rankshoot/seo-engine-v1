@@ -2,8 +2,9 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { generateBlogPost, geminiGenerate } from '@/lib/gemini';
+import { generateBlogPost, geminiGenerate, type AhrefsBlogContext } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
+import { buildKeywordCoverage, ahrefsMatchingTermsAll, ahrefsMatchingTermsQuestions } from '@/lib/ahrefs';
 import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
@@ -46,6 +47,51 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       console.warn('Research step failed, proceeding without context:', e);
     }
 
+    // Ahrefs Keywords-Explorer coverage — three concurrent calls:
+    //   (a) combined ideas (matching + related + suggestions) for topical coverage
+    //   (b) "Matching terms → All"  tab → H2 section seeds (secondary keywords)
+    //   (c) "Matching terms → Questions" tab → FAQ seeds
+    //   (d) live top-10 SERP via buildKeywordCoverage
+    let ahrefsContext: AhrefsBlogContext | null = null;
+    try {
+      const [coverage, matchingTerms, questions] = await Promise.all([
+        buildKeywordCoverage(entry.focus_keyword, project.target_region),
+        ahrefsMatchingTermsAll(entry.focus_keyword, project.target_region, 50),
+        ahrefsMatchingTermsQuestions(entry.focus_keyword, project.target_region, 30),
+      ]);
+      ahrefsContext = {
+        ideas: coverage.ideas.map(i => ({
+          keyword: i.keyword,
+          volume: i.volume,
+          difficulty: i.difficulty,
+          cpc: i.cpc,
+        })),
+        serp: coverage.serp.map(p => ({
+          position: p.position,
+          url: p.url,
+          title: p.title,
+          domain: p.domain,
+          domain_rating: p.domain_rating,
+          traffic: p.traffic,
+        })),
+        matchingTerms: matchingTerms.map(k => ({
+          keyword: k.keyword,
+          volume: k.volume,
+          difficulty: k.difficulty,
+        })),
+        questions: questions.map(k => ({
+          keyword: k.keyword,
+          volume: k.volume,
+          difficulty: k.difficulty,
+        })),
+      };
+      console.log(
+        `[blog] Ahrefs for "${entry.focus_keyword}": ideas=${ahrefsContext.ideas.length} terms=${ahrefsContext.matchingTerms?.length ?? 0} questions=${ahrefsContext.questions?.length ?? 0} serp=${ahrefsContext.serp.length}`
+      );
+    } catch (e) {
+      console.warn('Ahrefs coverage step failed, proceeding without it:', e);
+    }
+
     let existingBlogs: { title: string; slug: string; target_keyword: string }[] = [];
     try {
       const { data: blogs } = await supabaseAdmin
@@ -80,7 +126,8 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       wordCount,
       research ?? undefined,
       existingBlogs,
-      brief
+      brief,
+      ahrefsContext ?? undefined,
     );
     const images = await generateBlogImages({
       title: blogData.title,
@@ -239,7 +286,7 @@ function replaceFirstH1(markdown: string, title: string): string {
 }
 
 function sanitizeBlogMarkdown(markdown: string): string {
-  return markdown
+  return stripSchemaJsonBlocks(markdown)
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
@@ -247,6 +294,17 @@ function sanitizeBlogMarkdown(markdown: string): string {
     .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function stripSchemaJsonBlocks(markdown: string): string {
+  return markdown
+    .replace(/```(?:json|jsonld|ld\+json)?\s*([\s\S]*?)```/gi, (block, inner) => {
+      return /"@context"\s*:\s*"https?:\/\/schema\.org"|schema\.org/i.test(inner) ? '' : block;
+    })
+    .replace(
+      /(?:^|\n)\s*\{\s*\n[\s\S]*?"@context"\s*:\s*"https?:\/\/schema\.org[\s\S]*?\n\s*\}\s*(?=\n#{1,6}\s|\n*$)/gi,
+      '\n'
+    );
 }
 
 function extractMarkdownLinks(markdown: string, ownDomain = '') {

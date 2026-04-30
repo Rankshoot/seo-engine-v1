@@ -7,6 +7,19 @@ import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { crawlWebsite, type WebsiteCrawlResult } from '@/lib/websiteCrawler';
+import {
+  runKeywordDiscovery,
+  type DiscoveryResult,
+  type KeywordCandidate,
+} from '@/lib/keyword-discovery';
+import { enrichKeywordInBackground } from '@/lib/keyword-modal';
+
+type KeywordCalendarSeed = {
+  id: string;
+  project_id: string;
+  keyword: string;
+  secondary_keywords: string[] | null;
+};
 
 function aiScore(volume: number, kd: number, intent: string = ''): number {
   // Require both volume and KD to be known, otherwise the score misleads.
@@ -21,6 +34,229 @@ function aiScore(volume: number, kd: number, intent: string = ''): number {
     intent === 'informational' ? 6 :
     intent === 'navigational' ? 2 : 0;
   return Math.round(volScore + kdScore + intentBonus);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// runKeywordDiscoveryPipeline
+//
+// Site-Explorer-driven discovery (own organic + competitor gap + quick wins),
+// scored deterministically and persisted to `keywords`. Caps output at 50.
+//
+// This is **independent** from the legacy seed-driven `discoverKeywords` flow
+// above — both can coexist. The wiring decision (which one the keywords page
+// calls) is a follow-up; this action is intentionally additive so we don't
+// destabilise the production keywords page in a single PR.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface RunDiscoveryResponse {
+  success: boolean;
+  error?: string;
+  /** How many rows we just inserted into `keywords`. */
+  inserted: number;
+  /** Keywords that were already in the project and got skipped. */
+  duplicates_skipped: number;
+  /** Total candidates the pipeline returned (before duplicate filtering). */
+  candidates_returned: number;
+  /** Per-step trace — `console.log` it from the client for debugging. */
+  trace?: DiscoveryResult['trace'];
+  /** Funnel summary metadata. */
+  meta?: DiscoveryResult['meta'];
+}
+
+export async function runKeywordDiscoveryPipeline(
+  projectId: string,
+  opts: { topN?: number } = {}
+): Promise<RunDiscoveryResponse> {
+  const user = await currentUser();
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+    };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain, company, niche, target_audience, target_region, target_language')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) {
+    return {
+      success: false,
+      error: 'Project not found',
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+    };
+  }
+
+  console.log('[discovery] pipeline start', {
+    projectId,
+    domain: project.domain,
+    region: project.target_region,
+    niche: project.niche,
+  });
+
+  let result: DiscoveryResult;
+  try {
+    result = await runKeywordDiscovery({
+      domain: project.domain ?? '',
+      region: project.target_region ?? 'us',
+      niche: project.niche ?? '',
+      audience: project.target_audience ?? '',
+      brand: project.company ?? '',
+      topN: opts.topN ?? 50,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[discovery] pipeline crashed:', message);
+    return {
+      success: false,
+      error: `Pipeline crashed: ${message}`,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+    };
+  }
+
+  if (result.fatal_error) {
+    return {
+      success: false,
+      error: result.fatal_error,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  if (!result.candidates.length) {
+    console.warn('[discovery] pipeline returned 0 candidates');
+    return {
+      success: true,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  // 12. Avoid duplicates already on this project. We pre-filter in JS so the
+  //     trace stays accurate, AND rely on the unique (project_id, keyword)
+  //     constraint as a belt-and-braces safety net.
+  const { data: existingRows, error: existingErr } = await supabaseAdmin
+    .from('keywords')
+    .select('keyword')
+    .eq('project_id', projectId);
+  if (existingErr) {
+    console.error('[discovery] failed to load existing keywords:', existingErr.message);
+    return {
+      success: false,
+      error: existingErr.message,
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: result.candidates.length,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  const existingSet = new Set(
+    (existingRows ?? []).map(r => (r.keyword ?? '').trim().toLowerCase())
+  );
+
+  const fresh = result.candidates.filter(c => !existingSet.has(c.keyword));
+  const duplicatesSkipped = result.candidates.length - fresh.length;
+  console.log('[discovery] dedupe', {
+    candidates_returned: result.candidates.length,
+    duplicates_skipped: duplicatesSkipped,
+    fresh: fresh.length,
+  });
+
+  if (!fresh.length) {
+    return {
+      success: true,
+      inserted: 0,
+      duplicates_skipped: duplicatesSkipped,
+      candidates_returned: result.candidates.length,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  const rows = fresh.map(c => candidateToRow(projectId, c));
+
+  const { data: inserted, error: insErr } = await supabaseAdmin
+    .from('keywords')
+    .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+    .select('id');
+
+  if (insErr) {
+    console.error('[discovery] insert failed:', insErr.message);
+    return {
+      success: false,
+      error: insErr.message,
+      inserted: 0,
+      duplicates_skipped: duplicatesSkipped,
+      candidates_returned: result.candidates.length,
+      trace: result.trace,
+      meta: result.meta,
+    };
+  }
+
+  const insertedCount = inserted?.length ?? 0;
+  console.log('[discovery] pipeline done', {
+    inserted: insertedCount,
+    duplicates_skipped: duplicatesSkipped,
+    final_count: result.meta.final_count,
+  });
+
+  return {
+    success: true,
+    inserted: insertedCount,
+    duplicates_skipped: duplicatesSkipped,
+    candidates_returned: result.candidates.length,
+    trace: result.trace,
+    meta: result.meta,
+  };
+}
+
+function candidateToRow(projectId: string, c: KeywordCandidate) {
+  // CPC arrives in cents from Ahrefs. The product convention is to keep raw
+  // Ahrefs values where possible, but the existing `keywords.cpc NUMERIC(10,2)`
+  // column has historically stored DOLLARS (legacy DataForSEO path). Convert
+  // here to keep the column's meaning consistent across both pipelines.
+  const cpcDollars = c.cpc != null ? Math.round(c.cpc) / 100 : 0;
+  return {
+    project_id: projectId,
+    keyword: c.keyword,
+    volume: Math.max(0, Math.round(c.volume || 0)),
+    kd: c.difficulty != null ? Math.round(c.difficulty) : 0,
+    cpc: cpcDollars,
+    intent: c.intent || null,
+    intents: c.intents ?? {},
+    parent_topic: c.parent_topic ?? '',
+    traffic_potential: c.traffic_potential != null ? Math.round(c.traffic_potential) : 0,
+    source_type: c.source_type,
+    source_competitors: c.source_competitors,
+    source_urls: c.source_urls,
+    // Backfill the legacy single-string columns so the existing keywords UI
+    // (which reads `gap_competitor` + `source_url`) stays meaningful.
+    gap_competitor: c.source_type === 'competitor_gap' ? (c.source_competitors[0] ?? '') : '',
+    source_url: c.source_type === 'competitor_gap' ? (c.source_urls[0] ?? '') : '',
+    ai_score: c.ai_score,
+    keyword_analysis_score: c.analysis_score,
+    relevance_score: c.relevance_score,
+    business_fit_score: 0,
+    status: 'pending' as const,
+  };
 }
 
 export async function discoverKeywords(projectId: string) {
@@ -123,19 +359,17 @@ export async function discoverKeywords(projectId: string) {
   );
 
   if (!rawKeywords.length) {
-    const firstIdeas = discoveryTrace.find(t => t.label.includes('keyword_ideas'));
-    const parsed = firstIdeas?.parsed as
-      | { status_code?: number; status_message?: string; tasks?: Array<{ status_code?: number; status_message?: string }> }
-      | null
-      | undefined;
-    const apiStatus =
-      parsed?.tasks?.[0]?.status_message ||
-      parsed?.status_message ||
-      (firstIdeas && `HTTP ${firstIdeas.httpStatus}`) ||
-      'no response';
+    const ahrefsErr = discoveryTrace.find(
+      t => t.label.includes('ahrefs') && t.label.includes('error')
+    );
+    const cfgErr = discoveryTrace.find(t => t.label === '(config)');
+    const detail =
+      cfgErr?.fetchError ||
+      ahrefsErr?.fetchError ||
+      'Ahrefs returned 0 rows for these seeds.';
     return {
       success: false,
-      error: `No keywords returned by DataForSEO (${apiStatus}). Open DevTools console for the full trace.`,
+      error: `No keywords returned by Ahrefs (${detail}). Open DevTools console for the full trace.`,
       discoveryTrace,
       briefSummary: briefSummary(brief),
     };
@@ -269,26 +503,106 @@ function briefSummary(brief: BusinessBrief | undefined) {
   };
 }
 
-export async function getKeywords(projectId: string) {
+export async function getKeywords(
+  projectId: string,
+  opts: { limit?: number; offset?: number; includeApproved?: boolean } = {}
+) {
   const user = await currentUser();
-  if (!user) return { success: false, error: 'Not authenticated', data: [] as Keyword[] };
+  if (!user)
+    return {
+      success: false,
+      error: 'Not authenticated',
+      data: [] as Keyword[],
+      total: 0,
+    };
+
+  // Approved/rejected rows are always returned so the existing UI selection
+  // state survives. The `limit/offset` only paginates pending rows.
+  const includeApproved = opts.includeApproved !== false;
+  const limit = Math.max(1, Math.min(opts.limit ?? 20, 200));
+  const offset = Math.max(0, opts.offset ?? 0);
+
+  // Total pending count — drives the "Load more" affordance in the UI.
+  const { count } = await supabaseAdmin
+    .from('keywords')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId);
+
+  const pendingPromise = supabaseAdmin
+    .from('keywords')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('status', 'pending')
+    .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
+    .order('volume', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  const lockedPromise = includeApproved
+    ? supabaseAdmin
+        .from('keywords')
+        .select('*')
+        .eq('project_id', projectId)
+        .neq('status', 'pending')
+        .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
+        .order('volume', { ascending: false })
+    : Promise.resolve({ data: [], error: null } as { data: unknown[]; error: { message: string } | null });
+
+  const [pendingRes, lockedRes] = await Promise.all([pendingPromise, lockedPromise]);
+  if (pendingRes.error)
+    return { success: false, error: pendingRes.error.message, data: [] as Keyword[], total: 0 };
+  if (lockedRes.error)
+    return { success: false, error: lockedRes.error.message, data: [] as Keyword[], total: 0 };
+
+  const data = [...(lockedRes.data as Keyword[] ?? []), ...(pendingRes.data as Keyword[] ?? [])];
+  return { success: true, data, total: count ?? data.length };
+}
+
+/**
+ * Pagination helper for the "Load more" button on the keywords screen. Returns
+ * the next N pending keywords past `offset`, sorted by analysis score.
+ */
+export async function loadMoreKeywords(
+  projectId: string,
+  offset: number,
+  limit: number = 20
+) {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: [] as Keyword[], total: 0 };
+
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const safeOffset = Math.max(0, offset);
+
+  const { count } = await supabaseAdmin
+    .from('keywords')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId)
+    .eq('status', 'pending');
 
   const { data, error } = await supabaseAdmin
     .from('keywords')
     .select('*')
     .eq('project_id', projectId)
-    // Sort by the new composite analysis score; rows that were written before
-    // the new column existed will have 0 and simply fall to the bottom.
+    .eq('status', 'pending')
     .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
-    .order('volume', { ascending: false });
+    .order('volume', { ascending: false })
+    .range(safeOffset, safeOffset + safeLimit - 1);
 
-  if (error) return { success: false, error: error.message, data: [] as Keyword[] };
-  return { success: true, data: data as Keyword[] };
+  if (error) return { success: false, error: error.message, data: [] as Keyword[], total: 0 };
+  return { success: true, data: (data ?? []) as Keyword[], total: count ?? 0 };
 }
 
 export async function updateKeywordStatus(keywordId: string, status: KeywordStatus) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
+
+  const { data: keyword, error: kwErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, project_id, keyword, secondary_keywords, projects!inner(user_id)')
+    .eq('id', keywordId)
+    .eq('projects.user_id', user.id)
+    .single();
+
+  if (kwErr || !keyword) return { success: false, error: 'Keyword not found or unauthorized' };
 
   const { error } = await supabaseAdmin
     .from('keywords')
@@ -296,6 +610,15 @@ export async function updateKeywordStatus(keywordId: string, status: KeywordStat
     .eq('id', keywordId);
 
   if (error) return { success: false, error: error.message };
+  if (status === 'approved') {
+    const placed = await ensureCalendarEntryForKeyword(keyword as KeywordCalendarSeed);
+    if (!placed.success) return placed;
+    // Fire-and-forget: warm the modal cache so the blog pipeline + the
+    // keyword drilldown both have ideas/overview ready when the user clicks.
+    // Errors are swallowed inside `enrichKeywordInBackground`; the user
+    // never waits for Ahrefs here.
+    void enrichKeywordInBackground(keywordId);
+  }
   return { success: true };
 }
 
@@ -303,12 +626,33 @@ export async function bulkUpdateKeywordStatus(keywordIds: string[], status: Keyw
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
+  const { data: keywords, error: kwErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, project_id, keyword, secondary_keywords, projects!inner(user_id)')
+    .in('id', keywordIds)
+    .eq('projects.user_id', user.id);
+
+  if (kwErr) return { success: false, error: kwErr.message };
+  if ((keywords ?? []).length !== keywordIds.length) {
+    return { success: false, error: 'Some keywords were not found or unauthorized' };
+  }
+
   const { error } = await supabaseAdmin
     .from('keywords')
     .update({ status })
     .in('id', keywordIds);
 
   if (error) return { success: false, error: error.message };
+  if (status === 'approved') {
+    const placed = await ensureCalendarEntriesForKeywords((keywords ?? []) as KeywordCalendarSeed[]);
+    if (!placed.success) return placed;
+    // Fire-and-forget warming for every newly approved keyword. Each call is
+    // self-contained and swallows its own errors, so a single failure can't
+    // poison the whole bulk approval.
+    for (const id of keywordIds) {
+      void enrichKeywordInBackground(id);
+    }
+  }
   return { success: true };
 }
 
@@ -358,7 +702,103 @@ export async function approveKeywordCluster(projectId: string, phrases: string[]
     .in('keyword', [...matched]);
 
   if (error) return { success: false, error: error.message, updated: 0 };
+  const { data: approvedRows, error: approvedFetchErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, project_id, keyword, secondary_keywords')
+    .eq('project_id', projectId)
+    .in('keyword', [...matched]);
+
+  if (approvedFetchErr) return { success: false, error: approvedFetchErr.message, updated: 0 };
+  const placed = await ensureCalendarEntriesForKeywords((approvedRows ?? []) as KeywordCalendarSeed[]);
+  if (!placed.success) return { success: false, error: placed.error, updated: 0 };
   return { success: true, updated: matched.size };
+}
+
+async function ensureCalendarEntriesForKeywords(keywords: KeywordCalendarSeed[]) {
+  for (const keyword of keywords) {
+    const res = await ensureCalendarEntryForKeyword(keyword);
+    if (!res.success) return res;
+  }
+  return { success: true };
+}
+
+async function ensureCalendarEntryForKeyword(keyword: KeywordCalendarSeed) {
+  const { data: existing, error: existingErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id')
+    .eq('project_id', keyword.project_id)
+    .eq('keyword_id', keyword.id)
+    .maybeSingle();
+
+  if (existingErr) return { success: false, error: existingErr.message };
+  if (existing) return { success: true };
+
+  const scheduledDate = await nextCalendarSlot(keyword.project_id);
+  const title = titleFromKeyword(keyword.keyword);
+  const { error } = await supabaseAdmin.from('calendar_entries').insert({
+    project_id: keyword.project_id,
+    keyword_id: keyword.id,
+    scheduled_date: scheduledDate,
+    title,
+    article_type: 'Blog Post',
+    slug: slugify(title),
+    focus_keyword: keyword.keyword,
+    secondary_keywords: keyword.secondary_keywords ?? [],
+    status: 'scheduled',
+  });
+
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+async function nextCalendarSlot(projectId: string): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('scheduled_date')
+    .eq('project_id', projectId)
+    .order('scheduled_date', { ascending: true });
+
+  const used = new Set((data ?? []).map(row => row.scheduled_date));
+  const today = toDateOnly(new Date());
+  const start = data?.[0]?.scheduled_date && data[0].scheduled_date < today ? data[0].scheduled_date : today;
+
+  let cursor = parseLocalDate(start);
+  for (let i = 0; i < Math.max((data?.length ?? 0) + 2, 32); i++) {
+    const candidate = toDateOnly(cursor);
+    if (!used.has(candidate)) return candidate;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return toDateOnly(cursor);
+}
+
+function titleFromKeyword(keyword: string): string {
+  const cleaned = keyword.trim().replace(/\s+/g, ' ');
+  const title = cleaned
+    .split(' ')
+    .map(word => (word.length <= 3 ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join(' ');
+  return `${title}: Complete Guide`;
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+function toDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseLocalDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
 }
 
 export async function deleteAllKeywords(projectId: string) {

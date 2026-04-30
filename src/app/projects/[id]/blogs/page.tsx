@@ -242,7 +242,7 @@ export default function BlogsPage() {
                           <button
                             onClick={() => handleGenerate(entry.id)}
                             disabled={isGenerating || generating !== null}
-                            className="px-5 py-1.5 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 text-white text-[10px] font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                            className="px-5 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-[10px] font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                           >
                             {isGenerating ? (
                               <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Writing blog...</>

@@ -1,9 +1,16 @@
 import * as cheerio from 'cheerio';
-import { JSDOM } from 'jsdom';
+import { JSDOM, VirtualConsole } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { chromium, type Browser, type Page } from 'playwright';
 import { analyzeWebsiteWithAI, type AIAnalysisResult } from './aiWebsiteAnalyzer';
+
+const quietJsdomConsole = new VirtualConsole();
+quietJsdomConsole.on('jsdomError', error => {
+  const jsdomError = error as Error & { type?: string };
+  if (jsdomError.type === 'css parsing' || /could not parse css stylesheet/i.test(jsdomError.message)) return;
+  console.warn('[hybridScraper] jsdom warning:', error.message);
+});
 
 export interface ScrapedBlogPost {
   url: string;
@@ -68,7 +75,9 @@ async function fetchHtmlWithRetries(url: string, retries = 2, timeoutMs = 10000)
 /**
  * Fetch HTML using Playwright (fallback mechanism).
  */
+let playwrightAvailable = true;
 async function fetchHtmlWithPlaywright(url: string): Promise<string | null> {
+  if (!playwrightAvailable) return null;
   let browser: Browser | null = null;
   try {
     browser = await chromium.launch({ headless: true });
@@ -80,6 +89,15 @@ async function fetchHtmlWithPlaywright(url: string): Promise<string | null> {
     const content = await page.content();
     return content;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // If the browser executable is missing, disable further attempts for this process.
+    if (message.includes('Executable doesn')) {
+      playwrightAvailable = false;
+      console.warn(
+        '[hybridScraper] Playwright not installed (missing browser). Run `npx playwright install chromium` to enable fallback.'
+      );
+      return null;
+    }
     console.error(`[hybridScraper] Playwright fallback failed for ${url}:`, error);
     return null;
   } finally {
@@ -161,7 +179,7 @@ function parseWebsiteHtml(html: string, baseUrl: string) {
   });
 
   // Readability extraction
-  const dom = new JSDOM(html, { url: baseUrl });
+  const dom = new JSDOM(html, { url: baseUrl, virtualConsole: quietJsdomConsole });
   const reader = new Readability(dom.window.document);
   const article = reader.parse();
 
@@ -278,7 +296,7 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
       throw new Error(`Failed to fetch HTML for ${url}`);
     }
 
-    const dom = new JSDOM(html, { url });
+    const dom = new JSDOM(html, { url, virtualConsole: quietJsdomConsole });
     const reader = new Readability(dom.window.document);
     const article = reader.parse();
 

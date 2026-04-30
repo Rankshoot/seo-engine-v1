@@ -9,6 +9,7 @@ export interface Project {
   target_region: string;
   target_language: string;
   description: string;
+  ahrefs_rank_tracker_project_id?: number | null;
   created_at: string;
   updated_at: string;
   project_competitors?: ProjectCompetitor[];
@@ -22,6 +23,24 @@ export interface ProjectCompetitor {
 }
 
 export type KeywordStatus = 'pending' | 'approved' | 'rejected';
+
+/**
+ * Provenance for a keyword row.
+ * - `industry`        — Keywords-Explorer / seed-driven (legacy + future).
+ * - `competitor_gap`  — competitor ranks for it, we do not.
+ * - `quick_win`       — we already rank for it at positions 4–20.
+ */
+export type KeywordSourceType = 'industry' | 'competitor_gap' | 'quick_win';
+
+/** Multi-intent flags as Ahrefs returns them. Structurally matches `AhrefsIntentObject`. */
+export interface KeywordIntents {
+  informational?: boolean;
+  navigational?: boolean;
+  commercial?: boolean;
+  transactional?: boolean;
+  branded?: boolean;
+  local?: boolean;
+}
 export type CalendarStatus = 'scheduled' | 'generating' | 'generated' | 'downloaded';
 export type BlogStatus = 'generated' | 'approved' | 'published';
 export type BlogSeoIssueKey =
@@ -68,6 +87,142 @@ export interface Keyword {
   competition_level?: string | null;
   /** Dominant SERP intent: informational / commercial / navigational / transactional */
   intent?: string | null;
+  /** Discovery-pipeline provenance. */
+  source_type?: KeywordSourceType | string | null;
+  /** Competitor domains that rank for this keyword (sorted by traffic). */
+  source_competitors?: string[] | null;
+  /** Ranking page URLs aligned positionally with `source_competitors`. */
+  source_urls?: string[] | null;
+  /** Ahrefs Keywords Explorer parent topic / cluster head. */
+  parent_topic?: string | null;
+  /** Ahrefs estimated total traffic the #1 page would earn for this term. */
+  traffic_potential?: number | null;
+  /** Multi-intent flag bag from Ahrefs (commercial + branded + …). */
+  intents?: KeywordIntents | null;
+  /**
+   * Lower-cased + trimmed form of `keyword`. Stored generated column —
+   * Postgres maintains it; never assign from app code. Used for the
+   * (project_id, normalized_keyword) unique index that catches case-different
+   * duplicates ("SEO Tool" vs "seo tool").
+   */
+  normalized_keyword?: string;
+  /** Worldwide search volume (Ahrefs `global_volume`), all regions combined. */
+  global_volume?: number | null;
+  /** Search volume of the parent_topic keyword (the cluster head's own demand). */
+  parent_volume?: number | null;
+  /** SERP features Ahrefs detected for the term (featured snippet, PAA, video, …). */
+  serp_features?: KeywordSerpFeature[] | null;
+  /** Mutation timestamp; bumped explicitly by app code on UPDATE. */
+  updated_at?: string;
+}
+
+/**
+ * One SERP feature surfaced by Ahrefs for a keyword. Shape mirrors
+ * `serp_overview/serp-overview` feature rows; extra Ahrefs-specific keys are
+ * permitted via the index signature so downstream UI can render anything.
+ */
+export interface KeywordSerpFeature {
+  type: string;
+  position?: number | null;
+  url?: string | null;
+  title?: string | null;
+  [key: string]: unknown;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyword modal + blog-generation coverage
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One-row-per-keyword modal payload. Caches every Ahrefs response we'd ever
+ * want to render in the keyword drilldown UI so we don't pay for the same
+ * Ahrefs unit twice. `last_fetched_at` is the source-of-truth for staleness;
+ * the UI can soft-refresh when it's older than N hours.
+ */
+export interface KeywordDetail {
+  id: string;
+  keyword_id: string;
+  /** Full Ahrefs Keywords-Explorer / overview row (volume, KD, CPC, intents, parent_topic, …). */
+  overview: KeywordOverview | null;
+  /** Per-month historical volume (Ahrefs volume-history). */
+  volume_history: KeywordVolumeHistoryPoint[];
+  /** Per-country volume (Ahrefs volume-by-country). */
+  volume_by_country: KeywordVolumeByCountry[];
+  /** Top organic SERP results (positions 1..N). */
+  serp_top_results: KeywordSerpResult[];
+  /** Convenience pointer at the single highest-ranking result. */
+  top_ranking_result: KeywordSerpResult | null;
+  last_fetched_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Cached Ahrefs Keywords-Explorer overview row stored in `keyword_details.overview`.
+ * Structurally matches `AhrefsKeywordOverviewRow` from `lib/ahrefs.ts`.
+ */
+export interface KeywordOverview {
+  keyword: string;
+  volume: number;
+  difficulty: number | null;
+  cpc: number | null;
+  intents: KeywordIntents | null;
+  parent_topic: string | null;
+  traffic_potential: number | null;
+  global_volume?: number | null;
+}
+
+export interface KeywordVolumeHistoryPoint {
+  /** ISO date — Ahrefs returns month-anchored values like `2026-01-01`. */
+  date: string;
+  volume: number;
+}
+
+export interface KeywordVolumeByCountry {
+  /** Lowercase ISO-2 country code (`us`, `gb`, `in`). */
+  country: string;
+  volume: number;
+}
+
+export interface KeywordSerpResult {
+  position: number;
+  url: string;
+  title: string;
+  domain: string;
+  domain_rating: number | null;
+  url_rating: number | null;
+  traffic: number | null;
+  refdomains: number | null;
+}
+
+/**
+ * Source bucket on a `keyword_ideas` row. Mirrors Ahrefs' Keywords-Explorer
+ * tabs so we can persist each tab's output separately for blog generation.
+ */
+export type KeywordIdeaType =
+  | 'terms_match'
+  | 'questions'
+  | 'also_rank_for'
+  | 'also_talk_about'
+  | 'search_suggestion';
+
+/**
+ * Many-rows-per-keyword "ideas" pool. The blog pipeline reads these by
+ * `type` to drive H2 outline (terms_match), FAQ (questions), entity coverage
+ * (also_rank_for), and synonym/related concepts (also_talk_about).
+ */
+export interface KeywordIdea {
+  id: string;
+  keyword_id: string;
+  type: KeywordIdeaType;
+  keyword: string;
+  volume: number;
+  difficulty: number | null;
+  cpc: number | null;
+  traffic_potential: number | null;
+  intents: KeywordIntents | null;
+  parent_topic: string | null;
+  created_at: string;
 }
 
 export interface CalendarEntry {

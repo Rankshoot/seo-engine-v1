@@ -1,5 +1,16 @@
 import { TARGET_REGIONS } from './types';
 import type { WebsiteCrawlResult } from './websiteCrawler';
+import {
+  ahrefsKeywordOverview,
+  ahrefsMatchingTerms,
+  ahrefsOrganicCompetitors,
+  ahrefsOrganicKeywords,
+  ahrefsRelatedTerms,
+  ahrefsSearchSuggestions,
+  isAhrefsConfigured,
+  type AhrefsKeywordIdea,
+  type AhrefsKeywordOverviewRow,
+} from './ahrefs';
 
 export type Intent = 'informational' | 'commercial' | 'navigational' | 'transactional' | '';
 export type CompetitionLevel = 'LOW' | 'MEDIUM' | 'HIGH' | '';
@@ -280,6 +291,53 @@ function itemToKeyword(it: DfsIdeaItem, source: string): DiscoveredKeyword | nul
 // customer-care queries, etc. — which poisoned the relevance scorer. The
 // pipeline now relies on keyword_ideas + related_keywords only.
 
+/**
+ * Convert Ahrefs Keywords Explorer ideas → our internal `DiscoveredKeyword`
+ * shape. Volume + KD + CPC + intent come straight from Ahrefs; missing
+ * fields are left at sensible defaults so the downstream merge/scorer keeps
+ * working.
+ */
+function ahrefsIdeasToDiscovered(rows: AhrefsKeywordIdea[]): DiscoveredKeyword[] {
+  const map = new Map<string, DiscoveredKeyword>();
+  for (const row of rows) {
+    const keyword = (row.keyword ?? '').trim().toLowerCase();
+    if (!keyword) continue;
+    const intent = inferIntentFromAhrefs(row.intents);
+    const existing = map.get(keyword);
+    const next: DiscoveredKeyword = {
+      keyword,
+      volume: Number(row.volume ?? 0) || 0,
+      kd: row.difficulty != null ? Math.round(Number(row.difficulty)) : 0,
+      cpc: row.cpc != null ? Number(row.cpc) / 100 : 0, // Ahrefs CPC is in USD cents
+      trend: '',
+      competition_level: '',
+      intent,
+      monthly_searches: [],
+      secondary_keywords: [],
+      keyword_analysis_score: 0,
+      source: ['ahrefs_keywords_explorer'],
+    };
+    if (!existing) {
+      map.set(keyword, next);
+      continue;
+    }
+    if (next.volume > existing.volume) existing.volume = next.volume;
+    if (!existing.kd && next.kd) existing.kd = next.kd;
+    if (!existing.cpc && next.cpc) existing.cpc = next.cpc;
+    if (!existing.intent && next.intent) existing.intent = next.intent;
+  }
+  return [...map.values()].sort((a, b) => b.volume - a.volume);
+}
+
+function inferIntentFromAhrefs(intents: AhrefsKeywordIdea['intents']): Intent {
+  if (!intents) return '';
+  if (intents.transactional) return 'transactional';
+  if (intents.commercial) return 'commercial';
+  if (intents.informational) return 'informational';
+  if (intents.navigational) return 'navigational';
+  return '';
+}
+
 async function fetchKeywordIdeas(
   seeds: string[],
   locationCode: number,
@@ -325,6 +383,36 @@ async function fetchKeywordIdeas(
   return items
     .map(it => itemToKeyword(it, 'keyword_ideas'))
     .filter((x): x is DiscoveredKeyword => x !== null);
+}
+
+export async function fetchKeywordIdeasForSeeds(
+  seeds: string[],
+  regionCode: string,
+  _languageCode: string,
+  limit = 120
+): Promise<DiscoveredKeyword[]> {
+  void _languageCode;
+  const cleanSeeds = [...new Set(seeds.map(s => s.trim().toLowerCase()).filter(Boolean))].slice(0, 80);
+  if (!cleanSeeds.length) return [];
+  if (!isAhrefsConfigured()) {
+    console.warn('[ahrefs] fetchKeywordIdeasForSeeds: AHREFS_API_KEY missing — returning [].');
+    return [];
+  }
+  try {
+    const [matching, related, suggestions] = await Promise.all([
+      ahrefsMatchingTerms(cleanSeeds, regionCode, Math.max(limit, 80)),
+      ahrefsRelatedTerms(cleanSeeds, regionCode, Math.max(limit, 80)),
+      ahrefsSearchSuggestions(cleanSeeds, regionCode, Math.max(limit, 80)),
+    ]);
+    const merged = ahrefsIdeasToDiscovered([...matching, ...related, ...suggestions]);
+    console.log(
+      `[ahrefs] fetchKeywordIdeasForSeeds: matching=${matching.length} related=${related.length} suggestions=${suggestions.length} merged=${merged.length}`
+    );
+    return merged.slice(0, limit);
+  } catch (e) {
+    console.warn('[ahrefs] fetchKeywordIdeasForSeeds failed:', e);
+    return [];
+  }
 }
 
 async function fetchRelatedKeywords(
@@ -1352,70 +1440,53 @@ export interface KeywordVitals {
 }
 
 /**
- * Look up current search demand for a list of keywords. Cheap (one
- * `keyword_overview/live` call covers up to ~700 keywords). Used by the
- * Content Health audit to answer: "is the keyword this blog targets still
- * trending, or is demand dying?".
+ * Look up current search demand for a list of keywords. Used by the Content
+ * Health audit to answer: "is the keyword this blog targets still trending,
+ * or is demand dying?".
  *
- * Returns a Map keyed by the lower-cased keyword. Returns an empty Map if
- * DataForSEO credentials are missing — caller should treat this as optional.
+ * AHREFS-FIRST: tries Ahrefs Keywords Explorer `overview` first (richer data,
+ * includes parent topic + intents + traffic potential). Falls back to
+ * DataForSEO `keyword_overview/live` for any keywords Ahrefs didn't return.
+ *
+ * Returns a Map keyed by the lower-cased keyword. May be empty if neither
+ * provider is reachable — callers should treat this as optional.
  */
 export async function fetchKeywordVitals(
   keywords: string[],
   region: string,
-  language: string = 'en'
+  _language: string = 'en'
 ): Promise<Map<string, KeywordVitals>> {
+  void _language;
   const out = new Map<string, KeywordVitals>();
   const clean = [...new Set(keywords.map(k => k.trim()).filter(Boolean))];
   if (!clean.length) return out;
-
-  const auth = getAuthHeader();
-  if (!auth) return out;
-
-  const locationCode = getLocationCode(region);
-  const languageCode = language || 'en';
-  const trace: DataForSEOTraceEntry[] = [];
-
-  const body = [
-    {
-      keywords: clean.slice(0, 700),
-      location_code: locationCode,
-      language_code: languageCode,
-    },
-  ];
-
-  const parsed = (await dfsPost(
-    'dataforseo_labs/google/keyword_overview/live',
-    body,
-    auth,
-    trace
-  )) as {
-    tasks?: Array<{
-      result?: Array<{
-        items?: DfsIdeaItem[];
-      }>;
-    }>;
-  } | null;
-
-  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
-  for (const it of items) {
-    const kw = typeof it.keyword === 'string' ? it.keyword.trim() : '';
-    if (!kw) continue;
-    const info = it.keyword_info ?? {};
-    const trendPct = Number(info.search_volume_trend?.monthly ?? 0) || 0;
-    out.set(kw.toLowerCase(), {
-      keyword: kw,
-      volume: Number(info.search_volume ?? 0) || 0,
-      trend: formatTrend(info.search_volume_trend?.monthly),
-      trend_pct: trendPct,
-      monthly_searches: (info.monthly_searches ?? []).slice(0, 12).map(m => ({
-        month: `${m.year}-${String(m.month).padStart(2, '0')}`,
-        volume: Number(m.search_volume ?? 0) || 0,
-      })),
-    });
+  if (!isAhrefsConfigured()) {
+    console.warn('[ahrefs] fetchKeywordVitals: AHREFS_API_KEY missing — returning empty vitals.');
+    return out;
   }
-
+  try {
+    const overview = await ahrefsKeywordOverview(clean, region);
+    for (const [k, row] of overview.entries()) {
+      out.set(k, ahrefsRowToVitals(row));
+    }
+  } catch (e) {
+    console.warn('[ahrefs] fetchKeywordVitals failed:', e);
+  }
   return out;
+}
+
+/** Convert an Ahrefs keyword overview row into our common KeywordVitals shape. */
+function ahrefsRowToVitals(row: AhrefsKeywordOverviewRow): KeywordVitals {
+  return {
+    keyword: row.keyword,
+    volume: row.volume || 0,
+    // Ahrefs Overview doesn't expose a monthly trend percentage in the same
+    // way DataForSEO does — we leave trend empty and let the UI fall back to
+    // the DataForSEO-sourced value when present.
+    trend: '',
+    trend_pct: 0,
+    monthly_searches: [],
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1476,8 +1547,7 @@ export async function discoverKeywordsForProject(
   extras: ProjectContextExtras = {}
 ): Promise<DiscoverKeywordsForProjectResult> {
   const trace: DataForSEOTraceEntry[] = [];
-  const auth = getAuthHeader();
-  if (!auth) {
+  if (!isAhrefsConfigured()) {
     trace.push({
       label: '(config)',
       url: '',
@@ -1486,13 +1556,12 @@ export async function discoverKeywordsForProject(
       ok: false,
       rawText: '',
       parsed: null,
-      fetchError: 'DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD missing in server env',
+      fetchError:
+        'AHREFS_API_KEY is not set. Ahrefs is now the only keyword data provider — add it to .env.local.',
     });
     return { keywords: [], trace };
   }
 
-  const locationCode = getLocationCode(region);
-  const languageCode = language || 'en';
   const ownDomain = extractDomainFromUrl(targetUrl ?? '');
   const seeds = seedKeywords.map(s => s.trim()).filter(Boolean);
 
@@ -1565,61 +1634,138 @@ export async function discoverKeywordsForProject(
     commercialModifiers: context.commercialModifiers,
   });
 
-  // 2. Seeds go to DataForSEO VERBATIM — we no longer merge in synthetic
-  //    cross-product phrases (they were injecting "leadership hiring
-  //    consulting", "executive search for leadership hiring", etc. into
-  //    request bodies even when the user typed only "Software engineering,
-  //    HR, RPO services…"). The user's raw form input is the source of truth.
+  // 2. Seeds go to Ahrefs VERBATIM — we no longer merge in synthetic
+  //    cross-product phrases. The user's raw form input is the source of truth.
   const userSeeds = seeds.slice(0, 20);
 
   pushDebugTrace(trace, '(synthetic_seeds)', {
     fromTemplatesAndCrawl: context.syntheticSeeds,
     userSeeds: seeds,
-    actuallySentToDataForSeo: userSeeds,
+    actuallySentToAhrefs: userSeeds,
     note: 'synthetic seeds are computed for context/scoring only; the request body uses the raw user inputs',
     count: userSeeds.length,
   });
 
-  // Echo the EXACT request body we're about to send to keyword_ideas/live —
-  // useful when the API returns nothing unexpected and you want to eyeball
-  // the payload without re-running the pipeline.
-  pushDebugTrace(trace, '(dataforseo_keyword_ideas_body)', {
-    endpoint: 'dataforseo_labs/google/keyword_ideas/live',
+  // Echo the seeds we're about to send to Ahrefs Keywords Explorer.
+  pushDebugTrace(trace, '(ahrefs_keyword_ideas_body)', {
+    endpoint: 'ahrefs/keywords-explorer/{matching,related,search-suggestions}',
     body: [
       {
         keywords: userSeeds,
-        location_code: locationCode,
-        language_code: languageCode,
-        limit: 100,
-        include_seed_keyword: true,
-        closely_variants: true,
-        order_by: ['keyword_info.search_volume,desc'],
+        country: region,
+        ideas: 'matching+related+suggestions',
+        per_endpoint_limit: 100,
+        order_by: ['volume:desc'],
       },
     ],
   });
 
-  // 3. Discovery — the two semantic-seed endpoints in parallel.
-  //    `keyword_ideas/live`: one call, returns up to 100 ideas for the full
-  //    seed set (volume + cpc + competition + intent + monthly searches
-  //    come back in the same response — we no longer call keyword_overview
-  //    separately).
-  //    `related_keywords/live`: one call PER seed, 2 related per seed.
-  const ideasPromise = fetchKeywordIdeas(userSeeds, locationCode, languageCode, auth, trace).catch(e => {
-    trace.push(errEntry('keyword_ideas', e));
-    return [] as DiscoveredKeyword[];
+  // 3. Discovery — Ahrefs only (per product spec). Three keyword-idea
+  //    endpoints fan out in parallel (matching/related/search-suggestions),
+  //    plus competitor mining (organic-competitors → organic-keywords) when
+  //    we have the user's domain. We merge all candidate pools and let the
+  //    existing relevance / business-fit / negative-pattern scorers pick the
+  //    winners — no Gemini in the hot path.
+  const matchingPromise = ahrefsMatchingTerms(userSeeds, region, 100).catch(e => {
+    pushDebugTrace(trace, '(ahrefs_matching_terms_error)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return [] as AhrefsKeywordIdea[];
   });
 
-  const relatedPromise = fetchRelatedKeywords(userSeeds, locationCode, languageCode, auth, trace).catch(e => {
-    trace.push(errEntry('related_keywords', e));
-    return [] as DiscoveredKeyword[];
+  const relatedPromise = ahrefsRelatedTerms(userSeeds, region, 100).catch(e => {
+    pushDebugTrace(trace, '(ahrefs_related_terms_error)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return [] as AhrefsKeywordIdea[];
   });
 
-  const [ideas, related] = await Promise.all([ideasPromise, relatedPromise]);
+  const suggestionsPromise = ahrefsSearchSuggestions(userSeeds, region, 100).catch(e => {
+    pushDebugTrace(trace, '(ahrefs_search_suggestions_error)', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return [] as AhrefsKeywordIdea[];
+  });
 
-  // 4. Merge + dedupe. No relevance / business-fit hard filter — the user
-  //    asked for the raw ~120-keyword result set displayed as-is. We still
-  //    COMPUTE relevance + business-fit for the Rel/Fit micro-badges.
-  const merged = mergeKeywordCandidates(ideas, related);
+  // Competitor mining: organic-competitors gives us up to 5 domains the user
+  // really competes against; organic-keywords on each surfaces real ranking
+  // gaps with verified search volume + KD. Limited to keep query cost bounded.
+  const competitorMinedPromise = (async (): Promise<{
+    keywords: AhrefsKeywordIdea[];
+    competitors: string[];
+  }> => {
+    const targetForSiteExplorer = ownDomain || extractDomainFromUrl(businessDomain ?? '');
+    if (!targetForSiteExplorer) return { keywords: [], competitors: [] };
+    try {
+      const competitors = await ahrefsOrganicCompetitors(targetForSiteExplorer, region, 5);
+      const competitorDomains = competitors.map(c => c.competitor_domain).filter(Boolean);
+      pushDebugTrace(trace, '(ahrefs_organic_competitors)', {
+        target: targetForSiteExplorer,
+        count: competitorDomains.length,
+        competitors: competitorDomains,
+      });
+      if (!competitorDomains.length) return { keywords: [], competitors: [] };
+      const perCompetitor = await Promise.all(
+        competitorDomains.slice(0, 5).map(c =>
+          ahrefsOrganicKeywords(c, region, 30).then(rows =>
+            rows.map<AhrefsKeywordIdea>(r => ({
+              keyword: r.keyword,
+              volume: r.volume,
+              cpc: r.cpc,
+              difficulty: r.keyword_difficulty,
+              intents: null,
+              parent_topic: null,
+              traffic_potential: null,
+              global_volume: null,
+            }))
+          ).catch(e => {
+            pushDebugTrace(trace, '(ahrefs_organic_keywords_error)', {
+              competitor: c,
+              error: e instanceof Error ? e.message : String(e),
+            });
+            return [] as AhrefsKeywordIdea[];
+          })
+        )
+      );
+      const flat = perCompetitor.flat();
+      pushDebugTrace(trace, '(ahrefs_competitor_mined_keywords)', {
+        competitors: competitorDomains,
+        rows: flat.length,
+      });
+      return { keywords: flat, competitors: competitorDomains };
+    } catch (e) {
+      pushDebugTrace(trace, '(ahrefs_organic_competitors_error)', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return { keywords: [], competitors: [] };
+    }
+  })();
+
+  const [matching, related, suggestions, competitorMined] = await Promise.all([
+    matchingPromise,
+    relatedPromise,
+    suggestionsPromise,
+    competitorMinedPromise,
+  ]);
+
+  pushDebugTrace(trace, '(ahrefs_keywords_explorer)', {
+    matching: matching.length,
+    related: related.length,
+    suggestions: suggestions.length,
+    competitor_mined: competitorMined.keywords.length,
+    competitor_domains: competitorMined.competitors,
+  });
+
+  const ahrefsIdeas: DiscoveredKeyword[] = ahrefsIdeasToDiscovered([
+    ...matching,
+    ...related,
+    ...suggestions,
+    ...competitorMined.keywords,
+  ]);
+
+  // 4. Score relevance + business-fit using the project context (niche,
+  //    audience, crawl, etc.). Negative patterns zero out off-topic noise.
+  const merged = mergeKeywordCandidates(ahrefsIdeas);
 
   for (const kw of merged) {
     if (!kw.keyword) continue;
@@ -1629,23 +1775,40 @@ export async function discoverKeywordsForProject(
     kw.suggested_content_type = suggestedContentType(kw.keyword);
   }
 
-  // 5. Bulk KD for the ENTIRE merged pool — roughly 100 (ideas) + 2 × N
-  //    (related, one call per seed). The API max is 700, we're well under.
-  if (merged.length) {
+  // 5. Enrichment — bulk Keywords Explorer Overview for any rows that came
+  //    from competitor mining (where `intents`/`parent_topic`/`traffic_potential`
+  //    aren't populated by organic-keywords). We chunk by 700 to respect the
+  //    Ahrefs `keywords` limit and skip rows that already have full data.
+  const needsOverview = merged.filter(
+    k => !k.kd || !k.volume
+  );
+  if (needsOverview.length) {
     try {
-      const kdMap = await fetchBulkKeywordDifficulty(
-        merged.map(k => k.keyword),
-        locationCode,
-        languageCode,
-        auth,
-        trace
+      const overviewMap = await ahrefsKeywordOverview(
+        needsOverview.map(k => k.keyword),
+        region
       );
+      pushDebugTrace(trace, '(ahrefs_keywords_overview_enrich)', {
+        requested: needsOverview.length,
+        returned: overviewMap.size,
+      });
       for (const kw of merged) {
-        const kd = kdMap.get(kw.keyword.toLowerCase());
-        if (typeof kd === 'number' && kd > 0) kw.kd = kd;
+        const o = overviewMap.get(kw.keyword.toLowerCase());
+        if (!o) continue;
+        if (!kw.volume && o.volume) kw.volume = o.volume;
+        if (!kw.kd && o.difficulty) kw.kd = o.difficulty;
+        if (!kw.cpc && o.cpc) kw.cpc = o.cpc;
+        if (!kw.intent && o.intents) {
+          kw.intent = inferIntentFromAhrefs(o.intents);
+        }
+        if (!kw.traffic_potential && o.traffic_potential) {
+          kw.traffic_potential = o.traffic_potential;
+        }
       }
     } catch (e) {
-      trace.push(errEntry('bulk_keyword_difficulty', e));
+      pushDebugTrace(trace, '(ahrefs_keywords_overview_error)', {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -1657,15 +1820,17 @@ export async function discoverKeywordsForProject(
     (a, b) => (b.keyword_analysis_score ?? 0) - (a.keyword_analysis_score ?? 0)
   );
 
-  // NOTE: SERP (`serp/google/organic/live/advanced`), keyword_overview and
-  // clustering are intentionally not called — the user asked for the raw
-  // keyword_ideas + related_keywords + bulk_keyword_difficulty pipeline with
-  // all ~120 rows visible. Re-introduce them behind a flag if that changes.
-  void ownDomain;
+  // Legacy helpers kept around for /keywords/new flow but not called here.
   void fetchKeywordOverview;
   void fetchSerpForKeywords;
   void clusterKeywords;
   void pickCompetitorDomains;
+  void fetchKeywordIdeas;
+  void fetchRelatedKeywords;
+  void fetchBulkKeywordDifficulty;
+  void getLocationCode;
+  void getAuthHeader;
+  void errEntry;
 
   return { keywords: merged, trace };
 }

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS projects (
   target_region TEXT NOT NULL DEFAULT 'us',
   target_language TEXT NOT NULL DEFAULT 'en',
   description TEXT DEFAULT '',
+  ahrefs_rank_tracker_project_id BIGINT DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -76,8 +77,54 @@ CREATE TABLE IF NOT EXISTS keywords (
   gap_competitor TEXT DEFAULT '',
   competition_level TEXT DEFAULT '',
   intent TEXT DEFAULT '',
+  -- Keyword-discovery pipeline columns. See supabase-migration-keyword-discovery-pipeline.sql.
+  source_type TEXT DEFAULT 'industry',
+  source_competitors TEXT[] DEFAULT '{}',
+  source_urls TEXT[] DEFAULT '{}',
+  parent_topic TEXT DEFAULT '',
+  traffic_potential INTEGER DEFAULT 0,
+  intents JSONB DEFAULT '{}'::jsonb,
+  -- Keyword modal columns. See supabase-migration-keyword-modal-tables.sql.
+  --   normalized_keyword is a STORED generated column == LOWER(TRIM(keyword)).
+  --   Postgres maintains it automatically; never assign it from app code.
+  normalized_keyword TEXT GENERATED ALWAYS AS (LOWER(TRIM(keyword))) STORED,
+  global_volume INTEGER DEFAULT 0,
+  parent_volume INTEGER DEFAULT 0,
+  serp_features JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(project_id, keyword)
+);
+
+-- One-row-per-keyword modal payload (overview / history / by-country / SERP).
+CREATE TABLE IF NOT EXISTS keyword_details (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  keyword_id UUID NOT NULL UNIQUE REFERENCES keywords(id) ON DELETE CASCADE,
+  overview JSONB NOT NULL DEFAULT '{}'::jsonb,
+  volume_history JSONB NOT NULL DEFAULT '[]'::jsonb,
+  volume_by_country JSONB NOT NULL DEFAULT '[]'::jsonb,
+  serp_top_results JSONB NOT NULL DEFAULT '[]'::jsonb,
+  top_ranking_result JSONB,
+  last_fetched_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Many-rows-per-keyword "ideas" pool for blog-generation coverage.
+CREATE TABLE IF NOT EXISTS keyword_ideas (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  keyword_id UUID NOT NULL REFERENCES keywords(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (
+    type IN ('terms_match', 'questions', 'also_rank_for', 'also_talk_about', 'search_suggestion')
+  ),
+  keyword TEXT NOT NULL,
+  volume INTEGER DEFAULT 0,
+  difficulty INTEGER DEFAULT 0,
+  cpc NUMERIC(10,2) DEFAULT 0,
+  traffic_potential INTEGER DEFAULT 0,
+  intents JSONB DEFAULT '{}'::jsonb,
+  parent_topic TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS calendar_entries (
@@ -179,6 +226,13 @@ CREATE INDEX IF NOT EXISTS idx_blog_audits_project_id ON blog_audits(project_id)
 CREATE INDEX IF NOT EXISTS idx_blog_audits_health_score ON blog_audits(health_score);
 CREATE INDEX IF NOT EXISTS idx_keywords_project_id ON keywords(project_id);
 CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(status);
+CREATE INDEX IF NOT EXISTS idx_keywords_source_type ON keywords(source_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_normalized
+  ON keywords(project_id, normalized_keyword);
+CREATE INDEX IF NOT EXISTS idx_keyword_ideas_keyword_id_type
+  ON keyword_ideas(keyword_id, type);
+CREATE INDEX IF NOT EXISTS idx_keyword_ideas_keyword
+  ON keyword_ideas(keyword);
 CREATE INDEX IF NOT EXISTS idx_calendar_project_id ON calendar_entries(project_id);
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_entries(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_blogs_entry_id ON blogs(entry_id);

@@ -9,12 +9,65 @@ import {
   generateBlogFromOpportunity,
   type BenchmarkState,
 } from "@/app/actions/competitor-actions";
+import { getProject, updateProject } from "@/app/actions/project-actions";
+import { projectDomainHost } from "@/lib/project-domain-host";
 import type {
   Competitor,
   CompetitorKeyword,
   GapType,
   KeywordGap,
+  Project,
 } from "@/lib/types";
+
+function logoUrlCandidates(host: string): string[] {
+  if (!host) return [];
+  return [
+    `https://logo.clearbit.com/${encodeURIComponent(host)}`,
+    `https://icons.duckduckgo.com/ip3/${encodeURIComponent(host)}.ico`,
+    `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`,
+  ];
+}
+
+function DomainLogo({ domain }: { domain: string }) {
+  const host = useMemo(() => projectDomainHost(domain), [domain]);
+  const sources = useMemo(() => logoUrlCandidates(host), [host]);
+  const [index, setIndex] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setIndex(0);
+    setFailed(false);
+  }, [host]);
+
+  const letter = (domain || "?").charAt(0).toUpperCase();
+
+  if (!host || failed) {
+    return (
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-zinc-700 to-zinc-900 text-sm font-bold text-zinc-200 ring-1 ring-inset ring-white/10">
+        {letter}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white ring-1 ring-inset ring-zinc-200/80 shadow-sm">
+      <img
+        key={`${host}-${index}`}
+        src={sources[index]}
+        alt=""
+        width={28}
+        height={28}
+        loading="lazy"
+        decoding="async"
+        className="h-7 w-7 object-contain"
+        onError={() => {
+          if (index < sources.length - 1) setIndex(i => i + 1);
+          else setFailed(true);
+        }}
+      />
+    </div>
+  );
+}
 
 type TabId = "competitors" | "gaps" | "opportunities";
 
@@ -27,6 +80,16 @@ const GAP_STYLES: Record<GapType, string> = {
 function formatTrend(trend: string, pct: number) {
   if (!trend || trend === "+0%") return "—";
   return trend;
+}
+
+function compactUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    const path = `${parsed.pathname}${parsed.search}`.replace(/\/$/, "");
+    return path && path !== "/" ? path : parsed.hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }
 
 function scoreColor(score: number) {
@@ -49,11 +112,22 @@ export default function CompetitorsPage() {
   const [gapFilter, setGapFilter] = useState<"all" | GapType>("all");
   const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null);
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
+  const [project, setProject] = useState<Project | null>(null);
+  const [rtIdInput, setRtIdInput] = useState("");
+  const [rtIdEditing, setRtIdEditing] = useState(false);
+  const [rtIdSaving, setRtIdSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await getCompetitorBenchmark(projectId);
-    setState(res);
+    const [benchRes, projRes] = await Promise.all([
+      getCompetitorBenchmark(projectId),
+      getProject(projectId),
+    ]);
+    setState(benchRes);
+    if (projRes.success && projRes.data) {
+      setProject(projRes.data);
+      setRtIdInput(String(projRes.data.ahrefs_rank_tracker_project_id ?? ""));
+    }
     setLoading(false);
   }, [projectId]);
 
@@ -86,6 +160,25 @@ export default function CompetitorsPage() {
     setRunning(false);
   };
 
+  const handleSaveRtId = async () => {
+    if (!project) return;
+    setRtIdSaving(true);
+    const parsed = rtIdInput.trim() ? Number(rtIdInput.trim()) : null;
+    await updateProject(projectId, {
+      name: project.name,
+      domain: project.domain,
+      company: project.company,
+      niche: project.niche,
+      target_audience: project.target_audience,
+      target_region: project.target_region,
+      description: project.description,
+      ahrefs_rank_tracker_project_id: parsed,
+    });
+    setProject(prev => prev ? { ...prev, ahrefs_rank_tracker_project_id: parsed } : prev);
+    setRtIdEditing(false);
+    setRtIdSaving(false);
+  };
+
   const handleGenerateBlog = async (keyword: string) => {
     setGeneratingKeyword(keyword);
     const res = await generateBlogFromOpportunity(projectId, keyword);
@@ -105,7 +198,7 @@ export default function CompetitorsPage() {
 
   const filteredGaps = useMemo(() => {
     const list = gapFilter === "all" ? gaps : gaps.filter(g => g.gap_type === gapFilter);
-    return [...list].sort((a, b) => b.opportunity_score - a.opportunity_score);
+    return [...list].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score);
   }, [gaps, gapFilter]);
 
   const gapCounts = useMemo(() => {
@@ -115,7 +208,7 @@ export default function CompetitorsPage() {
   }, [gaps]);
 
   const topOpportunities = useMemo(
-    () => [...gaps].sort((a, b) => b.opportunity_score - a.opportunity_score).slice(0, 12),
+    () => [...gaps].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score).slice(0, 12),
     [gaps]
   );
 
@@ -148,7 +241,7 @@ export default function CompetitorsPage() {
           <button
             onClick={handleRun}
             disabled={running}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-cyan-600 text-white text-xs font-bold shadow-md shadow-cyan-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60 flex items-center gap-2"
+            className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold shadow-md shadow-cyan-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60 flex items-center gap-2"
           >
             {running ? (
               <>
@@ -178,6 +271,59 @@ export default function CompetitorsPage() {
         </div>
       )}
 
+      {/* Ahrefs Rank Tracker Project ID config */}
+      <div className="rounded-xl border border-border-subtle bg-surface-secondary/30 px-4 py-3 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <svg className="w-4 h-4 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25Z" />
+          </svg>
+          <span className="text-xs font-bold text-text-secondary">Ahrefs Rank Tracker Project ID</span>
+          {!rtIdEditing && (
+            <span className="text-xs text-text-tertiary">
+              {project?.ahrefs_rank_tracker_project_id
+                ? <span className="text-cyan-400 font-mono">{project.ahrefs_rank_tracker_project_id}</span>
+                : <span className="italic">not set</span>}
+            </span>
+          )}
+        </div>
+        {rtIdEditing ? (
+          <div className="flex items-center gap-2">
+            <input
+              value={rtIdInput}
+              onChange={e => setRtIdInput(e.target.value)}
+              placeholder="e.g. 8024646"
+              inputMode="numeric"
+              className="input-field w-36 text-xs py-1.5"
+              autoFocus
+              onKeyDown={e => { if (e.key === "Enter") void handleSaveRtId(); if (e.key === "Escape") setRtIdEditing(false); }}
+            />
+            <button
+              onClick={() => void handleSaveRtId()}
+              disabled={rtIdSaving}
+              className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold disabled:opacity-60 transition-all"
+            >
+              {rtIdSaving ? "Saving…" : "Save"}
+            </button>
+            <button
+              onClick={() => { setRtIdEditing(false); setRtIdInput(String(project?.ahrefs_rank_tracker_project_id ?? "")); }}
+              className="px-3 py-1.5 rounded-lg border border-border-subtle text-text-tertiary text-xs font-bold hover:text-text-secondary transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setRtIdEditing(true)}
+            className="text-xs font-bold text-brand-400 hover:text-brand-300 transition-colors shrink-0"
+          >
+            {project?.ahrefs_rank_tracker_project_id ? "Edit" : "Set ID"}
+          </button>
+        )}
+        <p className="w-full text-[10px] text-text-tertiary -mt-1">
+          Found in Ahrefs → Rank Tracker → your project URL. Pulls top 10 competitor pages from your tracked keywords.
+        </p>
+      </div>
+
       {loading ? (
         <div className="space-y-3">
           {[...Array(4)].map((_, i) => (
@@ -195,7 +341,7 @@ export default function CompetitorsPage() {
           <button
             onClick={handleRun}
             disabled={running}
-            className="rounded-2xl bg-gradient-to-r from-cyan-500 to-cyan-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-cyan-500/20 hover:-translate-y-0.5 disabled:opacity-60"
+            className="rounded-2xl bg-cyan-500 hover:bg-cyan-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-cyan-500/20 hover:-translate-y-0.5 disabled:opacity-60"
           >
             {running ? "Benchmarking…" : "Run benchmark"}
           </button>
@@ -341,7 +487,7 @@ function OpportunityDashboard({
   return (
     <div className="space-y-4">
       {averages?.recommendations?.length ? (
-        <div className="glass-card border-cyan-500/10 bg-gradient-to-br from-cyan-500/5 to-transparent p-5">
+        <div className="glass-card border-cyan-500/10 bg-cyan-500/8 p-5">
           <h3 className="font-bold text-text-primary mb-2">Content benchmark recommendations</h3>
           <ul className="space-y-1 text-sm text-text-secondary">
             {averages.recommendations.map((r, i) => (
@@ -370,7 +516,7 @@ function OpportunityDashboard({
                   <th className="px-4 py-3 text-center">Trend</th>
                   <th className="px-4 py-3 text-center">Weakness</th>
                   <th className="px-4 py-3 text-center">Opportunity</th>
-                  <th className="px-4 py-3">Top competitor</th>
+                  <th className="px-4 py-3">Ranking page</th>
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
@@ -423,9 +569,10 @@ function OpportunityDashboard({
                           href={g.top_competitor_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[11px] text-brand-400 hover:underline"
+                          title={g.top_competitor_url}
+                          className="block truncate text-[11px] text-brand-400 hover:underline"
                         >
-                          Open page ↗
+                          {compactUrl(g.top_competitor_url)} ↗
                         </a>
                       ) : null}
                     </td>
@@ -434,7 +581,7 @@ function OpportunityDashboard({
                         type="button"
                         onClick={() => onGenerateBlog(g.keyword)}
                         disabled={generatingKeyword === g.keyword}
-                        className="rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                        className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
                       >
                         {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
                       </button>
@@ -471,9 +618,7 @@ function CompetitorList({
               className="w-full flex flex-wrap items-center justify-between gap-3 p-4 text-left hover:bg-white/[0.02] transition-colors"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-cyan-500/15 text-cyan-400 text-xs font-black">
-                  {c.rank_score}
-                </span>
+                <DomainLogo domain={c.domain} />
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-text-primary truncate">{c.domain}</p>
                   <p className="text-[11px] text-text-tertiary truncate">
@@ -625,7 +770,7 @@ function KeywordGapTable({
                   <th className="px-4 py-3 text-right">Volume</th>
                   <th className="px-4 py-3 text-center">Trend</th>
                   <th className="px-4 py-3 text-center">Score</th>
-                  <th className="px-4 py-3">Source</th>
+                  <th className="px-4 py-3">Ranking page</th>
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
@@ -660,9 +805,10 @@ function KeywordGapTable({
                           href={g.top_competitor_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[11px] text-brand-400 hover:underline"
+                          title={g.top_competitor_url}
+                          className="block truncate text-[11px] text-brand-400 hover:underline"
                         >
-                          Open ↗
+                          {compactUrl(g.top_competitor_url)} ↗
                         </a>
                       ) : null}
                     </td>
@@ -671,7 +817,7 @@ function KeywordGapTable({
                         type="button"
                         onClick={() => onGenerateBlog(g.keyword)}
                         disabled={generatingKeyword === g.keyword}
-                        className="rounded-lg bg-gradient-to-r from-brand-500 to-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                        className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
                       >
                         {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
                       </button>

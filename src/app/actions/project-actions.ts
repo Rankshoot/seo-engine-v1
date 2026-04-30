@@ -13,6 +13,7 @@ import {
 } from '@/lib/ahrefs';
 import { normalizeDomain } from '@/lib/keyword-discovery';
 import { Project } from '@/lib/types';
+import { getBlogAudits } from '@/app/actions/audit-actions';
 
 export async function createProject(data: {
   name: string;
@@ -164,15 +165,17 @@ export async function getProjectStats(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: null };
 
-  const [kwResult, calResult, blogResult] = await Promise.all([
+  const [kwResult, calResult, blogResult, auditRes] = await Promise.all([
     supabaseAdmin.from('keywords').select('status').eq('project_id', projectId),
     supabaseAdmin.from('calendar_entries').select('status').eq('project_id', projectId),
     supabaseAdmin.from('blogs').select('status').eq('project_id', projectId),
+    getBlogAudits(projectId),
   ]);
 
   const keywords = kwResult.data ?? [];
   const calendar = calResult.data ?? [];
   const blogs = blogResult.data ?? [];
+  const auditPending = auditRes.success ? Math.max(0, auditRes.coverage.blogs_found - auditRes.coverage.blogs_audited) : 0;
 
   return {
     success: true,
@@ -181,6 +184,7 @@ export async function getProjectStats(projectId: string) {
       approvedKeywords: keywords.filter(k => k.status === 'approved').length,
       calendarEntries: calendar.length,
       blogsGenerated: blogs.filter(b => ['generated', 'approved', 'published'].includes(b.status)).length,
+      auditPending,
     },
   };
 }

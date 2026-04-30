@@ -374,7 +374,7 @@ export default async function ProjectOverviewPage({ params }: { params: Promise<
       )}
 
       {/* ── WORKFLOW NAVIGATION ─────────────────────────────────────────────── */}
-      <section>
+      {/* <section>
         <h2 className="mb-4 text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">
           Navigate your project
         </h2>
@@ -395,30 +395,8 @@ export default async function ProjectOverviewPage({ params }: { params: Promise<
             </Link>
           ))}
         </div>
-      </section>
+      </section> */}
 
-      {/* ── AUDIT BANNER ───────────────────────────────────────────────────── */}
-      {audit.blogs_found > 0 && auditPending > 0 && (
-        <Link
-          href={`/projects/${id}/audit`}
-          className="group flex items-center gap-5 rounded-[16px] border border-brand-coral/30 bg-brand-coral/5 p-5 transition-colors hover:bg-brand-coral/10"
-        >
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-brand-coral/10 text-brand-coral">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-            </svg>
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[16px] font-medium text-text-primary">
-              {auditPending} blog{auditPending !== 1 ? "s" : ""} on your site haven&apos;t been audited yet
-            </p>
-            <p className="mt-1 text-[14px] text-text-tertiary">
-              Run Content Health so new content aligns with what you already publish.
-            </p>
-          </div>
-          <span className="shrink-0 text-[14px] font-medium text-brand-coral group-hover:underline">Run audit →</span>
-        </Link>
-      )}
 
       {/* ── ORGANIC COMPETITORS + TOP PAGES ────────────────────────────────── */}
       {ahrefsConfigured && target && (

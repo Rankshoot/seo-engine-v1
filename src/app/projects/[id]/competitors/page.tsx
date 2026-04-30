@@ -43,14 +43,14 @@ function DomainLogo({ domain }: { domain: string }) {
 
   if (!host || failed) {
     return (
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-zinc-700 to-zinc-900 text-sm font-bold text-zinc-200 ring-1 ring-inset ring-white/10">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-surface-tertiary text-[14px] font-bold text-text-primary border border-border-subtle">
         {letter}
       </div>
     );
   }
 
   return (
-    <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white ring-1 ring-inset ring-zinc-200/80 shadow-sm">
+    <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-[8px] bg-white border border-border-subtle shadow-sm">
       <img
         key={`${host}-${index}`}
         src={sources[index]}
@@ -72,9 +72,9 @@ function DomainLogo({ domain }: { domain: string }) {
 type TabId = "competitors" | "gaps" | "opportunities";
 
 const GAP_STYLES: Record<GapType, string> = {
-  missing: "border-rose-500/20 bg-rose-500/10 text-rose-400",
-  weak: "border-yellow-500/20 bg-yellow-500/10 text-yellow-400",
-  untapped: "border-cyan-500/20 bg-cyan-500/10 text-cyan-400",
+  missing: "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
+  weak: "border-[#f59e0b]/20 bg-[#f59e0b]/10 text-[#f59e0b]",
+  untapped: "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]",
 };
 
 function formatTrend(trend: string, pct: number) {
@@ -93,9 +93,9 @@ function compactUrl(url: string) {
 }
 
 function scoreColor(score: number) {
-  if (score >= 70) return "text-accent-400 border-accent-500/20 bg-accent-500/10";
-  if (score >= 50) return "text-yellow-400 border-yellow-500/20 bg-yellow-500/10";
-  if (score >= 30) return "text-brand-400 border-brand-500/20 bg-brand-500/10";
+  if (score >= 70) return "text-[#10b981] border-[#10b981]/20 bg-[#10b981]/10";
+  if (score >= 50) return "text-[#f59e0b] border-[#f59e0b]/20 bg-[#f59e0b]/10";
+  if (score >= 30) return "text-brand-action border-brand-action/20 bg-brand-action/10";
   return "text-text-tertiary border-border-subtle bg-surface-elevated";
 }
 
@@ -215,18 +215,19 @@ export default function CompetitorsPage() {
   const hasBenchmark = competitors.length > 0;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="space-y-10 pb-16 max-w-full pl-4 pr-4 mx-auto">
+      {/* ── HEADER ─────────────────────────────────────────────────────────── */}
+      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-black tracking-tight text-text-primary mb-1">
-            Competitor <span className="gradient-text">insights</span>
+          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
+            Competitor insights
           </h1>
-          <p className="text-text-tertiary text-sm max-w-xl">
+          <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
             Benchmark the competitors winning your SERPs, diff their keyword coverage against yours, and
             publish the opportunities with one click.
           </p>
           {lastBenchmarkedAt ? (
-            <p className="mt-1 text-[11px] text-text-tertiary">
+            <p className="mt-2 text-[12px] text-text-tertiary">
               Last benchmark: {new Date(lastBenchmarkedAt).toLocaleString()}
             </p>
           ) : null}
@@ -234,23 +235,23 @@ export default function CompetitorsPage() {
         <div className="flex flex-wrap items-center gap-3">
           <Link
             href={`/projects/${projectId}/keywords`}
-            className="px-4 py-2.5 rounded-xl border border-border-subtle bg-surface-elevated text-text-secondary text-xs font-bold hover:border-brand-500/30 transition-all inline-flex items-center gap-2"
+            className="rounded-[30px] border border-border-subtle bg-surface-secondary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors inline-flex items-center gap-2"
           >
             Keywords
           </Link>
           <button
             onClick={handleRun}
             disabled={running}
-            className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold shadow-md shadow-cyan-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60 flex items-center gap-2"
+            className="rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60 flex items-center gap-2"
           >
             {running ? (
               <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <div className="w-4 h-4 border-2 border-brand-on-primary/30 border-t-brand-on-primary rounded-full animate-spin" />
                 Benchmarking…
               </>
             ) : (
               <>
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <circle cx="12" cy="12" r="10" />
                   <circle cx="12" cy="12" r="6" />
                   <circle cx="12" cy="12" r="2" />
@@ -263,25 +264,25 @@ export default function CompetitorsPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-400">{error}</div>
+        <div className="rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">{error}</div>
       )}
       {lastRunSummary && !error && (
-        <div className="rounded-xl border border-accent-500/20 bg-accent-500/5 p-4 text-sm text-accent-400">
+        <div className="rounded-[16px] border border-brand-action/20 bg-brand-action/5 p-5 text-[14px] text-brand-action">
           {lastRunSummary}
         </div>
       )}
 
       {/* Ahrefs Rank Tracker Project ID config */}
-      <div className="rounded-xl border border-border-subtle bg-surface-secondary/30 px-4 py-3 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <svg className="w-4 h-4 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <div className="rounded-[16px] border border-border-subtle bg-surface-secondary p-5 flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <svg className="w-5 h-5 text-brand-action shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25Z" />
           </svg>
-          <span className="text-xs font-bold text-text-secondary">Ahrefs Rank Tracker Project ID</span>
+          <span className="text-[14px] font-medium text-text-primary">Ahrefs Rank Tracker Project ID</span>
           {!rtIdEditing && (
-            <span className="text-xs text-text-tertiary">
+            <span className="text-[14px] text-text-tertiary">
               {project?.ahrefs_rank_tracker_project_id
-                ? <span className="text-cyan-400 font-mono">{project.ahrefs_rank_tracker_project_id}</span>
+                ? <span className="text-brand-action font-mono">{project.ahrefs_rank_tracker_project_id}</span>
                 : <span className="italic">not set</span>}
             </span>
           )}
@@ -293,20 +294,20 @@ export default function CompetitorsPage() {
               onChange={e => setRtIdInput(e.target.value)}
               placeholder="e.g. 8024646"
               inputMode="numeric"
-              className="input-field w-36 text-xs py-1.5"
+              className="rounded-[4px] border border-border-subtle bg-surface-elevated px-3 py-1.5 text-[13px] text-text-primary outline-none focus:border-brand-action w-36"
               autoFocus
               onKeyDown={e => { if (e.key === "Enter") void handleSaveRtId(); if (e.key === "Escape") setRtIdEditing(false); }}
             />
             <button
               onClick={() => void handleSaveRtId()}
               disabled={rtIdSaving}
-              className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold disabled:opacity-60 transition-all"
+              className="rounded-[4px] bg-brand-primary px-3 py-1.5 text-[13px] font-medium text-brand-on-primary disabled:opacity-60 transition-all"
             >
               {rtIdSaving ? "Saving…" : "Save"}
             </button>
             <button
               onClick={() => { setRtIdEditing(false); setRtIdInput(String(project?.ahrefs_rank_tracker_project_id ?? "")); }}
-              className="px-3 py-1.5 rounded-lg border border-border-subtle text-text-tertiary text-xs font-bold hover:text-text-secondary transition-all"
+              className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:text-text-primary transition-all"
             >
               Cancel
             </button>
@@ -314,34 +315,40 @@ export default function CompetitorsPage() {
         ) : (
           <button
             onClick={() => setRtIdEditing(true)}
-            className="text-xs font-bold text-brand-400 hover:text-brand-300 transition-colors shrink-0"
+            className="text-[13px] font-medium text-brand-action hover:underline transition-colors shrink-0"
           >
             {project?.ahrefs_rank_tracker_project_id ? "Edit" : "Set ID"}
           </button>
         )}
-        <p className="w-full text-[10px] text-text-tertiary -mt-1">
+        <p className="w-full text-[12px] text-text-tertiary mt-1">
           Found in Ahrefs → Rank Tracker → your project URL. Pulls top 10 competitor pages from your tracked keywords.
         </p>
       </div>
 
       {loading ? (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-20 w-full animate-pulse rounded-2xl border border-border-subtle bg-surface-secondary/50" />
+            <div key={i} className="h-24 w-full animate-pulse rounded-[16px] border border-border-subtle bg-surface-elevated" />
           ))}
         </div>
       ) : !hasBenchmark ? (
-        <div className="rounded-3xl border-2 border-dashed border-border-subtle py-24 text-center">
-          <div className="mb-4 text-5xl">📡</div>
-          <h3 className="mb-2 text-lg font-bold text-text-secondary">No benchmark yet</h3>
-          <p className="mb-6 text-sm text-text-tertiary max-w-md mx-auto">
+        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
+          <div className="mb-6 flex justify-center">
+            <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
+              <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
+              </svg>
+            </div>
+          </div>
+          <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No benchmark yet</h3>
+          <p className="mb-8 text-[16px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
             We'll pull the real SERP competitors for your niche, scrape their best pages via Jina, extract the
             keywords they rank for, and score every opportunity with DataForSEO volumes.
           </p>
           <button
             onClick={handleRun}
             disabled={running}
-            className="rounded-2xl bg-cyan-500 hover:bg-cyan-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-cyan-500/20 hover:-translate-y-0.5 disabled:opacity-60"
+            className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {running ? "Benchmarking…" : "Run benchmark"}
           </button>
@@ -355,7 +362,7 @@ export default function CompetitorsPage() {
             gaps={gaps}
           />
 
-          <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border-subtle bg-surface-secondary/50 p-1 w-fit">
+          <div className="flex flex-wrap items-center gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
             <TabButton id="opportunities" active={tab} onClick={setTab}>
               Opportunity Dashboard ({gaps.length})
             </TabButton>
@@ -420,8 +427,8 @@ function TabButton({
     <button
       type="button"
       onClick={() => onClick(id)}
-      className={`rounded-lg px-5 py-2 text-xs font-bold transition-all ${
-        isActive ? "bg-brand-500 text-white shadow-sm" : "text-text-tertiary hover:text-text-secondary"
+      className={`rounded-[4px] px-4 py-2 text-[14px] font-medium transition-all ${
+        isActive ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
       }`}
     >
       {children}
@@ -442,7 +449,7 @@ function BenchmarkOverview({
 }) {
   const topGap = [...gaps].sort((a, b) => b.opportunity_score - a.opportunity_score)[0];
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
       <StatCard label="Competitors" value={competitors.length.toString()} hint="benchmarked domains" />
       <StatCard
         label="Keywords mined"
@@ -465,10 +472,10 @@ function BenchmarkOverview({
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="glass-card p-5">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1">{label}</p>
-      <p className="text-2xl font-black text-text-primary">{value}</p>
-      {hint ? <p className="text-[11px] text-text-tertiary mt-0.5">{hint}</p> : null}
+    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6 flex flex-col justify-center">
+      <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary mb-1.5">{label}</p>
+      <p className="font-mono text-[28px] font-bold tracking-tight text-text-primary">{value}</p>
+      {hint ? <p className="text-[13px] text-text-tertiary mt-1">{hint}</p> : null}
     </div>
   );
 }
@@ -485,14 +492,14 @@ function OpportunityDashboard({
   onGenerateBlog: (keyword: string) => void;
 }) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {averages?.recommendations?.length ? (
-        <div className="glass-card border-cyan-500/10 bg-cyan-500/8 p-5">
-          <h3 className="font-bold text-text-primary mb-2">Content benchmark recommendations</h3>
-          <ul className="space-y-1 text-sm text-text-secondary">
+        <div className="rounded-[16px] border border-brand-action/20 bg-brand-action/5 p-6">
+          <h3 className="text-[18px] font-medium text-text-primary mb-4">Content benchmark recommendations</h3>
+          <ul className="space-y-2 text-[14px] text-text-secondary">
             {averages.recommendations.map((r, i) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-cyan-400">·</span>
+              <li key={i} className="flex gap-3">
+                <span className="text-brand-action font-bold">·</span>
                 <span>{r}</span>
               </li>
             ))}
@@ -501,14 +508,14 @@ function OpportunityDashboard({
       ) : null}
 
       {topOpportunities.length === 0 ? (
-        <div className="rounded-3xl border-2 border-dashed border-border-subtle py-16 text-center text-sm text-text-tertiary">
+        <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
           No opportunities yet. Run a benchmark.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30 backdrop-blur-md">
+        <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
           <div className="overflow-x-auto">
             <table className="w-full text-left">
-              <thead className="bg-surface-tertiary/50 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+              <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
                   <th className="px-4 py-3">Keyword</th>
                   <th className="px-4 py-3 text-center">Gap</th>
@@ -520,57 +527,57 @@ function OpportunityDashboard({
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle">
+              <tbody className="divide-y divide-border-subtle/60">
                 {topOpportunities.map(g => (
-                  <tr key={g.id} className="transition-colors hover:bg-white/[0.02]">
+                  <tr key={g.id} className="transition-colors hover:bg-surface-hover">
                     <td className="px-4 py-3 max-w-[280px]">
-                      <p className="text-sm font-semibold text-text-primary truncate">{g.keyword}</p>
+                      <p className="text-[14px] font-medium text-text-primary truncate">{g.keyword}</p>
                       {g.reasoning ? (
-                        <p className="text-[11px] text-text-tertiary truncate" title={g.reasoning}>
+                        <p className="mt-1 text-[11px] text-text-tertiary truncate" title={g.reasoning}>
                           {g.reasoning}
                         </p>
                       ) : null}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span
-                        className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize ${GAP_STYLES[g.gap_type]}`}
+                        className={`inline-block rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${GAP_STYLES[g.gap_type]}`}
                       >
                         {g.gap_type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right text-sm font-bold text-text-primary">
+                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
                       {g.volume > 0 ? g.volume.toLocaleString() : "—"}
                     </td>
-                    <td className="px-4 py-3 text-center text-xs font-bold">
-                      <span className={g.trend_pct > 0 ? "text-accent-400" : g.trend_pct < 0 ? "text-rose-400" : "text-text-tertiary"}>
+                    <td className="px-4 py-3 text-center text-[12px] font-bold">
+                      <span className={g.trend_pct > 0 ? "text-[#10b981]" : g.trend_pct < 0 ? "text-brand-coral" : "text-text-tertiary"}>
                         {formatTrend(g.trend, g.trend_pct)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-2">
-                        <div className="h-1.5 w-14 overflow-hidden rounded-full bg-surface-elevated">
+                        <div className="h-1.5 w-14 overflow-hidden rounded-full bg-surface-tertiary">
                           <div
-                            className={`h-full ${g.competitor_weakness >= 60 ? "bg-accent-500" : g.competitor_weakness >= 30 ? "bg-yellow-500" : "bg-rose-500"}`}
+                            className={`h-full rounded-full ${g.competitor_weakness >= 60 ? "bg-[#10b981]" : g.competitor_weakness >= 30 ? "bg-[#f59e0b]" : "bg-brand-coral"}`}
                             style={{ width: `${g.competitor_weakness}%` }}
                           />
                         </div>
-                        <span className="text-[11px] font-bold text-text-secondary">{g.competitor_weakness}</span>
+                        <span className="text-[12px] font-bold text-text-secondary">{g.competitor_weakness}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`rounded-full border px-2.5 py-1 text-xs font-black ${scoreColor(g.opportunity_score)}`}>
+                      <span className={`rounded-[4px] border px-2.5 py-1 text-[12px] font-mono ${scoreColor(g.opportunity_score)}`}>
                         {g.opportunity_score}
                       </span>
                     </td>
                     <td className="px-4 py-3 max-w-[220px]">
-                      <p className="text-xs font-bold text-cyan-400 truncate">{g.top_competitor_domain}</p>
+                      <p className="text-[12px] font-bold text-brand-action truncate">{g.top_competitor_domain}</p>
                       {g.top_competitor_url ? (
                         <a
                           href={g.top_competitor_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           title={g.top_competitor_url}
-                          className="block truncate text-[11px] text-brand-400 hover:underline"
+                          className="block truncate text-[11px] text-brand-action/80 hover:underline mt-1"
                         >
                           {compactUrl(g.top_competitor_url)} ↗
                         </a>
@@ -581,7 +588,7 @@ function OpportunityDashboard({
                         type="button"
                         onClick={() => onGenerateBlog(g.keyword)}
                         disabled={generatingKeyword === g.keyword}
-                        className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                        className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
                       >
                         {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
                       </button>
@@ -607,41 +614,45 @@ function CompetitorList({
   onToggle: (id: string) => void;
 }) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {competitors.map(c => {
         const expanded = expandedId === c.id;
         return (
-          <div key={c.id} className="rounded-2xl border border-border-subtle bg-surface-secondary/30 backdrop-blur-md">
+          <div key={c.id} className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
             <button
               type="button"
               onClick={() => onToggle(c.id)}
-              className="w-full flex flex-wrap items-center justify-between gap-3 p-4 text-left hover:bg-white/[0.02] transition-colors"
+              className="w-full flex flex-wrap items-center justify-between gap-4 p-5 text-left hover:bg-surface-hover transition-colors"
             >
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-4 min-w-0">
                 <DomainLogo domain={c.domain} />
                 <div className="min-w-0">
-                  <p className="text-sm font-bold text-text-primary truncate">{c.domain}</p>
-                  <p className="text-[11px] text-text-tertiary truncate">
+                  <p className="text-[16px] font-medium text-text-primary truncate">{c.domain}</p>
+                  <p className="mt-1 text-[13px] text-text-tertiary truncate">
                     {c.pages_scraped} pages analyzed · {c.top_pages?.length ?? 0} snapshots
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-4 text-xs text-text-tertiary">
+              <div className="flex items-center gap-6 text-[13px] text-text-tertiary">
                 <MiniStat label="Words" value={c.avg_word_count.toLocaleString()} />
                 <MiniStat label="H2" value={String(c.avg_h2)} />
                 <MiniStat label="H3" value={String(c.avg_h3)} />
                 <MiniStat label="FAQ" value={`${c.faq_pages_pct}%`} />
-                <span className="text-text-tertiary">{expanded ? "▲" : "▼"}</span>
+                <span className="text-text-tertiary ml-2">
+                  <svg className={`w-5 h-5 transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </span>
               </div>
             </button>
             {expanded ? (
-              <div className="border-t border-border-subtle p-4 space-y-3">
+              <div className="border-t border-border-subtle p-5 space-y-6 bg-surface-secondary">
                 {c.recommendations?.length ? (
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1">
+                    <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary mb-3">
                       Recommendations
                     </p>
-                    <ul className="space-y-0.5 text-xs text-text-secondary">
+                    <ul className="space-y-1.5 text-[14px] text-text-secondary">
                       {c.recommendations.map((r, i) => (
                         <li key={i}>· {r}</li>
                       ))}
@@ -650,32 +661,32 @@ function CompetitorList({
                 ) : null}
                 {c.top_pages?.length ? (
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1">
+                    <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary mb-3">
                       Pages sampled
                     </p>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs">
-                        <thead className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                    <div className="overflow-x-auto rounded-[8px] border border-border-subtle bg-surface-elevated">
+                      <table className="w-full text-left text-[13px]">
+                        <thead className="text-[11px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle bg-surface-secondary">
                           <tr>
-                            <th className="py-2 pr-2">Page</th>
-                            <th className="py-2 text-right">Words</th>
-                            <th className="py-2 text-center">H2</th>
-                            <th className="py-2 text-center">H3</th>
-                            <th className="py-2 text-center">Images</th>
-                            <th className="py-2 text-center">Int / Ext</th>
-                            <th className="py-2 text-center">FAQ</th>
+                            <th className="p-3">Page</th>
+                            <th className="p-3 text-right">Words</th>
+                            <th className="p-3 text-center">H2</th>
+                            <th className="p-3 text-center">H3</th>
+                            <th className="p-3 text-center">Images</th>
+                            <th className="p-3 text-center">Int / Ext</th>
+                            <th className="p-3 text-center">FAQ</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-border-subtle">
+                        <tbody className="divide-y divide-border-subtle/60">
                           {c.top_pages.map((p, i) => (
-                            <tr key={`${p.url}-${i}`} className="text-text-secondary">
-                              <td className="py-2 pr-2 max-w-[280px] truncate">
+                            <tr key={`${p.url}-${i}`} className="text-text-secondary hover:bg-surface-hover transition-colors">
+                              <td className="p-3 max-w-[280px] truncate">
                                 {p.url ? (
                                   <a
                                     href={p.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-brand-400 hover:underline"
+                                    className="text-brand-action hover:underline"
                                     title={p.title}
                                   >
                                     {p.title || p.url}
@@ -684,14 +695,14 @@ function CompetitorList({
                                   <span>{p.title}</span>
                                 )}
                               </td>
-                              <td className="py-2 text-right">{p.word_count.toLocaleString()}</td>
-                              <td className="py-2 text-center">{p.h2_count}</td>
-                              <td className="py-2 text-center">{p.h3_count}</td>
-                              <td className="py-2 text-center">{p.image_count}</td>
-                              <td className="py-2 text-center">
+                              <td className="p-3 text-right font-mono">{p.word_count.toLocaleString()}</td>
+                              <td className="p-3 text-center font-mono">{p.h2_count}</td>
+                              <td className="p-3 text-center font-mono">{p.h3_count}</td>
+                              <td className="p-3 text-center font-mono">{p.image_count}</td>
+                              <td className="p-3 text-center font-mono">
                                 {p.internal_link_count} / {p.external_link_count}
                               </td>
-                              <td className="py-2 text-center">{p.has_faq ? "✓" : "—"}</td>
+                              <td className="p-3 text-center font-mono">{p.has_faq ? "✓" : "—"}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -711,8 +722,8 @@ function CompetitorList({
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="text-right">
-      <p className="text-[9px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>
-      <p className="text-xs font-bold text-text-primary">{value}</p>
+      <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>
+      <p className="text-[14px] font-medium text-text-primary mt-0.5">{value}</p>
     </div>
   );
 }
@@ -739,15 +750,15 @@ function KeywordGapTable({
     { id: "untapped", label: "Untapped" },
   ];
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-1 rounded-xl border border-border-subtle bg-surface-secondary/50 p-1 w-fit">
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
         {filters.map(f => (
           <button
             key={f.id}
             type="button"
             onClick={() => onFilterChange(f.id)}
-            className={`rounded-lg px-4 py-1.5 text-xs font-bold capitalize transition-all ${
-              filter === f.id ? "bg-brand-500 text-white" : "text-text-tertiary hover:text-text-secondary"
+            className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
+              filter === f.id ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
             }`}
           >
             {f.label} ({counts[f.id]})
@@ -756,14 +767,14 @@ function KeywordGapTable({
       </div>
 
       {gaps.length === 0 ? (
-        <div className="rounded-3xl border-2 border-dashed border-border-subtle py-16 text-center text-sm text-text-tertiary">
+        <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
           No keyword gaps match this filter.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30 backdrop-blur-md">
+        <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
           <div className="overflow-x-auto">
             <table className="w-full text-left">
-              <thead className="bg-surface-tertiary/50 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+              <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
                   <th className="px-4 py-3">Keyword</th>
                   <th className="px-4 py-3 text-center">Type</th>
@@ -774,39 +785,39 @@ function KeywordGapTable({
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle">
+              <tbody className="divide-y divide-border-subtle/60">
                 {gaps.map(g => (
-                  <tr key={g.id} className="transition-colors hover:bg-white/[0.02]">
+                  <tr key={g.id} className="transition-colors hover:bg-surface-hover">
                     <td className="px-4 py-3 max-w-[280px]">
-                      <p className="text-sm font-semibold text-text-primary truncate">{g.keyword}</p>
+                      <p className="text-[14px] font-medium text-text-primary truncate">{g.keyword}</p>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize ${GAP_STYLES[g.gap_type]}`}>
+                      <span className={`inline-block rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${GAP_STYLES[g.gap_type]}`}>
                         {g.gap_type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right text-sm font-bold text-text-primary">
+                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
                       {g.volume > 0 ? g.volume.toLocaleString() : "—"}
                     </td>
-                    <td className="px-4 py-3 text-center text-xs font-bold">
-                      <span className={g.trend_pct > 0 ? "text-accent-400" : g.trend_pct < 0 ? "text-rose-400" : "text-text-tertiary"}>
+                    <td className="px-4 py-3 text-center text-[12px] font-bold">
+                      <span className={g.trend_pct > 0 ? "text-[#10b981]" : g.trend_pct < 0 ? "text-brand-coral" : "text-text-tertiary"}>
                         {formatTrend(g.trend, g.trend_pct)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`rounded-full border px-2.5 py-1 text-xs font-black ${scoreColor(g.opportunity_score)}`}>
+                      <span className={`rounded-[4px] border px-2.5 py-1 text-[12px] font-mono ${scoreColor(g.opportunity_score)}`}>
                         {g.opportunity_score}
                       </span>
                     </td>
                     <td className="px-4 py-3 max-w-[220px]">
-                      <p className="text-xs font-bold text-cyan-400 truncate">{g.top_competitor_domain}</p>
+                      <p className="text-[12px] font-bold text-brand-action truncate">{g.top_competitor_domain}</p>
                       {g.top_competitor_url ? (
                         <a
                           href={g.top_competitor_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           title={g.top_competitor_url}
-                          className="block truncate text-[11px] text-brand-400 hover:underline"
+                          className="block truncate text-[11px] text-brand-action/80 hover:underline mt-1"
                         >
                           {compactUrl(g.top_competitor_url)} ↗
                         </a>
@@ -817,7 +828,7 @@ function KeywordGapTable({
                         type="button"
                         onClick={() => onGenerateBlog(g.keyword)}
                         disabled={generatingKeyword === g.keyword}
-                        className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                        className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
                       >
                         {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
                       </button>

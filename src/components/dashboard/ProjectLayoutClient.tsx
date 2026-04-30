@@ -11,7 +11,7 @@ export default function ProjectLayoutClient({
   children,
 }: {
   project: Project;
-  stats?: { approvedKeywords: number; calendarEntries: number; blogsGenerated: number };
+  stats?: { approvedKeywords: number; calendarEntries: number; blogsGenerated: number; auditPending?: number };
   allProjects: Project[];
   children: React.ReactNode;
 }) {

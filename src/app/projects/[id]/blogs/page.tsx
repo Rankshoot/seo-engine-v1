@@ -8,10 +8,10 @@ import { BlogStatus, WORD_COUNT_OPTIONS } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-  scheduled: { label: "Scheduled", color: "bg-surface-elevated text-text-tertiary border-border-subtle" },
-  generating: { label: "Generating...", color: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20 animate-pulse" },
-  generated: { label: "Generated", color: "bg-accent-500/10 text-accent-400 border-accent-500/20" },
-  approved: { label: "Approved", color: "bg-brand-500/10 text-brand-400 border-brand-500/20" },
+  scheduled: { label: "Scheduled", color: "bg-surface-secondary text-text-tertiary border-border-subtle" },
+  generating: { label: "Generating...", color: "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20 animate-pulse" },
+  generated: { label: "Generated", color: "bg-[#10b981]/10 text-[#10b981] border-[#10b981]/20" },
+  approved: { label: "Approved", color: "bg-brand-action/10 text-brand-action border-brand-action/20" },
   published: { label: "Published", color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
 };
 
@@ -118,38 +118,50 @@ export default function BlogsPage() {
   const readyCount = entries.filter(e => e.blog).length;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
+    <div className="space-y-10 pb-16 pl-4 pr-4 mx-auto">
+      {/* ── HEADER ─────────────────────────────────────────────────────────── */}
+      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-black tracking-tight text-text-primary mb-1">
-            Blog <span className="gradient-text">Generator</span>
+          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
+            Blog Generator
           </h1>
-          <p className="text-text-tertiary text-sm">Generate blogs one at a time. Review each before downloading.</p>
+          <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
+            Generate blogs one at a time. Review each before downloading.
+          </p>
         </div>
         {readyCount > 0 && (
           <div className="text-right">
-            <p className="text-2xl font-black text-accent-400">{readyCount}</p>
-            <p className="text-xs text-text-tertiary">blogs generated</p>
+            <p className="text-[28px] font-normal tracking-tight text-text-primary font-display">{readyCount}</p>
+            <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary">blogs generated</p>
           </div>
         )}
       </div>
 
       {loading ? (
-        <div className="space-y-3">
-          {[...Array(5)].map((_, i) => <div key={i} className="h-24 animate-pulse bg-surface-secondary/50 rounded-2xl border border-border-subtle" />)}
+        <div className="space-y-4">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-32 animate-pulse bg-surface-elevated rounded-[16px] border border-border-subtle" />
+          ))}
         </div>
       ) : entries.length === 0 ? (
-        <div className="text-center py-24 border-2 border-dashed border-border-subtle rounded-3xl">
-          <div className="text-5xl mb-4">📝</div>
-          <h3 className="text-lg font-bold text-text-secondary mb-2">No calendar yet</h3>
-          <p className="text-sm text-text-tertiary mb-4">Generate your content calendar first.</p>
-          <Link href={`/projects/${projectId}/calendar`} className="text-brand-400 font-bold hover:underline text-sm">
-            → Go to Calendar
+        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
+          <div className="mb-6 flex justify-center">
+            <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
+              <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+              </svg>
+            </div>
+          </div>
+          <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No calendar yet</h3>
+          <p className="mb-8 text-[16px] text-text-tertiary max-w-md mx-auto">
+            Generate your content calendar first.
+          </p>
+          <Link href={`/projects/${projectId}/calendar`} className="inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90">
+            Go to Calendar
           </Link>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-6">
           {entries.map((entry: any, i: number) => {
             const hasBlog = Boolean(entry.blog);
             const blogStatus = asBlogStatus(entry.blog?.status);
@@ -162,47 +174,49 @@ export default function BlogsPage() {
               <div
                 key={entry.id}
                 ref={isHighlighted ? highlightRef : null}
-                className={`glass-card p-5 transition-all ${isHighlighted ? "ring-2 ring-brand-500/40 border-brand-500/30" : ""}`}
+                className={`rounded-[16px] border border-border-subtle bg-surface-elevated p-6 transition-all ${
+                  isHighlighted ? "ring-2 ring-brand-action/40 border-brand-action/30" : ""
+                }`}
               >
-                <div className="flex items-start gap-4">
+                <div className="flex flex-col md:flex-row items-start gap-6">
                   {/* Day number */}
-                  <div className="w-14 h-14 rounded-xl bg-surface-elevated border border-border-subtle flex flex-col items-center justify-center shrink-0">
-                    <span className="text-[9px] font-bold text-text-tertiary uppercase">
+                  <div className="w-16 h-16 rounded-[12px] bg-surface-secondary border border-border-subtle flex flex-col items-center justify-center shrink-0">
+                    <span className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
                       {new Date(entry.scheduled_date + "T00:00:00").toLocaleDateString("en-US", { month: "short" })}
                     </span>
-                    <span className="text-lg font-black text-text-primary leading-none">
+                    <span className="text-[20px] font-bold text-text-primary leading-none mt-1 font-mono">
                       {new Date(entry.scheduled_date + "T00:00:00").getDate()}
                     </span>
                   </div>
 
                   {/* Content */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-4 mb-2">
+                  <div className="flex-1 min-w-0 w-full">
+                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-4">
                       <div>
-                        <h3 className="text-sm font-bold text-text-primary leading-snug">{entry.title}</h3>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className="text-[10px] text-text-tertiary">{entry.focus_keyword}</span>
-                          <span className="text-[10px] text-text-tertiary/60">·</span>
-                          <span className="text-[10px] text-text-tertiary">{entry.article_type}</span>
+                        <h3 className="text-[18px] font-medium text-text-primary leading-snug">{entry.title}</h3>
+                        <div className="flex flex-wrap items-center gap-3 mt-2">
+                          <span className="text-[13px] text-text-tertiary">{entry.focus_keyword}</span>
+                          <span className="text-[13px] text-text-tertiary/40">·</span>
+                          <span className="text-[13px] text-text-tertiary">{entry.article_type}</span>
                           {hasBlog && (
                             <>
-                              <span className="text-[10px] text-text-tertiary/60">·</span>
-                              <span className="text-[10px] text-text-tertiary">{entry.blog.word_count.toLocaleString()} words</span>
+                              <span className="text-[13px] text-text-tertiary/40">·</span>
+                              <span className="text-[13px] text-text-tertiary">{entry.blog.word_count.toLocaleString()} words</span>
                             </>
                           )}
                         </div>
                       </div>
-                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border shrink-0 ${cfg.color}`}>
+                      <span className={`inline-flex items-center justify-center text-[11px] font-bold px-2.5 py-1 rounded-[4px] border shrink-0 uppercase tracking-widest ${cfg.color}`}>
                         {cfg.label}
                       </span>
                     </div>
 
                     {error[entry.id] && (
-                      <p className="text-xs text-rose-400 mb-2">{error[entry.id]}</p>
+                      <p className="text-[13px] text-brand-coral mb-4">{error[entry.id]}</p>
                     )}
 
                     {hasBlog && (
-                      <div className="mb-3 inline-flex items-center gap-3 rounded-xl border border-border-subtle bg-surface-elevated/60 px-3 py-2">
+                      <div className="mb-4 inline-flex items-center gap-3 rounded-[8px] border border-border-subtle bg-surface-secondary px-3 py-2">
                         <span className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
                           Status
                         </span>
@@ -210,7 +224,7 @@ export default function BlogsPage() {
                           value={blogStatus}
                           onChange={e => handleStatusChange(entry.id, entry.blog.id, e.target.value as BlogStatus)}
                           disabled={savingStatus === entry.blog.id}
-                          className="bg-transparent text-xs font-bold text-text-primary outline-none disabled:opacity-60"
+                          className="bg-transparent text-[13px] font-medium text-text-primary outline-none disabled:opacity-60 cursor-pointer"
                         >
                           {BLOG_STATUSES.map(status => (
                             <option key={status.value} value={status.value}>
@@ -219,20 +233,20 @@ export default function BlogsPage() {
                           ))}
                         </select>
                         {savingStatus === entry.blog.id && (
-                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-brand-500/30 border-t-brand-400" />
+                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
                         )}
                       </div>
                     )}
 
                     {/* Actions */}
-                    <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex flex-wrap items-center gap-3">
                       {!hasBlog ? (
                         <>
                           {/* Word count selector */}
                           <select
                             value={wc}
                             onChange={e => setWordCounts(prev => ({ ...prev, [entry.id]: +e.target.value }))}
-                            className="text-[10px] font-bold bg-surface-elevated border border-border-subtle rounded-lg px-2 py-1.5 text-text-secondary outline-none"
+                            className="text-[13px] font-medium bg-surface-secondary border border-border-subtle rounded-[4px] px-3 py-2 text-text-secondary outline-none hover:border-brand-action transition-colors cursor-pointer"
                           >
                             {WORD_COUNT_OPTIONS.map(opt => (
                               <option key={opt} value={opt}>{opt.toLocaleString()} words</option>
@@ -242,10 +256,10 @@ export default function BlogsPage() {
                           <button
                             onClick={() => handleGenerate(entry.id)}
                             disabled={isGenerating || generating !== null}
-                            className="px-5 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-[10px] font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                            className="rounded-[32px] bg-brand-primary px-5 py-2 text-[13px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60 flex items-center gap-2"
                           >
                             {isGenerating ? (
-                              <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Writing blog...</>
+                              <><div className="w-3.5 h-3.5 border-2 border-brand-on-primary/30 border-t-brand-on-primary rounded-full animate-spin" /> Writing blog...</>
                             ) : "Generate Blog"}
                           </button>
                         </>
@@ -253,40 +267,44 @@ export default function BlogsPage() {
                         <>
                           <Link
                             href={`/projects/${projectId}/blogs/${entry.blog.id}`}
-                            className="px-4 py-1.5 rounded-lg bg-surface-elevated text-xs font-bold text-text-secondary border border-border-subtle hover:border-brand-500/30 hover:text-brand-400 transition-all"
+                            className="rounded-[30px] border border-border-subtle bg-surface-secondary px-5 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
                           >
                             View Blog
                           </Link>
 
                           {/* Download buttons */}
-                          {(["markdown", "html", "txt", "docx"] as const).map(fmt => (
-                            <button
-                              key={fmt}
-                              onClick={() => handleDownload(entry, fmt)}
-                              disabled={downloading === entry.id + fmt}
-                              className="px-3 py-1.5 rounded-lg bg-accent-500/10 text-accent-400 border border-accent-500/20 text-[10px] font-bold uppercase hover:bg-accent-500/20 transition-all disabled:opacity-60"
-                            >
-                              {downloading === entry.id + fmt ? "..." : `.${fmt === "markdown" ? "md" : fmt}`}
-                            </button>
-                          ))}
+                          <div className="flex flex-wrap items-center gap-2 border-l border-border-subtle pl-3 ml-1">
+                            {(["markdown", "html", "txt", "docx"] as const).map(fmt => (
+                              <button
+                                key={fmt}
+                                onClick={() => handleDownload(entry, fmt)}
+                                disabled={downloading === entry.id + fmt}
+                                className="rounded-[4px] bg-surface-secondary text-text-secondary border border-border-subtle px-3 py-2 text-[11px] font-bold uppercase tracking-widest hover:bg-surface-hover hover:text-text-primary transition-all disabled:opacity-60"
+                              >
+                                {downloading === entry.id + fmt ? "..." : `.${fmt === "markdown" ? "md" : fmt}`}
+                              </button>
+                            ))}
+                          </div>
 
                           {/* Regenerate with word count */}
-                          <select
-                            value={wc}
-                            onChange={e => setWordCounts(prev => ({ ...prev, [entry.id]: +e.target.value }))}
-                            className="text-[10px] font-bold bg-surface-elevated border border-border-subtle rounded-lg px-2 py-1.5 text-text-secondary outline-none"
-                          >
-                            {WORD_COUNT_OPTIONS.map(opt => (
-                              <option key={opt} value={opt}>{opt.toLocaleString()}w</option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => handleGenerate(entry.id)}
-                            disabled={isGenerating || generating !== null}
-                            className="px-3 py-1.5 rounded-lg border border-border-subtle text-[10px] font-bold text-text-tertiary hover:text-text-secondary hover:border-brand-500/20 transition-all disabled:opacity-60"
-                          >
-                            Regenerate
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2 border-l border-border-subtle pl-3 ml-1">
+                            <select
+                              value={wc}
+                              onChange={e => setWordCounts(prev => ({ ...prev, [entry.id]: +e.target.value }))}
+                              className="text-[13px] font-medium bg-surface-secondary border border-border-subtle rounded-[4px] px-3 py-2 text-text-secondary outline-none hover:border-brand-action transition-colors cursor-pointer"
+                            >
+                              {WORD_COUNT_OPTIONS.map(opt => (
+                                <option key={opt} value={opt}>{opt.toLocaleString()}w</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => handleGenerate(entry.id)}
+                              disabled={isGenerating || generating !== null}
+                              className="rounded-[4px] border border-border-subtle bg-surface-secondary px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
+                            >
+                              Regenerate
+                            </button>
+                          </div>
                         </>
                       )}
                     </div>

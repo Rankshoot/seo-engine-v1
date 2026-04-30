@@ -13,6 +13,7 @@ const Icon = {
   calendar: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>,
   fileText: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><line x1="10" x2="8" y1="9" y2="9"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/></svg>,
   target: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>,
+  audit: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0 1 12 2.944a11.955 11.955 0 0 1-8.618 3.04A12.02 12.02 0 0 0 3 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>,
   arrowLeft: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>,
   chevronDown: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
   chevronRight: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
@@ -22,7 +23,7 @@ const Icon = {
 
 interface ProjectSidebarProps {
   project: Project;
-  stats?: { approvedKeywords: number; calendarEntries: number; blogsGenerated: number };
+  stats?: { approvedKeywords: number; calendarEntries: number; blogsGenerated: number; auditPending?: number };
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
@@ -65,6 +66,13 @@ export default function ProjectSidebar({
       icon: Icon.target,
       label: "Competitors",
       href: `${base}/competitors`,
+    },
+    {
+      icon: Icon.audit,
+      label: "Content Health",
+      href: `${base}/audit`,
+      badge: stats?.auditPending ? `${stats.auditPending}` : undefined,
+      badgeColor: stats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
     },
     {
       icon: Icon.calendar,
@@ -223,7 +231,7 @@ export default function ProjectSidebar({
                   
                   <span className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[100px] opacity-100 ml-2"}`}>
                     {item.badge && (
-                      <span className="text-[10px] font-medium bg-surface-tertiary px-2 py-0.5 rounded-[4px] text-text-secondary border border-border-subtle">
+                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-[4px] border ${item.badgeColor || "bg-surface-tertiary text-text-secondary border-border-subtle"}`}>
                         {item.badge}
                       </span>
                     )}

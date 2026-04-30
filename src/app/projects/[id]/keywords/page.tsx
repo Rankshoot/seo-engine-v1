@@ -32,13 +32,13 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 
 const STATUS_COLORS: Record<KeywordStatus, string> = {
-  approved: "bg-accent-500/10 text-accent-400 border-accent-500/20",
-  rejected: "bg-rose-500/10 text-rose-400 border-rose-500/20",
-  pending: "bg-surface-elevated text-text-tertiary border-border-subtle",
+  approved: "bg-brand-action/10 text-brand-action border-brand-action/20",
+  rejected: "bg-brand-coral/10 text-brand-coral border-brand-coral/20",
+  pending: "bg-surface-secondary text-text-tertiary border-border-subtle",
 };
 
 const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-accent-400" : kd < 60 ? "text-yellow-400" : "text-rose-400";
+  kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
 const KD_LABEL = (kd: number) =>
   kd === 0 ? "—" : kd < 30 ? "Easy" : kd < 60 ? "Medium" : "Hard";
 
@@ -407,13 +407,14 @@ export default function KeywordsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="space-y-10 pb-16 max-w-full pl-4 pr-4 mx-auto">
+      {/* ── HEADER ─────────────────────────────────────────────────────────── */}
+      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-black tracking-tight text-text-primary mb-1">
-            Keyword <span className="gradient-text">workflow</span>
+          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
+            Keyword workflow
           </h1>
-          <p className="text-text-tertiary text-sm max-w-xl">
+          <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
             Step 1: discover industry demand. Step 2: see what competitors publish, compare both, pick a cluster, then
             open the calendar to generate blogs.
           </p>
@@ -421,20 +422,20 @@ export default function KeywordsPage() {
         <div className="flex flex-wrap items-center gap-3">
           <Link
             href={`/projects/${projectId}/audit`}
-            className="px-4 py-2.5 rounded-xl border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 text-xs font-bold hover:bg-yellow-500/15 transition-all inline-flex items-center gap-2"
+            className="rounded-[30px] border border-border-subtle bg-surface-primary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors inline-flex items-center gap-2"
           >
             Content health
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
             </svg>
           </Link>
           {counts.approved >= 5 && (
             <Link
               href={`/projects/${projectId}/calendar`}
-              className="px-5 py-2.5 rounded-xl bg-accent-500 hover:bg-accent-600 text-white text-xs font-bold shadow-md shadow-accent-500/20 hover:-translate-y-0.5 transition-all inline-flex items-center gap-2"
+              className="rounded-[30px] border border-border-subtle bg-surface-primary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors inline-flex items-center gap-2"
             >
               Calendar
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
             </Link>
@@ -442,7 +443,7 @@ export default function KeywordsPage() {
           <button
             onClick={handleDiscover}
             disabled={discovering}
-            className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 transition-all disabled:opacity-60 flex items-center gap-2"
+            className="rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60 flex items-center gap-2"
           >
             {discovering ? (
               <>
@@ -462,65 +463,71 @@ export default function KeywordsPage() {
         </div>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3 sm:items-center rounded-2xl border border-border-subtle bg-surface-secondary/30 p-4 text-sm">
-        <div className={`flex items-center gap-3 ${step1Done ? "text-accent-400" : "text-text-tertiary"}`}>
+      {/* ── PROGRESS STEPS ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row gap-4 sm:items-center rounded-[16px] border border-border-subtle bg-surface-elevated p-5">
+        <div className={`flex items-center gap-4 ${step1Done ? "text-text-primary" : "text-text-tertiary"}`}>
           <span
-            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-black ${
-              step1Done ? "bg-accent-500 text-white" : "bg-surface-elevated border border-border-subtle"
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] text-[14px] font-bold ${
+              step1Done ? "bg-brand-primary text-brand-on-primary" : "bg-surface-tertiary text-text-tertiary"
             }`}
           >
             1
           </span>
           <div>
-            <p className="font-bold text-text-primary">Industry keywords</p>
-            <p className="text-xs text-text-tertiary">Search volume, difficulty, approve the best seeds.</p>
+            <p className="text-[16px] font-medium leading-tight">Industry keywords</p>
+            <p className="mt-1 text-[13px] text-text-tertiary">Search volume, difficulty, approve the best seeds.</p>
           </div>
         </div>
-        <span className="hidden sm:block text-text-tertiary">→</span>
-        <div className={`flex items-center gap-3 ${step1Done ? "text-cyan-400" : "text-text-tertiary opacity-60"}`}>
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-surface-elevated text-xs font-black text-text-secondary">
+        <span className="hidden sm:block text-text-tertiary px-2">→</span>
+        <div className={`flex items-center gap-4 ${step1Done ? "text-text-primary" : "text-text-tertiary opacity-60"}`}>
+          <span
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] text-[14px] font-bold ${
+              activeTab === "competitor_gap" ? "bg-brand-primary text-brand-on-primary" : "bg-surface-tertiary text-text-tertiary"
+            }`}
+          >
             2
           </span>
           <div>
-            <p className="font-bold text-text-primary">Competitor gaps</p>
-            <p className="text-xs text-text-tertiary">Scan competitor sites, compare, pick a writing cluster.</p>
+            <p className="text-[16px] font-medium leading-tight">Competitor gaps</p>
+            <p className="mt-1 text-[13px] text-text-tertiary">Scan competitor sites, compare, pick a writing cluster.</p>
           </div>
         </div>
       </div>
 
-      <div className="glass-card border border-brand-500/15 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-500/15 text-brand-400">
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      {/* ── BUSINESS BRIEF ─────────────────────────────────────────────────── */}
+      <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-surface-tertiary text-text-primary">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2Z" />
               </svg>
             </div>
             <div>
-              <p className="text-sm font-bold text-text-primary">Business brief</p>
+              <p className="text-[16px] font-medium text-text-primary">Business brief</p>
               {brief ? (
-                <p className="text-xs text-text-tertiary">
+                <p className="mt-1 text-[13px] text-text-tertiary">
                   {brief.seed_phrases.length} seeds · scraped {brief.source_urls.length} pages
                   {briefUpdatedAt ? ` · updated ${new Date(briefUpdatedAt).toLocaleString()}` : ""}
                 </p>
               ) : (
-                <p className="text-xs text-text-tertiary">
+                <p className="mt-1 text-[13px] text-text-tertiary">
                   No brief yet — we'll auto-build one on your first Discover click.
                 </p>
               )}
               {brief?.summary ? (
-                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-text-secondary line-clamp-2">
+                <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-text-secondary line-clamp-2">
                   {brief.summary}
                 </p>
               ) : null}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             {brief ? (
               <button
                 type="button"
                 onClick={() => setBriefOpen(o => !o)}
-                className="rounded-lg border border-border-subtle bg-surface-elevated px-3 py-1.5 text-xs font-bold text-text-secondary hover:border-brand-500/30"
+                className="rounded-[4px] border border-border-subtle bg-surface-secondary px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
               >
                 {briefOpen ? "Hide details" : "View details"}
               </button>
@@ -529,16 +536,16 @@ export default function KeywordsPage() {
               type="button"
               onClick={handleRefreshBrief}
               disabled={refreshingBrief}
-              className="flex items-center gap-1.5 rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 py-1.5 text-xs font-bold text-brand-400 hover:bg-brand-500/20 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-[4px] border border-border-subtle bg-surface-secondary px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
             >
               {refreshingBrief ? (
                 <>
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-brand-400/30 border-t-brand-400" />
+                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
                   Scraping…
                 </>
               ) : (
                 <>
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
                   </svg>
                   {brief ? "Refresh brief" : "Generate brief"}
@@ -549,51 +556,51 @@ export default function KeywordsPage() {
         </div>
 
         {briefOpen && brief ? (
-          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="mt-6 grid grid-cols-1 gap-6 border-t border-border-subtle pt-6 md:grid-cols-2">
             {brief.products.length ? (
               <div>
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Products</p>
-                <div className="flex flex-wrap gap-1.5">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Products</p>
+                <div className="flex flex-wrap gap-2">
                   {brief.products.map(p => (
-                    <span key={p} className="rounded-full bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">{p}</span>
+                    <span key={p} className="rounded-[4px] bg-surface-secondary px-2.5 py-1 text-[13px] text-text-secondary">{p}</span>
                   ))}
                 </div>
               </div>
             ) : null}
             {brief.entities.length ? (
               <div>
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Entities</p>
-                <div className="flex flex-wrap gap-1.5">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Entities</p>
+                <div className="flex flex-wrap gap-2">
                   {brief.entities.slice(0, 18).map(e => (
-                    <span key={e} className="rounded-full bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">{e}</span>
+                    <span key={e} className="rounded-[4px] bg-surface-secondary px-2.5 py-1 text-[13px] text-text-secondary">{e}</span>
                   ))}
                 </div>
               </div>
             ) : null}
             {brief.audiences.length ? (
               <div>
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Audiences</p>
-                <ul className="space-y-0.5 text-xs text-text-secondary">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Audiences</p>
+                <ul className="space-y-1 text-[13px] text-text-secondary">
                   {brief.audiences.map(a => <li key={a}>· {a}</li>)}
                 </ul>
               </div>
             ) : null}
             {brief.usps.length ? (
               <div>
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">USPs</p>
-                <ul className="space-y-0.5 text-xs text-text-secondary">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">USPs</p>
+                <ul className="space-y-1 text-[13px] text-text-secondary">
                   {brief.usps.map(u => <li key={u}>· {u}</li>)}
                 </ul>
               </div>
             ) : null}
             {brief.seed_phrases.length ? (
               <div className="md:col-span-2">
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">
                   Seed phrases ({brief.seed_phrases.length})
                 </p>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-2">
                   {brief.seed_phrases.map(s => (
-                    <span key={s} className="rounded-full border border-brand-500/20 bg-brand-500/10 px-2 py-0.5 text-xs text-brand-400">
+                    <span key={s} className="rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2.5 py-1 text-[13px] text-brand-action">
                       {s}
                     </span>
                   ))}
@@ -602,11 +609,11 @@ export default function KeywordsPage() {
             ) : null}
             {brief.source_urls.length ? (
               <div className="md:col-span-2">
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Scraped pages</p>
-                <ul className="space-y-0.5 text-xs">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Scraped pages</p>
+                <ul className="space-y-1 text-[13px]">
                   {brief.source_urls.map(u => (
                     <li key={u} className="truncate">
-                      <a href={u} target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">{u}</a>
+                      <a href={u} target="_blank" rel="noopener noreferrer" className="text-brand-action hover:underline">{u}</a>
                     </li>
                   ))}
                 </ul>
@@ -616,12 +623,13 @@ export default function KeywordsPage() {
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border-subtle bg-surface-secondary/50 p-1 w-fit">
+      {/* ── TABS ───────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
         <button
           type="button"
           onClick={() => setActiveTab("keywords")}
-          className={`rounded-lg px-5 py-2 text-xs font-bold transition-all ${
-            activeTab === "keywords" ? "bg-brand-500 text-white shadow-sm" : "text-text-tertiary hover:text-text-secondary"
+          className={`rounded-[4px] px-4 py-2 text-[14px] font-medium transition-all ${
+            activeTab === "keywords" ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
           }`}
         >
           1 · Industry ({keywords.length})
@@ -631,9 +639,9 @@ export default function KeywordsPage() {
           onClick={() => step1Done && setActiveTab("competitor_gap")}
           disabled={!step1Done}
           title={!step1Done ? "Discover industry keywords in step 1 first" : undefined}
-          className={`rounded-lg px-5 py-2 text-xs font-bold transition-all ${
+          className={`rounded-[4px] px-4 py-2 text-[14px] font-medium transition-all ${
             activeTab === "competitor_gap"
-              ? "bg-brand-500 text-white shadow-sm"
+              ? "bg-surface-elevated text-text-primary shadow-sm"
               : step1Done
                 ? "text-text-tertiary hover:text-text-secondary"
                 : "cursor-not-allowed text-text-tertiary opacity-50"
@@ -643,36 +651,37 @@ export default function KeywordsPage() {
         </button>
       </div>
 
+      {/* ── TAB CONTENT: KEYWORDS ──────────────────────────────────────────── */}
       {activeTab === "keywords" && (
         <>
           {error && (
-            <div className="flex items-center gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-400">
+            <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
               {error}
             </div>
           )}
 
           {keywords.length > 0 && (
-            <div className="glass-card flex flex-wrap items-center gap-6 p-5">
+            <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6 flex flex-wrap items-center gap-6">
               <div>
-                <p className="mb-1 text-xs text-text-tertiary">Approved</p>
-                <p className="text-2xl font-black text-accent-400">
+                <p className="mb-1 text-[12px] font-bold uppercase tracking-widest text-text-tertiary">Approved</p>
+                <p className="text-[28px] font-normal tracking-tight text-text-primary font-display">
                   {counts.approved}{" "}
-                  <span className="text-sm font-normal text-text-tertiary">/ {keywords.length}</span>
+                  <span className="text-[16px] text-text-tertiary">/ {keywords.length}</span>
                 </p>
               </div>
-              <div className="h-2 min-w-[120px] flex-1 overflow-hidden rounded-full bg-surface-elevated">
+              <div className="h-2 min-w-[120px] flex-1 overflow-hidden rounded-full bg-surface-tertiary">
                 <div
-                  className="h-full rounded-full bg-accent-500 transition-all"
+                  className="h-full rounded-full bg-brand-action transition-all"
                   style={{ width: `${Math.min((counts.approved / keywords.length) * 100, 100)}%` }}
                 />
               </div>
-              <div className="text-right text-xs text-text-tertiary">
+              <div className="text-right text-[13px] text-text-tertiary">
                 {counts.approved < 5 ? `${5 - counts.approved} more approvals unlock the calendar wizard` : "Ready for calendar"}
                 {keywords.length > 0 && (
                   <button
                     type="button"
                     onClick={handleClearAll}
-                    className="mt-1 block text-[10px] text-text-tertiary hover:text-rose-400"
+                    className="mt-1.5 block text-[12px] text-text-tertiary hover:text-brand-coral transition-colors"
                   >
                     Clear all keywords
                   </button>
@@ -683,14 +692,14 @@ export default function KeywordsPage() {
 
           {keywords.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap gap-1 rounded-xl border border-border-subtle bg-surface-secondary/50 p-1">
+              <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1">
                 {(["all", "pending", "approved", "rejected"] as FilterTab[]).map(tab => (
                   <button
                     key={tab}
                     type="button"
                     onClick={() => setFilter(tab)}
-                    className={`rounded-lg px-4 py-1.5 text-xs font-bold capitalize transition-all ${
-                      filter === tab ? "bg-brand-500 text-white" : "text-text-tertiary hover:text-text-secondary"
+                    className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
+                      filter === tab ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
                     }`}
                   >
                     {tab} ({counts[tab]})
@@ -698,14 +707,14 @@ export default function KeywordsPage() {
                 ))}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-text-tertiary">Sort:</span>
+                <span className="text-[13px] text-text-tertiary">Sort:</span>
                 {(["analysis_score", "volume", "kd", "ai_score"] as const).map(s => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setSortBy(s)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${
-                      sortBy === s ? "bg-surface-elevated text-text-primary" : "text-text-tertiary hover:text-text-secondary"
+                    className={`rounded-[4px] px-3 py-1.5 text-[13px] font-medium transition-all ${
+                      sortBy === s ? "bg-surface-elevated text-text-primary border border-border-subtle shadow-sm" : "text-text-tertiary hover:text-text-secondary border border-transparent"
                     }`}
                   >
                     {s === "analysis_score"
@@ -722,27 +731,27 @@ export default function KeywordsPage() {
           )}
 
           {selected.size > 0 && (
-            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-500/20 bg-brand-500/10 p-4">
-              <span className="text-sm font-bold text-brand-400">{selected.size} selected</span>
-              <div className="ml-auto flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-4 rounded-[16px] border border-brand-action/30 bg-brand-action/5 p-4">
+              <span className="text-[14px] font-medium text-brand-action">{selected.size} selected</span>
+              <div className="ml-auto flex flex-wrap gap-3">
                 <button
                   type="button"
                   onClick={() => handleBulkUpdate("approved")}
-                  className="rounded-lg border border-accent-500/20 bg-accent-500/10 px-4 py-1.5 text-xs font-bold text-accent-400 hover:bg-accent-500/20"
+                  className="rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-4 py-2 text-[13px] font-medium text-brand-action hover:bg-brand-action/20 transition-colors"
                 >
                   Approve
                 </button>
                 <button
                   type="button"
                   onClick={() => handleBulkUpdate("rejected")}
-                  className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-1.5 text-xs font-bold text-rose-400 hover:bg-rose-500/20"
+                  className="rounded-[4px] border border-brand-coral/20 bg-brand-coral/10 px-4 py-2 text-[13px] font-medium text-brand-coral hover:bg-brand-coral/20 transition-colors"
                 >
                   Reject
                 </button>
                 <button
                   type="button"
                   onClick={() => handleBulkUpdate("pending")}
-                  className="rounded-lg border border-border-subtle bg-surface-elevated px-4 py-1.5 text-xs font-bold text-text-tertiary hover:bg-glass"
+                  className="rounded-[4px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
                 >
                   Reset
                 </button>
@@ -751,74 +760,69 @@ export default function KeywordsPage() {
           )}
 
           {loading ? (
-            <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30">
+            <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
               <TableSkeleton rows={8} columns={6} />
             </div>
           ) : filtered.length > 0 ? (
-            <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30 backdrop-blur-md">
+            <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
               <div className="overflow-x-auto">
-                {/* `table-fixed` + per-column widths keeps the 12 columns inside
-                    the viewport on 1280-px screens. Users can still scroll the
-                    wrapper horizontally on narrower windows. */}
                 <table className="w-full min-w-[1100px] text-left">
-                  <thead className="bg-surface-tertiary/50 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                  <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                     <tr>
-                      <th className="w-8 px-2 py-2.5">
+                      <th className="w-12 px-4 py-3">
                         <input
                           type="checkbox"
                           checked={filtered.length > 0 && filtered.every(k => selected.has(k.id))}
                           onChange={toggleSelectAll}
-                          className="rounded"
+                          className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
                         />
                       </th>
-                      <th className="px-2 py-2.5">Keyword</th>
-                      <th className="px-2 py-2.5 text-right">Volume</th>
-                      <th className="px-2 py-2.5 text-center">KD</th>
-                      <th className="px-2 py-2.5 text-right">CPC</th>
-                      <th className="px-2 py-2.5 text-center">Trend</th>
-                      <th className="px-2 py-2.5 text-center">Intent</th>
-                      <th className="px-2 py-2.5 text-center">Comp</th>
-                      <th className="px-2 py-2.5 text-center" title="Legacy AI score">AI</th>
+                      <th className="px-4 py-3">Keyword</th>
+                      <th className="px-4 py-3 text-right">Volume</th>
+                      <th className="px-4 py-3 text-center">KD</th>
+                      <th className="px-4 py-3 text-right">CPC</th>
+                      <th className="px-4 py-3 text-center">Trend</th>
+                      <th className="px-4 py-3 text-center">Intent</th>
+                      <th className="px-4 py-3 text-center">Comp</th>
+                      <th className="px-4 py-3 text-center" title="Legacy AI score">AI</th>
                       <th
-                        className="px-2 py-2.5 text-center"
+                        className="px-4 py-3 text-center"
                         title="Keyword Analysis Score — composite of relevance, business-fit, intent, KD, volume, CPC and SERP opportunity"
                       >
                         Analysis
                       </th>
-                      <th className="px-2 py-2.5 text-center">Status</th>
-                      <th className="px-2 py-2.5 text-center">Action</th>
+                      <th className="px-4 py-3 text-center">Status</th>
+                      <th className="px-4 py-3 text-center">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border-subtle">
+                  <tbody className="divide-y divide-border-subtle/60">
                     {filtered.map(kw => (
                       <tr
                         key={kw.id}
                         onClick={() => setModalKeywordId(kw.id)}
                         title="Click to open detailed keyword analysis"
-                        className={`cursor-pointer transition-all duration-200 ease-out hover:bg-white/[0.035] ${
-                          selected.has(kw.id)
-                            ? "bg-brand-500/8 shadow-[inset_3px_0_0_rgba(99,102,241,0.8)]"
-                            : ""
+                        className={`cursor-pointer transition-colors hover:bg-surface-hover ${
+                          selected.has(kw.id) ? "bg-brand-action/5" : ""
                         }`}
                       >
-                        <td className="px-2 py-2.5">
+                        <td className="px-4 py-3">
                           <input
                             type="checkbox"
                             checked={selected.has(kw.id)}
                             onClick={e => e.stopPropagation()}
                             onChange={() => toggleSelect(kw.id)}
-                            className="rounded accent-brand-500 transition-transform duration-150 checked:scale-110"
+                            className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
                           />
                         </td>
-                        <td className="px-2 py-2.5">
-                          <p className="text-sm font-semibold text-text-primary">{kw.keyword}</p>
+                        <td className="px-4 py-3">
+                          <p className="text-[14px] font-medium text-text-primary">{kw.keyword}</p>
                           {kw.gap_competitor ? (
-                            <p className="text-[10px] text-cyan-400/90">Gap · {kw.gap_competitor}</p>
+                            <p className="text-[11px] text-brand-action mt-0.5">Gap · {kw.gap_competitor}</p>
                           ) : null}
                           {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
                           (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
                             <p
-                              className="mt-0.5 text-[10px] text-text-tertiary"
+                              className="mt-1 text-[11px] text-text-tertiary"
                               title="Relevance = syntactic match to niche/phrase anchors. Fit = tiered business-fit (100 = niche × buying-intent match)."
                             >
                               Rel {typeof kw.relevance_score === "number" ? kw.relevance_score : "—"} ·
@@ -826,100 +830,100 @@ export default function KeywordsPage() {
                             </p>
                           ) : null}
                           {kw.secondary_keywords?.length ? (
-                            <p className="max-w-xs truncate text-[10px] text-text-tertiary">
+                            <p className="max-w-xs truncate mt-1 text-[11px] text-text-tertiary">
                               {kw.secondary_keywords.slice(0, 3).join(" · ")}
                             </p>
                           ) : null}
                         </td>
-                        <td className="px-2 py-2.5 text-right text-sm font-bold text-text-primary">
+                        <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
                           {kw.volume ? kw.volume.toLocaleString() : "—"}
                         </td>
-                        <td className="px-2 py-2.5 text-center">
+                        <td className="px-4 py-3 text-center">
                           {kw.kd > 0 ? (
-                            <div className="flex items-center justify-center gap-1.5">
-                              <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-elevated">
+                            <div className="flex items-center justify-center gap-2">
+                              <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
                                 <div
                                   className={`h-full rounded-full ${
-                                    kw.kd < 30 ? "bg-accent-500" : kw.kd < 60 ? "bg-yellow-500" : "bg-rose-500"
+                                    kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
                                   }`}
                                   style={{ width: `${kw.kd}%` }}
                                 />
                               </div>
-                              <span className={`text-[11px] font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
+                              <span className={`text-[12px] font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
                             </div>
                           ) : (
-                            <span className="text-xs text-text-tertiary">—</span>
+                            <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-2 py-2.5 text-right text-xs text-text-secondary">
+                        <td className="px-4 py-3 text-right text-[13px] font-mono text-text-tertiary">
                           {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
                         </td>
-                        <td className="px-2 py-2.5 text-center">
+                        <td className="px-4 py-3 text-center">
                           <span
-                            className={`text-xs font-bold ${
-                              kw.trend?.startsWith("+") ? "text-accent-400" : "text-rose-400"
+                            className={`text-[12px] font-bold ${
+                              kw.trend?.startsWith("+") ? "text-[#10b981]" : "text-brand-coral"
                             }`}
                           >
                             {kw.trend || "—"}
                           </span>
                         </td>
-                        <td className="px-2 py-2.5 text-center">
+                        <td className="px-4 py-3 text-center">
                           {kw.intent ? (
                             <span
-                              className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold capitalize ${
+                              className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
                                 kw.intent === "commercial" || kw.intent === "transactional"
-                                  ? "border-accent-500/20 bg-accent-500/10 text-accent-400"
+                                  ? "border-brand-action/20 bg-brand-action/10 text-brand-action"
                                   : kw.intent === "informational"
-                                    ? "border-cyan-500/20 bg-cyan-500/10 text-cyan-400"
-                                    : "border-border-subtle bg-surface-elevated text-text-tertiary"
+                                    ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
+                                    : "border-border-subtle bg-surface-secondary text-text-tertiary"
                               }`}
                             >
                               {kw.intent}
                             </span>
                           ) : (
-                            <span className="text-xs text-text-tertiary">—</span>
+                            <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-2 py-2.5 text-center">
+                        <td className="px-4 py-3 text-center">
                           {kw.competition_level ? (
                             <span
-                              className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                              className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold uppercase ${
                                 kw.competition_level === "LOW"
-                                  ? "border-accent-500/20 bg-accent-500/10 text-accent-400"
+                                  ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
                                   : kw.competition_level === "MEDIUM"
-                                    ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-400"
-                                    : "border-rose-500/20 bg-rose-500/10 text-rose-400"
+                                    ? "border-[#f59e0b]/20 bg-[#f59e0b]/10 text-[#f59e0b]"
+                                    : "border-brand-coral/20 bg-brand-coral/10 text-brand-coral"
                               }`}
                             >
                               {kw.competition_level}
                             </span>
                           ) : (
-                            <span className="text-xs text-text-tertiary">—</span>
+                            <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-2 py-2.5 text-center">
-                          <span className="rounded-full border border-brand-500/20 bg-brand-500/10 px-2 py-0.5 text-xs font-black text-brand-400">
+                        <td className="px-4 py-3 text-center">
+                          <span className="rounded-[4px] border border-border-subtle bg-surface-secondary px-2 py-0.5 text-[12px] font-mono text-text-secondary">
                             {kw.ai_score}
                           </span>
                         </td>
-                        <td className="px-2 py-2.5 text-center">
+                        <td className="px-4 py-3 text-center">
                           {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
-                            <span className="rounded-full border border-accent-500/20 bg-accent-500/10 px-2 py-0.5 text-xs font-black text-accent-400">
+                            <span className="rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action">
                               {Math.round(kw.keyword_analysis_score)}
                             </span>
                           ) : (
-                            <span className="text-xs text-text-tertiary">—</span>
+                            <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-2 py-2.5 text-center">
+                        <td className="px-4 py-3 text-center">
                           <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
+                            className={`rounded-[4px] border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
                           >
                             {kw.status}
                           </span>
                         </td>
-                        <td className="px-2 py-2.5">
-                          <div className="flex justify-center gap-1">
+                        <td className="px-4 py-3">
+                          <div className="flex justify-center gap-2">
                             {kw.status !== "approved" && (
                               <button
                                 type="button"
@@ -927,10 +931,10 @@ export default function KeywordsPage() {
                                   e.stopPropagation();
                                   handleStatusUpdate(kw.id, "approved");
                                 }}
-                                className="rounded-lg bg-accent-500/10 p-1.5 text-accent-400 hover:bg-accent-500/20"
+                                className="rounded-[4px] bg-brand-action/10 p-1.5 text-brand-action hover:bg-brand-action/20 transition-colors"
                                 title="Approve"
                               >
-                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
                                 </svg>
                               </button>
@@ -942,10 +946,10 @@ export default function KeywordsPage() {
                                   e.stopPropagation();
                                   handleStatusUpdate(kw.id, "rejected");
                                 }}
-                                className="rounded-lg bg-rose-500/10 p-1.5 text-rose-400 hover:bg-rose-500/20"
+                                className="rounded-[4px] bg-brand-coral/10 p-1.5 text-brand-coral hover:bg-brand-coral/20 transition-colors"
                                 title="Reject"
                               >
-                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                                 </svg>
                               </button>
@@ -957,10 +961,10 @@ export default function KeywordsPage() {
                                   e.stopPropagation();
                                   handleStatusUpdate(kw.id, "pending");
                                 }}
-                                className="rounded-lg bg-surface-elevated p-1.5 text-text-tertiary hover:bg-glass"
+                                className="rounded-[4px] bg-surface-secondary p-1.5 text-text-tertiary hover:text-text-primary transition-colors"
                                 title="Reset"
                               >
-                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                   <path
                                     strokeLinecap="round"
                                     strokeLinejoin="round"
@@ -980,18 +984,18 @@ export default function KeywordsPage() {
                 const pendingShown = keywords.filter(k => k.status === "pending").length;
                 if (pendingTotal <= pendingShown) return null;
                 return (
-                  <div className="flex flex-col items-center gap-2 border-t border-border-subtle px-4 py-5">
+                  <div className="flex flex-col items-center gap-3 border-t border-border-subtle px-6 py-6 bg-surface-secondary/50">
                     <button
                       type="button"
                       onClick={handleLoadMore}
                       disabled={loadingMore}
-                      className="rounded-xl border border-border-strong bg-surface-elevated px-6 py-2.5 text-sm font-semibold text-text-secondary transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-[30px] border border-border-subtle bg-surface-elevated px-6 py-2.5 text-[14px] font-medium text-text-secondary transition-colors hover:text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {loadingMore
                         ? "Loading more keywords…"
                         : `Load more (${pendingTotal - pendingShown} remaining)`}
                     </button>
-                    <span className="text-[11px] text-text-tertiary">
+                    <span className="text-[12px] text-text-tertiary">
                       Showing top {pendingShown} of {pendingTotal} Ahrefs-scored keywords
                     </span>
                   </div>
@@ -1000,16 +1004,22 @@ export default function KeywordsPage() {
             </div>
           ) : (
             !discovering && (
-              <div className="rounded-3xl border-2 border-dashed border-border-subtle py-24 text-center">
-                <div className="mb-4 text-5xl">🔍</div>
-                <h3 className="mb-2 text-lg font-bold text-text-secondary">No keywords yet</h3>
-                <p className="mb-6 text-sm text-text-tertiary">
+              <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
+                <div className="mb-6 flex justify-center">
+                  <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
+                    <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                    </svg>
+                  </div>
+                </div>
+                <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No keywords yet</h3>
+                <p className="mb-8 text-[16px] text-text-tertiary max-w-md mx-auto">
                   Run discovery to pull real search data for your niche, then continue to competitor gaps.
                 </p>
                 <button
                   type="button"
                   onClick={handleDiscover}
-                  className="rounded-2xl bg-brand-500 hover:bg-brand-600 px-8 py-3.5 font-bold text-white shadow-lg shadow-brand-500/20 hover:-translate-y-0.5"
+                  className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
                 >
                   Discover keywords
                 </button>
@@ -1019,19 +1029,20 @@ export default function KeywordsPage() {
         </>
       )}
 
+      {/* ── TAB CONTENT: COMPETITOR GAPS ─────────────────────────────────────── */}
       {activeTab === "competitor_gap" && (
         <div className="space-y-6">
           {!step1Done ? (
-            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-sm text-yellow-200/90">
+            <div className="rounded-[16px] border border-border-subtle bg-surface-secondary p-5 text-[14px] text-text-secondary">
               Run step 1 and discover at least one batch of industry keywords before scanning competitors.
             </div>
           ) : (
             <>
-              <div className="glass-card border-cyan-500/10 bg-cyan-500/8 p-6">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
+                <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <h3 className="mb-1 font-bold text-text-primary">Competitor keyword gap scan</h3>
-                    <p className="text-sm leading-relaxed text-text-tertiary max-w-2xl">
+                    <h3 className="mb-2 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">Competitor keyword gap scan</h3>
+                    <p className="text-[14px] leading-relaxed text-text-tertiary max-w-3xl">
                       We read competitor SERPs for your niche, hydrate volumes from DataForSEO, and skip topics you
                       already saved. If you haven&apos;t added competitors yet, we auto-discover the top domains
                       ranking for your niche and save them to the project. For the full pipeline — page-level
@@ -1041,15 +1052,15 @@ export default function KeywordsPage() {
                   </div>
                   <Link
                     href={`/projects/${projectId}/competitors`}
-                    className="inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-bold text-cyan-400 hover:bg-cyan-500/20 transition-all"
+                    className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
                   >
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <circle cx="12" cy="12" r="10" />
                       <circle cx="12" cy="12" r="6" />
                       <circle cx="12" cy="12" r="2" />
                     </svg>
                     Competitor Insights
-                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
                     </svg>
                   </Link>
@@ -1057,36 +1068,36 @@ export default function KeywordsPage() {
               </div>
 
               {gapError && (
-                <div className="flex gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-400">
+                <div className="flex gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
                   <div>
                     {gapError}
-                    <Link href={`/projects/${projectId}`} className="mt-1 block text-xs text-brand-400 hover:underline">
-                      Add competitors on the project overview
+                    <Link href={`/projects/${projectId}`} className="mt-2 block text-[13px] font-medium hover:underline">
+                      Add competitors on the project overview →
                     </Link>
                   </div>
                 </div>
               )}
 
               {autoDiscoveredCompetitors.length > 0 && (
-                <div className="flex gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 text-sm text-cyan-200">
-                  <svg className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="flex gap-4 rounded-[16px] border border-border-subtle bg-surface-secondary p-5 text-[14px] text-text-secondary">
+                  <svg className="mt-0.5 h-5 w-5 shrink-0 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" />
                   </svg>
-                  <div className="space-y-1">
-                    <div className="font-bold text-cyan-100">
+                  <div className="space-y-2">
+                    <div className="font-medium text-text-primary">
                       No competitors on file — auto-discovered from search
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-2">
                       {autoDiscoveredCompetitors.map(domain => (
                         <span
                           key={domain}
-                          className="rounded-md bg-cyan-500/15 px-2 py-0.5 text-[11px] font-semibold text-cyan-100"
+                          className="rounded-[4px] bg-surface-elevated border border-border-subtle px-2.5 py-1 text-[12px] font-mono text-text-secondary"
                         >
                           {domain}
                         </span>
                       ))}
                     </div>
-                    <div className="text-xs text-cyan-300/80">
+                    <div className="text-[13px] text-text-tertiary">
                       Saved to this project so future runs reuse them. You can edit the list any time on the project overview.
                     </div>
                   </div>
@@ -1098,16 +1109,16 @@ export default function KeywordsPage() {
                   type="button"
                   onClick={handleFindGaps}
                   disabled={gapLoading || !step1Done}
-                  className="flex items-center gap-2 rounded-xl bg-cyan-500 hover:bg-cyan-600 px-6 py-2.5 text-xs font-bold text-white shadow-md shadow-cyan-500/20 transition-all hover:bg-cyan-400 disabled:opacity-60"
+                  className="flex items-center gap-2 rounded-[32px] bg-brand-primary px-6 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
                 >
                   {gapLoading ? (
                     <>
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
                       Scanning…
                     </>
                   ) : (
                     <>
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                         <circle cx="12" cy="12" r="10" />
                         <circle cx="12" cy="12" r="6" />
                         <circle cx="12" cy="12" r="2" />
@@ -1121,7 +1132,7 @@ export default function KeywordsPage() {
                     type="button"
                     onClick={handleImportGaps}
                     disabled={importing}
-                    className="flex items-center gap-2 rounded-xl bg-accent-500 hover:bg-accent-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-accent-500/20 transition-all hover:-translate-y-0.5 disabled:opacity-60"
+                    className="flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-6 py-3 text-[14px] font-medium text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
                   >
                     {importing ? "Importing…" : `Import ${selectedGapKeys.size} into keyword list`}
                   </button>
@@ -1130,39 +1141,39 @@ export default function KeywordsPage() {
                   type="button"
                   onClick={handleAnalyze}
                   disabled={analyzing || !gaps.length || !keywords.length}
-                  className="rounded-xl border border-border-default bg-surface-elevated px-5 py-2.5 text-xs font-bold text-text-primary hover:border-brand-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-[30px] border border-border-subtle bg-surface-secondary px-6 py-3 text-[14px] font-medium text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
                 >
                   {analyzing ? "Analyzing…" : "Compare & analyze content gaps"}
                 </button>
               </div>
 
               {analysisError && (
-                <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-400">{analysisError}</div>
+                <div className="rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-[14px] text-brand-coral">{analysisError}</div>
               )}
 
               {gapLoading && (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {[...Array(8)].map((_, i) => (
-                    <div key={i} className="h-14 animate-pulse rounded-2xl border border-border-subtle bg-surface-secondary/50" />
+                    <div key={i} className="h-16 animate-pulse rounded-[16px] border border-border-subtle bg-surface-elevated" />
                   ))}
                 </div>
               )}
 
               {!gapLoading && gaps.length > 0 && (
                 <>
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                    <p className="text-sm font-bold text-text-primary">{gaps.length} competitor-led topics</p>
-                    <button type="button" onClick={toggleAllGaps} className="text-xs font-bold text-brand-400 hover:underline">
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-2">
+                    <p className="text-[14px] font-medium text-text-primary">{gaps.length} competitor-led topics</p>
+                    <button type="button" onClick={toggleAllGaps} className="text-[13px] font-medium text-brand-action hover:underline">
                       {gaps.every(g => selectedGapKeys.has(gapRowKey(g))) ? "Deselect all" : "Select all"}
                     </button>
                   </div>
 
-                  <div className="overflow-hidden rounded-2xl border border-border-subtle bg-surface-secondary/30 backdrop-blur-md">
+                  <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
                     <div className="overflow-x-auto">
                       <table className="w-full text-left">
-                        <thead className="bg-surface-tertiary/50 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                        <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                           <tr>
-                            <th className="w-10 px-4 py-3" />
+                            <th className="w-12 px-4 py-3" />
                             <th className="px-4 py-3">Topic</th>
                             <th className="px-4 py-3">Competitor</th>
                             <th className="px-4 py-3">Source page</th>
@@ -1170,29 +1181,29 @@ export default function KeywordsPage() {
                             <th className="px-4 py-3 text-center">Action</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-border-subtle">
+                        <tbody className="divide-y divide-border-subtle/60">
                           {gaps.map(gap => {
                             const key = gapRowKey(gap);
                             return (
-                              <tr key={key} className={`hover:bg-white/[0.02] ${selectedGapKeys.has(key) ? "bg-cyan-500/5" : ""}`}>
+                              <tr key={key} className={`hover:bg-surface-hover transition-colors ${selectedGapKeys.has(key) ? "bg-brand-action/5" : ""}`}>
                                 <td className="px-4 py-3">
                                   <input
                                     type="checkbox"
                                     checked={selectedGapKeys.has(key)}
                                     onChange={() => toggleGapKey(key)}
-                                    className="rounded"
+                                    className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
                                   />
                                 </td>
                                 <td className="px-4 py-3">
-                                  <p className="text-sm font-semibold text-text-primary">{gap.keyword}</p>
+                                  <p className="text-[14px] font-medium text-text-primary">{gap.keyword}</p>
                                 </td>
                                 <td className="px-4 py-3">
-                                  <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-xs font-bold text-cyan-400">
+                                  <span className="rounded-[4px] border border-border-subtle bg-surface-secondary px-2.5 py-1 text-[12px] font-mono text-text-secondary">
                                     {gap.competitorDomain}
                                   </span>
                                 </td>
                                 <td className="max-w-[min(360px,40vw)] px-4 py-3">
-                                  <p className="truncate text-xs text-text-tertiary" title={gap.sourceTitle}>
+                                  <p className="truncate text-[13px] text-text-secondary" title={gap.sourceTitle}>
                                     {gap.sourceTitle}
                                   </p>
                                   {gap.sourceUrl ? (
@@ -1200,15 +1211,15 @@ export default function KeywordsPage() {
                                       href={gap.sourceUrl}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="mt-1 inline-flex text-[11px] font-bold text-brand-400 hover:underline"
+                                      className="mt-1.5 inline-flex text-[12px] font-medium text-brand-action hover:underline"
                                     >
                                       Open page ↗
                                     </a>
                                   ) : (
-                                    <span className="mt-1 block text-[10px] text-text-tertiary">No direct URL</span>
+                                    <span className="mt-1.5 block text-[12px] text-text-tertiary">No direct URL</span>
                                   )}
                                 </td>
-                                <td className="px-4 py-3 text-right text-sm font-bold text-text-primary">
+                                <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
                                   {gap.estimatedVolume > 0 ? gap.estimatedVolume.toLocaleString() : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-center">
@@ -1216,7 +1227,7 @@ export default function KeywordsPage() {
                                     type="button"
                                     onClick={() => handleGenerateBlogFromGap(gap.keyword)}
                                     disabled={generatingGapKeyword === gap.keyword}
-                                    className="rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/20 hover:-translate-y-0.5 transition-all disabled:opacity-60"
+                                    className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
                                   >
                                     {generatingGapKeyword === gap.keyword ? "Queuing…" : "Generate blog"}
                                   </button>
@@ -1232,27 +1243,27 @@ export default function KeywordsPage() {
               )}
 
               {!gapLoading && gaps.length === 0 && !gapError && (
-                <div className="rounded-3xl border-2 border-dashed border-border-subtle py-16 text-center text-sm text-text-tertiary">
+                <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary max-w-2xl mx-auto">
                   Run a scan to load competitor topics, then run analysis without importing if you only want a report—or
                   import rows you want in your master list.
                 </div>
               )}
 
               {analysisMd ? (
-                <div className="glass-card border border-border-subtle p-6">
-                  <h3 className="mb-4 font-bold text-text-primary">Gap analysis</h3>
-                  <div className="max-w-none text-sm leading-relaxed text-text-secondary [&_a]:text-brand-400 [&_a]:underline [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-text-primary [&_h3]:mt-3 [&_h3]:text-sm [&_h3]:font-bold [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5">
+                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-8">
+                  <h3 className="mb-6 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">Gap analysis</h3>
+                  <div className="max-w-none text-[16px] leading-relaxed text-text-secondary [&_a]:text-brand-action [&_a]:underline [&_h2]:mt-8 [&_h2]:text-[20px] [&_h2]:font-medium [&_h2]:text-text-primary [&_h3]:mt-6 [&_h3]:text-[16px] [&_h3]:font-medium [&_li]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{analysisMd}</ReactMarkdown>
                   </div>
                 </div>
               ) : null}
 
               {clusterKeywords.length > 0 && (
-                <div className="glass-card border border-brand-500/15 p-6">
-                  <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-8">
+                  <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
                     <div>
-                      <h3 className="font-bold text-text-primary">Final cluster for blogs</h3>
-                      <p className="text-xs text-text-tertiary">
+                      <h3 className="text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">Final cluster for blogs</h3>
+                      <p className="mt-2 text-[14px] text-text-tertiary max-w-2xl">
                         We only approve phrases that already exist in your keyword list (import gaps first if they are
                         missing). Need at least 5 checked to start the calendar.
                       </p>
@@ -1260,22 +1271,22 @@ export default function KeywordsPage() {
                     <button
                       type="button"
                       onClick={handleApproveCluster}
-                      className="rounded-xl bg-accent-500 hover:bg-accent-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-accent-500/20 hover:-translate-y-0.5"
+                      className="rounded-[32px] bg-brand-primary px-6 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
                     >
                       Approve cluster &amp; open calendar ({clusterPick.size} selected)
                     </button>
                   </div>
-                  <div className="flex max-h-64 flex-col flex-wrap gap-2 overflow-y-auto rounded-xl border border-border-subtle bg-surface-primary/40 p-3">
+                  <div className="flex max-h-[320px] flex-col flex-wrap gap-2 overflow-y-auto rounded-[8px] border border-border-subtle bg-surface-secondary p-4">
                     {clusterKeywords.map(phrase => (
                       <label
                         key={phrase}
-                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-white/[0.04]"
+                        className="flex cursor-pointer items-center gap-3 rounded-[4px] px-3 py-2 text-[14px] hover:bg-surface-hover transition-colors"
                       >
                         <input
                           type="checkbox"
                           checked={clusterPick.has(phrase)}
                           onChange={() => toggleClusterPhrase(phrase)}
-                          className="rounded"
+                          className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
                         />
                         <span className="text-text-primary">{phrase}</span>
                       </label>

@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { getCalendarWithBlogs, generateBlog, updateBlogStatus } from "@/app/actions/blog-actions";
 import { BlogStatus, WORD_COUNT_OPTIONS } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
+
+type CalendarWithBlogsResponse = Awaited<ReturnType<typeof getCalendarWithBlogs>>;
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   scheduled: { label: "Scheduled", color: "bg-surface-secondary text-text-tertiary border-border-subtle" },
@@ -29,9 +33,10 @@ export default function BlogsPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const highlightEntry = searchParams.get("entry");
+  const queryClient = useQueryClient();
 
-  const [entries, setEntries] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const ENTRIES_KEY = qk.calendarWithBlogs(projectId);
+
   const [generating, setGenerating] = useState<string | null>(null);
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -39,13 +44,22 @@ export default function BlogsPage() {
   const [error, setError] = useState<Record<string, string>>({});
   const highlightRef = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(async () => {
-    const res = await getCalendarWithBlogs(projectId);
-    if (res.success) setEntries(res.data);
-    setLoading(false);
-  }, [projectId]);
+  const { data: entriesData, isLoading: loading } = useQuery<CalendarWithBlogsResponse>({
+    queryKey: ENTRIES_KEY,
+    queryFn: () => getCalendarWithBlogs(projectId),
+    enabled: !!projectId,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+  });
+  const entries: any[] = entriesData?.success ? entriesData.data : [];
 
-  useEffect(() => { load(); }, [load]);
+  /** Patch the cached entries list. Used for optimistic blog generation/status. */
+  const patchEntries = (mutator: (list: any[]) => any[]) => {
+    queryClient.setQueryData(ENTRIES_KEY, (prev: CalendarWithBlogsResponse | undefined) => {
+      if (!prev?.success) return prev;
+      return { ...prev, data: mutator(prev.data as any[]) } as CalendarWithBlogsResponse;
+    });
+  };
 
   useEffect(() => {
     if (highlightEntry && highlightRef.current) {
@@ -58,36 +72,36 @@ export default function BlogsPage() {
     setGenerating(entryId);
     setError(prev => ({ ...prev, [entryId]: "" }));
 
-    // Optimistic UI
-    setEntries(prev => prev.map(e => e.id === entryId ? { ...e, status: "generating" } : e));
+    // Optimistic UI: flip to "generating" immediately.
+    patchEntries(list => list.map(e => e.id === entryId ? { ...e, status: "generating" } : e));
 
     const res = await generateBlog(entryId, wc);
     if (res.success && res.data) {
-      setEntries(prev => prev.map(e => e.id === entryId ? { ...e, status: "generated", blog: res.data } : e));
+      // res.data already contains all server-side fields (slug, word_count, etc.)
+      // so the optimistic patch is the final state — no extra network call needed.
+      patchEntries(list => list.map(e => e.id === entryId ? { ...e, status: "generated", blog: res.data } : e));
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     } else {
-      setEntries(prev => prev.map(e => e.id === entryId ? { ...e, status: "scheduled" } : e));
+      patchEntries(list => list.map(e => e.id === entryId ? { ...e, status: "scheduled" } : e));
       setError(prev => ({ ...prev, [entryId]: res.error ?? "Generation failed" }));
     }
     setGenerating(null);
-    await load();
   };
 
   const handleStatusChange = async (entryId: string, blogId: string, status: BlogStatus) => {
     setSavingStatus(blogId);
     setError(prev => ({ ...prev, [entryId]: "" }));
-    const previous = entries;
-    setEntries(prev =>
-      prev.map(e =>
-        e.id === entryId && e.blog
-          ? { ...e, blog: { ...e.blog, status } }
-          : e
-      )
+    const previous = queryClient.getQueryData<CalendarWithBlogsResponse>(ENTRIES_KEY);
+    patchEntries(list =>
+      list.map(e => e.id === entryId && e.blog ? { ...e, blog: { ...e.blog, status } } : e)
     );
 
     const res = await updateBlogStatus(blogId, status);
     if (!res.success) {
-      setEntries(previous);
+      if (previous) queryClient.setQueryData(ENTRIES_KEY, previous);
       setError(prev => ({ ...prev, [entryId]: res.error ?? "Could not update blog status" }));
+    } else {
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     }
     setSavingStatus(null);
   };
@@ -193,9 +207,13 @@ export default function BlogsPage() {
                   <div className="flex-1 min-w-0 w-full">
                     <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-4">
                       <div>
-                        <h3 className="text-[18px] font-medium text-text-primary leading-snug">{entry.title}</h3>
+                        <h3 className="text-[18px] font-medium text-text-primary leading-snug">
+                          {entry.title && entry.title.trim()
+                            ? entry.title
+                            : <span className="text-text-tertiary italic">{entry.focus_keyword}</span>}
+                        </h3>
                         <div className="flex flex-wrap items-center gap-3 mt-2">
-                          <span className="text-[13px] text-text-tertiary">{entry.focus_keyword}</span>
+                          <span className="text-[12px] font-mono text-brand-action/70">{entry.focus_keyword}</span>
                           <span className="text-[13px] text-text-tertiary/40">·</span>
                           <span className="text-[13px] text-text-tertiary">{entry.article_type}</span>
                           {hasBlog && (
@@ -206,7 +224,7 @@ export default function BlogsPage() {
                           )}
                         </div>
                       </div>
-                      <span className={`inline-flex items-center justify-center text-[11px] font-bold px-2.5 py-1 rounded-[4px] border shrink-0 uppercase tracking-widest ${cfg.color}`}>
+                      <span className={`inline-flex items-center justify-center text-[11px] font-bold px-2.5 py-1 rounded-full border shrink-0 uppercase tracking-widest ${cfg.color}`}>
                         {cfg.label}
                       </span>
                     </div>

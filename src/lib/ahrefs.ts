@@ -324,6 +324,7 @@ interface AhrefsOrganicKeywordRow {
   keyword?: string | null;
   volume?: number | null;
   keyword_difficulty?: number | null;
+  keyword_keyword_difficulty?: number | null;
   cpc?: number | null;
   best_position?: number | null;
   best_position_url?: string | null;
@@ -354,7 +355,7 @@ export async function ahrefsOrganicKeywords(
       limit,
       order_by: 'sum_traffic:desc',
       where: 'best_position<=20,volume>=50',
-      select: 'keyword,volume,keyword_keyword_difficulty,cpc,best_position,best_position_url,sum_traffic',
+      select: 'keyword,volume,keyword_keyword_difficulty,best_position_url',
     },
   });
   if (!json?.keywords) return [];
@@ -363,7 +364,7 @@ export async function ahrefsOrganicKeywords(
     .map(row => ({
       keyword: (row.keyword ?? '').trim(),
       volume: Number(row.volume ?? 0),
-      keyword_difficulty: row.keyword_difficulty ?? null,
+      keyword_difficulty: row.keyword_keyword_difficulty ?? row.keyword_difficulty ?? null,
       cpc: row.cpc ?? null,
       best_position: row.best_position ?? null,
       best_position_url: row.best_position_url ?? '',
@@ -431,9 +432,12 @@ interface AhrefsOverviewRow {
  * comma-separated `keywords=`). We chunk the input list to stay under the URL
  * length limit.
  */
+export type AhrefsKeywordOverviewVariant = 'full' | 'lean';
+
 export async function ahrefsKeywordOverview(
   keywords: string[],
-  region: string
+  region: string,
+  variant: AhrefsKeywordOverviewVariant = 'full'
 ): Promise<Map<string, AhrefsKeywordOverviewRow>> {
   const out = new Map<string, AhrefsKeywordOverviewRow>();
   if (!keywords.length) return out;
@@ -442,14 +446,19 @@ export async function ahrefsKeywordOverview(
   const chunks: string[][] = [];
   for (let i = 0; i < cleaned.length; i += 80) chunks.push(cleaned.slice(i, i + 80));
 
+  const select =
+    variant === 'lean'
+      ? 'keyword,volume,difficulty,cpc,intents'
+      : 'keyword,volume,difficulty,cpc,intents,parent_topic,traffic_potential';
+
   for (const chunk of chunks) {
     const json = await ahrefsGet<{ keywords?: AhrefsOverviewRow[] }>({
       endpoint: '/keywords-explorer/overview',
-      label: `keywords-explorer/overview x${chunk.length} (${region})`,
+      label: `keywords-explorer/overview (${variant}) x${chunk.length} (${region})`,
       query: {
         country: ahrefsCountry(region),
         keywords: chunk.join(','),
-        select: 'keyword,volume,difficulty,cpc,intents,parent_topic,traffic_potential',
+        select,
         limit: chunk.length,
       },
     });
@@ -462,8 +471,8 @@ export async function ahrefsKeywordOverview(
         difficulty: row.difficulty ?? null,
         cpc: row.cpc ?? null,
         intents: row.intents ?? null,
-        parent_topic: row.parent_topic ?? null,
-        traffic_potential: row.traffic_potential ?? null,
+        parent_topic: variant === 'lean' ? null : row.parent_topic ?? null,
+        traffic_potential: variant === 'lean' ? null : row.traffic_potential ?? null,
       });
     }
   }
@@ -555,7 +564,7 @@ export async function ahrefsMatchingTerms(
     query: {
       country: ahrefsCountry(region),
       keywords: cleaned.join(','),
-      select: 'keyword,volume,difficulty,cpc,intents',
+      select: 'keyword,volume,difficulty,intents',
       limit,
       match_mode: 'terms',
       terms: 'all',
@@ -583,7 +592,7 @@ export async function ahrefsRelatedTerms(
     query: {
       country: ahrefsCountry(region),
       keywords: cleaned.join(','),
-      select: 'keyword,volume,difficulty,cpc,intents',
+      select: 'keyword,volume,difficulty,intents',
       limit,
       view_for: 'top_10',
       terms: 'all',
@@ -610,7 +619,7 @@ export async function ahrefsSearchSuggestions(
     query: {
       country: ahrefsCountry(region),
       keywords: cleaned.join(','),
-      select: 'keyword,volume,difficulty,cpc,intents',
+      select: 'keyword,volume,difficulty,intents',
       limit,
       order_by: 'volume:desc',
     },

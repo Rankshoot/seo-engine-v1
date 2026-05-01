@@ -208,12 +208,6 @@ function formatTrend(pct: number | null | undefined): string {
   return n >= 0 ? `+${n}%` : `${n}%`;
 }
 
-function parseTrendPct(trend: string | null | undefined): number {
-  if (!trend) return 0;
-  const m = String(trend).match(/-?\d+(\.\d+)?/);
-  return m ? Number(m[0]) : 0;
-}
-
 function normalizeIntent(raw: string | null | undefined): Intent {
   const v = (raw ?? '').toLowerCase();
   if (v === 'informational' || v === 'commercial' || v === 'navigational' || v === 'transactional') {
@@ -783,18 +777,11 @@ function mergeKeywordCandidates(...arrays: DiscoveredKeyword[][]): DiscoveredKey
         if (existing.kd === 0) existing.kd = kw.kd;
         else if (kw.kd < existing.kd) existing.kd = kw.kd;
       }
-      // Keep monthly_searches if the new one has more data
       if (kw.monthly_searches?.length && kw.monthly_searches.length > existing.monthly_searches.length) {
         existing.monthly_searches = kw.monthly_searches;
       }
-      // Keep trend if missing
-      if (!existing.trend && kw.trend) existing.trend = kw.trend;
       // Keep intent if missing
       if (!existing.intent && kw.intent) existing.intent = kw.intent;
-      // Keep competition_level if missing
-      if (!existing.competition_level && kw.competition_level) {
-        existing.competition_level = kw.competition_level;
-      }
       // Merge secondary_keywords
       if (kw.secondary_keywords?.length) {
         const merged = new Set([...(existing.secondary_keywords ?? []), ...kw.secondary_keywords]);
@@ -871,15 +858,6 @@ function intentScore(intent: Intent): number {
   }
 }
 
-function competitionScore(level: CompetitionLevel): number {
-  switch (level) {
-    case 'HIGH': return 90;
-    case 'MEDIUM': return 75;
-    case 'LOW': return 55;
-    default: return 50;
-  }
-}
-
 function cpcScore(cpc: number): number {
   if (!cpc || cpc <= 0) return 30;
   return normalizeLog(cpc, 0.1, 100);
@@ -893,11 +871,6 @@ function volumeScore(vol: number): number {
 function lowDifficultyScore(kd: number): number {
   if (!kd || kd <= 0) return 50;
   return clamp(100 - kd, 0, 100);
-}
-
-function trendScore(trend: string): number {
-  const pct = clamp(parseTrendPct(trend), -50, 100);
-  return clamp(50 + pct / 2, 0, 100);
 }
 
 function suggestedContentType(keyword: string): string {
@@ -1405,19 +1378,15 @@ export function calculateKeywordAnalysisScore(kw: DiscoveredKeyword): number {
   const kd = lowDifficultyScore(kw.kd);
   const vol = volumeScore(kw.volume);
   const cpc = cpcScore(kw.cpc);
-  const comp = competitionScore(kw.competition_level);
-  const trend = trendScore(kw.trend);
   const serp = serpOpportunityScore(kw.serp_results);
 
   const score =
-    0.30 * fit +
-    0.22 * rel +
-    0.12 * intent +
-    0.10 * kd +
-    0.08 * vol +
-    0.06 * cpc +
-    0.04 * comp +
-    0.04 * trend +
+    0.32 * fit +
+    0.24 * rel +
+    0.13 * intent +
+    0.11 * kd +
+    0.09 * vol +
+    0.07 * cpc +
     0.04 * serp;
 
   return Math.round(clamp(score, 0, 100));
@@ -1786,7 +1755,8 @@ export async function discoverKeywordsForProject(
     try {
       const overviewMap = await ahrefsKeywordOverview(
         needsOverview.map(k => k.keyword),
-        region
+        region,
+        'lean'
       );
       pushDebugTrace(trace, '(ahrefs_keywords_overview_enrich)', {
         requested: needsOverview.length,
@@ -1797,12 +1767,12 @@ export async function discoverKeywordsForProject(
         if (!o) continue;
         if (!kw.volume && o.volume) kw.volume = o.volume;
         if (!kw.kd && o.difficulty) kw.kd = o.difficulty;
-        if (!kw.cpc && o.cpc) kw.cpc = o.cpc;
+        if (!kw.cpc && o.cpc != null) {
+          const cents = Number(o.cpc);
+          if (Number.isFinite(cents) && cents > 0) kw.cpc = cents / 100;
+        }
         if (!kw.intent && o.intents) {
           kw.intent = inferIntentFromAhrefs(o.intents);
-        }
-        if (!kw.traffic_potential && o.traffic_potential) {
-          kw.traffic_potential = o.traffic_potential;
         }
       }
     } catch (e) {

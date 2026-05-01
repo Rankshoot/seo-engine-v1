@@ -1,11 +1,26 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { qk } from "@/lib/query-keys";
+import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
+import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
+import { getKeywords } from "@/app/actions/keyword-actions";
+import { getProjectStats } from "@/app/actions/project-actions";
+import { getBusinessBrief } from "@/app/actions/brief-actions";
+import { getCalendarEntries } from "@/app/actions/calendar-actions";
+import { getCalendarWithBlogs } from "@/app/actions/blog-actions";
+import { getCompetitorBenchmark } from "@/app/actions/competitor-actions";
+import { getBlogAudits } from "@/app/actions/audit-actions";
+
+// Stale time for hover-prefetched data. Only fetch on hover when the cache is
+// more than 5 minutes old — prevents thrashing on pages the user visits often.
+const PREFETCH_STALE_MS = 5 * 60_000;
 
 const Icon = {
   grid: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>,
@@ -38,10 +53,78 @@ export default function ProjectSidebar({
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
+  // staleTime: Infinity — the sidebar reads stats from the Redux overlay for
+  // real-time updates (keyword approvals, blog generation). The React Query
+  // entry is only needed as a reliable initial seed; it should NOT silently
+  // re-fetch on a timer because every POST fires against the current page URL.
+  const { data: statsResponse } = useQuery({
+    queryKey: qk.projectStats(project.id),
+    queryFn: () => getProjectStats(project.id),
+    enabled: !!project.id,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+  });
+  const serverStats = useMemo(() => {
+    if (statsResponse?.success && statsResponse.data) {
+      return {
+        approvedKeywords: statsResponse.data.approvedKeywords,
+        calendarEntries: statsResponse.data.calendarEntries,
+        blogsGenerated: statsResponse.data.blogsGenerated,
+        auditPending: statsResponse.data.auditPending,
+      };
+    }
+    return stats;
+  }, [
+    stats,
+    statsResponse?.success,
+    statsResponse?.data?.approvedKeywords,
+    statsResponse?.data?.calendarEntries,
+    statsResponse?.data?.blogsGenerated,
+    statsResponse?.data?.auditPending,
+  ]);
+  const liveStats = useAppSelector(state => selectProjectStats(state, project.id, serverStats));
   const base = `/projects/${project.id}`;
-  
+
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Prefetch helpers. Each one warms one or two query keys for the destination
+  // page so by the time the user clicks the link, the data is already cached.
+  // Guard: skip any key that is already in flight — React Query deduplicates
+  // concurrent prefetches for the same key, but the guard prevents redundant
+  // prefetchQuery calls (and their overhead) when the user hovers rapidly.
+  const safePrefetch = (queryKey: readonly unknown[], queryFn: () => Promise<unknown>) => {
+    if (queryClient.isFetching({ queryKey }) > 0) return;
+    void queryClient.prefetchQuery({ queryKey, queryFn, staleTime: PREFETCH_STALE_MS });
+  };
+
+  const prefetchFor = (label: string) => {
+    const id = project.id;
+    switch (label) {
+      case "Keywords":
+        safePrefetch(qk.keywords(id, { limit: 20, offset: 0 }), () => getKeywords(id, { limit: 20, offset: 0 }));
+        safePrefetch(qk.brief(id), () => getBusinessBrief(id));
+        break;
+      case "Calendar":
+        safePrefetch(qk.calendar(id), () => getCalendarEntries(id));
+        safePrefetch(qk.audits(id), () => getBlogAudits(id));
+        break;
+      case "Blogs":
+        safePrefetch(qk.calendarWithBlogs(id), () => getCalendarWithBlogs(id));
+        break;
+      case "Competitors":
+        safePrefetch(qk.competitors(id), () => getCompetitorBenchmark(id));
+        break;
+      case "Content Health":
+        safePrefetch(qk.audits(id), () => getBlogAudits(id));
+        break;
+      default:
+        // Overview — data is fetched client-side by SiteExplorerSection.
+        break;
+    }
+  };
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -54,13 +137,24 @@ export default function ProjectSidebar({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (serverStats) dispatch(hydrateProjectStats({ projectId: project.id, stats: serverStats }));
+  }, [
+    dispatch,
+    project.id,
+    serverStats?.approvedKeywords,
+    serverStats?.calendarEntries,
+    serverStats?.blogsGenerated,
+    serverStats?.auditPending,
+  ]);
+
   const navItems = [
     { icon: Icon.grid, label: "Overview", href: base },
     {
       icon: Icon.search,
       label: "Keywords",
       href: `${base}/keywords`,
-      badge: stats?.approvedKeywords ? `${stats.approvedKeywords}` : undefined,
+      badge: liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
     },
     {
       icon: Icon.target,
@@ -71,20 +165,20 @@ export default function ProjectSidebar({
       icon: Icon.audit,
       label: "Content Health",
       href: `${base}/audit`,
-      badge: stats?.auditPending ? `${stats.auditPending}` : undefined,
-      badgeColor: stats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
+      badge: liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
+      badgeColor: liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
     },
     {
       icon: Icon.calendar,
       label: "Calendar",
       href: `${base}/calendar`,
-      badge: stats?.calendarEntries ? `${stats.calendarEntries}` : undefined,
+      badge: liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
     },
     {
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
-      badge: stats?.blogsGenerated ? `${stats.blogsGenerated}` : undefined,
+      badge: liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
     },
   ];
 
@@ -215,6 +309,8 @@ export default function ProjectSidebar({
               <li key={item.label}>
                 <Link
                   href={item.href}
+                  onMouseEnter={() => prefetchFor(item.label)}
+                  onFocus={() => prefetchFor(item.label)}
                   className={`flex items-center rounded-[8px] text-[14px] font-medium transition-all duration-300 ease-in-out group relative
                     ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
                     ${active

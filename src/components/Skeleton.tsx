@@ -36,13 +36,16 @@ export function Skeleton({
   return (
     <span
       aria-hidden
-      className={`block bg-surface-elevated ${radiusClass[rounded]} ${animation} ${className}`}
+      className={`block bg-surface-elevated ${radiusClass[rounded]} ${animation} ${className} relative overflow-hidden`}
       style={style}
-    />
+    >
+      <span className="absolute inset-0 -translate-x-full animate-[shimmer_2s_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+    </span>
   );
 }
 
-/** Convenience component for a multi-row table skeleton. */
+/** Convenience component for a multi-row table skeleton with an AI feel.
+ *  Uses py-3 px-4 to match real table row padding so heights are identical. */
 export function TableSkeleton({
   rows = 8,
   columns = 6,
@@ -51,18 +54,42 @@ export function TableSkeleton({
   columns?: number;
 }) {
   return (
-    <div className="divide-y divide-border-subtle">
+    <div className="divide-y divide-border-subtle/50">
       {Array.from({ length: rows }).map((_, r) => (
-        <div key={r} className="grid items-center gap-3 px-3 py-3" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+        <div key={r} className="grid items-center gap-4 px-4 py-3" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
           {Array.from({ length: columns }).map((_, c) => (
-            <Skeleton
-              key={c}
-              className={c === 0 ? "h-4 w-3/4" : "h-3 w-1/2"}
-              rounded={c === 0 ? "md" : "sm"}
-            />
+            <div key={c} className={`flex ${c === 0 ? "justify-start" : "justify-center"}`}>
+              <Skeleton
+                className={c === 0 ? "h-4 w-3/4" : "h-3.5 w-1/2"}
+                rounded={c === 0 ? "md" : "sm"}
+                style={{ animationDelay: `${(r * 100) + (c * 50)}ms` }}
+              />
+            </div>
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Matches the exact height of the collapsed business-brief card. */
+export function BusinessBriefSkeleton() {
+  return (
+    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex items-start gap-4">
+          <Skeleton className="h-10 w-10 shrink-0" rounded="lg" />
+          <div className="space-y-2 pt-0.5">
+            <Skeleton className="h-3.5 w-48" rounded="sm" />
+            <Skeleton className="h-4 w-80 max-w-full" rounded="sm" />
+            <Skeleton className="h-4 w-60 max-w-full" rounded="sm" />
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-8 w-24" rounded="full" />
+          <Skeleton className="h-8 w-28" rounded="full" />
+        </div>
+      </div>
     </div>
   );
 }

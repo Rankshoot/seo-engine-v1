@@ -395,8 +395,8 @@ export async function discoverKeywords(projectId: string) {
     volume: kw.volume,
     kd: kw.kd,
     cpc: kw.cpc,
-    trend: kw.trend,
-    competition_level: kw.competition_level || null,
+    trend: '',
+    competition_level: '',
     intent: kw.intent || null,
     monthly_searches: kw.monthly_searches,
     secondary_keywords: kw.secondary_keywords,
@@ -734,14 +734,16 @@ async function ensureCalendarEntryForKeyword(keyword: KeywordCalendarSeed) {
   if (existing) return { success: true };
 
   const scheduledDate = await nextCalendarSlot(keyword.project_id);
-  const title = titleFromKeyword(keyword.keyword);
+  // Leave title blank — the calendar page shows the keyword when title is empty.
+  // A real title gets written when the user generates the blog.
+  const slug = slugify(keyword.keyword);
   const { error } = await supabaseAdmin.from('calendar_entries').insert({
     project_id: keyword.project_id,
     keyword_id: keyword.id,
     scheduled_date: scheduledDate,
-    title,
+    title: '',
     article_type: 'Blog Post',
-    slug: slugify(title),
+    slug,
     focus_keyword: keyword.keyword,
     secondary_keywords: keyword.secondary_keywords ?? [],
     status: 'scheduled',
@@ -799,6 +801,25 @@ function toDateOnly(date: Date): string {
 function parseLocalDate(value: string): Date {
   const [year, month, day] = value.split('-').map(Number);
   return new Date(year, (month || 1) - 1, day || 1);
+}
+
+export async function deleteKeyword(keywordId: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated' };
+
+  const { data: row, error: fetchErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, projects!inner(user_id)')
+    .eq('id', keywordId)
+    .eq('projects.user_id', user.id)
+    .single();
+
+  if (fetchErr || !row) return { success: false as const, error: 'Keyword not found or unauthorized' };
+
+  const { error } = await supabaseAdmin.from('keywords').delete().eq('id', keywordId);
+
+  if (error) return { success: false as const, error: error.message };
+  return { success: true as const };
 }
 
 export async function deleteAllKeywords(projectId: string) {

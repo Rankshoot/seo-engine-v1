@@ -219,6 +219,22 @@ CREATE TABLE IF NOT EXISTS keyword_gaps (
   UNIQUE(project_id, keyword)
 );
 
+-- Cached Ahrefs Site Explorer snapshot per project (overview, organic
+-- competitors, top pages). Refreshed manually by the user — never on a
+-- normal page load.
+CREATE TABLE IF NOT EXISTS project_site_explorer (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id UUID NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  target TEXT NOT NULL DEFAULT '',
+  region TEXT NOT NULL DEFAULT 'us',
+  overview JSONB,
+  competitors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  top_pages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_fetched_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_project_briefs_project_id ON project_briefs(project_id);
@@ -242,3 +258,5 @@ CREATE INDEX IF NOT EXISTS idx_competitor_keywords_project_id ON competitor_keyw
 CREATE INDEX IF NOT EXISTS idx_competitor_keywords_competitor_id ON competitor_keywords(competitor_id);
 CREATE INDEX IF NOT EXISTS idx_keyword_gaps_project_id ON keyword_gaps(project_id);
 CREATE INDEX IF NOT EXISTS idx_keyword_gaps_score ON keyword_gaps(opportunity_score DESC);
+CREATE INDEX IF NOT EXISTS idx_project_site_explorer_project_id
+  ON project_site_explorer(project_id);

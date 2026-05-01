@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   auditExistingBlogs,
   deleteBlogAudits,
@@ -12,6 +14,17 @@ import {
 } from "@/app/actions/audit-actions";
 import { repairBlogFromAudit } from "@/app/actions/repair-actions";
 import type { IssueCategory } from "@/lib/content-audit";
+import { Tooltip, InfoIcon } from "@/components/Tooltip";
+
+type AuditsResponse = Awaited<ReturnType<typeof getBlogAudits>>;
+
+const EMPTY_COVERAGE: AuditCoverage = {
+  blogs_found: 0,
+  blogs_audited: 0,
+  last_updated_at: null,
+  avg_health: 0,
+  high_severity: 0,
+};
 
 type SeverityFilter = "all" | "high" | "medium" | "low";
 
@@ -122,16 +135,10 @@ function scoreBar(score: number): string {
 export default function ContentHealthPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const [rows, setRows] = useState<PersistedBlogAudit[]>([]);
-  const [coverage, setCoverage] = useState<AuditCoverage>({
-    blogs_found: 0,
-    blogs_audited: 0,
-    last_updated_at: null,
-    avg_health: 0,
-    high_severity: 0,
-  });
-  const [loading, setLoading] = useState(true);
+  const AUDITS_KEY = qk.audits(projectId);
+
   const [running, setRunning] = useState(false);
   const [runSummary, setRunSummary] = useState<string>("");
   const [error, setError] = useState<string>("");
@@ -141,21 +148,19 @@ export default function ContentHealthPage() {
 
   const BATCH_SIZE = 10;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const res = await getBlogAudits(projectId);
-    if (res.success) {
-      setRows(res.data);
-      setCoverage(res.coverage);
-    } else {
-      setError(res.error ?? "Failed to load audits");
-    }
-    setLoading(false);
-  }, [projectId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { data: auditData, isLoading: loading } = useQuery<AuditsResponse>({
+    queryKey: AUDITS_KEY,
+    queryFn: async () => {
+      const res = await getBlogAudits(projectId);
+      if (!res.success) throw new Error(res.error ?? "Failed to load audits");
+      return res;
+    },
+    enabled: !!projectId,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+  });
+  const rows: PersistedBlogAudit[] = auditData?.success ? auditData.data : [];
+  const coverage: AuditCoverage = auditData?.success ? auditData.coverage : EMPTY_COVERAGE;
 
   const handleRun = async (force: boolean) => {
     setRunning(true);
@@ -169,8 +174,11 @@ export default function ContentHealthPage() {
           remaining ? ` · ${remaining} still pending` : ""
         }`
       );
-      setCoverage(res.coverage);
-      await load();
+      // Refresh the audit list and the sidebar pending-audit badge.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: AUDITS_KEY }),
+        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+      ]);
     } else {
       setError(res.error ?? "Audit failed");
     }
@@ -181,14 +189,16 @@ export default function ContentHealthPage() {
     if (!confirm("Delete all audit results for this project? You can re-run the audit any time.")) return;
     setRunning(true);
     await deleteBlogAudits(projectId);
-    setRows([]);
-    setCoverage({
-      blogs_found: coverage.blogs_found,
-      blogs_audited: 0,
-      last_updated_at: null,
-      avg_health: 0,
-      high_severity: 0,
+    // Optimistically clear rows and zero the audited count, but keep blogs_found.
+    queryClient.setQueryData<AuditsResponse>(AUDITS_KEY, prev => {
+      if (!prev?.success) return prev;
+      return {
+        ...prev,
+        data: [],
+        coverage: { ...prev.coverage, blogs_audited: 0, last_updated_at: null, avg_health: 0, high_severity: 0 },
+      };
     });
+    queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     setRunning(false);
   };
 
@@ -220,34 +230,20 @@ export default function ContentHealthPage() {
   const pendingAudits = Math.max(0, coverage.blogs_found - coverage.blogs_audited);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <Link
-          href={`/projects/${projectId}`}
-          className="inline-flex items-center gap-2 text-xs text-text-tertiary hover:text-text-secondary"
-        >
-          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="m12 19-7-7 7-7M19 12H5" />
-          </svg>
-          Back to project
-        </Link>
-      </div>
-
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="space-y-10 pb-16 pl-4 pr-4 mx-auto">
+      {/* ── HEADER ─────────────────────────────────────────────────────────── */}
+      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-black tracking-tight text-text-primary mb-1">
-            Content <span className="gradient-text">health</span>
+          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
+            Content health
           </h1>
-          <p className="text-text-tertiary text-sm max-w-2xl">
-            We audit each blog on your site on its own merits — is the page technically healthy, is the target keyword
-            still worth ranking for, and does the writing answer the reader&apos;s question. Every issue is explained in
-            plain language; click <span className="text-text-secondary">See fixes</span> on a card to expand the full
-            diagnosis, and <span className="text-text-secondary">Repair with AI</span> to open an improved rewrite in
-            the blog editor.
+          <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
+            We audit each blog on its own merits — is the page technically healthy, is the target keyword still worth
+            ranking for, and does the writing answer the reader's question. Click <strong className="text-text-secondary font-medium">See fixes</strong> to
+            expand the diagnosis, and <strong className="text-text-secondary font-medium">Repair with AI</strong> to open an improved rewrite.
           </p>
-          <p className="mt-1 text-[11px] text-text-tertiary">
-            We audit {BATCH_SIZE} blogs per click to keep LLM costs predictable. Real impressions &amp; clicks from
-            Google require connecting Search Console — coming next.
+          <p className="mt-2 text-[12px] text-text-tertiary">
+            Audits run in batches of {BATCH_SIZE} to keep LLM costs predictable.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -255,11 +251,11 @@ export default function ContentHealthPage() {
             type="button"
             onClick={() => handleRun(false)}
             disabled={running || (coverage.blogs_audited > 0 && pendingAudits === 0)}
-            className="flex items-center gap-2 rounded-xl bg-brand-500 hover:bg-brand-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-brand-500/20 hover:from-brand-400 hover:to-brand-500 disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-[32px] bg-brand-primary px-6 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {running ? (
               <>
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
                 Auditing…
               </>
             ) : coverage.blogs_audited === 0 ? (
@@ -267,15 +263,15 @@ export default function ContentHealthPage() {
             ) : pendingAudits === 0 ? (
               "All audited"
             ) : (
-              `Audit ${Math.min(BATCH_SIZE, pendingAudits)} more · ${pendingAudits} pending`
+              `Re-audit ${Math.min(BATCH_SIZE, pendingAudits)} more`
             )}
           </button>
           <button
             type="button"
             onClick={() => handleRun(true)}
             disabled={running || coverage.blogs_audited === 0}
-            title="Re-run the audit on 10 already-audited blogs. Useful after you've fixed issues and want a fresh score."
-            className="rounded-xl border border-border-subtle bg-surface-elevated px-4 py-2.5 text-xs font-bold text-text-secondary hover:border-brand-500/30 disabled:opacity-40"
+            title="Re-run the audit on 10 already-audited blogs."
+            className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
           >
             Re-audit 10
           </button>
@@ -283,8 +279,8 @@ export default function ContentHealthPage() {
             type="button"
             onClick={handleClear}
             disabled={running || rows.length === 0}
-            title="Delete all stored audit results for this project. You can re-run any time."
-            className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2.5 text-[11px] font-bold text-rose-400 hover:bg-rose-500/20 disabled:opacity-40"
+            title="Delete all stored audit results for this project."
+            className="inline-flex h-10 items-center rounded-[30px] border border-brand-coral/20 bg-brand-coral/10 px-4 text-[13px] font-medium text-brand-coral hover:bg-brand-coral/20 transition-colors disabled:opacity-40"
           >
             Clear all
           </button>
@@ -292,12 +288,14 @@ export default function ContentHealthPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-400">
+        <div className="flex items-start gap-3 p-5 rounded-[16px] bg-brand-coral/10 border border-brand-coral/20 text-brand-coral text-[14px]">
+          <svg className="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
           {error}
         </div>
       )}
       {runSummary && !error && (
-        <div className="rounded-xl border border-accent-500/20 bg-accent-500/10 p-3 text-sm text-accent-400">
+        <div className="flex items-center gap-3 p-4 rounded-[16px] bg-brand-action/5 border border-brand-action/20 text-brand-action text-[14px]">
+          <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7"/></svg>
           {runSummary}
         </div>
       )}
@@ -307,47 +305,47 @@ export default function ContentHealthPage() {
           label="Blogs found"
           value={coverage.blogs_found}
           sub="on your sitemap"
-          accent="from-brand-500/10 to-brand-700/5 border-brand-500/20"
-          tooltip="The total number of blog-style URLs we could find on your sitemap (and its child sitemaps). /blog/, /blogs/, /articles/, /posts/, etc."
+          tooltip="Total blog-style URLs found in your sitemap (/blog/, /blogs/, /articles/, /posts/, etc.)."
         />
         <StatCard
           label="Audited"
           value={coverage.blogs_audited}
           sub={`${pendingAudits} pending`}
-          accent="from-cyan-500/10 to-cyan-700/5 border-cyan-500/20"
-          tooltip="How many of those blogs we've actually scraped + diagnosed. Hit the audit button to process more."
+          tooltip="How many blogs have been scraped and diagnosed. Run more audits to increase coverage."
         />
         <StatCard
           label="Avg. health"
           value={coverage.avg_health}
           sub="0–100"
-          accent="from-accent-500/10 to-accent-700/5 border-accent-500/20"
           valueClass={healthColor(coverage.avg_health)}
-          tooltip="Average health score across every audited blog. Blends structural signals (word count, headings, internal links, FAQ, schema) with our LLM's content-quality score. Higher = closer to rank-ready."
+          tooltip="Average health score across every audited blog — blends technical signals with content quality. Higher = closer to rank-ready."
         />
         <StatCard
           label="High-severity"
           value={coverage.high_severity}
           sub="need fixes now"
-          accent="from-rose-500/10 to-rose-700/5 border-rose-500/20"
           valueClass="text-rose-400"
-          tooltip="Number of blogs with at least one 'high severity' issue — those that are actively blocked from ranking or AI-citation today."
+          tooltip="Blogs with at least one high-severity issue — actively blocked from ranking or AI citation today."
         />
       </div>
 
       {coverage.blogs_found === 0 && !loading && (
-        <div className="rounded-3xl border-2 border-dashed border-border-subtle py-20 text-center">
-          <div className="mb-3 text-4xl">🔎</div>
-          <p className="mb-2 font-bold text-text-secondary">No blog URLs discovered yet</p>
-          <p className="mx-auto mb-4 max-w-md text-sm text-text-tertiary">
-            We couldn&apos;t find any blog-style URLs in your sitemap. Make sure your sitemap.xml is reachable and
-            includes paths like <code className="rounded bg-surface-elevated px-1">/blog/…</code> or{" "}
-            <code className="rounded bg-surface-elevated px-1">/blogs/…</code>. Then refresh the brief on the Keywords
-            page.
+        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
+          <div className="mb-6 flex justify-center">
+            <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
+              <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" />
+              </svg>
+            </div>
+          </div>
+          <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No blog URLs found</h3>
+          <p className="mb-8 text-[16px] text-text-tertiary max-w-md mx-auto">
+            We couldn't find blog-style URLs in your sitemap. Make sure sitemap.xml includes paths like{" "}
+            <code className="rounded-[4px] bg-surface-elevated px-1.5 py-0.5 text-[13px]">/blog/…</code>. Then refresh your brief.
           </p>
           <Link
             href={`/projects/${projectId}/keywords`}
-            className="inline-flex items-center gap-2 rounded-xl border border-brand-500/30 bg-brand-500/10 px-4 py-2 text-xs font-bold text-brand-400 hover:bg-brand-500/20"
+            className="inline-flex items-center justify-center rounded-[32px] border border-border-subtle bg-surface-secondary px-6 py-3 text-[14px] font-medium text-text-secondary hover:text-text-primary transition-colors"
           >
             Go refresh the brief
           </Link>
@@ -355,15 +353,15 @@ export default function ContentHealthPage() {
       )}
 
       {rows.length > 0 && (
-        <div className="flex flex-wrap gap-1 rounded-xl border border-border-subtle bg-surface-secondary/50 p-1 w-fit">
+        <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
           {(["all", "high", "medium", "low"] as SeverityFilter[]).map(f => (
             <button
               key={f}
               type="button"
               onClick={() => setFilter(f)}
               title={f === "all" ? "Show every audited blog." : SEVERITY_TOOLTIP[f]}
-              className={`rounded-lg px-4 py-1.5 text-xs font-bold capitalize transition-all ${
-                filter === f ? "bg-brand-500 text-white" : "text-text-tertiary hover:text-text-secondary"
+              className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
+                filter === f ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
               }`}
             >
               {f} ({f === "all" ? rows.length : rows.filter(r => r.severity === f).length})
@@ -377,14 +375,14 @@ export default function ContentHealthPage() {
           {[...Array(5)].map((_, i) => (
             <div
               key={i}
-              className="h-24 w-full animate-pulse rounded-2xl border border-border-subtle bg-surface-secondary/50"
+              className="h-24 w-full animate-pulse rounded-[16px] border border-border-subtle bg-surface-elevated"
             />
           ))}
         </div>
       ) : filtered.length === 0 && coverage.blogs_found > 0 ? (
-        <div className="rounded-3xl border-2 border-dashed border-border-subtle py-16 text-center text-sm text-text-tertiary">
+        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
           {coverage.blogs_audited === 0
-            ? `Hit "Audit first ${BATCH_SIZE} blogs" to begin.`
+            ? `Click "Audit first ${BATCH_SIZE} blogs" to begin.`
             : "No blogs match this filter."}
         </div>
       ) : (
@@ -402,7 +400,7 @@ export default function ContentHealthPage() {
             return (
               <div
                 key={row.url}
-                className="rounded-2xl border border-border-subtle bg-surface-secondary/40 p-5"
+                className="rounded-[16px] border border-border-subtle bg-surface-elevated p-5"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
@@ -685,25 +683,24 @@ function StatCard({
   label,
   value,
   sub,
-  accent,
   valueClass = "text-text-primary",
   tooltip,
 }: {
   label: string;
   value: number;
   sub: string;
-  accent: string;
+  accent?: string;
   valueClass?: string;
   tooltip?: string;
 }) {
   return (
-    <div
-      className={`rounded-2xl border ${accent} p-5 ${tooltip ? "cursor-help" : ""}`}
-      title={tooltip}
-    >
-      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>
-      <p className={`text-3xl font-black ${valueClass}`}>{value}</p>
-      <p className="mt-1 text-[11px] text-text-tertiary">{sub}</p>
+    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-5 flex flex-col">
+      <div className="flex items-center gap-1.5 mb-2">
+        <p className="text-[11px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>
+        {tooltip && <Tooltip content={tooltip}><InfoIcon /></Tooltip>}
+      </div>
+      <p className={`font-mono text-[32px] font-bold tracking-tight leading-none ${valueClass}`}>{value}</p>
+      <p className="mt-2 text-[12px] text-text-tertiary">{sub}</p>
     </div>
   );
 }

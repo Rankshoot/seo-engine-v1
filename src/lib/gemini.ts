@@ -561,9 +561,20 @@ Return ONLY a JSON array. No markdown. No explanation. No code fences:
     console.error('JSON.parse failed on calendar:', jsonMatch[0].slice(0, 300));
     throw new Error('Failed to parse calendar from Gemini. Please try again.');
   }
-  return calendar.slice(0, actualDays).map(entry => {
-    const match = usedKeywords.find(k => k.keyword === entry.keyword);
-    return { ...entry, secondary_keywords: match?.secondary_keywords ?? [] };
+  // The LLM occasionally rephrases the keyword (case, "in", etc.). We trust the
+  // ordered `assignments` we sent, so realign by day index and overwrite the
+  // keyword/article_type/date with our canonical values.
+  return calendar.slice(0, actualDays).map((entry, i) => {
+    const canonical = assignments[i] ?? assignments[0];
+    const match = usedKeywords.find(k => k.keyword === canonical.keyword);
+    return {
+      ...entry,
+      day: canonical.day,
+      date: canonical.date,
+      keyword: canonical.keyword,
+      article_type: canonical.article_type,
+      secondary_keywords: match?.secondary_keywords ?? [],
+    };
   });
 }
 

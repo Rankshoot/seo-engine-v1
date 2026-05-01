@@ -18,7 +18,7 @@ export default function ProjectLayoutClient({
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
-    <div className="min-h-screen bg-surface-primary flex transition-all duration-300 ease-in-out">
+    <div className="h-screen overflow-hidden bg-surface-primary flex transition-all duration-300 ease-in-out">
       <ProjectSidebar 
         project={project} 
         stats={stats} 
@@ -27,7 +27,7 @@ export default function ProjectLayoutClient({
         setIsCollapsed={setIsCollapsed}
       />
       <main 
-        className={`flex-1 min-w-0 p-6 lg:p-8 transition-all duration-300 ease-in-out ${
+        className={`flex-1 min-w-0 overflow-y-auto p-6 lg:p-8 transition-all duration-300 ease-in-out ${
           isCollapsed ? "ml-[80px]" : "ml-[280px]"
         }`}
       >

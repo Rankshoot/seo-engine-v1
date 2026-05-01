@@ -1,23 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   runCompetitorBenchmark,
   getCompetitorBenchmark,
   generateBlogFromOpportunity,
   type BenchmarkState,
 } from "@/app/actions/competitor-actions";
-import { getProject, updateProject } from "@/app/actions/project-actions";
 import { projectDomainHost } from "@/lib/project-domain-host";
 import type {
   Competitor,
   CompetitorKeyword,
   GapType,
   KeywordGap,
-  Project,
 } from "@/lib/types";
+import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
 function logoUrlCandidates(host: string): string[] {
   if (!host) return [];
@@ -102,9 +103,10 @@ function scoreColor(score: number) {
 export default function CompetitorsPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const [state, setState] = useState<BenchmarkState | null>(null);
-  const [loading, setLoading] = useState(true);
+  const COMPETITORS_KEY = qk.competitors(projectId);
+
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<TabId>("opportunities");
@@ -112,28 +114,14 @@ export default function CompetitorsPage() {
   const [gapFilter, setGapFilter] = useState<"all" | GapType>("all");
   const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null);
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
-  const [project, setProject] = useState<Project | null>(null);
-  const [rtIdInput, setRtIdInput] = useState("");
-  const [rtIdEditing, setRtIdEditing] = useState(false);
-  const [rtIdSaving, setRtIdSaving] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [benchRes, projRes] = await Promise.all([
-      getCompetitorBenchmark(projectId),
-      getProject(projectId),
-    ]);
-    setState(benchRes);
-    if (projRes.success && projRes.data) {
-      setProject(projRes.data);
-      setRtIdInput(String(projRes.data.ahrefs_rank_tracker_project_id ?? ""));
-    }
-    setLoading(false);
-  }, [projectId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { data: state, isLoading: loading } = useQuery<BenchmarkState>({
+    queryKey: COMPETITORS_KEY,
+    queryFn: () => getCompetitorBenchmark(projectId),
+    enabled: !!projectId,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+  });
 
   const handleRun = async () => {
     setRunning(true);
@@ -155,28 +143,9 @@ export default function CompetitorsPage() {
       setLastRunSummary(
         `Benchmarked ${res.competitorsFound ?? 0} competitors across ${res.pagesScraped ?? 0} pages. Found ${res.gapsFound ?? 0} opportunities.`
       );
-      await load();
+      await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
     }
     setRunning(false);
-  };
-
-  const handleSaveRtId = async () => {
-    if (!project) return;
-    setRtIdSaving(true);
-    const parsed = rtIdInput.trim() ? Number(rtIdInput.trim()) : null;
-    await updateProject(projectId, {
-      name: project.name,
-      domain: project.domain,
-      company: project.company,
-      niche: project.niche,
-      target_audience: project.target_audience,
-      target_region: project.target_region,
-      description: project.description,
-      ahrefs_rank_tracker_project_id: parsed,
-    });
-    setProject(prev => prev ? { ...prev, ahrefs_rank_tracker_project_id: parsed } : prev);
-    setRtIdEditing(false);
-    setRtIdSaving(false);
   };
 
   const handleGenerateBlog = async (keyword: string) => {
@@ -228,7 +197,8 @@ export default function CompetitorsPage() {
           </p>
           {lastBenchmarkedAt ? (
             <p className="mt-2 text-[12px] text-text-tertiary">
-              Last benchmark: {new Date(lastBenchmarkedAt).toLocaleString()}
+              Last benchmark:{" "}
+              {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(lastBenchmarkedAt))}
             </p>
           ) : null}
         </div>
@@ -272,63 +242,10 @@ export default function CompetitorsPage() {
         </div>
       )}
 
-      {/* Ahrefs Rank Tracker Project ID config */}
-      <div className="rounded-[16px] border border-border-subtle bg-surface-secondary p-5 flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <svg className="w-5 h-5 text-brand-action shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25Z" />
-          </svg>
-          <span className="text-[14px] font-medium text-text-primary">Ahrefs Rank Tracker Project ID</span>
-          {!rtIdEditing && (
-            <span className="text-[14px] text-text-tertiary">
-              {project?.ahrefs_rank_tracker_project_id
-                ? <span className="text-brand-action font-mono">{project.ahrefs_rank_tracker_project_id}</span>
-                : <span className="italic">not set</span>}
-            </span>
-          )}
-        </div>
-        {rtIdEditing ? (
-          <div className="flex items-center gap-2">
-            <input
-              value={rtIdInput}
-              onChange={e => setRtIdInput(e.target.value)}
-              placeholder="e.g. 8024646"
-              inputMode="numeric"
-              className="rounded-[4px] border border-border-subtle bg-surface-elevated px-3 py-1.5 text-[13px] text-text-primary outline-none focus:border-brand-action w-36"
-              autoFocus
-              onKeyDown={e => { if (e.key === "Enter") void handleSaveRtId(); if (e.key === "Escape") setRtIdEditing(false); }}
-            />
-            <button
-              onClick={() => void handleSaveRtId()}
-              disabled={rtIdSaving}
-              className="rounded-[4px] bg-brand-primary px-3 py-1.5 text-[13px] font-medium text-brand-on-primary disabled:opacity-60 transition-all"
-            >
-              {rtIdSaving ? "Saving…" : "Save"}
-            </button>
-            <button
-              onClick={() => { setRtIdEditing(false); setRtIdInput(String(project?.ahrefs_rank_tracker_project_id ?? "")); }}
-              className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:text-text-primary transition-all"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => setRtIdEditing(true)}
-            className="text-[13px] font-medium text-brand-action hover:underline transition-colors shrink-0"
-          >
-            {project?.ahrefs_rank_tracker_project_id ? "Edit" : "Set ID"}
-          </button>
-        )}
-        <p className="w-full text-[12px] text-text-tertiary mt-1">
-          Found in Ahrefs → Rank Tracker → your project URL. Pulls top 10 competitor pages from your tracked keywords.
-        </p>
-      </div>
-
       {loading ? (
-        <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-24 w-full animate-pulse rounded-[16px] border border-border-subtle bg-surface-elevated" />
+            <div key={i} className="h-28 w-full animate-pulse rounded-[16px] border border-border-subtle bg-surface-elevated" />
           ))}
         </div>
       ) : !hasBenchmark ? (
@@ -450,32 +367,47 @@ function BenchmarkOverview({
   const topGap = [...gaps].sort((a, b) => b.opportunity_score - a.opportunity_score)[0];
   return (
     <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-      <StatCard label="Competitors" value={competitors.length.toString()} hint="benchmarked domains" />
+      <StatCard
+        label="Competitors"
+        value={competitors.length.toString()}
+        hint="benchmarked domains"
+        tooltip="Unique competitor domains discovered from your niche's SERPs and scraped in this benchmark run."
+      />
       <StatCard
         label="Keywords mined"
-        value={competitorKeywords.length.toLocaleString()}
+        value={new Intl.NumberFormat("en-US").format(competitorKeywords.length)}
         hint="from competitor pages"
+        tooltip="Total keywords extracted from competitor pages via Jina scraping + DataForSEO enrichment."
       />
       <StatCard
         label="Gaps found"
         value={gaps.length.toString()}
         hint={topGap ? `top score ${topGap.opportunity_score}` : "—"}
+        tooltip="Keywords your competitors rank for but your domain does not (missing), or ranks weakly (weak / untapped)."
       />
       <StatCard
         label="Avg word count"
-        value={(averages?.avg_word_count ?? 0).toLocaleString()}
+        value={new Intl.NumberFormat("en-US").format(averages?.avg_word_count ?? 0)}
         hint={averages?.pages_analyzed ? `across ${averages.pages_analyzed} pages` : "pages"}
+        tooltip="Average word count across all competitor pages scraped. Use this as a content-length benchmark when writing."
       />
     </div>
   );
 }
 
-function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function StatCard({ label, value, hint, tooltip }: { label: string; value: string; hint?: string; tooltip?: string }) {
   return (
-    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6 flex flex-col justify-center">
-      <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary mb-1.5">{label}</p>
-      <p className="font-mono text-[28px] font-bold tracking-tight text-text-primary">{value}</p>
-      {hint ? <p className="text-[13px] text-text-tertiary mt-1">{hint}</p> : null}
+    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-5 flex flex-col">
+      <div className="flex items-center gap-1.5 mb-2">
+        <p className="text-[11px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>
+        {tooltip && (
+          <Tooltip content={tooltip}>
+            <InfoIcon />
+          </Tooltip>
+        )}
+      </div>
+      <p className="font-mono text-[32px] font-bold tracking-tight text-text-primary leading-none">{value}</p>
+      {hint ? <p className="text-[12px] text-text-tertiary mt-2">{hint}</p> : null}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useTheme } from "next-themes";
+import { useTheme } from "@wrksz/themes/client";
 
 export function ThemeToggle() {
   const { theme, resolvedTheme, setTheme } = useTheme();

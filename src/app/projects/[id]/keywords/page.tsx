@@ -1,35 +1,62 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { Keyword, KeywordStatus } from "@/lib/types";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
+import { Keyword, KeywordStatus, TARGET_REGIONS } from "@/lib/types";
+import {
+  useAppDispatch,
+  useAppSelector,
+  selectKeywordPrefs,
+  selectKeywordStatuses,
+  selectKeywordsCache,
+  selectBriefCache,
+} from "@/lib/redux/hooks";
+import {
+  bulkKeywordStatusChanged,
+  briefLoaded,
+  keywordStatusChanged,
+  keywordsLoaded,
+  clearKeywordsCache,
+  clearBriefCache,
+  mergeKeywordStatuses,
+  rememberKeywordFilter,
+  rememberKeywordSort,
+  removeKeywordStatus,
+} from "@/lib/redux/keyword-workspace-slice";
 import {
   discoverKeywords,
   getKeywords,
   loadMoreKeywords,
   updateKeywordStatus,
   bulkUpdateKeywordStatus,
+  deleteKeyword,
   deleteAllKeywords,
-  approveKeywordCluster,
 } from "@/app/actions/keyword-actions";
+import { getCalendarEntries, addKeywordToCalendarOnDate } from "@/app/actions/calendar-actions";
+import type { CalendarEntry } from "@/lib/types";
+import { MiniCalendar } from "@/components/MiniCalendar";
 import {
   getBusinessBrief,
   generateBusinessBrief,
 } from "@/app/actions/brief-actions";
+import { getProject } from "@/app/actions/project-actions";
 import type { BusinessBrief } from "@/lib/business-brief";
 import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
-import {
-  findCompetitorGaps,
-  importGapKeywords,
-  analyzeKeywordGapsAction,
-} from "@/app/actions/research-actions";
-import { generateBlogFromOpportunity } from "@/app/actions/competitor-actions";
-import type { CompetitorGapKeyword } from "@/lib/research";
-import { TableSkeleton } from "@/components/Skeleton";
+import { TableSkeleton, BusinessBriefSkeleton } from "@/components/Skeleton";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
+import { KeywordRowMenu } from "@/components/keywords/KeywordRowMenu";
+import { Tooltip, InfoIcon } from "@/components/Tooltip";
+
+type KeywordsResponse = Awaited<ReturnType<typeof getKeywords>>;
+type BriefResponse = Awaited<ReturnType<typeof getBusinessBrief>>;
+type ProjectResponse = Awaited<ReturnType<typeof getProject>>;
+
+function regionName(code: string): string {
+  return TARGET_REGIONS.find(r => r.code === code.toLowerCase())?.name ?? code.toUpperCase();
+}
 
 const STATUS_COLORS: Record<KeywordStatus, string> = {
   approved: "bg-brand-action/10 text-brand-action border-brand-action/20",
@@ -42,105 +69,252 @@ const KD_COLOR = (kd: number) =>
 const KD_LABEL = (kd: number) =>
   kd === 0 ? "—" : kd < 30 ? "Easy" : kd < 60 ? "Medium" : "Hard";
 
-function gapRowKey(g: CompetitorGapKeyword) {
-  return `${g.keyword}|||${g.competitorDomain}|||${g.sourceUrl || ""}`;
+type FilterTab = "all" | KeywordStatus;
+
+type TableSortColumn =
+  | "keyword"
+  | "volume"
+  | "kd"
+  | "cpc"
+  | "intent"
+  | "ai_score"
+  | "analysis_score"
+  | "status";
+
+type SortDir = "asc" | "desc";
+
+const STATUS_ORDER: Record<KeywordStatus, number> = { pending: 0, approved: 1, rejected: 2 };
+
+/** Default first-click direction when activating a column. */
+function defaultDirForSortColumn(col: TableSortColumn): SortDir {
+  return col === "keyword" || col === "intent" ? "asc" : "desc";
 }
 
-type Tab = "keywords" | "competitor_gap";
-type FilterTab = "all" | KeywordStatus;
+function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: SortDir): number {
+  const m = dir === "asc" ? 1 : -1;
+  switch (col) {
+    case "keyword":
+      return m * a.keyword.localeCompare(b.keyword);
+    case "volume":
+      return m * ((a.volume || 0) - (b.volume || 0));
+    case "kd":
+      return m * ((a.kd || 0) - (b.kd || 0));
+    case "cpc":
+      return m * ((a.cpc || 0) - (b.cpc || 0));
+    case "intent":
+      return m * ((a.intent || "").localeCompare(b.intent || ""));
+    case "ai_score":
+      return m * ((a.ai_score || 0) - (b.ai_score || 0));
+    case "analysis_score":
+      return m * ((a.keyword_analysis_score ?? 0) - (b.keyword_analysis_score ?? 0));
+    case "status":
+      return m * (STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
+    default:
+      return 0;
+  }
+}
 
 export default function KeywordsPage() {
   const { id: projectId } = useParams<{ id: string }>();
-  const router = useRouter();
+  const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
+  const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
+  const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
 
-  const [activeTab, setActiveTab] = useState<Tab>("keywords");
-  const [keywords, setKeywords] = useState<Keyword[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Redux caches are backed by localStorage, which isn't available during SSR.
+  // We read them here but only apply them as React Query initialData AFTER the
+  // client has hydrated (mounted = true). This prevents the server/client HTML
+  // mismatch that would otherwise fire a hydration warning.
+  const reduxKeywordsCache = useAppSelector(state => selectKeywordsCache(state, projectId));
+  const reduxBriefCache = useAppSelector(state => selectBriefCache(state, projectId));
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  // After mount, pull from Redux so navigating back to this page is instant.
+  const keywordsCache = mounted ? reduxKeywordsCache : null;
+  const briefCache = mounted ? reduxBriefCache : null;
+
+  const PAGE_SIZE = 20;
+  const KEYWORDS_KEY = qk.keywords(projectId, { limit: PAGE_SIZE, offset: 0 });
+  const BRIEF_KEY = qk.brief(projectId);
+  const PROJECT_KEY = qk.project(projectId);
+
+  // Build React Query initialData from the Redux caches. When present, React Query
+  // uses the data immediately AND treats it as fresh (staleTime: Infinity + initialDataUpdatedAt),
+  // so no network call fires on revisit or page refresh.
+  const keywordsInitialData: KeywordsResponse | undefined = keywordsCache
+    ? { success: true, data: keywordsCache.keywords, total: keywordsCache.total }
+    : undefined;
+
+  const briefInitialData: BriefResponse | undefined = briefCache
+    ? { success: true, brief: briefCache.brief, updated_at: briefCache.updatedAt ?? undefined }
+    : undefined;
+
   const [discovering, setDiscovering] = useState(false);
-  const [filter, setFilter] = useState<FilterTab>("all");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sortBy, setSortBy] = useState<"volume" | "kd" | "ai_score" | "analysis_score">(
-    "analysis_score"
-  );
+  const filter = keywordPrefs.filter as FilterTab;
+  const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
 
-  const [gaps, setGaps] = useState<CompetitorGapKeyword[]>([]);
-  const [gapLoading, setGapLoading] = useState(false);
-  const [gapError, setGapError] = useState("");
-  const [autoDiscoveredCompetitors, setAutoDiscoveredCompetitors] = useState<string[]>([]);
-  const [selectedGapKeys, setSelectedGapKeys] = useState<Set<string>>(new Set());
-  const [importing, setImporting] = useState(false);
-
-  const [analysisMd, setAnalysisMd] = useState("");
-  const [clusterKeywords, setClusterKeywords] = useState<string[]>([]);
-  const [clusterPick, setClusterPick] = useState<Set<string>>(new Set());
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState("");
-  const [generatingGapKeyword, setGeneratingGapKeyword] = useState<string | null>(null);
-
-  const [brief, setBrief] = useState<BusinessBrief | null>(null);
-  const [briefUpdatedAt, setBriefUpdatedAt] = useState<string | null>(null);
   const [refreshingBrief, setRefreshingBrief] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
 
-  // Pagination — show 20 high-quality Ahrefs keywords first, expand on demand.
-  const PAGE_SIZE = 20;
-  const [pendingTotal, setPendingTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [busyRowId, setBusyRowId] = useState<string | null>(null);
+  const [massSelectMode, setMassSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkApproving, setBulkApproving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Keyword drilldown modal. Stored as id (not a `Keyword` object) so the
   // modal always reflects the latest row state — including approve/reject
   // updates that happen via `handleStatusUpdate`.
   const [modalKeywordId, setModalKeywordId] = useState<string | null>(null);
+
+  // "Add to calendar" scheduling flow
+  const [schedulingKeywordId, setSchedulingKeywordId] = useState<string | null>(null);
+  const [addingToCalendar, setAddingToCalendar] = useState(false);
+
+  const { data: keywordsData, isLoading: loading } = useQuery<KeywordsResponse>({
+    queryKey: KEYWORDS_KEY,
+    queryFn: () => getKeywords(projectId, { limit: PAGE_SIZE, offset: 0 }),
+    enabled: !!projectId,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+    initialData: keywordsInitialData,
+    initialDataUpdatedAt: keywordsCache?.loadedAt,
+  });
+  const serverKeywords: Keyword[] =
+    keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.data : [];
+  const keywords: Keyword[] = useMemo(
+    () =>
+      serverKeywords.map(keyword =>
+        keywordStatuses[keyword.id] ? { ...keyword, status: keywordStatuses[keyword.id] } : keyword
+      ),
+    [serverKeywords, keywordStatuses]
+  );
+  const pendingTotal =
+    keywordsData && "success" in keywordsData && keywordsData.success
+      ? keywordsData.total ?? keywordsData.data.length
+      : 0;
+
+  useEffect(() => {
+    if (serverKeywords.length === 0) return;
+    dispatch(
+      mergeKeywordStatuses({
+        projectId,
+        statuses: Object.fromEntries(serverKeywords.map(kw => [kw.id, kw.status])),
+      })
+    );
+    const total =
+      keywordsData && "success" in keywordsData && keywordsData.success
+        ? keywordsData.total ?? serverKeywords.length
+        : serverKeywords.length;
+    dispatch(keywordsLoaded({ projectId, keywords: serverKeywords, total }));
+  }, [dispatch, projectId, serverKeywords, keywordsData]);
+
+  const { data: briefData, isLoading: loadingBrief } = useQuery<BriefResponse>({
+    queryKey: BRIEF_KEY,
+    queryFn: () => getBusinessBrief(projectId),
+    enabled: !!projectId,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+    initialData: briefInitialData,
+    initialDataUpdatedAt: briefCache?.loadedAt,
+  });
+
+  // Keep Redux brief cache in sync so page-refresh is instant.
+  useEffect(() => {
+    if (!briefData?.success) return;
+    dispatch(
+      briefLoaded({
+        projectId,
+        brief: briefData.brief ?? null,
+        updatedAt: briefData.updated_at ?? null,
+      })
+    );
+  }, [dispatch, projectId, briefData]);
+
+  const { data: projectData } = useQuery<ProjectResponse>({
+    queryKey: PROJECT_KEY,
+    queryFn: () => getProject(projectId),
+    enabled: !!projectId,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+  });
+
+  const CALENDAR_KEY = qk.calendar(projectId);
+  const { data: calendarData, refetch: refetchCalendar } = useQuery({
+    queryKey: CALENDAR_KEY,
+    queryFn: () => getCalendarEntries(projectId),
+    enabled: !!projectId,
+    // Keep scheduling data perfectly in sync with the Calendar page —
+    // always refetch on mount so cross-page schedules surface here.
+    staleTime: 0,
+    gcTime: 30 * 60_000,
+    refetchOnMount: 'always',
+  });
+  const calendarEntries: CalendarEntry[] = calendarData?.success ? calendarData.data : [];
+  const brief: BusinessBrief | null =
+    briefData && briefData.success ? briefData.brief ?? null : null;
+  const briefUpdatedAt: string | null =
+    briefData && briefData.success ? briefData.updated_at ?? null : null;
+
+  const project =
+    projectData && "success" in projectData && projectData.success && projectData.data
+      ? projectData.data
+      : null;
+
+  const pushToast = (message: string) => {
+    setToast(message);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  };
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    },
+    []
+  );
+
   const modalKeyword = useMemo(
     () => keywords.find(k => k.id === modalKeywordId) ?? null,
     [keywords, modalKeywordId]
   );
 
-  const step1Done = keywords.length > 0;
+  /** Optimistically patch the cached keywords list. */
+  const patchKeywords = (mutator: (list: Keyword[]) => Keyword[]) => {
+    queryClient.setQueryData<KeywordsResponse>(KEYWORDS_KEY, prev => {
+      if (!prev || !("success" in prev) || !prev.success) return prev;
+      return { ...prev, data: mutator(prev.data) };
+    });
+  };
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const res = await getKeywords(projectId, { limit: PAGE_SIZE, offset: 0 });
-    if (res.success) {
-      setKeywords(res.data);
-      setSelected(new Set(res.data.filter(k => k.status === "approved").map(k => k.id)));
-      setPendingTotal(res.total ?? res.data.length);
-    }
-    setLoading(false);
-  }, [projectId]);
-
-  const handleLoadMore = useCallback(async () => {
+  const handleLoadMore = async () => {
     setLoadingMore(true);
     const currentPending = keywords.filter(k => k.status === "pending").length;
     const res = await loadMoreKeywords(projectId, currentPending, PAGE_SIZE);
     if (res.success) {
-      setKeywords(prev => {
-        const seen = new Set(prev.map(k => k.id));
+      queryClient.setQueryData<KeywordsResponse>(KEYWORDS_KEY, prev => {
+        if (!prev || !("success" in prev) || !prev.success) return prev;
+        const seen = new Set(prev.data.map(k => k.id));
         const fresh = res.data.filter(k => !seen.has(k.id));
-        return [...prev, ...fresh];
+        const merged = [...prev.data, ...fresh];
+        // Keep the Redux cache in sync with the expanded list.
+        dispatch(keywordsLoaded({ projectId, keywords: merged, total: res.total ?? prev.total ?? merged.length }));
+        return { ...prev, data: merged, total: res.total ?? prev.total };
       });
-      setPendingTotal(res.total ?? pendingTotal);
     }
     setLoadingMore(false);
-  }, [projectId, keywords, pendingTotal]);
-
-  const loadBrief = useCallback(async () => {
-    const res = await getBusinessBrief(projectId);
-    if (res.success) {
-      setBrief(res.brief);
-      setBriefUpdatedAt(res.updated_at ?? null);
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void load();
-    void loadBrief();
-  }, [load, loadBrief]);
+  };
 
   const handleDiscover = async () => {
     setDiscovering(true);
     setError("");
+    // Clear caches so fresh discovery results are fetched instead of stale data.
+    dispatch(clearKeywordsCache({ projectId }));
+    dispatch(clearBriefCache({ projectId }));
     const res = await discoverKeywords(projectId);
     const typed = res as {
       discoveryTrace?: DataForSEOTraceEntry[];
@@ -188,8 +362,12 @@ export default function KeywordsPage() {
       console.groupEnd();
     }
     if (res.success) {
-      await load();
-      await loadBrief();
+      // Refresh both the keyword list and the brief that drove the run.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.keywordsAll(projectId) }),
+        queryClient.invalidateQueries({ queryKey: BRIEF_KEY }),
+        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+      ]);
     } else setError(res.error ?? "Discovery failed");
     setDiscovering(false);
   };
@@ -208,196 +386,189 @@ export default function KeywordsPage() {
       console.groupEnd();
     }
     if (res.success && res.brief) {
-      setBrief(res.brief);
-      setBriefUpdatedAt(new Date().toISOString());
+      const updatedAt = new Date().toISOString();
+      // Update React Query cache immediately so the UI reflects fresh brief data.
+      queryClient.setQueryData<BriefResponse>(BRIEF_KEY, {
+        success: true,
+        brief: res.brief,
+        updated_at: updatedAt,
+      });
+      // Sync to Redux so the next page refresh serves from cache.
+      dispatch(briefLoaded({ projectId, brief: res.brief, updatedAt }));
     } else {
       setError(res.error ?? "Failed to refresh business brief");
     }
     setRefreshingBrief(false);
   };
 
-  const handleStatusUpdate = async (kwId: string, status: KeywordStatus) => {
-    const previousKeywords = keywords;
-    const previousSelected = selected;
+  const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string) => {
+    const keyword = keywords.find(k => k.id === kwId);
+    const previousStatus = keyword?.status;
+    const label = phrase ?? keyword?.keyword ?? "Keyword";
     setError("");
-    setKeywords(prev => prev.map(k => (k.id === kwId ? { ...k, status } : k)));
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (status === "approved") next.add(kwId);
-      else next.delete(kwId);
-      return next;
-    });
+    const previousData = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
+
+    // Optimistic update — fire immediately so the row reflects the new state
+    // without waiting for the network round-trip.
+    patchKeywords(list => list.map(k => (k.id === kwId ? { ...k, status } : k)));
+    dispatch(
+      keywordStatusChanged({
+        projectId,
+        keywordId: kwId,
+        previousStatus,
+        nextStatus: status,
+      })
+    );
+
+    // Show the toast now so it feels instant, then fire the API in the background.
+    if (status === "approved") {
+      pushToast(`"${label}" approved — go to Calendar to schedule it`);
+    } else if (status === "pending") {
+      pushToast(`"${label}" moved back to pending`);
+    }
+
+    // Keep the menu button blocked only for a brief moment while the row
+    // re-renders — then release so the user can interact again.
+    setBusyRowId(kwId);
     const res = await updateKeywordStatus(kwId, status);
+    setBusyRowId(null);
+
     if (!res.success) {
-      setKeywords(previousKeywords);
-      setSelected(previousSelected);
+      // Roll back on failure.
+      if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
+      if (previousStatus) {
+        dispatch(
+          keywordStatusChanged({
+            projectId,
+            keywordId: kwId,
+            previousStatus: status,
+            nextStatus: previousStatus,
+          })
+        );
+      }
       setError(res.error ?? "Could not update keyword status");
+    } else {
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+      queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
     }
   };
 
-  const handleBulkUpdate = async (status: KeywordStatus) => {
-    const ids = [...selected];
-    setKeywords(prev => prev.map(k => (ids.includes(k.id) ? { ...k, status } : k)));
-    setSelected(status === "approved" ? new Set(ids) : new Set());
-    await bulkUpdateKeywordStatus(ids, status);
+  const handleKeywordRemove = async (kwId: string, phrase: string) => {
+    if (!confirm(`Remove “${phrase}” from this project? This cannot be undone.`)) return;
+    setBusyRowId(kwId);
+    setError("");
+    const snapshot = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
+    const previousStatus = keywords.find(k => k.id === kwId)?.status;
+    patchKeywords(list => list.filter(k => k.id !== kwId));
+    const res = await deleteKeyword(kwId);
+    if (!res.success) {
+      if (snapshot) queryClient.setQueryData(KEYWORDS_KEY, snapshot);
+      setError(("error" in res && res.error) || "Could not delete keyword");
+    } else {
+      dispatch(removeKeywordStatus({ projectId, keywordId: kwId, previousStatus }));
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+    }
+    setBusyRowId(null);
   };
-
-  const handleClearAll = async () => {
-    if (!confirm("Delete all keywords for this project? Cannot be undone.")) return;
-    await deleteAllKeywords(projectId);
-    setKeywords([]);
-    setGaps([]);
-    setAnalysisMd("");
-    setClusterKeywords([]);
-    setClusterPick(new Set());
-  };
-
-  const toggleSelect = (id: string) =>
-    setSelected(prev => {
-      const s = new Set(prev);
-      s.has(id) ? s.delete(id) : s.add(id);
-      return s;
-    });
 
   const filtered = useMemo(() => {
-    const scoreOf = (k: Keyword, key: typeof sortBy): number => {
-      if (key === "analysis_score") return k.keyword_analysis_score ?? 0;
-      return (k[key] ?? 0) as number;
-    };
-    const list = keywords
-      .filter(k => filter === "all" || k.status === filter)
-      .sort((a, b) => scoreOf(b, sortBy) - scoreOf(a, sortBy));
-    // Product rule: the pipeline caps discovery + clustering at 100 keywords.
-    // Older projects may have more rows from a prior run — we display the
-    // top-100 by the active sort (defaults to keyword_analysis_score desc).
-    return list.slice(0, 100);
-  }, [keywords, filter, sortBy]);
+    const list = keywords.filter(k => {
+      if (filter === "all") return true;
+      return k.status === filter;
+    });
+    return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir)).slice(0, 100);
+  }, [keywords, filter, tableSort]);
 
-  const toggleSelectAll = () => {
-    const visible = filtered.map(k => k.id);
-    const allSelected = visible.length > 0 && visible.every(id => selected.has(id));
-    setSelected(allSelected ? new Set() : new Set(visible));
+  const toggleSortColumn = (column: TableSortColumn) =>
+    dispatch(
+      rememberKeywordSort({
+        projectId,
+        tableSort:
+          tableSort.column === column
+            ? { column, dir: tableSort.dir === "asc" ? "desc" : "asc" }
+            : { column, dir: defaultDirForSortColumn(column) },
+      })
+    );
+
+  const exitMassSelect = () => {
+    setMassSelectMode(false);
+    setSelectedIds(new Set());
   };
 
-  const handleFindGaps = async () => {
-    if (!step1Done) return;
-    setGapLoading(true);
-    setGapError("");
-    setGaps([]);
-    setAnalysisMd("");
-    setClusterKeywords([]);
-    setClusterPick(new Set());
-    setAutoDiscoveredCompetitors([]);
-    const res = await findCompetitorGaps(projectId);
-    if (res.success) {
-      setGaps(res.data);
-      if (res.autoDiscoveredCompetitors?.length) {
-        setAutoDiscoveredCompetitors(res.autoDiscoveredCompetitors);
+  const toggleRowSelected = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkApproveToCalendar = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setError("");
+    const previousData = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
+    const previousStatuses = Object.fromEntries(
+      ids.map(id => [id, keywords.find(keyword => keyword.id === id)?.status ?? "pending"])
+    ) as Record<string, KeywordStatus>;
+    setBulkApproving(true);
+    patchKeywords(list =>
+      list.map(k => (ids.includes(k.id) ? { ...k, status: "approved" as const } : k))
+    );
+    dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: ids, nextStatus: "approved" }));
+    console.log("[Keywords] Bulk approve → calendar", { count: ids.length, ids });
+    try {
+      const res = await bulkUpdateKeywordStatus(ids, "approved");
+      if (!res.success) {
+        if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
+        for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
+          dispatch(
+            keywordStatusChanged({
+              projectId,
+              keywordId,
+              previousStatus: "approved",
+              nextStatus: previousStatus,
+            })
+          );
+        }
+        setError(res.error ?? "Could not approve keywords");
+      } else {
+        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+        queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        pushToast(
+          ids.length === 1
+            ? "1 keyword approved — go to Calendar to schedule it"
+            : `${ids.length} keywords approved — go to Calendar to schedule them`
+        );
+        exitMassSelect();
       }
-    } else {
-      setGapError(res.error ?? "Failed to find competitor gaps");
+    } finally {
+      setBulkApproving(false);
     }
-    setGapLoading(false);
   };
 
-  const toggleGapKey = (key: string) =>
-    setSelectedGapKeys(prev => {
-      const s = new Set(prev);
-      s.has(key) ? s.delete(key) : s.add(key);
-      return s;
-    });
-
-  const toggleAllGaps = () => {
-    const keys = gaps.map(gapRowKey);
-    const allOn = keys.length > 0 && keys.every(k => selectedGapKeys.has(k));
-    setSelectedGapKeys(allOn ? new Set() : new Set(keys));
-  };
-
-  const handleGenerateBlogFromGap = async (keyword: string) => {
-    setGeneratingGapKeyword(keyword);
-    const res = await generateBlogFromOpportunity(projectId, keyword);
-    setGeneratingGapKeyword(null);
+  const handleScheduleOnDate = useCallback(async (date: string) => {
+    if (!schedulingKeywordId) return;
+    setAddingToCalendar(true);
+    const kw = keywords.find(k => k.id === schedulingKeywordId);
+    const res = await addKeywordToCalendarOnDate(schedulingKeywordId, projectId, date);
     if (res.success) {
-      router.push(`/projects/${projectId}/calendar`);
+      const wasRescheduled = 'rescheduled' in res && res.rescheduled;
+      pushToast(`"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${date}`);
+      setSchedulingKeywordId(null);
+      // Invalidate every cache that depends on calendar_entries so the
+      // calendar / blogs pages see the new schedule the moment they mount.
+      await refetchCalendar();
+      queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+      queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     } else {
-      setGapError(res.error ?? "Could not create calendar entry.");
+      pushToast(res.error ?? "Could not schedule keyword");
     }
-  };
-
-  const handleImportGaps = async () => {
-    if (!selectedGapKeys.size) return;
-    const picked = gaps.filter(g => selectedGapKeys.has(gapRowKey(g)));
-    setImporting(true);
-    const res = await importGapKeywords(projectId, picked);
-    if (res.success) {
-      await load();
-      setSelectedGapKeys(new Set());
-      setGaps([]);
-      setAnalysisMd("");
-      setClusterKeywords([]);
-      setClusterPick(new Set());
-      setActiveTab("keywords");
-    }
-    setImporting(false);
-  };
-
-  const handleAnalyze = async () => {
-    if (!gaps.length) {
-      setAnalysisError("Run a competitor scan first so we can compare real pages to your keyword set.");
-      return;
-    }
-    if (!keywords.length) {
-      setAnalysisError("Discover industry keywords in step 1 first.");
-      return;
-    }
-    setAnalyzing(true);
-    setAnalysisError("");
-    setAnalysisMd("");
-    setClusterKeywords([]);
-    setClusterPick(new Set());
-    const res = await analyzeKeywordGapsAction(projectId, gaps);
-    if (res.success) {
-      setAnalysisMd(res.analysisMarkdown ?? "");
-      const list = res.clusterKeywords ?? [];
-      setClusterKeywords(list);
-      setClusterPick(new Set(list));
-    } else {
-      setAnalysisError(("error" in res && res.error) || "Analysis failed");
-    }
-    setAnalyzing(false);
-  };
-
-  const toggleClusterPhrase = (phrase: string) =>
-    setClusterPick(prev => {
-      const s = new Set(prev);
-      s.has(phrase) ? s.delete(phrase) : s.add(phrase);
-      return s;
-    });
-
-  const handleApproveCluster = async () => {
-    const list = [...clusterPick];
-    if (list.length < 5) {
-      setAnalysisError("Pick at least 5 keywords for a 30-day calendar (or approve more in step 1).");
-      return;
-    }
-    setAnalysisError("");
-    const res = await approveKeywordCluster(projectId, list);
-    if (!res.success) {
-      setAnalysisError(("error" in res && res.error) || "Could not approve cluster");
-      return;
-    }
-    await load();
-    const refreshed = await getKeywords(projectId);
-    const approvedTotal =
-      refreshed.success ? refreshed.data.filter(k => k.status === "approved").length : 0;
-    if (approvedTotal < 5) {
-      setAnalysisError(
-        `Only ${approvedTotal} approved keywords in this project after matching. Add or import more so you have at least 5 approved before opening the calendar.`
-      );
-      return;
-    }
-    router.push(`/projects/${projectId}/calendar`);
-  };
+    setAddingToCalendar(false);
+  }, [schedulingKeywordId, keywords, projectId, refetchCalendar, queryClient]);
 
   const counts = {
     all: keywords.length,
@@ -406,96 +577,136 @@ export default function KeywordsPage() {
     rejected: keywords.filter(k => k.status === "rejected").length,
   };
 
+  const sortMark = (col: TableSortColumn) =>
+    tableSort.column !== col ? (
+      <span className="ml-1 text-[11px] font-normal normal-case tracking-normal text-text-tertiary/40" aria-hidden>
+        ↕
+      </span>
+    ) : (
+      <span className="ml-1 text-brand-action" aria-hidden>
+        {tableSort.dir === "asc" ? "↑" : "↓"}
+      </span>
+    );
+
+  const FILTER_TABS: { tab: FilterTab; label: string }[] = [
+    { tab: "all", label: "All" },
+    { tab: "pending", label: "Pending" },
+    { tab: "approved", label: "Approved" },
+    { tab: "rejected", label: "Rejected" },
+  ];
+
+  const thBtn =
+    "group inline-flex items-center gap-0.5 rounded-[6px] px-1 py-0.5 -mx-1 text-left uppercase tracking-widest hover:bg-surface-hover/80 hover:text-text-secondary transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40";
+
   return (
-    <div className="space-y-10 pb-16 max-w-full pl-4 pr-4 mx-auto">
-      {/* ── HEADER ─────────────────────────────────────────────────────────── */}
-      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-            Keyword workflow
-          </h1>
-          <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
-            Step 1: discover industry demand. Step 2: see what competitors publish, compare both, pick a cluster, then
-            open the calendar to generate blogs.
-          </p>
+    <div className="space-y-10 pb-16 pl-4 pr-4 relative">
+      {/* ── HEADER (match project overview chrome) ─────────────────────────── */}
+      <div className="pt-4 pb-8 border-b border-border-subtle">
+        <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
+          <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
+            <span className="h-2 w-2 rounded-full bg-brand-action" />
+            Keyword discovery
+          </span>
+          {project ? (
+            <>
+              <span className="font-mono text-text-primary">{project.domain}</span>
+              <span className="opacity-30">/</span>
+              <span>{regionName(project.target_region)}</span>
+              {project.niche ? (
+                <>
+                  <span className="opacity-30">/</span>
+                  <span>{project.niche}</span>
+                </>
+              ) : null}
+            </>
+          ) : (
+            <span className="text-text-tertiary">…</span>
+          )}
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link
-            href={`/projects/${projectId}/audit`}
-            className="rounded-[30px] border border-border-subtle bg-surface-primary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors inline-flex items-center gap-2"
-          >
-            Content health
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-            </svg>
-          </Link>
-          {counts.approved >= 5 && (
+
+        <div className="flex flex-wrap items-start justify-between gap-6">
+          <div>
+            <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
+              {project?.name ?? "…"}
+            </h1>
+            {project?.company && project.company !== project.name ? (
+              <p className="mt-3 text-[16px] text-text-tertiary">{project.company}</p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
             <Link
-              href={`/projects/${projectId}/calendar`}
-              className="rounded-[30px] border border-border-subtle bg-surface-primary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors inline-flex items-center gap-2"
+              href={`/projects/${projectId}`}
+              className="rounded-[4px] px-4 py-2 text-[14px] text-text-secondary hover:text-text-primary hover:underline"
             >
-              Calendar
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              Overview
+            </Link>
+            <Link
+              href={`/projects/${projectId}/competitors`}
+              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            >
+              Competitors
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
             </Link>
-          )}
-          <button
-            onClick={handleDiscover}
-            disabled={discovering}
-            className="rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60 flex items-center gap-2"
-          >
-            {discovering ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />{" "}
-                Discovering…
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <circle cx="11" cy="11" r="8" />
-                  <path d="m21 21-4.3-4.3" />
+            <Link
+              href={`/projects/${projectId}/audit`}
+              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            >
+              Content health
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+              </svg>
+            </Link>
+            {counts.approved >= 5 ? (
+              <Link
+                href={`/projects/${projectId}/calendar`}
+                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+              >
+                Calendar
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
                 </svg>
-                {keywords.length > 0 ? "Re-discover" : "Discover keywords"}
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* ── PROGRESS STEPS ─────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row gap-4 sm:items-center rounded-[16px] border border-border-subtle bg-surface-elevated p-5">
-        <div className={`flex items-center gap-4 ${step1Done ? "text-text-primary" : "text-text-tertiary"}`}>
-          <span
-            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] text-[14px] font-bold ${
-              step1Done ? "bg-brand-primary text-brand-on-primary" : "bg-surface-tertiary text-text-tertiary"
-            }`}
-          >
-            1
-          </span>
-          <div>
-            <p className="text-[16px] font-medium leading-tight">Industry keywords</p>
-            <p className="mt-1 text-[13px] text-text-tertiary">Search volume, difficulty, approve the best seeds.</p>
-          </div>
-        </div>
-        <span className="hidden sm:block text-text-tertiary px-2">→</span>
-        <div className={`flex items-center gap-4 ${step1Done ? "text-text-primary" : "text-text-tertiary opacity-60"}`}>
-          <span
-            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] text-[14px] font-bold ${
-              activeTab === "competitor_gap" ? "bg-brand-primary text-brand-on-primary" : "bg-surface-tertiary text-text-tertiary"
-            }`}
-          >
-            2
-          </span>
-          <div>
-            <p className="text-[16px] font-medium leading-tight">Competitor gaps</p>
-            <p className="mt-1 text-[13px] text-text-tertiary">Scan competitor sites, compare, pick a writing cluster.</p>
+              </Link>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleDiscover}
+              disabled={discovering}
+              className="inline-flex items-center gap-2 rounded-[32px] bg-brand-primary px-5 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
+            >
+              {discovering ? (
+                <>
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
+                  Discovering…
+                </>
+              ) : (
+                <>
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                  </svg>
+                  {keywords.length > 0 ? "Re-discover" : "Discover keywords"}
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>
 
       {/* ── BUSINESS BRIEF ─────────────────────────────────────────────────── */}
-      <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Business brief</h2>
+          <p className="mt-1.5 text-[14px] text-text-tertiary max-w-3xl">
+            Scraped context from your domain that seeds discovery — refresh when your site or positioning changes.
+          </p>
+        </div>
+        {loadingBrief ? (
+          <BusinessBriefSkeleton />
+        ) : (
+          <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-surface-tertiary text-text-primary">
@@ -504,14 +715,13 @@ export default function KeywordsPage() {
               </svg>
             </div>
             <div>
-              <p className="text-[16px] font-medium text-text-primary">Business brief</p>
               {brief ? (
-                <p className="mt-1 text-[13px] text-text-tertiary">
+                <p className="text-[13px] text-text-tertiary">
                   {brief.seed_phrases.length} seeds · scraped {brief.source_urls.length} pages
-                  {briefUpdatedAt ? ` · updated ${new Date(briefUpdatedAt).toLocaleString()}` : ""}
+                  {briefUpdatedAt ? ` · updated ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(briefUpdatedAt))}` : ""}
                 </p>
               ) : (
-                <p className="mt-1 text-[13px] text-text-tertiary">
+                <p className="text-[13px] text-text-tertiary">
                   No brief yet — we'll auto-build one on your first Discover click.
                 </p>
               )}
@@ -522,36 +732,44 @@ export default function KeywordsPage() {
               ) : null}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             {brief ? (
               <button
                 type="button"
                 onClick={() => setBriefOpen(o => !o)}
-                className="rounded-[4px] border border-border-subtle bg-surface-secondary px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95"
               >
                 {briefOpen ? "Hide details" : "View details"}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={handleRefreshBrief}
-              disabled={refreshingBrief}
-              className="flex items-center gap-2 rounded-[4px] border border-border-subtle bg-surface-secondary px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-            >
-              {refreshingBrief ? (
-                <>
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
-                  Scraping…
-                </>
-              ) : (
-                <>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                  </svg>
-                  {brief ? "Refresh brief" : "Generate brief"}
-                </>
+            <div className="flex flex-col items-end gap-0.5">
+              <button
+                type="button"
+                onClick={handleRefreshBrief}
+                disabled={refreshingBrief}
+                title="Re-scrape your domain and regenerate the business brief. Uses Jina Reader."
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50"
+              >
+                {refreshingBrief ? (
+                  <>
+                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
+                    Scraping…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                    {brief ? "Refresh brief" : "Generate brief"}
+                  </>
+                )}
+              </button>
+              {briefUpdatedAt && (
+                <span className="text-[10px] text-text-tertiary" title={briefUpdatedAt}>
+                  Updated {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(briefUpdatedAt))}
+                </span>
               )}
-            </button>
+            </div>
           </div>
         </div>
 
@@ -622,38 +840,20 @@ export default function KeywordsPage() {
           </div>
         ) : null}
       </div>
+      )}
+      </section>
 
-      {/* ── TABS ───────────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
-        <button
-          type="button"
-          onClick={() => setActiveTab("keywords")}
-          className={`rounded-[4px] px-4 py-2 text-[14px] font-medium transition-all ${
-            activeTab === "keywords" ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
-          }`}
-        >
-          1 · Industry ({keywords.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => step1Done && setActiveTab("competitor_gap")}
-          disabled={!step1Done}
-          title={!step1Done ? "Discover industry keywords in step 1 first" : undefined}
-          className={`rounded-[4px] px-4 py-2 text-[14px] font-medium transition-all ${
-            activeTab === "competitor_gap"
-              ? "bg-surface-elevated text-text-primary shadow-sm"
-              : step1Done
-                ? "text-text-tertiary hover:text-text-secondary"
-                : "cursor-not-allowed text-text-tertiary opacity-50"
-          }`}
-        >
-          2 · Competitor gaps
-        </button>
-      </div>
+      {/* ── KEYWORD LIST ───────────────────────────────────────────────────── */}
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Keyword list</h2>
+            {keywords.length === 0 ? (
+              <p className="mt-1.5 text-[14px] text-text-tertiary">Run Discover to load keywords.</p>
+            ) : null}
+          </div>
+        </div>
 
-      {/* ── TAB CONTENT: KEYWORDS ──────────────────────────────────────────── */}
-      {activeTab === "keywords" && (
-        <>
           {error && (
             <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
               {error}
@@ -661,100 +861,78 @@ export default function KeywordsPage() {
           )}
 
           {keywords.length > 0 && (
-            <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6 flex flex-wrap items-center gap-6">
-              <div>
-                <p className="mb-1 text-[12px] font-bold uppercase tracking-widest text-text-tertiary">Approved</p>
-                <p className="text-[28px] font-normal tracking-tight text-text-primary font-display">
-                  {counts.approved}{" "}
-                  <span className="text-[16px] text-text-tertiary">/ {keywords.length}</span>
-                </p>
-              </div>
-              <div className="h-2 min-w-[120px] flex-1 overflow-hidden rounded-full bg-surface-tertiary">
-                <div
-                  className="h-full rounded-full bg-brand-action transition-all"
-                  style={{ width: `${Math.min((counts.approved / keywords.length) * 100, 100)}%` }}
-                />
-              </div>
-              <div className="text-right text-[13px] text-text-tertiary">
-                {counts.approved < 5 ? `${5 - counts.approved} more approvals unlock the calendar wizard` : "Ready for calendar"}
-                {keywords.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleClearAll}
-                    className="mt-1.5 block text-[12px] text-text-tertiary hover:text-brand-coral transition-colors"
-                  >
-                    Clear all keywords
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {keywords.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1">
-                {(["all", "pending", "approved", "rejected"] as FilterTab[]).map(tab => (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit transition-shadow duration-200">
+                {FILTER_TABS.map(({ tab, label }) => (
                   <button
                     key={tab}
                     type="button"
-                    onClick={() => setFilter(tab)}
-                    className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
-                      filter === tab ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
+                    onClick={() => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
+                    className={`rounded-[6px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all duration-150 ${
+                      filter === tab
+                        ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
+                        : "text-text-tertiary hover:text-text-secondary"
                     }`}
                   >
-                    {tab} ({counts[tab]})
+                    {label} ({counts[tab]})
                   </button>
                 ))}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[13px] text-text-tertiary">Sort:</span>
-                {(["analysis_score", "volume", "kd", "ai_score"] as const).map(s => (
+                {!massSelectMode ? (
                   <button
-                    key={s}
                     type="button"
-                    onClick={() => setSortBy(s)}
-                    className={`rounded-[4px] px-3 py-1.5 text-[13px] font-medium transition-all ${
-                      sortBy === s ? "bg-surface-elevated text-text-primary border border-border-subtle shadow-sm" : "text-text-tertiary hover:text-text-secondary border border-transparent"
-                    }`}
+                    aria-label="Mass select keywords"
+                    onClick={() => {
+                      setMassSelectMode(true);
+                      setSelectedIds(new Set());
+                    }}
+                    className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
                   >
-                    {s === "analysis_score"
-                      ? "Analysis score"
-                      : s === "ai_score"
-                        ? "AI score"
-                        : s === "kd"
-                          ? "Difficulty"
-                          : "Volume"}
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-3 w-3 shrink-0 opacity-75"
+                      aria-hidden
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.85}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <path d="M14 17.5 16 19.5 21 13.5" />
+                    </svg>
+                    <span>Mass select</span>
                   </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {selected.size > 0 && (
-            <div className="flex flex-wrap items-center gap-4 rounded-[16px] border border-brand-action/30 bg-brand-action/5 p-4">
-              <span className="text-[14px] font-medium text-brand-action">{selected.size} selected</span>
-              <div className="ml-auto flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleBulkUpdate("approved")}
-                  className="rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-4 py-2 text-[13px] font-medium text-brand-action hover:bg-brand-action/20 transition-colors"
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleBulkUpdate("rejected")}
-                  className="rounded-[4px] border border-brand-coral/20 bg-brand-coral/10 px-4 py-2 text-[13px] font-medium text-brand-coral hover:bg-brand-coral/20 transition-colors"
-                >
-                  Reject
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleBulkUpdate("pending")}
-                  className="rounded-[4px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
-                >
-                  Reset
-                </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleBulkApproveToCalendar()}
+                      disabled={bulkApproving || selectedIds.size === 0}
+                      className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
+                        bulkApproving ? "animate-pulse cursor-wait" : ""
+                      }`}
+                    >
+                      <span
+                        className={`block max-w-full overflow-hidden truncate text-center ${bulkApproving ? "text-[13px] leading-none" : "tabular-nums"}`}
+                      >
+                        {bulkApproving ? "…" : selectedIds.size > 0 ? `Approve (${selectedIds.size})` : "Approve"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exitMassSelect}
+                      disabled={bulkApproving}
+                      className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
+                      title="Leave mass-select mode"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -764,61 +942,149 @@ export default function KeywordsPage() {
               <TableSkeleton rows={8} columns={6} />
             </div>
           ) : filtered.length > 0 ? (
-            <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[1100px] text-left">
-                  <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+            <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
+              <div className="overflow-x-auto overflow-hidden">
+                <table className="w-full min-w-[940px] text-left border-collapse">
+                  <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                     <tr>
-                      <th className="w-12 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={filtered.length > 0 && filtered.every(k => selected.has(k.id))}
-                          onChange={toggleSelectAll}
-                          className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
+                      <th
+                        scope="col"
+                        className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
+                          massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
+                        } overflow-hidden`}
+                      >
+                        <span
+                          className={`block min-h-5 transition-all duration-300 ease-out ${massSelectMode ? "opacity-100" : "opacity-0"}`}
+                          aria-hidden
                         />
                       </th>
-                      <th className="px-4 py-3">Keyword</th>
-                      <th className="px-4 py-3 text-right">Volume</th>
-                      <th className="px-4 py-3 text-center">KD</th>
-                      <th className="px-4 py-3 text-right">CPC</th>
-                      <th className="px-4 py-3 text-center">Trend</th>
-                      <th className="px-4 py-3 text-center">Intent</th>
-                      <th className="px-4 py-3 text-center">Comp</th>
-                      <th className="px-4 py-3 text-center" title="Legacy AI score">AI</th>
-                      <th
-                        className="px-4 py-3 text-center"
-                        title="Keyword Analysis Score — composite of relevance, business-fit, intent, KD, volume, CPC and SERP opportunity"
-                      >
-                        Analysis
+                      <th scope="col" className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("keyword")}>
+                            Keyword{sortMark("keyword")}
+                          </button>
+                          <Tooltip placement="below" content={`The search query. Live data from DataForSEO in ${projectData?.success && projectData.data ? regionName(projectData.data.target_region) : "your region"}.`}>
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
                       </th>
-                      <th className="px-4 py-3 text-center">Status</th>
-                      <th className="px-4 py-3 text-center">Action</th>
+                      <th scope="col" className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("volume")}>
+                            Volume{sortMark("volume")}
+                          </button>
+                          <Tooltip placement="below" content="Average monthly searches over the last 12 months.">
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("kd")}>
+                            KD{sortMark("kd")}
+                          </button>
+                          <Tooltip placement="below" content="Keyword Difficulty (0-100). Higher means harder to rank in top 10.">
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("cpc")}>
+                            CPC{sortMark("cpc")}
+                          </button>
+                          <Tooltip placement="below" content="Cost Per Click (USD). Indicates commercial value of the keyword.">
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("intent")}>
+                            Intent{sortMark("intent")}
+                          </button>
+                          <Tooltip placement="below" content="Search intent (informational, commercial, transactional, navigational).">
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("ai_score")}>
+                            AI{sortMark("ai_score")}
+                          </button>
+                          <Tooltip placement="below" content="AI relevance score (1-10) matching the keyword to your business brief.">
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("analysis_score")}>
+                            Analysis{sortMark("analysis_score")}
+                          </button>
+                          <Tooltip placement="below" content="Overall opportunity score based on volume, KD, CPC, and AI relevance.">
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("status")}>
+                            Status{sortMark("status")}
+                          </button>
+                        </div>
+                      </th>
+                      <th scope="col" className="w-14 px-2 py-3 text-center">
+                        <span className="sr-only">Actions menu</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle/60">
                     {filtered.map(kw => (
                       <tr
                         key={kw.id}
-                        onClick={() => setModalKeywordId(kw.id)}
-                        title="Click to open detailed keyword analysis"
-                        className={`cursor-pointer transition-colors hover:bg-surface-hover ${
-                          selected.has(kw.id) ? "bg-brand-action/5" : ""
-                        }`}
+                        onClick={e => {
+                          const t = e.target as HTMLElement;
+                          if (
+                            t.closest("button, input, [role='menu'], [role='menuitem'], a") ||
+                            t.closest("[data-row-no-mass]")
+                          )
+                            return;
+                          if (massSelectMode && !bulkApproving) {
+                            toggleRowSelected(kw.id);
+                            return;
+                          }
+                          if (!massSelectMode && !busyRowId) setModalKeywordId(kw.id);
+                        }}
+                        className={`group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
+                          kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
+                        } ${selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""} ${
+                          massSelectMode && !bulkApproving ? "cursor-pointer" : ""
+                        } ${!massSelectMode && !busyRowId ? "cursor-pointer" : ""}`}
                       >
-                        <td className="px-4 py-3">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(kw.id)}
-                            onClick={e => e.stopPropagation()}
-                            onChange={() => toggleSelect(kw.id)}
-                            className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
-                          />
+                        <td
+                          data-row-no-mass
+                          className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
+                            massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
+                          } overflow-hidden`}
+                        >
+                          <span
+                            className={`flex justify-center transition-all duration-300 ease-out ${massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0"}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(kw.id)}
+                              onChange={() => toggleRowSelected(kw.id)}
+                              onClick={e => e.stopPropagation()}
+                              disabled={bulkApproving || !massSelectMode}
+                              aria-label={`Select keyword ${kw.keyword}`}
+                              className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
+                            />
+                          </span>
                         </td>
-                        <td className="px-4 py-3">
-                          <p className="text-[14px] font-medium text-text-primary">{kw.keyword}</p>
-                          {kw.gap_competitor ? (
-                            <p className="text-[11px] text-brand-action mt-0.5">Gap · {kw.gap_competitor}</p>
-                          ) : null}
+                        <td className="px-4 py-3 align-middle max-w-[260px]">
+                          <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
                           {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
                           (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
                             <p
@@ -830,20 +1096,20 @@ export default function KeywordsPage() {
                             </p>
                           ) : null}
                           {kw.secondary_keywords?.length ? (
-                            <p className="max-w-xs truncate mt-1 text-[11px] text-text-tertiary">
+                            <p className="mt-1 max-w-xs truncate text-[11px] text-text-tertiary">
                               {kw.secondary_keywords.slice(0, 3).join(" · ")}
                             </p>
                           ) : null}
                         </td>
-                        <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
+                        <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
                           {kw.volume ? kw.volume.toLocaleString() : "—"}
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-4 py-3 text-center align-middle">
                           {kw.kd > 0 ? (
                             <div className="flex items-center justify-center gap-2">
                               <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
                                 <div
-                                  className={`h-full rounded-full ${
+                                  className={`h-full rounded-full transition-all duration-300 ${
                                     kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
                                   }`}
                                   style={{ width: `${kw.kd}%` }}
@@ -855,19 +1121,10 @@ export default function KeywordsPage() {
                             <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-right text-[13px] font-mono text-text-tertiary">
+                        <td className="px-4 py-3 text-right align-middle text-[13px] font-mono text-text-tertiary tabular-nums">
                           {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
                         </td>
-                        <td className="px-4 py-3 text-center">
-                          <span
-                            className={`text-[12px] font-bold ${
-                              kw.trend?.startsWith("+") ? "text-[#10b981]" : "text-brand-coral"
-                            }`}
-                          >
-                            {kw.trend || "—"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-4 py-3 text-center align-middle">
                           {kw.intent ? (
                             <span
                               className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
@@ -884,95 +1141,83 @@ export default function KeywordsPage() {
                             <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center">
-                          {kw.competition_level ? (
-                            <span
-                              className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold uppercase ${
-                                kw.competition_level === "LOW"
-                                  ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
-                                  : kw.competition_level === "MEDIUM"
-                                    ? "border-[#f59e0b]/20 bg-[#f59e0b]/10 text-[#f59e0b]"
-                                    : "border-brand-coral/20 bg-brand-coral/10 text-brand-coral"
-                              }`}
-                            >
-                              {kw.competition_level}
-                            </span>
-                          ) : (
-                            <span className="text-[13px] text-text-tertiary">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className="rounded-[4px] border border-border-subtle bg-surface-secondary px-2 py-0.5 text-[12px] font-mono text-text-secondary">
+                        <td className="px-4 py-3 text-center align-middle">
+                          <span className="inline-block rounded-[4px] border border-border-subtle bg-surface-secondary px-2 py-0.5 text-[12px] font-mono text-text-secondary tabular-nums">
                             {kw.ai_score}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-4 py-3 text-center align-middle">
                           {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
-                            <span className="rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action">
+                            <span className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums">
                               {Math.round(kw.keyword_analysis_score)}
                             </span>
                           ) : (
                             <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-4 py-3 text-center align-middle">
                           <span
-                            className={`rounded-[4px] border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
+                            className={`inline-block rounded-[4px] border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
                           >
                             {kw.status}
                           </span>
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="flex justify-center gap-2">
-                            {kw.status !== "approved" && (
-                              <button
-                                type="button"
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  handleStatusUpdate(kw.id, "approved");
-                                }}
-                                className="rounded-[4px] bg-brand-action/10 p-1.5 text-brand-action hover:bg-brand-action/20 transition-colors"
-                                title="Approve"
-                              >
-                                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
-                                </svg>
-                              </button>
-                            )}
-                            {kw.status !== "rejected" && (
-                              <button
-                                type="button"
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  handleStatusUpdate(kw.id, "rejected");
-                                }}
-                                className="rounded-[4px] bg-brand-coral/10 p-1.5 text-brand-coral hover:bg-brand-coral/20 transition-colors"
-                                title="Reject"
-                              >
-                                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                                </svg>
-                              </button>
-                            )}
-                            {kw.status !== "pending" && (
-                              <button
-                                type="button"
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  handleStatusUpdate(kw.id, "pending");
-                                }}
-                                className="rounded-[4px] bg-surface-secondary p-1.5 text-text-tertiary hover:text-text-primary transition-colors"
-                                title="Reset"
-                              >
-                                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
-                                  />
-                                </svg>
-                              </button>
-                            )}
+                        <td className="px-2 py-3 align-middle" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-1 justify-center">
+                            {/* Add-to-calendar button */}
+                            {(() => {
+                              const isAlreadyScheduled = calendarEntries.some(e => e.keyword_id === kw.id);
+                              const isSchedulingThis = schedulingKeywordId === kw.id;
+                              return (
+                                <button
+                                  type="button"
+                                  title={
+                                    isAlreadyScheduled
+                                      ? "Already on calendar"
+                                      : isSchedulingThis
+                                      ? "Cancel scheduling"
+                                      : "Add to calendar on a specific date"
+                                  }
+                                  onClick={() =>
+                                    setSchedulingKeywordId(isSchedulingThis ? null : kw.id)
+                                  }
+                                  disabled={addingToCalendar}
+                                  className={`w-7 h-7 flex items-center justify-center rounded-full border transition-colors shrink-0
+                                    ${isAlreadyScheduled
+                                      ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981] cursor-default"
+                                      : isSchedulingThis
+                                      ? "border-[#f59e0b]/40 bg-[#f59e0b]/10 text-[#f59e0b]"
+                                      : "border-border-subtle bg-surface-elevated text-text-tertiary hover:border-brand-action/40 hover:text-brand-action hover:bg-brand-action/5"
+                                    }
+                                  `}
+                                >
+                                  {isAlreadyScheduled ? (
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                                    </svg>
+                                  ) : (
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                                      <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+                                      <line x1="16" x2="16" y1="2" y2="6" />
+                                      <line x1="8" x2="8" y1="2" y2="6" />
+                                      <line x1="3" x2="21" y1="10" y2="10" />
+                                      <line x1="12" x2="12" y1="15" y2="18" />
+                                      <line x1="10.5" x2="13.5" y1="16.5" y2="16.5" />
+                                    </svg>
+                                  )}
+                                </button>
+                              );
+                            })()}
+                            <KeywordRowMenu
+                              status={kw.status}
+                              phrase={kw.keyword}
+                              busy={busyRowId === kw.id}
+                              onExplore={() => setModalKeywordId(kw.id)}
+                              onApproveCalendar={() => handleStatusUpdate(kw.id, "approved", kw.keyword)}
+                              onReject={() => handleStatusUpdate(kw.id, "rejected")}
+                              onResetPending={() => handleStatusUpdate(kw.id, "pending", kw.keyword)}
+                              onRemove={() => handleKeywordRemove(kw.id, kw.keyword)}
+                            />
                           </div>
                         </td>
                       </tr>
@@ -1014,7 +1259,7 @@ export default function KeywordsPage() {
                 </div>
                 <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No keywords yet</h3>
                 <p className="mb-8 text-[16px] text-text-tertiary max-w-md mx-auto">
-                  Run discovery to pull real search data for your niche, then continue to competitor gaps.
+                  Run discovery to pull real search data for your niche from your business brief.
                 </p>
                 <button
                   type="button"
@@ -1026,285 +1271,62 @@ export default function KeywordsPage() {
               </div>
             )
           )}
-        </>
-      )}
+      </section>
 
-      {/* ── TAB CONTENT: COMPETITOR GAPS ─────────────────────────────────────── */}
-      {activeTab === "competitor_gap" && (
-        <div className="space-y-6">
-          {!step1Done ? (
-            <div className="rounded-[16px] border border-border-subtle bg-surface-secondary p-5 text-[14px] text-text-secondary">
-              Run step 1 and discover at least one batch of industry keywords before scanning competitors.
+      {/* ── CALENDAR VIEW ─────────────────────────────────────────────────── */}
+      {(calendarEntries.length > 0 || schedulingKeywordId) && (
+        <section className="space-y-4" id="calendar-view">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">
+                Scheduled calendar
+              </h2>
+              <p className="mt-1.5 text-[14px] text-text-tertiary">
+                {schedulingKeywordId
+                  ? "Click any available date below to schedule your keyword."
+                  : "All keywords added to your content calendar."}
+              </p>
             </div>
-          ) : (
-            <>
-              <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <h3 className="mb-2 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">Competitor keyword gap scan</h3>
-                    <p className="text-[14px] leading-relaxed text-text-tertiary max-w-3xl">
-                      We read competitor SERPs for your niche, hydrate volumes from DataForSEO, and skip topics you
-                      already saved. If you haven&apos;t added competitors yet, we auto-discover the top domains
-                      ranking for your niche and save them to the project. For the full pipeline — page-level
-                      benchmarks, opportunity scores, and one-click publishing — open the Competitor Insights
-                      dashboard.
-                    </p>
-                  </div>
-                  <Link
-                    href={`/projects/${projectId}/competitors`}
-                    className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
-                  >
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <circle cx="12" cy="12" r="10" />
-                      <circle cx="12" cy="12" r="6" />
-                      <circle cx="12" cy="12" r="2" />
-                    </svg>
-                    Competitor Insights
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                    </svg>
-                  </Link>
-                </div>
-              </div>
-
-              {gapError && (
-                <div className="flex gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
-                  <div>
-                    {gapError}
-                    <Link href={`/projects/${projectId}`} className="mt-2 block text-[13px] font-medium hover:underline">
-                      Add competitors on the project overview →
-                    </Link>
-                  </div>
-                </div>
-              )}
-
-              {autoDiscoveredCompetitors.length > 0 && (
-                <div className="flex gap-4 rounded-[16px] border border-border-subtle bg-surface-secondary p-5 text-[14px] text-text-secondary">
-                  <svg className="mt-0.5 h-5 w-5 shrink-0 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" />
-                  </svg>
-                  <div className="space-y-2">
-                    <div className="font-medium text-text-primary">
-                      No competitors on file — auto-discovered from search
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {autoDiscoveredCompetitors.map(domain => (
-                        <span
-                          key={domain}
-                          className="rounded-[4px] bg-surface-elevated border border-border-subtle px-2.5 py-1 text-[12px] font-mono text-text-secondary"
-                        >
-                          {domain}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="text-[13px] text-text-tertiary">
-                      Saved to this project so future runs reuse them. You can edit the list any time on the project overview.
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleFindGaps}
-                  disabled={gapLoading || !step1Done}
-                  className="flex items-center gap-2 rounded-[32px] bg-brand-primary px-6 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
-                >
-                  {gapLoading ? (
-                    <>
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
-                      Scanning…
-                    </>
-                  ) : (
-                    <>
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                        <circle cx="12" cy="12" r="10" />
-                        <circle cx="12" cy="12" r="6" />
-                        <circle cx="12" cy="12" r="2" />
-                      </svg>
-                      Find competitor gaps
-                    </>
-                  )}
-                </button>
-                {selectedGapKeys.size > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleImportGaps}
-                    disabled={importing}
-                    className="flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-6 py-3 text-[14px] font-medium text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                  >
-                    {importing ? "Importing…" : `Import ${selectedGapKeys.size} into keyword list`}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleAnalyze}
-                  disabled={analyzing || !gaps.length || !keywords.length}
-                  className="rounded-[30px] border border-border-subtle bg-surface-secondary px-6 py-3 text-[14px] font-medium text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                >
-                  {analyzing ? "Analyzing…" : "Compare & analyze content gaps"}
-                </button>
-              </div>
-
-              {analysisError && (
-                <div className="rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-4 text-[14px] text-brand-coral">{analysisError}</div>
-              )}
-
-              {gapLoading && (
-                <div className="space-y-4">
-                  {[...Array(8)].map((_, i) => (
-                    <div key={i} className="h-16 animate-pulse rounded-[16px] border border-border-subtle bg-surface-elevated" />
-                  ))}
-                </div>
-              )}
-
-              {!gapLoading && gaps.length > 0 && (
-                <>
-                  <div className="flex flex-wrap items-center justify-between gap-3 px-2">
-                    <p className="text-[14px] font-medium text-text-primary">{gaps.length} competitor-led topics</p>
-                    <button type="button" onClick={toggleAllGaps} className="text-[13px] font-medium text-brand-action hover:underline">
-                      {gaps.every(g => selectedGapKeys.has(gapRowKey(g))) ? "Deselect all" : "Select all"}
-                    </button>
-                  </div>
-
-                  <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left">
-                        <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
-                          <tr>
-                            <th className="w-12 px-4 py-3" />
-                            <th className="px-4 py-3">Topic</th>
-                            <th className="px-4 py-3">Competitor</th>
-                            <th className="px-4 py-3">Source page</th>
-                            <th className="px-4 py-3 text-right">Volume</th>
-                            <th className="px-4 py-3 text-center">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border-subtle/60">
-                          {gaps.map(gap => {
-                            const key = gapRowKey(gap);
-                            return (
-                              <tr key={key} className={`hover:bg-surface-hover transition-colors ${selectedGapKeys.has(key) ? "bg-brand-action/5" : ""}`}>
-                                <td className="px-4 py-3">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedGapKeys.has(key)}
-                                    onChange={() => toggleGapKey(key)}
-                                    className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
-                                  />
-                                </td>
-                                <td className="px-4 py-3">
-                                  <p className="text-[14px] font-medium text-text-primary">{gap.keyword}</p>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <span className="rounded-[4px] border border-border-subtle bg-surface-secondary px-2.5 py-1 text-[12px] font-mono text-text-secondary">
-                                    {gap.competitorDomain}
-                                  </span>
-                                </td>
-                                <td className="max-w-[min(360px,40vw)] px-4 py-3">
-                                  <p className="truncate text-[13px] text-text-secondary" title={gap.sourceTitle}>
-                                    {gap.sourceTitle}
-                                  </p>
-                                  {gap.sourceUrl ? (
-                                    <a
-                                      href={gap.sourceUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="mt-1.5 inline-flex text-[12px] font-medium text-brand-action hover:underline"
-                                    >
-                                      Open page ↗
-                                    </a>
-                                  ) : (
-                                    <span className="mt-1.5 block text-[12px] text-text-tertiary">No direct URL</span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
-                                  {gap.estimatedVolume > 0 ? gap.estimatedVolume.toLocaleString() : "—"}
-                                </td>
-                                <td className="px-4 py-3 text-center">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleGenerateBlogFromGap(gap.keyword)}
-                                    disabled={generatingGapKeyword === gap.keyword}
-                                    className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                                  >
-                                    {generatingGapKeyword === gap.keyword ? "Queuing…" : "Generate blog"}
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {!gapLoading && gaps.length === 0 && !gapError && (
-                <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary max-w-2xl mx-auto">
-                  Run a scan to load competitor topics, then run analysis without importing if you only want a report—or
-                  import rows you want in your master list.
-                </div>
-              )}
-
-              {analysisMd ? (
-                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-8">
-                  <h3 className="mb-6 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">Gap analysis</h3>
-                  <div className="max-w-none text-[16px] leading-relaxed text-text-secondary [&_a]:text-brand-action [&_a]:underline [&_h2]:mt-8 [&_h2]:text-[20px] [&_h2]:font-medium [&_h2]:text-text-primary [&_h3]:mt-6 [&_h3]:text-[16px] [&_h3]:font-medium [&_li]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{analysisMd}</ReactMarkdown>
-                  </div>
-                </div>
-              ) : null}
-
-              {clusterKeywords.length > 0 && (
-                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-8">
-                  <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-                    <div>
-                      <h3 className="text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">Final cluster for blogs</h3>
-                      <p className="mt-2 text-[14px] text-text-tertiary max-w-2xl">
-                        We only approve phrases that already exist in your keyword list (import gaps first if they are
-                        missing). Need at least 5 checked to start the calendar.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleApproveCluster}
-                      className="rounded-[32px] bg-brand-primary px-6 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-                    >
-                      Approve cluster &amp; open calendar ({clusterPick.size} selected)
-                    </button>
-                  </div>
-                  <div className="flex max-h-[320px] flex-col flex-wrap gap-2 overflow-y-auto rounded-[8px] border border-border-subtle bg-surface-secondary p-4">
-                    {clusterKeywords.map(phrase => (
-                      <label
-                        key={phrase}
-                        className="flex cursor-pointer items-center gap-3 rounded-[4px] px-3 py-2 text-[14px] hover:bg-surface-hover transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={clusterPick.has(phrase)}
-                          onChange={() => toggleClusterPhrase(phrase)}
-                          className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
-                        />
-                        <span className="text-text-primary">{phrase}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+            <Link
+              href={`/projects/${projectId}/calendar`}
+              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary shrink-0"
+            >
+              Full calendar
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+              </svg>
+            </Link>
+          </div>
+          <MiniCalendar
+            entries={calendarEntries}
+            projectId={projectId}
+            schedulingKeywordId={schedulingKeywordId}
+            schedulingKeywordPhrase={
+              keywords.find(k => k.id === schedulingKeywordId)?.keyword ?? ""
+            }
+            onDatePick={handleScheduleOnDate}
+            onCancelSchedule={() => setSchedulingKeywordId(null)}
+          />
+        </section>
       )}
+
+      {toast ? (
+        <div
+          role="status"
+          className="fixed bottom-8 right-6 z-90 max-w-sm rounded-[12px] border border-brand-action/30 bg-surface-elevated px-4 py-3 text-[14px] text-text-primary shadow-lg ring-1 ring-brand-action/20 transition-opacity duration-150"
+        >
+          {toast}
+        </div>
+      ) : null}
 
       <KeywordDetailModal
         open={!!modalKeyword}
         projectId={projectId}
         keyword={modalKeyword}
         onClose={() => setModalKeywordId(null)}
-        onStatusChange={handleStatusUpdate}
+        onStatusChange={(id, status) =>
+          handleStatusUpdate(id, status, modalKeyword?.keyword ?? undefined)
+        }
       />
     </div>
   );

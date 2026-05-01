@@ -57,21 +57,85 @@ interface AhrefsRequestOptions {
 }
 
 /**
- * Generic Ahrefs GET. Returns the parsed JSON body when the response is 2xx,
- * otherwise returns null and prints a clear log line.
+ * Why an Ahrefs call did not produce usable data. Emitted by `ahrefsGetVerbose`
+ * so the higher-level provider router (`keyword-research.ts`) can pick a
+ * fallback when the Ahrefs key is missing/bad/over quota/rate-limited.
+ *
+ *   no_api_key      AHREFS_API_KEY env var is missing
+ *   auth            HTTP 401 / 403
+ *   rate_limit      HTTP 429
+ *   quota_exhausted Body / status hints quota / units exhausted
+ *   http_error      Any other non-2xx response
+ *   network_error   fetch() threw (timeout, DNS, abort, ...)
+ *   parse_error     2xx response that did not parse as JSON
  */
-async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | null> {
+export type AhrefsErrorReason =
+  | 'no_api_key'
+  | 'auth'
+  | 'rate_limit'
+  | 'quota_exhausted'
+  | 'http_error'
+  | 'network_error'
+  | 'parse_error';
+
+/**
+ * Result envelope used by `ahrefsGetVerbose`. `ok=true` → `data` is the
+ * parsed body. `ok=false` → `errorReason` + `errorMessage` describe why we
+ * could not get usable data; `data` is `null`.
+ */
+export interface AhrefsCallResult<T> {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  ms: number;
+  rows: number;
+  data: T | null;
+  errorReason?: AhrefsErrorReason;
+  errorMessage?: string;
+}
+
+function detectQuotaExhausted(status: number, body: string): boolean {
+  if (status === 402) return true; // Payment-required is the canonical "quota gone" code
+  const lower = (body || '').toLowerCase();
+  return (
+    lower.includes('quota') ||
+    lower.includes('units exhausted') ||
+    lower.includes('limit reached') ||
+    lower.includes('subscription expired') ||
+    lower.includes('insufficient funds') ||
+    lower.includes('insufficient credits')
+  );
+}
+
+/**
+ * Generic Ahrefs GET that returns a rich result envelope. Used directly by
+ * the provider router so it can detect failure modes that warrant falling
+ * back to DataForSEO. Existing wrappers go through `ahrefsGet` (which
+ * extracts `.data` for backwards-compat).
+ */
+export async function ahrefsGetVerbose<T = unknown>(
+  opts: AhrefsRequestOptions
+): Promise<AhrefsCallResult<T>> {
   const tag = opts.label ?? opts.endpoint;
   const key = getApiKey();
   if (!key) {
-    console.warn(`[ahrefs] ${tag} skipped â€” AHREFS_API_KEY missing`);
+    console.warn(`[ahrefs] ${tag} skipped — AHREFS_API_KEY missing`);
     console.log('[ahrefs:request]', {
       endpoint: opts.endpoint,
       label: opts.label,
       query: opts.query,
       skipped: 'no_api_key',
     });
-    return null;
+    return {
+      ok: false,
+      status: 0,
+      statusText: '',
+      ms: 0,
+      rows: 0,
+      data: null,
+      errorReason: 'no_api_key',
+      errorMessage: 'AHREFS_API_KEY is not set',
+    };
   }
 
   const params = new URLSearchParams();
@@ -106,8 +170,16 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      const reason: AhrefsErrorReason =
+        res.status === 401 || res.status === 403
+          ? 'auth'
+          : res.status === 429
+            ? 'rate_limit'
+            : detectQuotaExhausted(res.status, body)
+              ? 'quota_exhausted'
+              : 'http_error';
       console.warn(
-        `[ahrefs] ${tag} -> ${res.status} ${res.statusText} in ${ms}ms ${body.slice(0, 200)}`
+        `[ahrefs] ${tag} -> ${res.status} ${res.statusText} in ${ms}ms (${reason}) ${body.slice(0, 200)}`
       );
       console.log('[ahrefs:response:error]', {
         endpoint: opts.endpoint,
@@ -116,11 +188,38 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
         statusText: res.statusText,
         ms,
         bodyText: body,
+        reason,
       });
-      return null;
+      return {
+        ok: false,
+        status: res.status,
+        statusText: res.statusText,
+        ms,
+        rows: 0,
+        data: null,
+        errorReason: reason,
+        errorMessage: `${res.status} ${res.statusText} ${body.slice(0, 200)}`.trim(),
+      };
     }
 
-    const json = (await res.json()) as Record<string, unknown>;
+    let json: Record<string, unknown>;
+    try {
+      json = (await res.json()) as Record<string, unknown>;
+    } catch (parseErr) {
+      const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      console.warn(`[ahrefs] ${tag} parse error in ${ms}ms ${message}`);
+      return {
+        ok: false,
+        status: res.status,
+        statusText: res.statusText,
+        ms,
+        rows: 0,
+        data: null,
+        errorReason: 'parse_error',
+        errorMessage: message,
+      };
+    }
+
     const rowCount = primaryArrayLength(json);
     console.log(`[ahrefs] ${tag} -> ${res.status} ${rowCount} rows in ${ms}ms`);
     console.log('[ahrefs:response]', {
@@ -132,7 +231,14 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
       body: json,
     });
     console.log(`[ahrefs-raw] ${opts.label ?? opts.endpoint}`, JSON.stringify(json, null, 2));
-    return json as T;
+    return {
+      ok: true,
+      status: res.status,
+      statusText: res.statusText,
+      ms,
+      rows: rowCount,
+      data: json as T,
+    };
   } catch (error) {
     const ms = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
@@ -143,10 +249,29 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
       ms,
       error: message,
     });
-    return null;
+    return {
+      ok: false,
+      status: 0,
+      statusText: '',
+      ms,
+      rows: 0,
+      data: null,
+      errorReason: 'network_error',
+      errorMessage: message,
+    };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Backwards-compat thin wrapper. Returns parsed body on 2xx, `null`
+ * otherwise. New code that needs to know *why* a call failed should use
+ * `ahrefsGetVerbose` directly.
+ */
+async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | null> {
+  const result = await ahrefsGetVerbose<T>(opts);
+  return result.ok ? (result.data as T) : null;
 }
 
 function primaryArrayLength(json: Record<string, unknown>): number {
@@ -324,6 +449,7 @@ interface AhrefsOrganicKeywordRow {
   keyword?: string | null;
   volume?: number | null;
   keyword_difficulty?: number | null;
+  keyword_keyword_difficulty?: number | null;
   cpc?: number | null;
   best_position?: number | null;
   best_position_url?: string | null;
@@ -354,7 +480,7 @@ export async function ahrefsOrganicKeywords(
       limit,
       order_by: 'sum_traffic:desc',
       where: 'best_position<=20,volume>=50',
-      select: 'keyword,volume,keyword_keyword_difficulty,cpc,best_position,best_position_url,sum_traffic',
+      select: 'keyword,volume,keyword_keyword_difficulty,best_position_url',
     },
   });
   if (!json?.keywords) return [];
@@ -363,7 +489,7 @@ export async function ahrefsOrganicKeywords(
     .map(row => ({
       keyword: (row.keyword ?? '').trim(),
       volume: Number(row.volume ?? 0),
-      keyword_difficulty: row.keyword_difficulty ?? null,
+      keyword_difficulty: row.keyword_keyword_difficulty ?? row.keyword_difficulty ?? null,
       cpc: row.cpc ?? null,
       best_position: row.best_position ?? null,
       best_position_url: row.best_position_url ?? '',
@@ -431,9 +557,12 @@ interface AhrefsOverviewRow {
  * comma-separated `keywords=`). We chunk the input list to stay under the URL
  * length limit.
  */
+export type AhrefsKeywordOverviewVariant = 'full' | 'lean';
+
 export async function ahrefsKeywordOverview(
   keywords: string[],
-  region: string
+  region: string,
+  variant: AhrefsKeywordOverviewVariant = 'full'
 ): Promise<Map<string, AhrefsKeywordOverviewRow>> {
   const out = new Map<string, AhrefsKeywordOverviewRow>();
   if (!keywords.length) return out;
@@ -442,14 +571,19 @@ export async function ahrefsKeywordOverview(
   const chunks: string[][] = [];
   for (let i = 0; i < cleaned.length; i += 80) chunks.push(cleaned.slice(i, i + 80));
 
+  const select =
+    variant === 'lean'
+      ? 'keyword,volume,difficulty,cpc,intents'
+      : 'keyword,volume,difficulty,cpc,intents,parent_topic,traffic_potential';
+
   for (const chunk of chunks) {
     const json = await ahrefsGet<{ keywords?: AhrefsOverviewRow[] }>({
       endpoint: '/keywords-explorer/overview',
-      label: `keywords-explorer/overview x${chunk.length} (${region})`,
+      label: `keywords-explorer/overview (${variant}) x${chunk.length} (${region})`,
       query: {
         country: ahrefsCountry(region),
         keywords: chunk.join(','),
-        select: 'keyword,volume,difficulty,cpc,intents,parent_topic,traffic_potential',
+        select,
         limit: chunk.length,
       },
     });
@@ -462,8 +596,8 @@ export async function ahrefsKeywordOverview(
         difficulty: row.difficulty ?? null,
         cpc: row.cpc ?? null,
         intents: row.intents ?? null,
-        parent_topic: row.parent_topic ?? null,
-        traffic_potential: row.traffic_potential ?? null,
+        parent_topic: variant === 'lean' ? null : row.parent_topic ?? null,
+        traffic_potential: variant === 'lean' ? null : row.traffic_potential ?? null,
       });
     }
   }
@@ -555,7 +689,7 @@ export async function ahrefsMatchingTerms(
     query: {
       country: ahrefsCountry(region),
       keywords: cleaned.join(','),
-      select: 'keyword,volume,difficulty,cpc,intents',
+      select: 'keyword,volume,difficulty,intents',
       limit,
       match_mode: 'terms',
       terms: 'all',
@@ -583,7 +717,7 @@ export async function ahrefsRelatedTerms(
     query: {
       country: ahrefsCountry(region),
       keywords: cleaned.join(','),
-      select: 'keyword,volume,difficulty,cpc,intents',
+      select: 'keyword,volume,difficulty,intents',
       limit,
       view_for: 'top_10',
       terms: 'all',
@@ -610,7 +744,7 @@ export async function ahrefsSearchSuggestions(
     query: {
       country: ahrefsCountry(region),
       keywords: cleaned.join(','),
-      select: 'keyword,volume,difficulty,cpc,intents',
+      select: 'keyword,volume,difficulty,intents',
       limit,
       order_by: 'volume:desc',
     },

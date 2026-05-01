@@ -200,14 +200,94 @@ export type ProjectSiteExplorerData = {
   overview: AhrefsDomainOverview | null;
   competitors: AhrefsCompetitor[];
   topPages: AhrefsTopPage[];
+  /** When the cached snapshot was last fetched from Ahrefs. Null = never. */
+  lastFetchedAt: string | null;
+  /** True if this response came from the Supabase cache (vs. a live Ahrefs call). */
+  fromCache: boolean;
+};
+
+type SiteExplorerSnapshotRow = {
+  target: string;
+  region: string;
+  overview: AhrefsDomainOverview | null;
+  competitors: AhrefsCompetitor[];
+  top_pages: AhrefsTopPage[];
+  last_fetched_at: string;
 };
 
 /**
- * Ahrefs Site Explorer snapshot for the project overview: domain metrics,
- * organic competitors (overlap + totals), and top pages. Safe when API key
- * is missing — returns empty metrics with `ahrefsConfigured: false`.
+ * Hit Ahrefs for a fresh snapshot of (overview, organic competitors, top pages)
+ * and persist it to `project_site_explorer`. Pure data layer — no auth.
  */
-export async function getProjectSiteExplorerSnapshot(projectId: string): Promise<
+async function fetchAndPersistSiteExplorerSnapshot(
+  projectId: string,
+  target: string,
+  region: string,
+  trace: SiteExplorerTraceEntry[]
+) {
+  const [overview, competitors, topPages] = await Promise.all([
+    ahrefsDomainOverview(target, region),
+    ahrefsOrganicCompetitors(target, region, 40),
+    ahrefsTopPages(target, region, 8),
+  ]);
+
+  trace.push({
+    step: 'site_explorer_metrics',
+    ok: overview != null,
+    detail: overview
+      ? `DR=${overview.domain_rating ?? '—'} organic_kw=${overview.organic_keywords ?? '—'}`
+      : 'null',
+  });
+  trace.push({
+    step: 'organic_competitors',
+    ok: competitors.length > 0,
+    detail: `${competitors.length} rows for ${target} (${region})`,
+  });
+  trace.push({
+    step: 'top_pages',
+    ok: topPages.length > 0,
+    detail: `${topPages.length} rows`,
+  });
+
+  const now = new Date().toISOString();
+  const { error: upsertErr } = await supabaseAdmin.from('project_site_explorer').upsert(
+    {
+      project_id: projectId,
+      target,
+      region,
+      overview,
+      competitors,
+      top_pages: topPages,
+      last_fetched_at: now,
+      updated_at: now,
+    },
+    { onConflict: 'project_id' }
+  );
+  if (upsertErr) {
+    trace.push({ step: 'cache_persist', ok: false, detail: upsertErr.message });
+  } else {
+    trace.push({ step: 'cache_persist', ok: true, detail: `wrote at ${now}` });
+  }
+
+  return { overview, competitors, topPages, lastFetchedAt: now };
+}
+
+/**
+ * Ahrefs Site Explorer snapshot for the project overview: domain metrics,
+ * organic competitors (overlap + totals), and top pages.
+ *
+ * Caching strategy: reads from `project_site_explorer` by default. Only hits
+ * Ahrefs when (a) no cached row exists, (b) the project's target domain or
+ * region has changed since the last snapshot, or (c) `force: true`. The user
+ * controls refreshes via the "Refresh data" button on the overview page.
+ *
+ * Safe when the API key is missing — returns empty metrics with
+ * `ahrefsConfigured: false`.
+ */
+export async function getProjectSiteExplorerSnapshot(
+  projectId: string,
+  opts: { force?: boolean } = {}
+): Promise<
   | { success: true; data: ProjectSiteExplorerData; trace: SiteExplorerTraceEntry[] }
   | { success: false; error: string; data: null; trace: SiteExplorerTraceEntry[] }
 > {
@@ -246,6 +326,8 @@ export async function getProjectSiteExplorerSnapshot(projectId: string): Promise
         overview: null,
         competitors: [],
         topPages: [],
+        lastFetchedAt: null,
+        fromCache: false,
       },
       trace,
     };
@@ -262,34 +344,59 @@ export async function getProjectSiteExplorerSnapshot(projectId: string): Promise
         overview: null,
         competitors: [],
         topPages: [],
+        lastFetchedAt: null,
+        fromCache: false,
       },
       trace,
     };
   }
 
-  const [overview, competitors, topPages] = await Promise.all([
-    ahrefsDomainOverview(target, region),
-    ahrefsOrganicCompetitors(target, region, 40),
-    ahrefsTopPages(target, region, 8),
-  ]);
+  // Try the Supabase cache first unless caller asked to force-refresh.
+  // We use ANY cached row for this project — even if the project's domain or
+  // region has since changed — so we never auto-hit Ahrefs on a normal page
+  // visit. The user controls freshness via the "Refresh data" button.
+  const { data: cached, error: cacheErr } = await supabaseAdmin
+    .from('project_site_explorer')
+    .select('target, region, overview, competitors, top_pages, last_fetched_at')
+    .eq('project_id', projectId)
+    .maybeSingle<SiteExplorerSnapshotRow>();
+
+  if (cacheErr) {
+    trace.push({ step: 'cache_query', ok: false, detail: cacheErr.message });
+  }
+
+  // Return cached data on every normal page load. Only bypass when:
+  //   a) opts.force = true  (explicit "Refresh data" button click), OR
+  //   b) no row exists yet  (very first visit for this project)
+  if (!opts.force && cached) {
+    trace.push({
+      step: 'cache_hit',
+      ok: true,
+      detail: `last_fetched_at=${cached.last_fetched_at} target=${cached.target} region=${cached.region}`,
+    });
+    return {
+      success: true,
+      data: {
+        project: p,
+        target: cached.target || target,
+        ahrefsConfigured: true,
+        overview: cached.overview,
+        competitors: cached.competitors ?? [],
+        topPages: cached.top_pages ?? [],
+        lastFetchedAt: cached.last_fetched_at,
+        fromCache: true,
+      },
+      trace,
+    };
+  }
 
   trace.push({
-    step: 'site_explorer_metrics',
-    ok: overview != null,
-    detail: overview
-      ? `DR=${overview.domain_rating ?? '—'} organic_kw=${overview.organic_keywords ?? '—'}`
-      : 'null',
+    step: 'cache_miss',
+    ok: false,
+    detail: opts.force ? 'force=true (manual refresh)' : 'no row — first fetch',
   });
-  trace.push({
-    step: 'organic_competitors',
-    ok: competitors.length > 0,
-    detail: `${competitors.length} rows for ${target} (${region})`,
-  });
-  trace.push({
-    step: 'top_pages',
-    ok: topPages.length > 0,
-    detail: `${topPages.length} rows`,
-  });
+
+  const fresh = await fetchAndPersistSiteExplorerSnapshot(projectId, target, region, trace);
 
   return {
     success: true,
@@ -297,10 +404,20 @@ export async function getProjectSiteExplorerSnapshot(projectId: string): Promise
       project: p,
       target,
       ahrefsConfigured: true,
-      overview,
-      competitors,
-      topPages,
+      overview: fresh.overview,
+      competitors: fresh.competitors,
+      topPages: fresh.topPages,
+      lastFetchedAt: fresh.lastFetchedAt,
+      fromCache: false,
     },
     trace,
   };
+}
+
+/**
+ * Manual refresh of the Site Explorer snapshot. Always hits Ahrefs and
+ * overwrites the cache. Wired to the "Refresh data" button on the overview.
+ */
+export async function refreshProjectSiteExplorerSnapshot(projectId: string) {
+  return getProjectSiteExplorerSnapshot(projectId, { force: true });
 }

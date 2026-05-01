@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { QueryProvider } from "@/components/query-provider";
+import { ReduxProvider } from "@/components/redux-provider";
 
 // Conditionally import Clerk only if keys are configured
 const isClerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
@@ -45,7 +47,9 @@ export default async function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <ReduxProvider>
+            <QueryProvider>{children}</QueryProvider>
+          </ReduxProvider>
         </ThemeProvider>
       </body>
     </html>

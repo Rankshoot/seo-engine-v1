@@ -26,8 +26,29 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/Skeleton";
+import { qk } from "@/lib/query-keys";
 import type { Keyword, KeywordStatus } from "@/lib/types";
+
+/**
+ * Format a timestamp as a friendly relative label ("3 hours ago"), with the
+ * absolute timestamp surfaced via tooltip for precision.
+ */
+function relativeAge(iso: string | null | undefined): string {
+  if (!iso) return "Never";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  const diffMs = Date.now() - date.getTime();
+  const min = Math.floor(diffMs / 60_000);
+  if (min < 1) return "Just now";
+  if (min < 60) return `${min} min${min === 1 ? "" : "s"} ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+  return date.toLocaleDateString();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Local types — mirror the API response shape (`KeywordModalResponse`).
@@ -130,45 +151,65 @@ const TAB_LABELS: Record<IdeaTab, string> = {
 
 export function KeywordDetailModal(props: KeywordDetailModalProps) {
   const { open, projectId, keyword, onClose, onStatusChange } = props;
+  const queryClient = useQueryClient();
 
-  const [data, setData] = useState<KeywordModalApiData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [fetchError, setFetchError] = useState("");
   const [activeTab, setActiveTab] = useState<IdeaTab>("termsMatch");
   const [statusBusy, setStatusBusy] = useState<KeywordStatus | "">("");
 
-  // Fetch on open / keyword change. Reset state for a smooth transition
-  // between rows when the user clicks a different keyword without closing.
+  // Reset to the first tab whenever the user navigates to a different row
+  // without closing the modal — keeps tab state from leaking between keywords.
   useEffect(() => {
-    if (!open || !keyword) return;
-    let cancelled = false;
-    setData(null);
-    setFetchError("");
-    setLoading(true);
     setActiveTab("termsMatch");
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/projects/${projectId}/keywords/${keyword.id}/details`,
-          { credentials: "include" }
-        );
-        const json = await res.json();
-        if (cancelled) return;
-        if (!res.ok || !json.success) {
-          throw new Error(json.error || `HTTP ${res.status}`);
-        }
-        setData(json.data as KeywordModalApiData);
-      } catch (e) {
-        if (cancelled) return;
-        setFetchError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, keyword?.id, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword?.id]);
+
+  /** Fetch the Ahrefs drilldown. `force` bypasses the server-side 7d cache. */
+  const fetchKeywordDetails = async (force = false) => {
+    const url = `/api/projects/${projectId}/keywords/${keyword!.id}/details${force ? "?refresh=1" : ""}`;
+    const res = await fetch(url, { credentials: "include" });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || `HTTP ${res.status}`);
+    }
+    return json.data as KeywordModalApiData;
+  };
+
+  // Cached fetch of the Ahrefs drilldown. We deliberately disable every
+  // automatic refetch (window focus, reconnect, mount) — Ahrefs costs real
+  // money. The user controls refreshes via the explicit Refresh button.
+  const {
+    data: rawData,
+    isLoading,
+    isFetching,
+    error: queryError,
+  } = useQuery<KeywordModalApiData>({
+    queryKey: keyword ? qk.keywordDetails(projectId, keyword.id) : ["keyword-details", "noop"],
+    queryFn: () => fetchKeywordDetails(false),
+    enabled: open && !!keyword,
+    staleTime: Infinity,
+    gcTime: 60 * 60_000, // hold in memory for an hour after close
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+  });
+
+  // Manual refresh — bypasses both the React Query cache (we overwrite it on
+  // success) and the 7-day server-side `keyword_details` cache (`?refresh=1`).
+  const refreshMutation = useMutation<KeywordModalApiData>({
+    mutationFn: () => fetchKeywordDetails(true),
+    onSuccess: fresh => {
+      if (!keyword) return;
+      queryClient.setQueryData(qk.keywordDetails(projectId, keyword.id), fresh);
+    },
+  });
+  // Normalize `undefined` (React Query's missing-data sentinel) to `null` so
+  // the existing downstream child components keep their existing type contract.
+  const data: KeywordModalApiData | null = rawData ?? null;
+  // Show the skeleton only when there's no cached data to render. On a cached
+  // hit we get `data` immediately and skip the loading state entirely.
+  const loading = isLoading && !data;
+  // Treat all errors uniformly with the previous string-based UI.
+  const fetchError = queryError instanceof Error ? queryError.message : queryError ? String(queryError) : "";
+  void isFetching;
 
   // Esc to close.
   useEffect(() => {
@@ -238,6 +279,11 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
           data={data}
           loading={loading}
           statusBusy={statusBusy}
+          refreshing={refreshMutation.isPending}
+          refreshError={
+            refreshMutation.error instanceof Error ? refreshMutation.error.message : ""
+          }
+          onRefresh={() => refreshMutation.mutate()}
           onClose={onClose}
           onStatus={handleStatus}
         />
@@ -332,6 +378,9 @@ function Header({
   data,
   loading,
   statusBusy,
+  refreshing,
+  refreshError,
+  onRefresh,
   onClose,
   onStatus,
 }: {
@@ -339,9 +388,13 @@ function Header({
   data: KeywordModalApiData | null;
   loading: boolean;
   statusBusy: KeywordStatus | "";
+  refreshing: boolean;
+  refreshError: string;
+  onRefresh: () => void;
   onClose: () => void;
   onStatus: (s: KeywordStatus) => void;
 }) {
+  const lastUpdated = data ? relativeAge(data.lastFetchedAt) : null;
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border-subtle bg-surface-secondary/95 p-5 backdrop-blur">
       <div className="min-w-0 flex-1">
@@ -366,6 +419,11 @@ function Header({
           ) : loading ? (
             <Skeleton className="h-4 w-16" rounded="full" />
           ) : null}
+          {lastUpdated && (
+            <span title={data ? new Date(data.lastFetchedAt).toLocaleString() : undefined}>
+              Last updated <span className="text-text-secondary">{lastUpdated}</span>
+            </span>
+          )}
           {keyword.status === "approved" && (
             <span className="rounded-full border border-accent-500/25 bg-accent-500/10 px-2 py-0.5 font-semibold text-accent-400">
               Approved
@@ -377,9 +435,35 @@ function Header({
             </span>
           )}
         </div>
+        {refreshError && (
+          <p className="mt-2 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+            {refreshError}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={refreshing || loading}
+          title="Re-fetch this keyword from Ahrefs. Bypasses the 7-day server cache and uses Ahrefs API credits."
+          className="inline-flex items-center gap-1.5 rounded-xl border border-border-subtle bg-surface-elevated px-3 py-2 text-xs font-bold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {refreshing ? (
+            <>
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
+              Refreshing…
+            </>
+          ) : (
+            <>
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+              Refresh
+            </>
+          )}
+        </button>
         <button
           type="button"
           disabled={statusBusy === "approved" || keyword.status === "approved"}

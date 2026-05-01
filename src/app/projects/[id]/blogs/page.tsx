@@ -48,8 +48,12 @@ export default function BlogsPage() {
     queryKey: ENTRIES_KEY,
     queryFn: () => getCalendarWithBlogs(projectId),
     enabled: !!projectId,
-    staleTime: Infinity,
+    // Always refetch on mount — the Calendar page may have rescheduled an
+    // entry while this page was unmounted. Stale dates here would mislead
+    // the user about when their blogs are due.
+    staleTime: 0,
     gcTime: 30 * 60_000,
+    refetchOnMount: 'always',
   });
   const entries: any[] = entriesData?.success ? entriesData.data : [];
 

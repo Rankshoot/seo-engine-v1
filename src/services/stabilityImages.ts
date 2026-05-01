@@ -112,7 +112,11 @@ export function insertBlogImages(content: string, images: BlogImageAsset[]): str
 }
 
 function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImageAsset, 'url'>> {
-  const count = input.wordCount >= 2200 ? 3 : input.wordCount >= 1400 ? 2 : 1;
+  // Hard product cap: a blog ships with at most 2 images (hero + one
+  // supporting visual). Going higher historically produced broken-image
+  // sequences in the middle of the article — see blog-content.ts for the
+  // matching post-generation cap.
+  const count = input.wordCount >= 1400 ? 2 : 1;
   const baseStyle =
     'premium editorial blog illustration, modern SaaS website style, clean composition, realistic lighting, no text, no logos, no watermark';
   const context = `${input.niche} industry, for ${input.audience}, company context: ${input.company}`;
@@ -130,14 +134,6 @@ function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImag
       placement: 'section',
       alt: `${input.targetKeyword} strategy visual`,
       prompt: `${baseStyle}. Strategic visual explaining "${input.targetKeyword}" for a ${input.articleType} article. Show abstract workflow, research, and growth concepts. ${context}.`,
-    });
-  }
-
-  if (count >= 3) {
-    requests.push({
-      placement: 'summary',
-      alt: `${input.targetKeyword} action plan visual`,
-      prompt: `${baseStyle}. Closing visual for a practical action plan about "${input.targetKeyword}". Show clarity, prioritization, and measurable outcomes. ${context}.`,
     });
   }
 

@@ -11,7 +11,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getBlogById, generateBlog, updateBlogStatus, updateBlogContent, fixBlogSeoIssue } from "@/app/actions/blog-actions";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
-import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
+import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
@@ -95,14 +95,21 @@ export default function BlogViewerPage() {
   const handleDownload = async (format: ExportFormat) => {
     if (!blog) return;
     setDownloading(format);
-    const slug = blog.slug || blog.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-    let blob: Blob;
-    if (format === "markdown") blob = exportToMarkdown(blog);
-    else if (format === "html") blob = exportToHTML(blog);
-    else if (format === "txt") blob = exportToText(blog);
-    else blob = await exportToDocx(blog);
-    triggerDownload(blob, `${slug}.${format === "markdown" ? "md" : format}`);
-    setDownloading(null);
+    try {
+      let blob: Blob;
+      if (format === "markdown") blob = exportToMarkdown(blog);
+      else if (format === "html") blob = exportToHTML(blog);
+      else if (format === "txt") blob = exportToText(blog);
+      else blob = await exportToDocx(blog);
+      // `triggerBlogDownload` enforces the right extension + MIME type and
+      // runs the title/slug through `safeFilename` so the OS save dialog
+      // doesn't choke on slashes or punctuation.
+      triggerBlogDownload(blob, blog, format);
+    } catch (e) {
+      console.error("[blog] download failed", e);
+    } finally {
+      setDownloading(null);
+    }
   };
 
   const handleRegenerate = async () => {

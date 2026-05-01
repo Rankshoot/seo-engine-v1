@@ -937,7 +937,11 @@ export default function KeywordsPage() {
             </div>
           )}
 
-          {loading ? (
+          {loading || discovering ? (
+            // Skeleton stays visible for the whole discovery run — including
+            // the DataForSEO fallback path that fires when Ahrefs is exhausted —
+            // so the table never freezes between "Discover clicked" and
+            // "fresh keywords arrived".
             <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
               <TableSkeleton rows={8} columns={6} />
             </div>

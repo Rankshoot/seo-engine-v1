@@ -8,6 +8,7 @@ import { buildKeywordCoverage, ahrefsMatchingTermsAll, ahrefsMatchingTermsQuesti
 import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
+import { sanitizeBlogContent } from '@/lib/blog-content';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500) {
   const user = await currentUser();
@@ -139,7 +140,22 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       wordCount: blogData.word_count,
     });
     const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(blogData.content, images));
-    const finalWordCount = countWords(contentWithImages);
+
+    // Probe every external link, drop dead ones, cap rendered images at 2
+    // and strip leftover IMAGE_PLACEHOLDER artifacts so the preview and the
+    // exported file always agree. `external_links` / `internal_links` are
+    // rebuilt from the sanitized markdown so the sidebar counts can't drift.
+    const sanitized = await sanitizeBlogContent(contentWithImages, {
+      ownDomain: project.domain ?? '',
+    });
+    if (sanitized.removedLinks.length) {
+      console.log(
+        `[blog] dropped ${sanitized.removedLinks.length} dead external link(s) from "${blogData.title}":`,
+        sanitized.removedLinks.slice(0, 5)
+      );
+    }
+    const finalContent = sanitized.content;
+    const finalWordCount = countWords(finalContent);
 
     const { data: existing } = await supabaseAdmin
       .from('blogs')
@@ -149,7 +165,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
 
     const upsertPayload = {
       title: blogData.title,
-      content: contentWithImages,
+      content: finalContent,
       meta_description: blogData.meta_description,
       slug: blogData.slug,
       word_count: finalWordCount,
@@ -157,8 +173,8 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       article_type: entry.article_type,
       status: 'generated',
       research_sources: blogData.research_sources,
-      external_links: blogData.external_links,
-      internal_links: blogData.internal_links,
+      external_links: sanitized.externalLinks.slice(0, 10),
+      internal_links: sanitized.internalLinks.slice(0, 12),
       updated_at: new Date().toISOString(),
     };
 
@@ -289,6 +305,11 @@ function sanitizeBlogMarkdown(markdown: string): string {
   return stripSchemaJsonBlocks(markdown)
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
+    // Strip the LLM's leftover `![alt](IMAGE_PLACEHOLDER)` artifacts so the
+    // preview never flashes a broken-image icon. The async sanitizer in
+    // `blog-content.ts` does this on fresh generations; this branch keeps
+    // legacy rows clean too.
+    .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
     .replace(/Regenerat(?:e|ing) with AI[^\n]*(?:illustration|visual)?/gi, '')
     .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '')

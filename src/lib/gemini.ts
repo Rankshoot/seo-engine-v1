@@ -357,11 +357,15 @@ SENTENCE & PARAGRAPH STYLE:
 • Active voice throughout. Passive voice is only acceptable for citing sources.
 • Simple, jargon-free language. If a technical term is unavoidable, define it in the same sentence.
 
-IMAGES (add 2–3 image placeholders using this exact format, placed at logical section breaks):
-![Image: descriptive alt text explaining what the image should show](IMAGE_PLACEHOLDER)
+IMAGES:
+• Do NOT add any image markdown yourself. The system inserts at most 2 real images (hero + one supporting visual) AFTER your draft is written.
+• Never output image syntax (no exclamation-mark followed by square-bracket alt then parenthesized URL).
+• Never write a literal placeholder such as IMAGE_PLACEHOLDER.
+• Never reference an image by URL.
 
 LINKS:
-• External links: cite ONLY credible institutional reports and research (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Do NOT link to competitor blogs, Medium posts, or generic websites.
+• External links: cite ONLY credible institutional reports and research (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Do NOT link to competitor blogs, Medium posts, Quora, Reddit, or generic websites.
+• Every external URL must be a real, currently-live page. Prefer the publication's main domain over deep-linked article slugs that decay quickly. If you are not confident a URL resolves, do NOT include it.
 • Internal links: 2–4 from the INTERNAL LINKING pools above. Place them where they genuinely help the reader — not just appended. Do NOT invent internal URLs.
 • Format all links as [anchor text](url).
 
@@ -389,15 +393,11 @@ OUTPUT FORMAT
 [40–50 word snippet paragraph]
 [Deeper paragraphs, bullets, or table]
 
-![Image: alt text](IMAGE_PLACEHOLDER)
-
 ## [H2 — authority-building section for ${project.company}]
 [40–50 word snippet paragraph]
 [Content that demonstrates ${project.company}'s expertise, no hard sell]
 
 ## [Continue sections…]
-
-![Image: alt text](IMAGE_PLACEHOLDER)
 
 ## Frequently Asked Questions
 

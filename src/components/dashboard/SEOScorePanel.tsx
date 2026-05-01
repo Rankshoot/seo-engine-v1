@@ -3,6 +3,17 @@
 import { useMemo } from "react";
 import { Blog, BlogSeoIssueKey } from "@/lib/types";
 
+// ─── CSS variable refs (auto-switch light ↔ dark) ─────────────────────────
+const V = {
+  bg:      "var(--surface-primary)",
+  bgSec:   "var(--surface-secondary)",
+  border:  "var(--border-default)",
+  txt:     "var(--text-primary)",
+  txtMute: "var(--text-tertiary)",
+  action:  "var(--brand-action)",
+} as const;
+const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
+
 interface SEOCheck {
   key: BlogSeoIssueKey;
   label: string;
@@ -19,42 +30,26 @@ interface SEOScore {
 }
 
 function computeSEOScore(blog: Blog): SEOScore {
-  const kw = blog.target_keyword?.toLowerCase() ?? "";
+  const kw      = blog.target_keyword?.toLowerCase() ?? "";
   const content = blog.content ?? "";
-  const title = blog.title?.toLowerCase() ?? "";
-  const meta = blog.meta_description ?? "";
+  const title   = blog.title?.toLowerCase() ?? "";
+  const meta    = blog.meta_description ?? "";
 
-  // Extract first paragraph text
   const firstParaMatch = content.match(/^#.+\n+(.+)/m);
   const firstPara = firstParaMatch ? firstParaMatch[1].toLowerCase() : content.slice(0, 500).toLowerCase();
 
-  // Count H2 and H3 headings
   const h2Count = (content.match(/^## /gm) ?? []).length;
   const h3Count = (content.match(/^### /gm) ?? []).length;
 
-  // External and internal links. Prefer the persisted link arrays because the
-  // generator/repair flow already classifies absolute same-domain URLs (e.g.
-  // https://example.com/blog/foo) as internal. Fall back to markdown scanning
-  // for older rows or manually edited content before it has been saved.
   const markdownExternalLinks = (content.match(/\[([^\]]+)\]\(https?:\/\//g) ?? []).length;
   const markdownInternalLinks = (content.match(/\[([^\]]+)\]\(\//g) ?? []).length;
   const externalLinks = blog.external_links?.length ?? markdownExternalLinks;
   const internalLinks = blog.internal_links?.length ?? markdownInternalLinks;
 
-  // Has FAQ section
   const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(content);
 
-  // Keyword density (target 1-3%). Normalize punctuation so phrases like
-  // "chief ai officer," still count as "chief ai officer".
-  const words = content
-    .toLowerCase()
-    .replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-  const kwWords = kw
-    .replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+  const words = content.toLowerCase().replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ").split(/\s+/).filter(Boolean);
+  const kwWords = kw.replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ").split(/\s+/).filter(Boolean);
   let kwOccurrences = 0;
   for (let i = 0; i <= words.length - kwWords.length; i++) {
     if (kwWords.every((w, j) => words[i + j] === w)) kwOccurrences++;
@@ -123,7 +118,7 @@ function computeSEOScore(blog: Blog): SEOScore {
       label: "External links (3–8)",
       pass: externalLinks >= 3,
       points: 10,
-      hint: `${externalLinks} external links found — aim for 3–8 authoritative sources`,
+      hint: `${externalLinks} external links — aim for 3–8 authoritative sources`,
     },
     {
       key: "internal_links",
@@ -141,10 +136,9 @@ function computeSEOScore(blog: Blog): SEOScore {
     },
   ];
 
-  const total = checks.reduce((s, c) => s + (c.pass ? c.points : 0), 0);
+  const total    = checks.reduce((s, c) => s + (c.pass ? c.points : 0), 0);
   const maxTotal = checks.reduce((s, c) => s + c.points, 0);
-
-  const pct = (total / maxTotal) * 100;
+  const pct      = (total / maxTotal) * 100;
   const grade: SEOScore["grade"] =
     pct >= 90 ? "A" : pct >= 75 ? "B" : pct >= 60 ? "C" : pct >= 40 ? "D" : "F";
 
@@ -152,94 +146,101 @@ function computeSEOScore(blog: Blog): SEOScore {
 }
 
 const GRADE_CONFIG = {
-  A: { color: "text-accent-400", ring: "ring-accent-500/30", bg: "bg-accent-500/10", label: "Excellent" },
-  B: { color: "text-brand-400", ring: "ring-brand-500/30", bg: "bg-brand-500/10", label: "Good" },
-  C: { color: "text-yellow-400", ring: "ring-yellow-500/30", bg: "bg-yellow-500/10", label: "Needs Work" },
-  D: { color: "text-warm-400", ring: "ring-warm-500/30", bg: "bg-warm-500/10", label: "Poor" },
-  F: { color: "text-rose-400", ring: "ring-rose-500/30", bg: "bg-rose-500/10", label: "Critical" },
+  A: { color: "#16a34a", ring: "#16a34a33", bg: "#16a34a12", bar: "#16a34a", label: "Excellent" },
+  B: { color: "var(--brand-action)", ring: "var(--brand-action)", bg: "color-mix(in srgb, var(--brand-action) 10%, transparent)", bar: "var(--brand-action)", label: "Good" },
+  C: { color: "#d97706", ring: "#d9770633", bg: "#d9770612", bar: "#d97706", label: "Needs Work" },
+  D: { color: "var(--brand-coral)", ring: "var(--brand-coral)", bg: "color-mix(in srgb, var(--brand-coral) 10%, transparent)", bar: "var(--brand-coral)", label: "Poor" },
+  F: { color: "#b91c1c", ring: "#b91c1c33", bg: "#b91c1c12", bar: "#b91c1c", label: "Critical" },
 };
 
 export default function SEOScorePanel({
   blog,
   onFixIssue,
   fixingIssue,
+  className = "rounded-[8px] p-5 bg-surface-primary border border-border-default",
 }: {
   blog: Blog;
   onFixIssue?: (issue: SEOCheck) => void;
   fixingIssue?: BlogSeoIssueKey | null;
+  className?: string;
 }) {
-  const score = useMemo(() => computeSEOScore(blog), [blog]);
-  const cfg = GRADE_CONFIG[score.grade];
-  const pct = Math.round((score.total / score.maxTotal) * 100);
+  const score    = useMemo(() => computeSEOScore(blog), [blog]);
+  const cfg      = GRADE_CONFIG[score.grade];
+  const pct      = Math.round((score.total / score.maxTotal) * 100);
   const failures = score.checks.filter(c => !c.pass);
 
   return (
-    <div className="glass-card p-5 space-y-4">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">SEO Score</p>
+    <div className={`space-y-4 ${className}`}>
+      {/* Header label */}
+      <p className="text-[10px] font-medium uppercase text-text-tertiary" style={MONO_LABEL}>
+        SEO Score
+      </p>
 
-      {/* Score circle + grade */}
+      {/* Grade ring + summary */}
       <div className="flex items-center gap-4">
-        <div className={`w-16 h-16 rounded-full ring-4 ${cfg.ring} ${cfg.bg} flex flex-col items-center justify-center shrink-0`}>
-          <span className={`text-2xl font-black leading-none ${cfg.color}`}>{score.grade}</span>
-          <span className="text-[9px] text-text-tertiary font-bold">{pct}%</span>
+        <div
+          className="w-[60px] h-[60px] rounded-full flex flex-col items-center justify-center shrink-0"
+          style={{ background: cfg.bg, outline: `3px solid ${cfg.ring}`, outlineOffset: 0 }}
+        >
+          <span className="text-[26px] font-bold leading-none" style={{ color: cfg.color }}>{score.grade}</span>
+          <span className="text-[9px] font-medium text-text-tertiary" style={MONO_LABEL}>{pct}%</span>
         </div>
         <div>
-          <p className={`text-sm font-black ${cfg.color}`}>{cfg.label}</p>
-          <p className="text-xs text-text-tertiary">{score.total} / {score.maxTotal} points</p>
+          <p className="text-[14px] font-bold" style={{ color: cfg.color }}>{cfg.label}</p>
+          <p className="text-[11px] mt-0.5 text-text-tertiary">{score.total} / {score.maxTotal} points</p>
           {failures.length > 0 && (
-            <p className="text-[10px] text-text-tertiary mt-0.5">{failures.length} issue{failures.length > 1 ? "s" : ""} to fix</p>
+            <p className="text-[11px] mt-0.5 text-text-tertiary">{failures.length} issue{failures.length > 1 ? "s" : ""} to fix</p>
           )}
         </div>
       </div>
 
       {/* Progress bar */}
-      <div className="h-1.5 w-full bg-surface-elevated rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${
-            score.grade === "A" ? "bg-accent-500" :
-            score.grade === "B" ? "bg-brand-500" :
-            score.grade === "C" ? "bg-yellow-500" : "bg-rose-500"
-          }`}
-          style={{ width: `${pct}%` }}
-        />
+      <div className="h-1 w-full rounded-full bg-surface-secondary">
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: cfg.bar }} />
       </div>
 
+      {/* Divider */}
+      <div className="border-t border-border-default" />
+
       {/* Checklist */}
-      <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+      <div className="space-y-2">
         {score.checks.map(check => (
           <div key={check.label} className="flex items-start gap-2.5">
-            <div className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
-              check.pass ? "bg-accent-500/10 text-accent-400" : "bg-rose-500/10 text-rose-400"
-            }`}>
+            <div
+              className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+              style={{ background: check.pass ? "#16a34a18" : "#b91c1c12" }}
+            >
               {check.pass ? (
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="#16a34a" strokeWidth={3}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
                 </svg>
               ) : (
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" strokeWidth={3}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                 </svg>
               )}
             </div>
+
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-2">
-                <p className={`text-[10px] font-bold leading-tight ${check.pass ? "text-text-secondary" : "text-text-primary"}`}>
+                <p className="text-[11px] font-medium leading-tight" style={{ color: check.pass ? V.txtMute : V.txt }}>
                   {check.label}
-                  <span className="text-text-tertiary font-normal ml-1">({check.points}pt)</span>
+                  <span className="ml-1 font-normal text-text-tertiary">({check.points}pt)</span>
                 </p>
                 {!check.pass && onFixIssue && (
                   <button
                     type="button"
                     onClick={() => onFixIssue(check)}
                     disabled={Boolean(fixingIssue)}
-                    className="shrink-0 rounded-md border border-brand-500/20 bg-brand-500/10 px-2 py-0.5 text-[9px] font-bold text-brand-400 transition-all hover:bg-brand-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{ border: `1px solid ${V.action}33`, background: `color-mix(in srgb, ${V.action} 10%, transparent)`, color: V.action }}
                   >
-                    {fixingIssue === check.key ? "Fixing..." : "AI fix"}
+                    {fixingIssue === check.key ? "Fixing…" : "AI fix"}
                   </button>
                 )}
               </div>
               {!check.pass && (
-                <p className="text-[9px] text-text-tertiary leading-tight mt-0.5">{check.hint}</p>
+                <p className="text-[10px] mt-0.5 leading-tight text-text-tertiary">{check.hint}</p>
               )}
             </div>
           </div>

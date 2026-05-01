@@ -2,15 +2,17 @@ import { TARGET_REGIONS } from './types';
 import type { WebsiteCrawlResult } from './websiteCrawler';
 import {
   ahrefsKeywordOverview,
-  ahrefsMatchingTerms,
   ahrefsOrganicCompetitors,
   ahrefsOrganicKeywords,
-  ahrefsRelatedTerms,
-  ahrefsSearchSuggestions,
   isAhrefsConfigured,
   type AhrefsKeywordIdea,
   type AhrefsKeywordOverviewRow,
 } from './ahrefs';
+import {
+  getKeywordResearchData,
+  type KeywordResearchTraceEntry,
+  type NormalizedKeyword,
+} from './keyword-research';
 
 export type Intent = 'informational' | 'commercial' | 'navigational' | 'transactional' | '';
 export type CompetitionLevel = 'LOW' | 'MEDIUM' | 'HIGH' | '';
@@ -382,29 +384,41 @@ async function fetchKeywordIdeas(
 export async function fetchKeywordIdeasForSeeds(
   seeds: string[],
   regionCode: string,
-  _languageCode: string,
+  languageCode: string,
   limit = 120
 ): Promise<DiscoveredKeyword[]> {
-  void _languageCode;
   const cleanSeeds = [...new Set(seeds.map(s => s.trim().toLowerCase()).filter(Boolean))].slice(0, 80);
   if (!cleanSeeds.length) return [];
-  if (!isAhrefsConfigured()) {
-    console.warn('[ahrefs] fetchKeywordIdeasForSeeds: AHREFS_API_KEY missing — returning [].');
-    return [];
-  }
+  // Routes through the unified provider service: Ahrefs first, DataForSEO
+  // fallback. Returns [] only when *both* providers fail.
   try {
-    const [matching, related, suggestions] = await Promise.all([
-      ahrefsMatchingTerms(cleanSeeds, regionCode, Math.max(limit, 80)),
-      ahrefsRelatedTerms(cleanSeeds, regionCode, Math.max(limit, 80)),
-      ahrefsSearchSuggestions(cleanSeeds, regionCode, Math.max(limit, 80)),
-    ]);
-    const merged = ahrefsIdeasToDiscovered([...matching, ...related, ...suggestions]);
+    const research = await getKeywordResearchData({
+      seeds: cleanSeeds,
+      region: regionCode,
+      language: languageCode,
+      limit: Math.max(limit, 80),
+      maxResults: limit,
+    });
+    const merged = research.keywords.map<DiscoveredKeyword>(k => ({
+      keyword: k.keyword,
+      volume: k.volume,
+      kd: k.difficulty ?? 0,
+      cpc: k.cpc ?? 0,
+      trend: k.trend,
+      competition_level: k.competitionLevel,
+      intent: k.intent,
+      monthly_searches: k.monthlySearches,
+      secondary_keywords: [],
+      keyword_analysis_score: 0,
+      source: [`${k.source}_${k.endpoint}`],
+    }));
     console.log(
-      `[ahrefs] fetchKeywordIdeasForSeeds: matching=${matching.length} related=${related.length} suggestions=${suggestions.length} merged=${merged.length}`
+      `[keyword-research] fetchKeywordIdeasForSeeds provider=${research.provider} ` +
+        `fellBack=${research.fellBackToDataForSEO} merged=${merged.length}`
     );
     return merged.slice(0, limit);
   } catch (e) {
-    console.warn('[ahrefs] fetchKeywordIdeasForSeeds failed:', e);
+    console.warn('[keyword-research] fetchKeywordIdeasForSeeds failed:', e);
     return [];
   }
 }
@@ -1516,20 +1530,10 @@ export async function discoverKeywordsForProject(
   extras: ProjectContextExtras = {}
 ): Promise<DiscoverKeywordsForProjectResult> {
   const trace: DataForSEOTraceEntry[] = [];
-  if (!isAhrefsConfigured()) {
-    trace.push({
-      label: '(config)',
-      url: '',
-      requestBody: null,
-      httpStatus: 0,
-      ok: false,
-      rawText: '',
-      parsed: null,
-      fetchError:
-        'AHREFS_API_KEY is not set. Ahrefs is now the only keyword data provider — add it to .env.local.',
-    });
-    return { keywords: [], trace };
-  }
+  // Provider routing now happens inside `getKeywordResearchData` — Ahrefs is
+  // tried first and DataForSEO is the fallback. We deliberately do NOT
+  // short-circuit on a missing Ahrefs key here so users with only DataForSEO
+  // configured still get keyword data through the fallback path.
 
   const ownDomain = extractDomainFromUrl(targetUrl ?? '');
   const seeds = seedKeywords.map(s => s.trim()).filter(Boolean);
@@ -1615,54 +1619,100 @@ export async function discoverKeywordsForProject(
     count: userSeeds.length,
   });
 
-  // Echo the seeds we're about to send to Ahrefs Keywords Explorer.
-  pushDebugTrace(trace, '(ahrefs_keyword_ideas_body)', {
-    endpoint: 'ahrefs/keywords-explorer/{matching,related,search-suggestions}',
-    body: [
-      {
-        keywords: userSeeds,
-        country: region,
-        ideas: 'matching+related+suggestions',
-        per_endpoint_limit: 100,
-        order_by: ['volume:desc'],
+  // Echo the seeds we're about to send to the keyword-research provider.
+  pushDebugTrace(trace, '(keyword_research_request)', {
+    primary_provider: 'ahrefs',
+    fallback_provider: 'dataforseo',
+    body: {
+      seeds: userSeeds,
+      region,
+      language,
+      per_endpoint_limit: 100,
+    },
+    note:
+      'Ahrefs is tried first; on any failure (missing key, 401/403, 429, quota exhausted, network timeout, or empty result) the orchestrator automatically falls back to DataForSEO and returns the same normalized shape.',
+  });
+
+  // 3. Discovery — primary path is Ahrefs (matching + related + search-
+  //    suggestions). If Ahrefs is misconfigured, returns an error, or yields
+  //    zero keywords, the orchestrator falls back to DataForSEO
+  //    (keyword_ideas/live + related_keywords/live). Both branches return
+  //    `NormalizedKeyword[]` so the relevance / business-fit / scoring
+  //    pipeline below stays provider-agnostic.
+  let researchKeywords: NormalizedKeyword[] = [];
+  let researchTrace: KeywordResearchTraceEntry[] = [];
+  let researchProvider: 'ahrefs' | 'dataforseo' = 'ahrefs';
+  let researchFellBack = false;
+  let researchFallbackReason: string | undefined;
+  try {
+    const research = await getKeywordResearchData({
+      seeds: userSeeds,
+      region,
+      language,
+      limit: 100,
+      maxResults: 300,
+    });
+    researchKeywords = research.keywords;
+    researchTrace = research.trace;
+    researchProvider = research.provider;
+    researchFellBack = research.fellBackToDataForSEO;
+    researchFallbackReason = research.fallbackReason;
+  } catch (e) {
+    // Both providers failed — push the error to the trace and continue with
+    // an empty keyword set. Competitor mining below may still yield rows.
+    const message = e instanceof Error ? e.message : String(e);
+    const traceFromError =
+      e && typeof e === 'object' && 'trace' in e
+        ? ((e as { trace?: KeywordResearchTraceEntry[] }).trace ?? [])
+        : [];
+    researchTrace = traceFromError;
+    pushDebugTrace(trace, '(keyword_research_failure)', {
+      error: message,
+      note: 'Both Ahrefs and DataForSEO failed; continuing with empty research result.',
+    });
+  }
+
+  // Forward each upstream call into the existing DataForSEO-shaped trace so
+  // the keywords page's DevTools logger keeps working without changes.
+  for (const entry of researchTrace) {
+    trace.push({
+      label: `[${entry.provider}] ${entry.endpoint}${entry.fallbackReason ? ` → fallback (${entry.fallbackReason})` : ''}`,
+      url: '',
+      requestBody: null,
+      httpStatus: entry.status ?? 0,
+      ok: entry.ok,
+      rawText: '',
+      parsed: {
+        ms: entry.ms,
+        rows: entry.rows,
+        errorReason: entry.errorReason,
+        fallbackReason: entry.fallbackReason,
       },
-    ],
-  });
-
-  // 3. Discovery — Ahrefs only (per product spec). Three keyword-idea
-  //    endpoints fan out in parallel (matching/related/search-suggestions),
-  //    plus competitor mining (organic-competitors → organic-keywords) when
-  //    we have the user's domain. We merge all candidate pools and let the
-  //    existing relevance / business-fit / negative-pattern scorers pick the
-  //    winners — no Gemini in the hot path.
-  const matchingPromise = ahrefsMatchingTerms(userSeeds, region, 100).catch(e => {
-    pushDebugTrace(trace, '(ahrefs_matching_terms_error)', {
-      error: e instanceof Error ? e.message : String(e),
+      fetchError: entry.errorMessage,
     });
-    return [] as AhrefsKeywordIdea[];
-  });
+  }
 
-  const relatedPromise = ahrefsRelatedTerms(userSeeds, region, 100).catch(e => {
-    pushDebugTrace(trace, '(ahrefs_related_terms_error)', {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return [] as AhrefsKeywordIdea[];
-  });
-
-  const suggestionsPromise = ahrefsSearchSuggestions(userSeeds, region, 100).catch(e => {
-    pushDebugTrace(trace, '(ahrefs_search_suggestions_error)', {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return [] as AhrefsKeywordIdea[];
+  pushDebugTrace(trace, '(keyword_research_result)', {
+    provider: researchProvider,
+    fellBackToDataForSEO: researchFellBack,
+    fallbackReason: researchFallbackReason,
+    keyword_count: researchKeywords.length,
   });
 
   // Competitor mining: organic-competitors gives us up to 5 domains the user
   // really competes against; organic-keywords on each surfaces real ranking
-  // gaps with verified search volume + KD. Limited to keep query cost bounded.
-  const competitorMinedPromise = (async (): Promise<{
+  // gaps with verified search volume + KD. Best-effort — returns [] when
+  // Ahrefs is unavailable, since DataForSEO has no comparable endpoint.
+  const competitorMined = await (async (): Promise<{
     keywords: AhrefsKeywordIdea[];
     competitors: string[];
   }> => {
+    if (!isAhrefsConfigured()) {
+      pushDebugTrace(trace, '(ahrefs_competitor_mining_skipped)', {
+        reason: 'AHREFS_API_KEY missing — competitor mining requires Ahrefs Site Explorer.',
+      });
+      return { keywords: [], competitors: [] };
+    }
     const targetForSiteExplorer = ownDomain || extractDomainFromUrl(businessDomain ?? '');
     if (!targetForSiteExplorer) return { keywords: [], competitors: [] };
     try {
@@ -1710,27 +1760,26 @@ export async function discoverKeywordsForProject(
     }
   })();
 
-  const [matching, related, suggestions, competitorMined] = await Promise.all([
-    matchingPromise,
-    relatedPromise,
-    suggestionsPromise,
-    competitorMinedPromise,
-  ]);
+  // Convert NormalizedKeyword[] (provider-agnostic) → DiscoveredKeyword[]
+  // (the shape used by the relevance / business-fit / scoring pipeline).
+  const researchAsDiscovered: DiscoveredKeyword[] = researchKeywords.map(k => ({
+    keyword: k.keyword,
+    volume: k.volume,
+    kd: k.difficulty ?? 0,
+    cpc: k.cpc ?? 0,
+    trend: k.trend,
+    competition_level: k.competitionLevel,
+    intent: k.intent,
+    monthly_searches: k.monthlySearches,
+    secondary_keywords: [],
+    keyword_analysis_score: 0,
+    source: [`${k.source}_${k.endpoint}`],
+  }));
 
-  pushDebugTrace(trace, '(ahrefs_keywords_explorer)', {
-    matching: matching.length,
-    related: related.length,
-    suggestions: suggestions.length,
-    competitor_mined: competitorMined.keywords.length,
-    competitor_domains: competitorMined.competitors,
-  });
-
-  const ahrefsIdeas: DiscoveredKeyword[] = ahrefsIdeasToDiscovered([
-    ...matching,
-    ...related,
-    ...suggestions,
-    ...competitorMined.keywords,
-  ]);
+  const ahrefsIdeas: DiscoveredKeyword[] = mergeKeywordCandidates(
+    researchAsDiscovered,
+    ahrefsIdeasToDiscovered(competitorMined.keywords)
+  );
 
   // 4. Score relevance + business-fit using the project context (niche,
   //    audience, crawl, etc.). Negative patterns zero out off-topic noise.

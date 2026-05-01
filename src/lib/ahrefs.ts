@@ -57,21 +57,85 @@ interface AhrefsRequestOptions {
 }
 
 /**
- * Generic Ahrefs GET. Returns the parsed JSON body when the response is 2xx,
- * otherwise returns null and prints a clear log line.
+ * Why an Ahrefs call did not produce usable data. Emitted by `ahrefsGetVerbose`
+ * so the higher-level provider router (`keyword-research.ts`) can pick a
+ * fallback when the Ahrefs key is missing/bad/over quota/rate-limited.
+ *
+ *   no_api_key      AHREFS_API_KEY env var is missing
+ *   auth            HTTP 401 / 403
+ *   rate_limit      HTTP 429
+ *   quota_exhausted Body / status hints quota / units exhausted
+ *   http_error      Any other non-2xx response
+ *   network_error   fetch() threw (timeout, DNS, abort, ...)
+ *   parse_error     2xx response that did not parse as JSON
  */
-async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | null> {
+export type AhrefsErrorReason =
+  | 'no_api_key'
+  | 'auth'
+  | 'rate_limit'
+  | 'quota_exhausted'
+  | 'http_error'
+  | 'network_error'
+  | 'parse_error';
+
+/**
+ * Result envelope used by `ahrefsGetVerbose`. `ok=true` → `data` is the
+ * parsed body. `ok=false` → `errorReason` + `errorMessage` describe why we
+ * could not get usable data; `data` is `null`.
+ */
+export interface AhrefsCallResult<T> {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  ms: number;
+  rows: number;
+  data: T | null;
+  errorReason?: AhrefsErrorReason;
+  errorMessage?: string;
+}
+
+function detectQuotaExhausted(status: number, body: string): boolean {
+  if (status === 402) return true; // Payment-required is the canonical "quota gone" code
+  const lower = (body || '').toLowerCase();
+  return (
+    lower.includes('quota') ||
+    lower.includes('units exhausted') ||
+    lower.includes('limit reached') ||
+    lower.includes('subscription expired') ||
+    lower.includes('insufficient funds') ||
+    lower.includes('insufficient credits')
+  );
+}
+
+/**
+ * Generic Ahrefs GET that returns a rich result envelope. Used directly by
+ * the provider router so it can detect failure modes that warrant falling
+ * back to DataForSEO. Existing wrappers go through `ahrefsGet` (which
+ * extracts `.data` for backwards-compat).
+ */
+export async function ahrefsGetVerbose<T = unknown>(
+  opts: AhrefsRequestOptions
+): Promise<AhrefsCallResult<T>> {
   const tag = opts.label ?? opts.endpoint;
   const key = getApiKey();
   if (!key) {
-    console.warn(`[ahrefs] ${tag} skipped â€” AHREFS_API_KEY missing`);
+    console.warn(`[ahrefs] ${tag} skipped — AHREFS_API_KEY missing`);
     console.log('[ahrefs:request]', {
       endpoint: opts.endpoint,
       label: opts.label,
       query: opts.query,
       skipped: 'no_api_key',
     });
-    return null;
+    return {
+      ok: false,
+      status: 0,
+      statusText: '',
+      ms: 0,
+      rows: 0,
+      data: null,
+      errorReason: 'no_api_key',
+      errorMessage: 'AHREFS_API_KEY is not set',
+    };
   }
 
   const params = new URLSearchParams();
@@ -106,8 +170,16 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      const reason: AhrefsErrorReason =
+        res.status === 401 || res.status === 403
+          ? 'auth'
+          : res.status === 429
+            ? 'rate_limit'
+            : detectQuotaExhausted(res.status, body)
+              ? 'quota_exhausted'
+              : 'http_error';
       console.warn(
-        `[ahrefs] ${tag} -> ${res.status} ${res.statusText} in ${ms}ms ${body.slice(0, 200)}`
+        `[ahrefs] ${tag} -> ${res.status} ${res.statusText} in ${ms}ms (${reason}) ${body.slice(0, 200)}`
       );
       console.log('[ahrefs:response:error]', {
         endpoint: opts.endpoint,
@@ -116,11 +188,38 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
         statusText: res.statusText,
         ms,
         bodyText: body,
+        reason,
       });
-      return null;
+      return {
+        ok: false,
+        status: res.status,
+        statusText: res.statusText,
+        ms,
+        rows: 0,
+        data: null,
+        errorReason: reason,
+        errorMessage: `${res.status} ${res.statusText} ${body.slice(0, 200)}`.trim(),
+      };
     }
 
-    const json = (await res.json()) as Record<string, unknown>;
+    let json: Record<string, unknown>;
+    try {
+      json = (await res.json()) as Record<string, unknown>;
+    } catch (parseErr) {
+      const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      console.warn(`[ahrefs] ${tag} parse error in ${ms}ms ${message}`);
+      return {
+        ok: false,
+        status: res.status,
+        statusText: res.statusText,
+        ms,
+        rows: 0,
+        data: null,
+        errorReason: 'parse_error',
+        errorMessage: message,
+      };
+    }
+
     const rowCount = primaryArrayLength(json);
     console.log(`[ahrefs] ${tag} -> ${res.status} ${rowCount} rows in ${ms}ms`);
     console.log('[ahrefs:response]', {
@@ -132,7 +231,14 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
       body: json,
     });
     console.log(`[ahrefs-raw] ${opts.label ?? opts.endpoint}`, JSON.stringify(json, null, 2));
-    return json as T;
+    return {
+      ok: true,
+      status: res.status,
+      statusText: res.statusText,
+      ms,
+      rows: rowCount,
+      data: json as T,
+    };
   } catch (error) {
     const ms = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
@@ -143,10 +249,29 @@ async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | n
       ms,
       error: message,
     });
-    return null;
+    return {
+      ok: false,
+      status: 0,
+      statusText: '',
+      ms,
+      rows: 0,
+      data: null,
+      errorReason: 'network_error',
+      errorMessage: message,
+    };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Backwards-compat thin wrapper. Returns parsed body on 2xx, `null`
+ * otherwise. New code that needs to know *why* a call failed should use
+ * `ahrefsGetVerbose` directly.
+ */
+async function ahrefsGet<T = unknown>(opts: AhrefsRequestOptions): Promise<T | null> {
+  const result = await ahrefsGetVerbose<T>(opts);
+  return result.ok ? (result.data as T) : null;
 }
 
 function primaryArrayLength(json: Record<string, unknown>): number {

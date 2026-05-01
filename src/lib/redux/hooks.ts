@@ -44,3 +44,11 @@ export function selectKeywordsCache(state: RootState, projectId: string) {
 export function selectBriefCache(state: RootState, projectId: string) {
   return state.keywordWorkspace.projects[projectId]?.briefCache ?? null;
 }
+
+/**
+ * Per-keyword calendar scheduling state. Populated on calendar page load and
+ * updated optimistically when a keyword is scheduled/rescheduled.
+ */
+export function selectCalendarScheduledKeywords(state: RootState, projectId: string) {
+  return state.keywordWorkspace.projects[projectId]?.calendarScheduledKeywords ?? {};
+}

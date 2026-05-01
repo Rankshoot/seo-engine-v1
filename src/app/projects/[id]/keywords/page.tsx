@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -35,6 +35,9 @@ import {
   deleteKeyword,
   deleteAllKeywords,
 } from "@/app/actions/keyword-actions";
+import { getCalendarEntries, addKeywordToCalendarOnDate } from "@/app/actions/calendar-actions";
+import type { CalendarEntry } from "@/lib/types";
+import { MiniCalendar } from "@/components/MiniCalendar";
 import {
   getBusinessBrief,
   generateBusinessBrief,
@@ -168,6 +171,10 @@ export default function KeywordsPage() {
   // updates that happen via `handleStatusUpdate`.
   const [modalKeywordId, setModalKeywordId] = useState<string | null>(null);
 
+  // "Add to calendar" scheduling flow
+  const [schedulingKeywordId, setSchedulingKeywordId] = useState<string | null>(null);
+  const [addingToCalendar, setAddingToCalendar] = useState(false);
+
   const { data: keywordsData, isLoading: loading } = useQuery<KeywordsResponse>({
     queryKey: KEYWORDS_KEY,
     queryFn: () => getKeywords(projectId, { limit: PAGE_SIZE, offset: 0 }),
@@ -235,6 +242,19 @@ export default function KeywordsPage() {
     staleTime: Infinity,
     gcTime: 30 * 60_000,
   });
+
+  const CALENDAR_KEY = qk.calendar(projectId);
+  const { data: calendarData, refetch: refetchCalendar } = useQuery({
+    queryKey: CALENDAR_KEY,
+    queryFn: () => getCalendarEntries(projectId),
+    enabled: !!projectId,
+    // Keep scheduling data perfectly in sync with the Calendar page —
+    // always refetch on mount so cross-page schedules surface here.
+    staleTime: 0,
+    gcTime: 30 * 60_000,
+    refetchOnMount: 'always',
+  });
+  const calendarEntries: CalendarEntry[] = calendarData?.success ? calendarData.data : [];
   const brief: BusinessBrief | null =
     briefData && briefData.success ? briefData.brief ?? null : null;
   const briefUpdatedAt: string | null =
@@ -402,9 +422,9 @@ export default function KeywordsPage() {
 
     // Show the toast now so it feels instant, then fire the API in the background.
     if (status === "approved") {
-      pushToast(`"${label}" added to your calendar`);
+      pushToast(`"${label}" approved — go to Calendar to schedule it`);
     } else if (status === "pending") {
-      pushToast(`"${label}" removed from your calendar`);
+      pushToast(`"${label}" moved back to pending`);
     }
 
     // Keep the menu button blocked only for a brief moment while the row
@@ -518,7 +538,9 @@ export default function KeywordsPage() {
         queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
         queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         pushToast(
-          ids.length === 1 ? "1 keyword added to your calendar" : `${ids.length} keywords added to your calendar`
+          ids.length === 1
+            ? "1 keyword approved — go to Calendar to schedule it"
+            : `${ids.length} keywords approved — go to Calendar to schedule them`
         );
         exitMassSelect();
       }
@@ -526,6 +548,27 @@ export default function KeywordsPage() {
       setBulkApproving(false);
     }
   };
+
+  const handleScheduleOnDate = useCallback(async (date: string) => {
+    if (!schedulingKeywordId) return;
+    setAddingToCalendar(true);
+    const kw = keywords.find(k => k.id === schedulingKeywordId);
+    const res = await addKeywordToCalendarOnDate(schedulingKeywordId, projectId, date);
+    if (res.success) {
+      const wasRescheduled = 'rescheduled' in res && res.rescheduled;
+      pushToast(`"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${date}`);
+      setSchedulingKeywordId(null);
+      // Invalidate every cache that depends on calendar_entries so the
+      // calendar / blogs pages see the new schedule the moment they mount.
+      await refetchCalendar();
+      queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+      queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+    } else {
+      pushToast(res.error ?? "Could not schedule keyword");
+    }
+    setAddingToCalendar(false);
+  }, [schedulingKeywordId, keywords, projectId, refetchCalendar, queryClient]);
 
   const counts = {
     all: keywords.length,
@@ -1120,16 +1163,62 @@ export default function KeywordsPage() {
                           </span>
                         </td>
                         <td className="px-2 py-3 align-middle" onClick={e => e.stopPropagation()}>
-                          <KeywordRowMenu
-                            status={kw.status}
-                            phrase={kw.keyword}
-                            busy={busyRowId === kw.id}
-                            onExplore={() => setModalKeywordId(kw.id)}
-                            onApproveCalendar={() => handleStatusUpdate(kw.id, "approved", kw.keyword)}
-                            onReject={() => handleStatusUpdate(kw.id, "rejected")}
-                            onResetPending={() => handleStatusUpdate(kw.id, "pending", kw.keyword)}
-                            onRemove={() => handleKeywordRemove(kw.id, kw.keyword)}
-                          />
+                          <div className="flex items-center gap-1 justify-center">
+                            {/* Add-to-calendar button */}
+                            {(() => {
+                              const isAlreadyScheduled = calendarEntries.some(e => e.keyword_id === kw.id);
+                              const isSchedulingThis = schedulingKeywordId === kw.id;
+                              return (
+                                <button
+                                  type="button"
+                                  title={
+                                    isAlreadyScheduled
+                                      ? "Already on calendar"
+                                      : isSchedulingThis
+                                      ? "Cancel scheduling"
+                                      : "Add to calendar on a specific date"
+                                  }
+                                  onClick={() =>
+                                    setSchedulingKeywordId(isSchedulingThis ? null : kw.id)
+                                  }
+                                  disabled={addingToCalendar}
+                                  className={`w-7 h-7 flex items-center justify-center rounded-full border transition-colors shrink-0
+                                    ${isAlreadyScheduled
+                                      ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981] cursor-default"
+                                      : isSchedulingThis
+                                      ? "border-[#f59e0b]/40 bg-[#f59e0b]/10 text-[#f59e0b]"
+                                      : "border-border-subtle bg-surface-elevated text-text-tertiary hover:border-brand-action/40 hover:text-brand-action hover:bg-brand-action/5"
+                                    }
+                                  `}
+                                >
+                                  {isAlreadyScheduled ? (
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                                    </svg>
+                                  ) : (
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                                      <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+                                      <line x1="16" x2="16" y1="2" y2="6" />
+                                      <line x1="8" x2="8" y1="2" y2="6" />
+                                      <line x1="3" x2="21" y1="10" y2="10" />
+                                      <line x1="12" x2="12" y1="15" y2="18" />
+                                      <line x1="10.5" x2="13.5" y1="16.5" y2="16.5" />
+                                    </svg>
+                                  )}
+                                </button>
+                              );
+                            })()}
+                            <KeywordRowMenu
+                              status={kw.status}
+                              phrase={kw.keyword}
+                              busy={busyRowId === kw.id}
+                              onExplore={() => setModalKeywordId(kw.id)}
+                              onApproveCalendar={() => handleStatusUpdate(kw.id, "approved", kw.keyword)}
+                              onReject={() => handleStatusUpdate(kw.id, "rejected")}
+                              onResetPending={() => handleStatusUpdate(kw.id, "pending", kw.keyword)}
+                              onRemove={() => handleKeywordRemove(kw.id, kw.keyword)}
+                            />
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1183,6 +1272,43 @@ export default function KeywordsPage() {
             )
           )}
       </section>
+
+      {/* ── CALENDAR VIEW ─────────────────────────────────────────────────── */}
+      {(calendarEntries.length > 0 || schedulingKeywordId) && (
+        <section className="space-y-4" id="calendar-view">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">
+                Scheduled calendar
+              </h2>
+              <p className="mt-1.5 text-[14px] text-text-tertiary">
+                {schedulingKeywordId
+                  ? "Click any available date below to schedule your keyword."
+                  : "All keywords added to your content calendar."}
+              </p>
+            </div>
+            <Link
+              href={`/projects/${projectId}/calendar`}
+              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary shrink-0"
+            >
+              Full calendar
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+              </svg>
+            </Link>
+          </div>
+          <MiniCalendar
+            entries={calendarEntries}
+            projectId={projectId}
+            schedulingKeywordId={schedulingKeywordId}
+            schedulingKeywordPhrase={
+              keywords.find(k => k.id === schedulingKeywordId)?.keyword ?? ""
+            }
+            onDatePick={handleScheduleOnDate}
+            onCancelSchedule={() => setSchedulingKeywordId(null)}
+          />
+        </section>
+      )}
 
       {toast ? (
         <div

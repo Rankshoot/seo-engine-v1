@@ -253,7 +253,7 @@ export async function updateBlogStatus(blogId: string, status: BlogStatus) {
 
   const { data: blog, error: bErr } = await supabaseAdmin
     .from('blogs')
-    .select('id, project_id')
+    .select('id, entry_id, project_id')
     .eq('id', blogId)
     .single();
 
@@ -276,6 +276,19 @@ export async function updateBlogStatus(blogId: string, status: BlogStatus) {
     .single();
 
   if (error) return { success: false, error: error.message, data: null };
+
+  // Keep the calendar entry status in sync so the calendar page reflects publishing.
+  if (blog.entry_id) {
+    const calendarStatus =
+      status === 'published' ? 'published' :
+      status === 'approved'  ? 'approved'  :
+      'generated';
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: calendarStatus })
+      .eq('id', blog.entry_id);
+  }
+
   return { success: true, data: data as Blog };
 }
 

@@ -285,6 +285,7 @@ export const ARTICLE_TYPES = [
 export const TARGET_REGIONS = [
   { code: 'us', name: 'United States', locationCode: 2840 },
   { code: 'uk', name: 'United Kingdom', locationCode: 2826 },
+  /** DataForSEO / Google Ads country location — India is 2356; US is 2840 (do not swap). */
   { code: 'in', name: 'India', locationCode: 2356 },
   { code: 'au', name: 'Australia', locationCode: 2036 },
   { code: 'ca', name: 'Canada', locationCode: 2124 },
@@ -294,6 +295,34 @@ export const TARGET_REGIONS = [
   { code: 'ae', name: 'UAE', locationCode: 2784 },
   { code: 'nz', name: 'New Zealand', locationCode: 2554 },
 ] as const;
+
+/** DataForSEO default when `target_region` cannot be resolved (United States). */
+export const DATAFORSEO_DEFAULT_LOCATION_CODE = 2840 as const;
+
+/**
+ * Maps a project's `target_region` (dropdown stores codes like `in`, `us`)
+ * to DataForSEO `location_code`. Handles case, whitespace, display names
+ * (`India`), and numeric codes that match our table. Unknown values fall back
+ * to {@link DATAFORSEO_DEFAULT_LOCATION_CODE}.
+ */
+export function locationCodeFromTargetRegion(region: string | null | undefined): number {
+  const raw = (region ?? '').trim();
+  if (!raw) return DATAFORSEO_DEFAULT_LOCATION_CODE;
+
+  const lower = raw.toLowerCase();
+  const byCode = TARGET_REGIONS.find(r => r.code === lower);
+  if (byCode) return byCode.locationCode;
+
+  const byName = TARGET_REGIONS.find(r => r.name.toLowerCase() === lower);
+  if (byName) return byName.locationCode;
+
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    if (TARGET_REGIONS.some(r => r.locationCode === n)) return n;
+  }
+
+  return DATAFORSEO_DEFAULT_LOCATION_CODE;
+}
 
 export const WORD_COUNT_OPTIONS = [500, 1000, 1500, 2500, 3000, 5000] as const;
 

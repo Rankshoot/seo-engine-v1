@@ -37,7 +37,9 @@ import {
   bulkUpdateKeywordStatus,
   deleteKeyword,
   deleteAllKeywords,
+  getDomainKeywords,
 } from "@/app/actions/keyword-actions";
+import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
 import { getCalendarEntries, addKeywordToCalendarOnDate } from "@/app/actions/calendar-actions";
 import type { CalendarEntry } from "@/lib/types";
 import { MiniCalendar } from "@/components/MiniCalendar";
@@ -73,6 +75,8 @@ const KD_LABEL = (kd: number) =>
   kd === 0 ? "—" : kd < 30 ? "Easy" : kd < 60 ? "Medium" : "Hard";
 
 type FilterTab = "all" | "ai" | "low_competition" | "long_tail" | KeywordStatus;
+
+type SourceTab = "industry" | "domain";
 
 type TableSortColumn =
   | "keyword"
@@ -162,6 +166,13 @@ export default function KeywordsPage() {
   const filter = keywordPrefs.filter as FilterTab;
   const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
+
+  // Source tab — "industry" shows the existing Discover flow; "domain" shows
+  // live Google Ads keywords_for_site data for the project's own domain.
+  const [sourceTab, setSourceTab] = useState<SourceTab>("industry");
+  const [domainKeywords, setDomainKeywords] = useState<CompetitorKeywordsForSiteRow[]>([]);
+  const [domainFetching, setDomainFetching] = useState(false);
+  const [domainError, setDomainError] = useState("");
 
   const [refreshingBrief, setRefreshingBrief] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
@@ -386,6 +397,28 @@ export default function KeywordsPage() {
     } else setError(res.error ?? "Discovery failed");
     setDiscovering(false);
   };
+
+  const handleFetchDomainKeywords = async () => {
+    setDomainFetching(true);
+    setDomainError("");
+    const res = await getDomainKeywords(projectId);
+    if (res.success) {
+      setDomainKeywords(res.data);
+    } else {
+      setDomainError(res.error ?? "Failed to fetch domain keywords");
+    }
+    setDomainFetching(false);
+  };
+
+  // Auto-fetch domain keywords the first time the domain tab is activated.
+  const domainFetchedRef = useRef(false);
+  useEffect(() => {
+    if (sourceTab === "domain" && !domainFetchedRef.current && domainKeywords.length === 0 && !domainFetching) {
+      domainFetchedRef.current = true;
+      void handleFetchDomainKeywords();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceTab]);
 
   const handleRefreshBrief = async () => {
     setRefreshingBrief(true);
@@ -873,11 +906,215 @@ export default function KeywordsPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Keyword list</h2>
-            {keywords.length === 0 ? (
-              <p className="mt-1.5 text-[14px] text-text-tertiary">Run Discover to load keywords.</p>
-            ) : null}
           </div>
         </div>
+
+        {/* Source tab switcher */}
+        <div className="flex gap-1 rounded-[10px] border border-border-subtle bg-surface-secondary p-1 w-fit">
+          <button
+            type="button"
+            onClick={() => setSourceTab("industry")}
+            className={`rounded-[7px] px-5 py-2 text-[13px] font-medium transition-all duration-150 ${
+              sourceTab === "industry"
+                ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
+                : "text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            Data via Industry
+          </button>
+          <button
+            type="button"
+            onClick={() => setSourceTab("domain")}
+            className={`rounded-[7px] px-5 py-2 text-[13px] font-medium transition-all duration-150 ${
+              sourceTab === "domain"
+                ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
+                : "text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            Data via Domain
+          </button>
+        </div>
+
+        {/* ── DATA VIA DOMAIN ─────────────────────────────────────────── */}
+        {sourceTab === "domain" && (
+          <div className="space-y-4">
+            {domainError && (
+              <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
+                {domainError}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[14px] text-text-tertiary">
+                Live Google Ads keyword data for your domain — sorted by search volume.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  domainFetchedRef.current = true;
+                  void handleFetchDomainKeywords();
+                }}
+                disabled={domainFetching}
+                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 shrink-0"
+              >
+                {domainFetching ? (
+                  <>
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
+                    Fetching…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                    Refresh
+                  </>
+                )}
+              </button>
+            </div>
+
+            {domainFetching ? (
+              <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
+                <TableSkeleton rows={8} columns={5} />
+              </div>
+            ) : domainKeywords.length > 0 ? (
+              <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
+                <div className="overflow-x-auto overflow-hidden">
+                  <table className="w-full min-w-[700px] text-left border-collapse">
+                    <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+                      <tr>
+                        <th scope="col" className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <span>Keyword</span>
+                            <Tooltip placement="below" content="Search query found on your domain via Google Ads data.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <span>Volume</span>
+                            <Tooltip placement="below" content="Average monthly searches over the last 12 months.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <span>KD</span>
+                            <Tooltip placement="below" content="Keyword Difficulty (0-100). Estimated from Google Ads competition index.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <span>CPC</span>
+                            <Tooltip placement="below" content="Cost Per Click (USD) from Google Ads.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-center">
+                          <span>Intent</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border-subtle/60">
+                      {domainKeywords.map((kw, i) => (
+                        <tr
+                          key={`${kw.keyword}-${i}`}
+                          className="transition-colors duration-150 hover:bg-surface-hover/90"
+                        >
+                          <td className="px-4 py-3 align-middle max-w-[320px]">
+                            <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                          </td>
+                          <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
+                            {kw.volume ? kw.volume.toLocaleString() : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-center align-middle">
+                            {kw.kd > 0 ? (
+                              <div className="flex items-center justify-center gap-2">
+                                <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-300 ${
+                                      kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
+                                    }`}
+                                    style={{ width: `${kw.kd}%` }}
+                                  />
+                                </div>
+                                <span className={`text-[12px] font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
+                              </div>
+                            ) : (
+                              <span className="text-[13px] text-text-tertiary">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right align-middle text-[13px] font-mono text-text-tertiary tabular-nums">
+                            {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-center align-middle">
+                            {kw.intent ? (
+                              <span
+                                className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
+                                  kw.intent === "commercial" || kw.intent === "transactional"
+                                    ? "border-brand-action/20 bg-brand-action/10 text-brand-action"
+                                    : kw.intent === "informational"
+                                      ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
+                                      : "border-border-subtle bg-surface-secondary text-text-tertiary"
+                                }`}
+                              >
+                                {kw.intent}
+                              </span>
+                            ) : (
+                              <span className="text-[13px] text-text-tertiary">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-border-subtle px-6 py-4 bg-surface-secondary/50">
+                  <span className="text-[12px] text-text-tertiary">
+                    {domainKeywords.length} keywords found for {project?.domain ?? "your domain"} · sorted by search volume
+                  </span>
+                </div>
+              </div>
+            ) : (
+              !domainFetching && (
+                <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
+                  <div className="mb-6 flex justify-center">
+                    <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
+                      <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                      </svg>
+                    </div>
+                  </div>
+                  <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No domain keywords found</h3>
+                  <p className="mb-8 text-[16px] text-text-tertiary max-w-md mx-auto">
+                    No Google Ads keyword data was returned for your domain. Try refreshing or check that your domain is correct.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      domainFetchedRef.current = true;
+                      void handleFetchDomainKeywords();
+                    }}
+                    className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+                  >
+                    Fetch domain keywords
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        )}
+
+        {/* ── DATA VIA INDUSTRY ───────────────────────────────────────── */}
+        {sourceTab === "industry" && (
+          <div className="space-y-4">
+            {keywords.length === 0 ? (
+              <p className="text-[14px] text-text-tertiary">Run Discover to load keywords.</p>
+            ) : null}
 
           {error && (
             <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
@@ -1312,6 +1549,8 @@ export default function KeywordsPage() {
               </div>
             )
           )}
+          </div>
+        )}
       </section>
 
       {/* ── CALENDAR VIEW ─────────────────────────────────────────────────── */}

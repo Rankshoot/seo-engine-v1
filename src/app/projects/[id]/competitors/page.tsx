@@ -186,11 +186,6 @@ export default function CompetitorsPage() {
     return counts;
   }, [gaps]);
 
-  const topOpportunities = useMemo(
-    () => [...gaps].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score).slice(0, 12),
-    [gaps]
-  );
-
   const hasBenchmark = competitors.length > 0;
 
   return (
@@ -303,7 +298,10 @@ export default function CompetitorsPage() {
 
           {tab === "opportunities" && (
             <OpportunityDashboard
-              topOpportunities={topOpportunities}
+              gaps={filteredGaps}
+              gapCounts={gapCounts}
+              gapFilter={gapFilter}
+              onGapFilterChange={setGapFilter}
               averages={averages}
               generatingKeyword={generatingKeyword}
               onGenerateBlog={handleGenerateBlog}
@@ -322,9 +320,9 @@ export default function CompetitorsPage() {
           {tab === "gaps" && (
             <KeywordGapTable
               gaps={filteredGaps}
-              counts={gapCounts}
-              filter={gapFilter}
-              onFilterChange={setGapFilter}
+              gapCounts={gapCounts}
+              gapFilter={gapFilter}
+              onGapFilterChange={setGapFilter}
               generatingKeyword={generatingKeyword}
               onGenerateBlog={handleGenerateBlog}
               aiGapKeywordSet={aiGapKeywordSet}
@@ -407,6 +405,40 @@ function BenchmarkOverview({
   );
 }
 
+const GAP_FILTER_OPTIONS: Array<{ id: "all" | GapType; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "missing", label: "Missing" },
+  { id: "weak", label: "Weak" },
+  { id: "untapped", label: "Untapped" },
+];
+
+function GapFilterBar({
+  counts,
+  filter,
+  onFilterChange,
+}: {
+  counts: Record<"all" | GapType, number>;
+  filter: "all" | GapType;
+  onFilterChange: (f: "all" | GapType) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
+      {GAP_FILTER_OPTIONS.map(f => (
+        <button
+          key={f.id}
+          type="button"
+          onClick={() => onFilterChange(f.id)}
+          className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
+            filter === f.id ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
+          }`}
+        >
+          {f.label} ({counts[f.id]})
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function StatCard({ label, value, hint, tooltip }: { label: string; value: string; hint?: string; tooltip?: string }) {
   return (
     <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-5 flex flex-col">
@@ -425,13 +457,19 @@ function StatCard({ label, value, hint, tooltip }: { label: string; value: strin
 }
 
 function OpportunityDashboard({
-  topOpportunities,
+  gaps,
+  gapCounts,
+  gapFilter,
+  onGapFilterChange,
   averages,
   generatingKeyword,
   onGenerateBlog,
   aiGapKeywordSet,
 }: {
-  topOpportunities: KeywordGap[];
+  gaps: KeywordGap[];
+  gapCounts: Record<"all" | GapType, number>;
+  gapFilter: "all" | GapType;
+  onGapFilterChange: (f: "all" | GapType) => void;
   averages?: BenchmarkState["averages"];
   generatingKeyword: string | null;
   onGenerateBlog: (keyword: string) => void;
@@ -453,9 +491,18 @@ function OpportunityDashboard({
         </div>
       ) : null}
 
-      {topOpportunities.length === 0 ? (
+      <div className="space-y-3">
+        <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary">
+          Keyword opportunities
+        </p>
+        <GapFilterBar counts={gapCounts} filter={gapFilter} onFilterChange={onGapFilterChange} />
+      </div>
+
+      {gaps.length === 0 ? (
         <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
-          No opportunities yet. Run a benchmark.
+          {gapFilter === "all"
+            ? "No opportunities yet. Run a benchmark."
+            : "No keyword gaps match this filter."}
         </div>
       ) : (
         <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
@@ -474,7 +521,7 @@ function OpportunityDashboard({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle/60">
-                {topOpportunities.map(g => (
+                {gaps.map(g => (
                   <tr key={g.id} className="transition-colors hover:bg-surface-hover">
                     <td className="px-4 py-3 max-w-[280px]">
                       <div className="flex items-center gap-2">
@@ -683,43 +730,24 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 
 function KeywordGapTable({
   gaps,
-  counts,
-  filter,
-  onFilterChange,
+  gapCounts,
+  gapFilter,
+  onGapFilterChange,
   generatingKeyword,
   onGenerateBlog,
   aiGapKeywordSet,
 }: {
   gaps: KeywordGap[];
-  counts: Record<"all" | GapType, number>;
-  filter: "all" | GapType;
-  onFilterChange: (f: "all" | GapType) => void;
+  gapCounts: Record<"all" | GapType, number>;
+  gapFilter: "all" | GapType;
+  onGapFilterChange: (f: "all" | GapType) => void;
   generatingKeyword: string | null;
   onGenerateBlog: (keyword: string) => void;
   aiGapKeywordSet: Set<string>;
 }) {
-  const filters: Array<{ id: "all" | GapType; label: string }> = [
-    { id: "all", label: "All" },
-    { id: "missing", label: "Missing" },
-    { id: "weak", label: "Weak" },
-    { id: "untapped", label: "Untapped" },
-  ];
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
-        {filters.map(f => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => onFilterChange(f.id)}
-            className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
-              filter === f.id ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
-            }`}
-          >
-            {f.label} ({counts[f.id]})
-          </button>
-        ))}
-      </div>
+      <GapFilterBar counts={gapCounts} filter={gapFilter} onFilterChange={onGapFilterChange} />
 
       {gaps.length === 0 ? (
         <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">

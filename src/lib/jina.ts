@@ -247,3 +247,45 @@ export async function fetchBlogUrls(domain: string, max = 500): Promise<string[]
   }
   return out;
 }
+
+/**
+ * Fetch a public URL as Markdown via Jina Reader (`r.jina.ai/...`).
+ * Bypasses many WAF / bot blocks that return 403 to server-side fetch.
+ */
+export async function readUrlViaJinaReader(
+  url: string,
+  opts: { timeoutMs?: number } = {}
+): Promise<{ ok: boolean; markdown: string; error?: string }> {
+  const normalized = normalizeDomain(url.trim());
+  const readerBase = 'https://r.jina.ai/';
+  const readerUrl = readerBase + normalized;
+
+  const timeoutMs = opts.timeoutMs ?? 25_000;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const headers: Record<string, string> = {
+      Accept: 'text/markdown,text/plain,*/*',
+      'X-Return-Format': 'markdown',
+      'X-Md-Heading-Style': 'atx',
+    };
+    const key = process.env.JINA_API_KEY?.trim();
+    if (key) headers.Authorization = `Bearer ${key}`;
+
+    const res = await fetch(readerUrl, { signal: controller.signal, headers });
+    if (!res.ok) {
+      return { ok: false, markdown: '', error: `Jina Reader HTTP ${res.status}` };
+    }
+    const markdown = (await res.text()).trim();
+    if (!markdown || markdown.length < 40) {
+      return { ok: false, markdown: '', error: 'Jina Reader returned empty body' };
+    }
+    return { ok: true, markdown };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, markdown: '', error: msg.includes('abort') ? 'Jina Reader timeout' : msg };
+  } finally {
+    clearTimeout(id);
+  }
+}

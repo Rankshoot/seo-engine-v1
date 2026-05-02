@@ -2,7 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { discoverKeywordsForProject } from '@/lib/dataforseo';
+import { discoverKeywordsForProject, fetchGoogleAdsKeywordsForSite, type CompetitorKeywordsForSiteRow } from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
@@ -723,4 +723,39 @@ export async function deleteAllKeywords(projectId: string) {
 
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+
+/**
+ * Fetches keywords for the project's own domain using the Google Ads
+ * `keywords_for_site/live` endpoint. Returns live data — not persisted to the
+ * `keywords` table.
+ */
+export async function getDomainKeywords(
+  projectId: string
+): Promise<{ success: true; data: CompetitorKeywordsForSiteRow[] } | { success: false; error: string; data: CompetitorKeywordsForSiteRow[] }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: [] };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('domain, target_region, target_language')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Project not found', data: [] };
+
+  const domain: string = (project as { domain?: string | null }).domain ?? '';
+  const region: string = (project as { target_region?: string | null }).target_region ?? 'us';
+  const language: string = (project as { target_language?: string | null }).target_language ?? 'en';
+
+  if (!domain) return { success: false, error: 'No domain configured for this project', data: [] };
+
+  try {
+    const keywords = await fetchGoogleAdsKeywordsForSite(domain, region, language, 100);
+    return { success: true, data: keywords };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, error: `API error: ${msg}`, data: [] };
+  }
 }

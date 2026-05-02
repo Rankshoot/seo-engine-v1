@@ -1,4 +1,4 @@
-import { TARGET_REGIONS } from './types';
+import { TARGET_REGIONS, locationCodeFromTargetRegion } from './types';
 import type { WebsiteCrawlResult } from './websiteCrawler';
 import {
   ahrefsKeywordOverview,
@@ -105,10 +105,18 @@ function getAuthHeader(): string | null {
   return `Basic ${Buffer.from(`${login}:${password}`).toString('base64')}`;
 }
 
+/**
+ * Resolves a project's `target_region` to a DataForSEO `location_code`.
+ *
+ * Projects can store the region as a code (`in`, `us`), display name
+ * (`"India"`, `"United States"`) or already-resolved numeric code (`2356`).
+ * We use the shared helper so all three are accepted — otherwise saved names
+ * fall through to the US default and DataForSEO silently returns US data.
+ */
 function getLocationCode(regionCode: string): number {
-  const region = TARGET_REGIONS.find(r => r.code === regionCode);
-  return region?.locationCode ?? 2840;
+  return locationCodeFromTargetRegion(regionCode);
 }
+void TARGET_REGIONS;
 
 interface DfsMonthly {
   year: number;
@@ -148,15 +156,44 @@ async function dfsPost(
       entry.parseError = e instanceof Error ? e.message : 'JSON parse failed';
     }
 
-    // console.log('DataForSEO URL:', url);
-    // console.log('DataForSEO request body:', JSON.stringify(body, null, 2));
-    // console.log('DataForSEO HTTP status:', entry.httpStatus);
-
     const parsed = entry.parsed as { cost?: number } | null;
     if (parsed && typeof parsed.cost === 'number') entry.cost = parsed.cost;
   } catch (e) {
     entry.fetchError = e instanceof Error ? e.message : String(e);
   } finally {
+    const root = entry.parsed as {
+      status_code?: number;
+      status_message?: string;
+      cost?: number;
+      tasks_count?: number;
+      tasks_error?: number;
+      tasks?: Array<{ status_code?: number; status_message?: string; cost?: number }>;
+    } | null;
+
+    const task0 = root?.tasks?.[0];
+    console.groupCollapsed(
+      `[dataforseo] POST v3/${endpoint} → HTTP ${entry.httpStatus} ${entry.ok ? 'ok' : 'FAIL'}${typeof root?.status_code === 'number' ? ` · API ${root.status_code}` : ''}`
+    );
+    console.log('url:', url);
+    console.log('request body:', body);
+    if (root && typeof root === 'object') {
+      console.log('response summary:', {
+        status_code: root.status_code,
+        status_message: root.status_message,
+        cost: entry.cost ?? root.cost,
+        tasks_count: root.tasks_count,
+        tasks_error: root.tasks_error,
+        task0_status: task0?.status_code,
+        task0_message: task0?.status_message,
+        task0_cost: task0?.cost,
+      });
+    } else if (entry.rawText) {
+      console.log('response (unparsed / raw prefix):', entry.rawText.slice(0, 500));
+    }
+    if (entry.fetchError) console.warn('fetchError:', entry.fetchError);
+    if (entry.parseError) console.warn('parseError:', entry.parseError);
+    console.groupEnd();
+
     trace.push(entry);
   }
   return entry.parsed;
@@ -1470,6 +1507,132 @@ function ahrefsRowToVitals(row: AhrefsKeywordOverviewRow): KeywordVitals {
     trend_pct: 0,
     monthly_searches: [],
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Google Ads Keywords For Site — competitor benchmark keyword list
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One keyword row from `keywords_data/google_ads/keywords_for_site/live`,
+ * normalized to the shape the competitor benchmark pipeline expects.
+ */
+export interface CompetitorKeywordsForSiteRow {
+  keyword: string;
+  volume: number;
+  kd: number;
+  cpc: number;
+  intent: Intent;
+  /** Keywords For Site does not return SERP rank — always 0. */
+  competitor_position: number;
+  /** Site-level landing URL for the competitor (no per-keyword URL from API). */
+  competitor_url: string;
+}
+
+interface DfsGoogleAdsKeywordForSiteItem {
+  keyword?: string;
+  search_volume?: number | null;
+  cpc?: number | string | null;
+  competition?: string | null;
+  competition_index?: number | null;
+}
+
+function competitionLevelToKdHint(level: string | null | undefined): number {
+  const v = (level ?? '').toUpperCase();
+  if (v === 'LOW') return 25;
+  if (v === 'MEDIUM') return 55;
+  if (v === 'HIGH') return 80;
+  return 0;
+}
+
+/**
+ * Calls DataForSEO `keywords_data/google_ads/keywords_for_site/live` for a
+ * single competitor domain (or URL). Uses the project region for
+ * `location_code` and sorts by `search_volume` descending server-side.
+ *
+ * @see https://docs.dataforseo.com/v3/keywords_data-google_ads-keywords_for_site-live/
+ */
+export async function fetchGoogleAdsKeywordsForSite(
+  competitorTarget: string,
+  regionCode: string,
+  languageCode: string = 'en',
+  limit: number = 100
+): Promise<CompetitorKeywordsForSiteRow[]> {
+  const auth = getAuthHeader();
+  if (!auth) {
+    console.warn('[dataforseo] fetchGoogleAdsKeywordsForSite: credentials missing');
+    return [];
+  }
+
+  const target = extractDomainFromUrl(competitorTarget) || competitorTarget.trim().toLowerCase();
+  if (!target) return [];
+
+  const locationCode = getLocationCode(regionCode);
+  const trace: DataForSEOTraceEntry[] = [];
+
+  const body = [
+    {
+      target,
+      target_type: 'site' as const,
+      location_code: locationCode,
+      language_code: languageCode,
+      search_partners: true,
+      limit,
+      sort_by: 'search_volume',
+    },
+  ];
+
+  console.log(
+    `[dataforseo] keywords_for_site → target="${target}" location_code=${locationCode} language_code=${languageCode} limit=${limit}`
+  );
+
+  const parsed = (await dfsPost(
+    'keywords_data/google_ads/keywords_for_site/live',
+    body,
+    auth,
+    trace
+  )) as {
+    tasks?: Array<{
+      result?: DfsGoogleAdsKeywordForSiteItem[];
+    }>;
+  } | null;
+
+  const rawItems: DfsGoogleAdsKeywordForSiteItem[] = parsed?.tasks?.[0]?.result ?? [];
+  const baseUrl = `https://${target.replace(/^www\./, '')}`;
+
+  const keywords = rawItems
+    .slice(0, limit)
+    .map((it): CompetitorKeywordsForSiteRow | null => {
+      const keyword = (it.keyword ?? '').trim().toLowerCase();
+      if (!keyword) return null;
+
+      const volume = Number(it.search_volume ?? 0) || 0;
+      const rawCpc = it.cpc;
+      const cpc = rawCpc != null ? Number(rawCpc) || 0 : 0;
+      const idx = it.competition_index;
+      const kd =
+        typeof idx === 'number' && Number.isFinite(idx)
+          ? Math.max(0, Math.min(100, Math.round(idx)))
+          : competitionLevelToKdHint(it.competition ?? null);
+
+      return {
+        keyword,
+        volume,
+        kd,
+        cpc,
+        intent: '',
+        competitor_position: 0,
+        competitor_url: baseUrl,
+      };
+    })
+    .filter((x): x is CompetitorKeywordsForSiteRow => x !== null);
+
+  console.log(
+    `[dataforseo] keywords_for_site parsed → ${keywords.length} keywords for ${target}`,
+    keywords.slice(0, 10)
+  );
+
+  return keywords;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

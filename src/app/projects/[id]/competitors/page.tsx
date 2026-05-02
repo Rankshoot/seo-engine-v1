@@ -19,6 +19,7 @@ import type {
   KeywordGap,
 } from "@/lib/types";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
+import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
 
 function logoUrlCandidates(host: string): string[] {
   if (!host) return [];
@@ -35,10 +36,12 @@ function DomainLogo({ domain }: { domain: string }) {
   const [index, setIndex] = useState(0);
   const [failed, setFailed] = useState(false);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setIndex(0);
     setFailed(false);
   }, [host]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const letter = (domain || "?").charAt(0).toUpperCase();
 
@@ -114,6 +117,13 @@ export default function CompetitorsPage() {
   const [gapFilter, setGapFilter] = useState<"all" | GapType>("all");
   const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null);
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
+  const aiSuggestedGapKeywords = useAppSelector(state =>
+    selectAiSuggestedGapKeywords(state, projectId)
+  );
+  const aiGapKeywordSet = useMemo(
+    () => new Set(aiSuggestedGapKeywords.map(k => k.toLowerCase())),
+    [aiSuggestedGapKeywords]
+  );
 
   const { data: state, isLoading: loading } = useQuery<BenchmarkState>({
     queryKey: COMPETITORS_KEY,
@@ -259,7 +269,7 @@ export default function CompetitorsPage() {
           </div>
           <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No benchmark yet</h3>
           <p className="mb-8 text-[16px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            We'll pull the real SERP competitors for your niche, scrape their best pages via Jina, extract the
+            We&apos;ll pull the real SERP competitors for your niche, scrape their best pages via Jina, extract the
             keywords they rank for, and score every opportunity with DataForSEO volumes.
           </p>
           <button
@@ -297,6 +307,7 @@ export default function CompetitorsPage() {
               averages={averages}
               generatingKeyword={generatingKeyword}
               onGenerateBlog={handleGenerateBlog}
+              aiGapKeywordSet={aiGapKeywordSet}
             />
           )}
 
@@ -316,6 +327,7 @@ export default function CompetitorsPage() {
               onFilterChange={setGapFilter}
               generatingKeyword={generatingKeyword}
               onGenerateBlog={handleGenerateBlog}
+              aiGapKeywordSet={aiGapKeywordSet}
             />
           )}
         </>
@@ -417,11 +429,13 @@ function OpportunityDashboard({
   averages,
   generatingKeyword,
   onGenerateBlog,
+  aiGapKeywordSet,
 }: {
   topOpportunities: KeywordGap[];
   averages?: BenchmarkState["averages"];
   generatingKeyword: string | null;
   onGenerateBlog: (keyword: string) => void;
+  aiGapKeywordSet: Set<string>;
 }) {
   return (
     <div className="space-y-6">
@@ -463,7 +477,14 @@ function OpportunityDashboard({
                 {topOpportunities.map(g => (
                   <tr key={g.id} className="transition-colors hover:bg-surface-hover">
                     <td className="px-4 py-3 max-w-[280px]">
-                      <p className="text-[14px] font-medium text-text-primary truncate">{g.keyword}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
+                        {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
+                          <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+                            AI pick
+                          </span>
+                        ) : null}
+                      </div>
                       {g.reasoning ? (
                         <p className="mt-1 text-[11px] text-text-tertiary truncate" title={g.reasoning}>
                           {g.reasoning}
@@ -667,6 +688,7 @@ function KeywordGapTable({
   onFilterChange,
   generatingKeyword,
   onGenerateBlog,
+  aiGapKeywordSet,
 }: {
   gaps: KeywordGap[];
   counts: Record<"all" | GapType, number>;
@@ -674,6 +696,7 @@ function KeywordGapTable({
   onFilterChange: (f: "all" | GapType) => void;
   generatingKeyword: string | null;
   onGenerateBlog: (keyword: string) => void;
+  aiGapKeywordSet: Set<string>;
 }) {
   const filters: Array<{ id: "all" | GapType; label: string }> = [
     { id: "all", label: "All" },
@@ -721,7 +744,14 @@ function KeywordGapTable({
                 {gaps.map(g => (
                   <tr key={g.id} className="transition-colors hover:bg-surface-hover">
                     <td className="px-4 py-3 max-w-[280px]">
-                      <p className="text-[14px] font-medium text-text-primary truncate">{g.keyword}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
+                        {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
+                          <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+                            AI pick
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-block rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${GAP_STYLES[g.gap_type]}`}>

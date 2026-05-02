@@ -52,3 +52,19 @@ export function selectBriefCache(state: RootState, projectId: string) {
 export function selectCalendarScheduledKeywords(state: RootState, projectId: string) {
   return state.keywordWorkspace.projects[projectId]?.calendarScheduledKeywords ?? {};
 }
+
+export function selectAiSuggestedKeywordIds(state: RootState, projectId: string) {
+  return state.keywordWorkspace.projects[projectId]?.aiAssistant?.suggestedKeywordIds ?? [];
+}
+
+export function selectAiSuggestedGapKeywords(state: RootState, projectId: string) {
+  return state.keywordWorkspace.projects[projectId]?.aiAssistant?.suggestedGapKeywords ?? [];
+}
+
+export function selectAiLowCompetitionKeywordIds(state: RootState, projectId: string) {
+  return state.keywordWorkspace.projects[projectId]?.aiAssistant?.lowCompetitionKeywordIds ?? [];
+}
+
+export function selectAiLongTailKeywordIds(state: RootState, projectId: string) {
+  return state.keywordWorkspace.projects[projectId]?.aiAssistant?.longTailKeywordIds ?? [];
+}

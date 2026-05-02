@@ -7,7 +7,12 @@ export type CalendarScheduledKeyword = {
   status: string;
 };
 
-export type KeywordFilterTab = "all" | KeywordStatus;
+export type KeywordFilterTab =
+  | "all"
+  | "ai"
+  | "low_competition"
+  | "long_tail"
+  | KeywordStatus;
 export type KeywordTableSortColumn =
   | "keyword"
   | "volume"
@@ -76,6 +81,15 @@ type ProjectKeywordWorkspace = {
    * Key: keyword ID, Value: { date, status }
    */
   calendarScheduledKeywords: Record<string, CalendarScheduledKeyword>;
+  aiAssistant: {
+    suggestedKeywordIds: string[];
+    suggestedGapKeywords: string[];
+    lowCompetitionKeywordIds: string[];
+    longTailKeywordIds: string[];
+    selectedKeywordIds: string[];
+    lastAction: string | null;
+    preferredFilter: "all" | "low_competition" | "long_tail" | "ai";
+  };
 };
 
 export type KeywordWorkspaceState = {
@@ -100,9 +114,27 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
     keywordsCache: null,
     briefCache: null,
     calendarScheduledKeywords: {},
+    aiAssistant: {
+      suggestedKeywordIds: [],
+      suggestedGapKeywords: [],
+      lowCompetitionKeywordIds: [],
+      longTailKeywordIds: [],
+      selectedKeywordIds: [],
+      lastAction: null,
+      preferredFilter: "all",
+    },
   };
   // Backfill for existing persisted state that predates this field
   state.projects[projectId].calendarScheduledKeywords ??= {};
+  state.projects[projectId].aiAssistant ??= {
+    suggestedKeywordIds: [],
+    suggestedGapKeywords: [],
+    lowCompetitionKeywordIds: [],
+    longTailKeywordIds: [],
+    selectedKeywordIds: [],
+    lastAction: null,
+    preferredFilter: "all",
+  };
   return state.projects[projectId];
 }
 
@@ -339,6 +371,44 @@ export const keywordWorkspaceSlice = createSlice({
         };
       }
     },
+
+    aiAssistantMemoryUpdated(
+      state,
+      action: PayloadAction<{
+        projectId: string;
+        suggestedKeywordIds?: string[];
+        suggestedGapKeywords?: string[];
+        lowCompetitionKeywordIds?: string[];
+        longTailKeywordIds?: string[];
+        selectedKeywordIds?: string[];
+        lastAction?: string | null;
+        preferredFilter?: "all" | "low_competition" | "long_tail" | "ai";
+      }>
+    ) {
+      const project = ensureProject(state, action.payload.projectId);
+      const current = project.aiAssistant;
+      if (action.payload.suggestedKeywordIds) {
+        current.suggestedKeywordIds = action.payload.suggestedKeywordIds;
+      }
+      if (action.payload.suggestedGapKeywords) {
+        current.suggestedGapKeywords = action.payload.suggestedGapKeywords;
+      }
+      if (action.payload.lowCompetitionKeywordIds) {
+        current.lowCompetitionKeywordIds = action.payload.lowCompetitionKeywordIds;
+      }
+      if (action.payload.longTailKeywordIds) {
+        current.longTailKeywordIds = action.payload.longTailKeywordIds;
+      }
+      if (action.payload.selectedKeywordIds) {
+        current.selectedKeywordIds = action.payload.selectedKeywordIds;
+      }
+      if (action.payload.lastAction !== undefined) {
+        current.lastAction = action.payload.lastAction;
+      }
+      if (action.payload.preferredFilter) {
+        current.preferredFilter = action.payload.preferredFilter;
+      }
+    },
   },
 });
 
@@ -358,6 +428,7 @@ export const {
   clearBriefCache,
   calendarKeywordScheduled,
   calendarEntriesHydrated,
+  aiAssistantMemoryUpdated,
 } = keywordWorkspaceSlice.actions;
 
 export { defaultPrefs };

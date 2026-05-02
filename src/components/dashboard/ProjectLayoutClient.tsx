@@ -3,6 +3,7 @@
 import { useState } from "react";
 import ProjectSidebar from "./ProjectSidebar";
 import { Project } from "@/lib/types";
+import { ContextualAIChatbot } from "@/features/ai-assistant/components/ContextualAIChatbot";
 
 export default function ProjectLayoutClient({
   project,
@@ -32,6 +33,7 @@ export default function ProjectLayoutClient({
         }`}
       >
         {children}
+        <ContextualAIChatbot project={project} />
       </main>
     </div>
   );

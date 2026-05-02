@@ -13,6 +13,9 @@ import {
   selectKeywordStatuses,
   selectKeywordsCache,
   selectBriefCache,
+  selectAiSuggestedKeywordIds,
+  selectAiLowCompetitionKeywordIds,
+  selectAiLongTailKeywordIds,
 } from "@/lib/redux/hooks";
 import {
   bulkKeywordStatusChanged,
@@ -69,7 +72,7 @@ const KD_COLOR = (kd: number) =>
 const KD_LABEL = (kd: number) =>
   kd === 0 ? "—" : kd < 30 ? "Easy" : kd < 60 ? "Medium" : "Hard";
 
-type FilterTab = "all" | KeywordStatus;
+type FilterTab = "all" | "ai" | "low_competition" | "long_tail" | KeywordStatus;
 
 type TableSortColumn =
   | "keyword"
@@ -120,6 +123,11 @@ export default function KeywordsPage() {
   const dispatch = useAppDispatch();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
+  const aiSuggestedKeywordIds = useAppSelector(state => selectAiSuggestedKeywordIds(state, projectId));
+  const aiLowCompetitionKeywordIds = useAppSelector(state =>
+    selectAiLowCompetitionKeywordIds(state, projectId)
+  );
+  const aiLongTailKeywordIds = useAppSelector(state => selectAiLongTailKeywordIds(state, projectId));
 
   // Redux caches are backed by localStorage, which isn't available during SSR.
   // We read them here but only apply them as React Query initialData AFTER the
@@ -157,6 +165,13 @@ export default function KeywordsPage() {
 
   const [refreshingBrief, setRefreshingBrief] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
+  const aiSuggestedIds = useMemo(() => new Set(aiSuggestedKeywordIds), [aiSuggestedKeywordIds]);
+  const aiLowCompetitionIds = useMemo(
+    () => new Set(aiLowCompetitionKeywordIds),
+    [aiLowCompetitionKeywordIds]
+  );
+  const aiLongTailIds = useMemo(() => new Set(aiLongTailKeywordIds), [aiLongTailKeywordIds]);
+
 
   const [loadingMore, setLoadingMore] = useState(false);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
@@ -475,10 +490,13 @@ export default function KeywordsPage() {
   const filtered = useMemo(() => {
     const list = keywords.filter(k => {
       if (filter === "all") return true;
+      if (filter === "ai") return aiSuggestedIds.has(k.id);
+      if (filter === "low_competition") return aiLowCompetitionIds.has(k.id);
+      if (filter === "long_tail") return aiLongTailIds.has(k.id);
       return k.status === filter;
     });
     return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir)).slice(0, 100);
-  }, [keywords, filter, tableSort]);
+  }, [keywords, filter, tableSort, aiSuggestedIds, aiLowCompetitionIds, aiLongTailIds]);
 
   const toggleSortColumn = (column: TableSortColumn) =>
     dispatch(
@@ -499,7 +517,8 @@ export default function KeywordsPage() {
   const toggleRowSelected = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -572,6 +591,9 @@ export default function KeywordsPage() {
 
   const counts = {
     all: keywords.length,
+    ai: aiSuggestedIds.size,
+    low_competition: aiLowCompetitionIds.size,
+    long_tail: aiLongTailIds.size,
     pending: keywords.filter(k => k.status === "pending").length,
     approved: keywords.filter(k => k.status === "approved").length,
     rejected: keywords.filter(k => k.status === "rejected").length,
@@ -590,6 +612,9 @@ export default function KeywordsPage() {
 
   const FILTER_TABS: { tab: FilterTab; label: string }[] = [
     { tab: "all", label: "All" },
+    { tab: "ai", label: "AI Picks" },
+    { tab: "low_competition", label: "Low Comp" },
+    { tab: "long_tail", label: "Long-tail" },
     { tab: "pending", label: "Pending" },
     { tab: "approved", label: "Approved" },
     { tab: "rejected", label: "Rejected" },
@@ -722,7 +747,7 @@ export default function KeywordsPage() {
                 </p>
               ) : (
                 <p className="text-[13px] text-text-tertiary">
-                  No brief yet — we'll auto-build one on your first Discover click.
+                  No brief yet — we&apos;ll auto-build one on your first Discover click.
                 </p>
               )}
               {brief?.summary ? (
@@ -1045,7 +1070,9 @@ export default function KeywordsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle/60">
-                    {filtered.map(kw => (
+                    {filtered.map(kw => {
+                      const isAiPick = aiSuggestedIds.has(kw.id);
+                      return (
                       <tr
                         key={kw.id}
                         onClick={e => {
@@ -1063,7 +1090,9 @@ export default function KeywordsPage() {
                         }}
                         className={`group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
                           kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
-                        } ${selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""} ${
+                        } ${isAiPick ? "bg-[#8b5cf6]/[0.07] ring-1 ring-inset ring-[#8b5cf6]/20" : ""} ${
+                          selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
+                        } ${
                           massSelectMode && !bulkApproving ? "cursor-pointer" : ""
                         } ${!massSelectMode && !busyRowId ? "cursor-pointer" : ""}`}
                       >
@@ -1088,7 +1117,14 @@ export default function KeywordsPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3 align-middle max-w-[260px]">
-                          <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                            {isAiPick ? (
+                              <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+                                AI pick
+                              </span>
+                            ) : null}
+                          </div>
                           {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
                           (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
                             <p
@@ -1225,7 +1261,8 @@ export default function KeywordsPage() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1317,7 +1354,7 @@ export default function KeywordsPage() {
       {toast ? (
         <div
           role="status"
-          className="fixed bottom-8 right-6 z-90 max-w-sm rounded-[12px] border border-brand-action/30 bg-surface-elevated px-4 py-3 text-[14px] text-text-primary shadow-lg ring-1 ring-brand-action/20 transition-opacity duration-150"
+          className="fixed bottom-24 right-6 z-80 max-w-sm rounded-[12px] border border-brand-action/30 bg-surface-elevated px-4 py-3 text-[14px] text-text-primary shadow-lg ring-1 ring-brand-action/20 transition-opacity duration-150"
         >
           {toast}
         </div>

@@ -26,17 +26,12 @@ import { getKeywords } from "@/app/actions/keyword-actions";
 import type { CalendarEntry } from "@/lib/types";
 import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
+import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 
 type CalendarResponse = Awaited<ReturnType<typeof getCalendarEntries>>;
 type KeywordsResponse = Awaited<ReturnType<typeof getKeywords>>;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function getTomorrowISO(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().split("T")[0];
-}
 
 function fmtDate(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-US", {
@@ -79,90 +74,23 @@ function sourceInfo(
  * Maps a raw calendar_entries.status value to a display label + colour.
  * Uses the exact DB status names so the UI stays in sync with the backend.
  */
-const STATUS_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
-  scheduled:  { label: "Scheduled",    color: "text-text-tertiary",  dot: "bg-border-strong" },
-  generating: { label: "Generating…",  color: "text-[#f59e0b]",      dot: "bg-[#f59e0b] animate-pulse" },
-  generated:  { label: "Generated",    color: "text-[#10b981]",      dot: "bg-[#10b981]" },
-  downloaded: { label: "Downloaded",   color: "text-brand-action",   dot: "bg-brand-action" },
+const STATUS_CONFIG: Record<string, { label: string | null; color: string; dot: string }> = {
+  scheduled:  { label: null,            color: "",                        dot: ""                          },
+  generating: { label: "Generating…",  color: "text-[#f59e0b]",          dot: "bg-[#f59e0b] animate-pulse" },
+  generated:  { label: "Generated",    color: "text-[#10b981]",          dot: "bg-[#10b981]"               },
+  downloaded: { label: "Generated",    color: "text-[#10b981]",          dot: "bg-[#10b981]"               },
+  approved:   { label: "Approved",     color: "text-brand-action",       dot: "bg-brand-action"            },
+  published:  { label: "Published",    color: "text-[#10b981]",          dot: "bg-[#10b981]"               },
 };
 
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.scheduled;
+  if (!cfg.label) return null;
   return (
     <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${cfg.color}`}>
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cfg.dot}`} />
       {cfg.label}
     </span>
-  );
-}
-
-// ── DatePickerPopover ─────────────────────────────────────────────────────────
-
-function DatePickerPopover({
-  currentDate,
-  onConfirm,
-  onCancel,
-  saving,
-}: {
-  currentDate?: string | null;
-  onConfirm: (date: string) => void;
-  onCancel: () => void;
-  saving: boolean;
-}) {
-  const minDate = getTomorrowISO();
-  const [date, setDate] = useState(
-    currentDate && currentDate >= minDate ? currentDate : minDate
-  );
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        onCancel();
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onCancel]);
-
-  return (
-    <div
-      ref={ref}
-      className="absolute right-0 top-full z-50 mt-1.5 w-56 rounded-[14px] border border-border-strong bg-surface-elevated shadow-xl p-3.5 flex flex-col gap-3"
-    >
-      <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
-        {currentDate ? "Change date" : "Pick a date"}
-      </p>
-      <input
-        type="date"
-        min={minDate}
-        value={date}
-        onChange={(e) => setDate(e.target.value)}
-        className="w-full rounded-[8px] border border-border-subtle bg-surface-secondary px-3 py-2 text-[13px] text-text-primary outline-none focus:border-brand-action transition-colors"
-      />
-      <div className="flex gap-2">
-        <button
-          disabled={saving || !date || date < minDate}
-          onClick={() => onConfirm(date)}
-          className="flex-1 h-8 rounded-[8px] bg-brand-primary text-brand-on-primary text-[12px] font-semibold disabled:opacity-50 transition-opacity hover:opacity-90"
-        >
-          {saving ? (
-            <span className="flex items-center justify-center gap-1.5">
-              <span className="w-3 h-3 border-2 border-brand-on-primary/30 border-t-brand-on-primary rounded-full animate-spin" />
-              Saving…
-            </span>
-          ) : (
-            "Schedule"
-          )}
-        </button>
-        <button
-          onClick={onCancel}
-          className="h-8 px-3 rounded-[8px] border border-border-subtle text-[12px] text-text-tertiary hover:text-text-primary transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -267,6 +195,12 @@ export default function CalendarPage() {
         (!e.keyword_id || !approvedIds.has(e.keyword_id))
     );
   }, [entries, approvedKeywords]);
+
+  // Pre-built Set of all already-scheduled dates for the calendar picker
+  const scheduledDatesSet = useMemo(
+    () => new Set(entries.map((e) => e.scheduled_date)),
+    [entries]
+  );
 
   // ── Redux sync ────────────────────────────────────────────────────────────
 
@@ -468,7 +402,9 @@ export default function CalendarPage() {
                     // — so the optimistic Redux update is reflected immediately.
                     const isLocked =
                       effectiveStatus === "generated" ||
-                      effectiveStatus === "downloaded";
+                      effectiveStatus === "downloaded" ||
+                      effectiveStatus === "approved"  ||
+                      effectiveStatus === "published";
                     const isGenerating = effectiveStatus === "generating";
                     const isScheduledOnly = !!effectiveDate && !isLocked && !isGenerating;
 
@@ -504,108 +440,71 @@ export default function CalendarPage() {
                           <KdCell kd={kw.kd} />
                         </td>
 
-                        {/* status — shows scheduled date + DB status badge */}
+                        {/* status — blog status label only (Generated / Approved / Published) */}
                         <td className="px-4 py-3.5 align-middle">
-                          {effectiveDate ? (
-                            <div className="flex flex-col gap-1">
-                              <span className="text-[12px] font-medium text-text-primary tabular-nums">
-                                {fmtDate(effectiveDate)}
-                              </span>
-                              <StatusBadge status={effectiveStatus!} />
-                            </div>
+                          {effectiveStatus && STATUS_CONFIG[effectiveStatus]?.label ? (
+                            <StatusBadge status={effectiveStatus} />
                           ) : (
                             <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
 
-                        {/* action — derived entirely from effectiveStatus */}
+                        {/* schedule — date + hover-reveal pencil, plus View Blog / Pick date */}
                         <td className="px-4 py-3.5 align-middle text-right pr-5">
-                          <div className="relative inline-block">
-                            {isLocked ? (
-                              /* generated / downloaded — link to blog if entry available */
-                              entry ? (
-                                <Link
-                                  href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                                  className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-[#10b981]/10 border border-[#10b981]/20 text-[11px] font-semibold text-[#10b981] hover:bg-[#10b981]/20 transition-colors"
-                                >
-                                  View Blog
-                                </Link>
-                              ) : (
-                                /* optimistic lock — entry.id not yet available */
-                                <span className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-[#10b981]/10 border border-[#10b981]/20 text-[11px] font-semibold text-[#10b981]">
-                                  Blog Ready
+                          {effectiveDate ? (
+                            <div className="flex flex-col items-end gap-1.5">
+                              {/* Date row + pencil */}
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[12px] font-medium text-text-primary tabular-nums">
+                                  {fmtDate(effectiveDate)}
                                 </span>
-                              )
-                            ) : isGenerating ? (
-                              /* generating — no action available */
-                              <span className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-[#f59e0b]/20 text-[11px] font-semibold text-[#f59e0b]/70 select-none">
-                                <span className="w-2 h-2 rounded-full bg-[#f59e0b] animate-pulse" />
-                                Generating…
-                              </span>
-                            ) : isScheduledOnly ? (
-                              /* scheduled, no blog yet — allow date change */
-                              <>
-                                <button
-                                  type="button"
-                                  disabled={savingDate}
-                                  onClick={() =>
-                                    setPickingDateFor(isPickingThis ? null : kw.id)
-                                  }
-                                  className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border text-[11px] font-semibold transition-colors ${
-                                    isPickingThis
-                                      ? "border-brand-action/40 bg-brand-action/10 text-brand-action"
-                                      : "border-border-subtle bg-surface-elevated text-text-secondary hover:border-[#f59e0b]/40 hover:text-[#f59e0b] hover:bg-[#f59e0b]/5"
-                                  }`}
-                                >
-                                  <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                                  </svg>
-                                  {isPickingThis ? "Cancel" : "Change date"}
-                                </button>
-                                {isPickingThis && (
-                                  <DatePickerPopover
-                                    currentDate={entry?.scheduled_date ?? effectiveDate}
-                                    onConfirm={(d) => handleScheduleKeyword(kw.id, d)}
-                                    onCancel={() => setPickingDateFor(null)}
-                                    saving={savingDate}
-                                  />
+                                {!isGenerating && (
+                                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <CalendarDatePicker
+                                      open={isPickingThis}
+                                      onOpenChange={(o) => setPickingDateFor(o ? kw.id : null)}
+                                      currentDate={entry?.scheduled_date ?? effectiveDate}
+                                      onConfirm={(d) => handleScheduleKeyword(kw.id, d)}
+                                      saving={savingDate}
+                                      scheduledDates={scheduledDatesSet}
+                                      iconOnly
+                                    />
+                                  </div>
                                 )}
-                              </>
-                            ) : (
-                              /* not yet scheduled — pick a date */
-                              <>
-                                <button
-                                  type="button"
-                                  disabled={savingDate}
-                                  onClick={() =>
-                                    setPickingDateFor(isPickingThis ? null : kw.id)
-                                  }
-                                  className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border text-[11px] font-semibold transition-colors ${
-                                    isPickingThis
-                                      ? "border-brand-action/40 bg-brand-action/10 text-brand-action"
-                                      : "border-border-subtle bg-surface-elevated text-text-secondary hover:border-brand-action/40 hover:text-brand-action hover:bg-brand-action/5"
-                                  }`}
-                                >
-                                  <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                                    <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
-                                    <line x1="16" x2="16" y1="2" y2="6" />
-                                    <line x1="8" x2="8" y1="2" y2="6" />
-                                    <line x1="3" x2="21" y1="10" y2="10" />
-                                    <line x1="12" x2="12" y1="15" y2="18" />
-                                    <line x1="10.5" x2="13.5" y1="16.5" y2="16.5" />
-                                  </svg>
-                                  {isPickingThis ? "Cancel" : "Pick date"}
-                                </button>
-                                {isPickingThis && (
-                                  <DatePickerPopover
-                                    onConfirm={(d) => handleScheduleKeyword(kw.id, d)}
-                                    onCancel={() => setPickingDateFor(null)}
-                                    saving={savingDate}
-                                  />
-                                )}
-                              </>
-                            )}
-                          </div>
+                              </div>
+                              {/* View Blog link if blog exists */}
+                              {isLocked && (
+                                entry ? (
+                                  <Link
+                                    href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+                                    className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-[#10b981]/10 border border-[#10b981]/20 text-[11px] font-semibold text-[#10b981] hover:bg-[#10b981]/20 transition-colors"
+                                  >
+                                    View Blog
+                                  </Link>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-[#10b981]/10 border border-[#10b981]/20 text-[11px] font-semibold text-[#10b981]">
+                                    Blog Ready
+                                  </span>
+                                )
+                              )}
+                              {isGenerating && (
+                                <span className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-[#f59e0b]/20 text-[11px] font-semibold text-[#f59e0b]/70 select-none">
+                                  <span className="w-2 h-2 rounded-full bg-[#f59e0b] animate-pulse" />
+                                  Generating…
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            /* not yet scheduled — pick a date */
+                            <CalendarDatePicker
+                              open={isPickingThis}
+                              onOpenChange={(o) => setPickingDateFor(o ? kw.id : null)}
+                              onConfirm={(d) => handleScheduleKeyword(kw.id, d)}
+                              saving={savingDate}
+                              scheduledDates={scheduledDatesSet}
+                              variant="pick"
+                            />
+                          )}
                         </td>
                       </tr>
                     );
@@ -618,7 +517,7 @@ export default function CalendarPage() {
                       | undefined;
                     const src = sourceInfo(kwData?.source_type, "Repair");
                     const isLocked =
-                      entry.status === "generated" || entry.status === "downloaded";
+                      entry.status === "generated" || entry.status === "downloaded" || entry.status === "approved" || entry.status === "published";
 
                     return (
                       <tr key={entry.id} className="hover:bg-surface-hover/50 transition-colors group">
@@ -715,7 +614,7 @@ export default function CalendarPage() {
                         entry.article_type
                       );
                       const isReady =
-                        entry.status === "generated" || entry.status === "downloaded";
+                        entry.status === "generated" || entry.status === "downloaded" || entry.status === "approved" || entry.status === "published";
                       return (
                         <tr key={entry.id} className="hover:bg-surface-hover/50 transition-colors">
                           <td className="px-5 py-3 align-middle">

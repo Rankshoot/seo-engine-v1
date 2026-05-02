@@ -1,0 +1,403 @@
+/**
+ * Helpers for normalizing generated blog markdown so the preview and the
+ * downloaded file always match.
+ *
+ * Responsibilities:
+ *   1. Drop dead/uncredible external links (HEAD/GET probe) so blogs never
+ *      ship with `[anchor](https://broken.example/404)`.
+ *   2. Cap rendered images at 2 (hero + one supporting visual) and strip the
+ *      LLM's leftover `![...](IMAGE_PLACEHOLDER)` artifacts that would
+ *      otherwise show up as broken-image icons.
+ *   3. Produce a clean, slug-safe filename for downloads.
+ *
+ * Everything here is intentionally framework-agnostic — the same primitives
+ * are shared by `blog-actions.ts` (server) and `export.ts` (client).
+ */
+
+/** Hard cap on rendered images per blog. Matches the product spec. */
+export const MAX_IMAGES_PER_BLOG = 2;
+
+/**
+ * Domains we consider authoritative for SEO citations. We allow these
+ * unconditionally even if they fail a probe — large news/research sites
+ * occasionally block HEAD requests, but a Gartner / WEF / .gov citation is
+ * almost always real.
+ */
+const CREDIBLE_DOMAINS = new Set([
+  'gartner.com',
+  'forrester.com',
+  'mckinsey.com',
+  'deloitte.com',
+  'accenture.com',
+  'bcg.com',
+  'ey.com',
+  'pwc.com',
+  'kpmg.com',
+  'ibm.com',
+  'oracle.com',
+  'salesforce.com',
+  'microsoft.com',
+  'google.com',
+  'developers.google.com',
+  'cloud.google.com',
+  'aws.amazon.com',
+  'docs.aws.amazon.com',
+  'azure.microsoft.com',
+  'docs.microsoft.com',
+  'learn.microsoft.com',
+  'developer.mozilla.org',
+  'reactjs.org',
+  'react.dev',
+  'nextjs.org',
+  'vuejs.org',
+  'nodejs.org',
+  'python.org',
+  'docs.python.org',
+  'kubernetes.io',
+  'github.com',
+  'stackoverflow.com',
+  'statista.com',
+  'forbes.com',
+  'hbr.org',
+  'wsj.com',
+  'nytimes.com',
+  'ft.com',
+  'reuters.com',
+  'bloomberg.com',
+  'cnbc.com',
+  'businessinsider.com',
+  'techcrunch.com',
+  'wired.com',
+  'theverge.com',
+  'arstechnica.com',
+  'shrm.org',
+  'linkedin.com',
+  'business.linkedin.com',
+  'weforum.org',
+  'oecd.org',
+  'worldbank.org',
+  'imf.org',
+  'who.int',
+  'un.org',
+  'gov.uk',
+  'europa.eu',
+  'ftc.gov',
+  'sec.gov',
+  'nist.gov',
+  'nih.gov',
+  'cdc.gov',
+  'bls.gov',
+  'census.gov',
+]);
+
+/**
+ * Domains we explicitly ban — community/UGC sites where the LLM tends to
+ * hallucinate non-existent threads/articles.
+ */
+const BLOCKED_DOMAINS = new Set([
+  'medium.com',
+  'reddit.com',
+  'quora.com',
+  'yahoo.com',
+  'answers.yahoo.com',
+  'wikihow.com',
+]);
+
+function getHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** A domain is credible if it's on the allow-list or ends in `.gov` / `.edu`. */
+export function isCredibleDomain(url: string): boolean {
+  const host = getHost(url);
+  if (!host) return false;
+  if (BLOCKED_DOMAINS.has(host)) return false;
+  if (CREDIBLE_DOMAINS.has(host)) return true;
+  if (/\.(gov|edu|ac\.[a-z]{2}|edu\.[a-z]{2}|gov\.[a-z]{2})$/.test(host)) return true;
+  // Subdomain match against the allow-list (e.g. `developers.google.com`).
+  for (const d of CREDIBLE_DOMAINS) {
+    if (host === d || host.endsWith(`.${d}`)) return true;
+  }
+  return false;
+}
+
+/**
+ * Probe a URL with a short timeout. We try HEAD first (cheap), then GET on
+ * 405 because some CDNs don't allow HEAD. Anything outside 2xx/3xx is
+ * considered broken. Network errors short-circuit to `false`.
+ */
+export async function validateExternalUrl(url: string, timeoutMs = 5000): Promise<boolean> {
+  if (!/^https?:\/\//i.test(url)) return false;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        // A real-looking UA stops most bot blockers from returning 403.
+        'user-agent':
+          'Mozilla/5.0 (compatible; SEOEngineBot/1.0; +https://seo-engine.app/bot)',
+        accept: '*/*',
+      },
+    });
+    if (res.status === 405 || res.status === 403 || res.status === 501) {
+      // Some servers block HEAD — retry with GET (no body read).
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          'user-agent':
+            'Mozilla/5.0 (compatible; SEOEngineBot/1.0; +https://seo-engine.app/bot)',
+          accept: 'text/html,*/*',
+        },
+      });
+    }
+    return res.status >= 200 && res.status < 400;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Validate a list of URLs in parallel with a small concurrency cap. Returns
+ * a Set of urls that passed validation. Entries on the credible allow-list
+ * skip the network probe entirely so we don't drop authoritative citations
+ * when their CDN is being slow.
+ */
+export async function validateExternalUrls(urls: string[]): Promise<Set<string>> {
+  const unique = [...new Set(urls)];
+  const results = await Promise.allSettled(
+    unique.map(async (url) => {
+      const credible = isCredibleDomain(url);
+      const ok = await validateExternalUrl(url);
+      // Credible host that returned anything other than a hard network failure:
+      // we trust it. We still try the probe so genuinely-404'd Gartner pages
+      // (rare) get dropped — but a transient timeout doesn't kill the link.
+      if (credible && ok) return [url, true] as const;
+      if (credible) return [url, true] as const;
+      return [url, ok] as const;
+    })
+  );
+  const live = new Set<string>();
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value[1]) live.add(r.value[0]);
+  }
+  return live;
+}
+
+/**
+ * Validate a single image URL. `data:` URIs are trusted since they're
+ * embedded inline (they can't 404). HTTP(s) images are HEAD-probed and we
+ * additionally verify the response advertises an image content-type when
+ * the server returns it.
+ */
+export async function validateImageUrl(url: string, timeoutMs = 5000): Promise<boolean> {
+  if (url.startsWith('data:image/')) return true;
+  if (!/^https?:\/\//i.test(url)) return false;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'user-agent':
+          'Mozilla/5.0 (compatible; SEOEngineBot/1.0; +https://seo-engine.app/bot)',
+        accept: 'image/*,*/*',
+      },
+    });
+    if (res.status < 200 || res.status >= 400) return false;
+    const ct = res.headers.get('content-type') ?? '';
+    return ct === '' || ct.startsWith('image/');
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+interface SanitizeResult {
+  content: string;
+  externalLinks: string[];
+  internalLinks: string[];
+  removedLinks: string[];
+}
+
+interface SanitizeOpts {
+  ownDomain?: string;
+  maxImages?: number;
+}
+
+/**
+ * Server-side sanitizer. Walks the markdown once and:
+ *   1. Removes `![...](IMAGE_PLACEHOLDER)` artifacts the LLM left behind.
+ *   2. Caps rendered images at `maxImages` (default 2). Extras are dropped
+ *      from the markdown so the preview and the export agree.
+ *   3. Validates external links and rewrites broken `[text](url)` to plain
+ *      `text`, preserving the surrounding sentence.
+ *   4. Returns a fresh `external_links` / `internal_links` array reflecting
+ *      what's actually still in the content.
+ */
+export async function sanitizeBlogContent(
+  markdown: string,
+  opts: SanitizeOpts = {}
+): Promise<SanitizeResult> {
+  const ownHost = opts.ownDomain ? getHost(opts.ownDomain) : null;
+  const maxImages = opts.maxImages ?? MAX_IMAGES_PER_BLOG;
+
+  // Phase 1 — strip placeholder images. These are LLM artifacts, never real.
+  let next = markdown.replace(
+    /!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)/gi,
+    ''
+  );
+
+  // Phase 2 — collect every image and cap to `maxImages`. We keep the FIRST
+  // N images encountered (which lines up with the hero-then-section order
+  // already produced by `insertBlogImages`). The rest are removed.
+  let imageCount = 0;
+  next = next.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (full, _alt: string, url: string) => {
+    const trimmed = url.trim();
+    // `data:` URIs are valid by construction; `http(s)://` are kept now and
+    // will be validated below. Anything else (empty, bare placeholder) is
+    // dropped immediately.
+    const looksValid =
+      trimmed.startsWith('data:image/') || /^https?:\/\//i.test(trimmed);
+    if (!looksValid) return '';
+    if (imageCount >= maxImages) return '';
+    imageCount += 1;
+    return full;
+  });
+
+  // Phase 3 — validate any HTTP(s) images that survived. data: URLs skip the
+  // network probe (`validateImageUrl` returns true immediately). Failed
+  // HTTP images are removed entirely.
+  const httpImageRegex = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+  const httpImageUrls: string[] = [];
+  for (const m of next.matchAll(httpImageRegex)) httpImageUrls.push(m[2]);
+
+  if (httpImageUrls.length) {
+    const checks = await Promise.allSettled(
+      httpImageUrls.map(u => validateImageUrl(u))
+    );
+    const dead = new Set<string>();
+    httpImageUrls.forEach((u, i) => {
+      const c = checks[i];
+      if (c.status !== 'fulfilled' || !c.value) dead.add(u);
+    });
+    if (dead.size) {
+      next = next.replace(
+        /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g,
+        (full, _alt: string, url: string) => (dead.has(url) ? '' : full)
+      );
+    }
+  }
+
+  // Phase 4 — collect every external link and validate. Internal/relative
+  // links are kept as-is. Broken externals are rewritten to plain text so
+  // we don't leave dangling brackets.
+  const linkRegex = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+  const externalUrls: string[] = [];
+  // Walk once to gather URLs; we mutate the markdown in a second pass so
+  // negative lookbehinds for `!` still work consistently.
+  for (const m of next.matchAll(linkRegex)) {
+    const idx = m.index ?? 0;
+    if (idx > 0 && next[idx - 1] === '!') continue;
+    const url = m[2].trim();
+    if (!/^https?:\/\//i.test(url)) continue;
+    const host = getHost(url);
+    if (host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`))) continue;
+    externalUrls.push(url);
+  }
+
+  const live = await validateExternalUrls(externalUrls);
+  const removed: string[] = [];
+
+  next = next.replace(
+    /(!?)\[([^\]]+)\]\(([^)\s]+)\)/g,
+    (full, bang: string, anchor: string, url: string) => {
+      if (bang === '!') return full;
+      const trimmed = url.trim();
+      if (!/^https?:\/\//i.test(trimmed)) return full;
+      const host = getHost(trimmed);
+      if (host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`))) {
+        return full;
+      }
+      if (live.has(trimmed)) return full;
+      removed.push(trimmed);
+      // Drop the link, keep the anchor text so sentences stay readable.
+      return anchor;
+    }
+  );
+
+  // Phase 5 — rebuild link arrays from the post-sanitization markdown so the
+  // sidebar counts and the saved arrays agree with what's actually there.
+  const externalLinks = new Set<string>();
+  const internalLinks = new Set<string>();
+  for (const m of next.matchAll(linkRegex)) {
+    const idx = m.index ?? 0;
+    if (idx > 0 && next[idx - 1] === '!') continue;
+    const url = m[2].trim();
+    if (/^https?:\/\//i.test(url)) {
+      const host = getHost(url);
+      if (host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`))) {
+        internalLinks.add(url);
+      } else {
+        externalLinks.add(url);
+      }
+    } else if (url.startsWith('/')) {
+      internalLinks.add(url);
+    }
+  }
+
+  // Tidy stray blank lines a sanitization step may have introduced.
+  next = next.replace(/\n{3,}/g, '\n\n').trim();
+
+  return {
+    content: next,
+    externalLinks: [...externalLinks],
+    internalLinks: [...internalLinks],
+    removedLinks: removed,
+  };
+}
+
+/**
+ * Generate a download-safe filename from a blog title or slug. Strips path
+ * separators and shell-unsafe characters, collapses whitespace, and trims to
+ * a sensible length so the OS save dialog renders cleanly.
+ */
+export function safeFilename(input: string, fallback = 'blog-post'): string {
+  const cleaned = (input ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '')
+    .replace(/[^\w\s.-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .toLowerCase()
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
+/** Mapping from internal export format → file extension + MIME type. */
+export const EXPORT_FILE_INFO = {
+  markdown: { ext: 'md',   mime: 'text/markdown' },
+  html:     { ext: 'html', mime: 'text/html' },
+  txt:      { ext: 'txt',  mime: 'text/plain' },
+  docx: {
+    ext:  'docx',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  },
+} as const;

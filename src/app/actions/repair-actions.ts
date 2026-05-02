@@ -26,6 +26,7 @@ import { hybridReadUrl as jinaReadUrl } from '@/services/hybridScraper';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
 import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import type { Project } from '@/lib/types';
+import { sanitizeBlogContent } from '@/lib/blog-content';
 
 function titleNeedsRepair(analysis: BlogAuditAnalysis): boolean {
   return analysis.issues.some(i =>
@@ -188,11 +189,19 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
     // flagged title/H1/keyword-title problems.
     const preserveTitle = !titleNeedsRepair(analysis) && Boolean(auditRow.title);
     const finalTitle = preserveTitle ? auditRow.title : repaired.title;
-    const finalContent = preserveTitle ? replaceFirstH1(repaired.content, auditRow.title) : repaired.content;
+    const rawContent = preserveTitle ? replaceFirstH1(repaired.content, auditRow.title) : repaired.content;
     const finalMetaDescription = metaNeedsRepair(analysis)
       ? repaired.meta_description
       : (analysis.summary || repaired.meta_description);
     const repairNotes = normalizeRepairNotes(repaired.repair_notes, analysis);
+
+    // Same link validation + image cap we apply to fresh generations — a
+    // repaired blog should never ship with dead citations or stray
+    // IMAGE_PLACEHOLDER artifacts either.
+    const sanitized = await sanitizeBlogContent(rawContent, {
+      ownDomain: project.domain ?? '',
+    });
+    const finalContent = sanitized.content;
 
     // 7. Persist the blog.
     const { data: blogRow, error: blogErr } = await supabaseAdmin
@@ -209,8 +218,8 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
         slug: repaired.slug,
         status: 'generated',
         research_sources: repaired.research_sources,
-        external_links: repaired.external_links,
-        internal_links: repaired.internal_links,
+        external_links: sanitized.externalLinks.slice(0, 10),
+        internal_links: sanitized.internalLinks.slice(0, 12),
         source_url: auditUrl,
         repair_notes: repairNotes,
       })

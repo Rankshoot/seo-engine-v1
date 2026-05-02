@@ -41,7 +41,7 @@ export interface KeywordIntents {
   branded?: boolean;
   local?: boolean;
 }
-export type CalendarStatus = 'scheduled' | 'generating' | 'generated' | 'downloaded';
+export type CalendarStatus = 'scheduled' | 'generating' | 'generated' | 'downloaded' | 'published' | 'approved';
 export type BlogStatus = 'generated' | 'approved' | 'published';
 export type BlogSeoIssueKey =
   | 'title_keyword'

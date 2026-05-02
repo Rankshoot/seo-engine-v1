@@ -1,39 +1,28 @@
-import { Blog } from './types';
+import { Blog, ExportFormat } from './types';
+import { EXPORT_FILE_INFO, safeFilename } from './blog-content';
+
+// ─── Public API ────────────────────────────────────────────────────────────
 
 export function exportToMarkdown(blog: Blog): Blob {
   const frontmatter = `---
-title: "${blog.title}"
+title: "${escapeYaml(blog.title)}"
 slug: "${blog.slug}"
-target_keyword: "${blog.target_keyword}"
-meta_description: "${blog.meta_description}"
-article_type: "${blog.article_type}"
+target_keyword: "${escapeYaml(blog.target_keyword)}"
+meta_description: "${escapeYaml(blog.meta_description)}"
+article_type: "${escapeYaml(blog.article_type)}"
 word_count: ${blog.word_count}
 date: "${blog.created_at.split('T')[0]}"
----\n\n`;
+---
 
-  return new Blob([frontmatter + blog.content], { type: 'text/markdown' });
+`;
+
+  return new Blob([frontmatter + blog.content], {
+    type: EXPORT_FILE_INFO.markdown.mime,
+  });
 }
 
 export function exportToHTML(blog: Blog): Blob {
-  const md = blog.content;
-  const body = md
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
-    .replace(/\n\n/g, '\n')
-    .split('\n')
-    .map(line => {
-      if (/^<(h[1-6]|li|ul|ol)/.test(line)) return line;
-      if (line.trim() === '') return '';
-      return `<p>${line}</p>`;
-    })
-    .join('\n');
-
+  const body = renderMarkdownToHtml(blog.content);
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -48,9 +37,23 @@ export function exportToHTML(blog: Blog): Blob {
     h3{font-size:1.25em;margin-top:1.6em}
     h4{font-size:1.05em;margin-top:1.2em}
     p{margin:1em 0}
+    a{color:#1863dc;text-decoration:underline}
+    a:hover{color:#0c4eb4}
     ul,ol{margin:1em 0;padding-left:2em}
     li{margin:.5em 0}
     strong{font-weight:700}
+    em{font-style:italic}
+    img{max-width:100%;height:auto;display:block;margin:1.5em auto;border-radius:8px}
+    figure{margin:1.75em 0;text-align:center}
+    figcaption{font-size:.85em;color:#666;margin-top:.5em}
+    blockquote{border-left:3px solid #ccc;margin:1.5em 0;padding:.25em 1em;color:#555;font-style:italic}
+    code{background:#f3f3f3;padding:2px 6px;border-radius:4px;font-family:monospace;font-size:.92em}
+    pre{background:#f3f3f3;border-radius:6px;padding:1em;overflow:auto;font-family:monospace;font-size:.92em}
+    pre code{background:transparent;padding:0}
+    hr{border:none;border-top:1px solid #e0e0e0;margin:2.5em 0}
+    table{width:100%;border-collapse:collapse;margin:1.5em 0;font-size:.95em}
+    th,td{border:1px solid #e0e0e0;padding:.5em .75em;text-align:left;vertical-align:top}
+    th{background:#f8f8f8;font-weight:600}
     .meta-bar{background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;padding:12px 16px;margin-bottom:2em;font-size:.85em;color:#555;font-family:system-ui,sans-serif}
   </style>
 </head>
@@ -61,19 +64,27 @@ export function exportToHTML(blog: Blog): Blob {
     <strong>Words:</strong> ${blog.word_count} &nbsp;|&nbsp;
     <strong>Slug:</strong> /${escapeHTML(blog.slug)}
   </div>
-  ${body}
+${body}
 </body>
 </html>`;
 
-  return new Blob([html], { type: 'text/html' });
+  return new Blob([html], { type: EXPORT_FILE_INFO.html.mime });
 }
 
 export function exportToText(blog: Blog): Blob {
   const stripped = blog.content
+    // Drop image markdown — they make no sense in plain text.
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+    // Inline links → "text (url)" so the URL is still readable.
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '$1 ($2)')
+    // Internal/relative links → just the text.
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/\*(.+?)\*/g, '$1')
-    .replace(/^- /gm, '• ');
+    .replace(/^- /gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
   const header = [
     `TITLE: ${blog.title}`,
@@ -87,27 +98,74 @@ export function exportToText(blog: Blog): Blob {
     '',
   ].join('\n');
 
-  return new Blob([header + stripped], { type: 'text/plain' });
+  return new Blob([header + stripped], { type: EXPORT_FILE_INFO.txt.mime });
 }
 
 export async function exportToDocx(blog: Blog): Promise<Blob> {
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel } = await import('docx');
+  const {
+    Document, Packer, Paragraph, TextRun, ImageRun,
+    HeadingLevel, ExternalHyperlink, AlignmentType,
+  } = await import('docx');
 
-  const children: InstanceType<typeof Paragraph>[] = [];
+  type ParagraphInstance = InstanceType<typeof Paragraph>;
+  const children: ParagraphInstance[] = [];
 
-  // Meta header paragraph
   children.push(
     new Paragraph({
       children: [
-        new TextRun({ text: `Keyword: ${blog.target_keyword}  |  Type: ${blog.article_type}  |  Words: ${blog.word_count}`, color: '777777', size: 18 }),
+        new TextRun({
+          text: `Keyword: ${blog.target_keyword}  |  Type: ${blog.article_type}  |  Words: ${blog.word_count}`,
+          color: '777777',
+          size: 18,
+        }),
       ],
     }),
     new Paragraph({ text: '' })
   );
 
-  for (const line of blog.content.split('\n')) {
-    if (!line.trim()) {
+  // Cache image fetches so the same data: URL doesn't get decoded twice.
+  const imageCache = new Map<string, Uint8Array>();
+
+  for (const rawLine of blog.content.split('\n')) {
+    const line = rawLine.trim();
+
+    if (!line) {
       children.push(new Paragraph({ text: '' }));
+      continue;
+    }
+
+    // Image-only line — embed as a centered ImageRun if we can decode it.
+    const imageMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (imageMatch) {
+      const alt = imageMatch[1];
+      const url = imageMatch[2].trim();
+      const bytes = await loadImageBytes(url, imageCache);
+      if (bytes) {
+        children.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [
+              new ImageRun({
+                type: detectImageType(url),
+                data: bytes,
+                transformation: { width: 600, height: 338 },
+              }),
+            ],
+          })
+        );
+        if (alt) {
+          children.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new TextRun({ text: alt, italics: true, color: '777777', size: 18 }),
+              ],
+            })
+          );
+        }
+      }
+      // If we can't decode it (e.g. remote 404), skip silently — sanitization
+      // will normally have stripped these already.
       continue;
     }
 
@@ -118,49 +176,73 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
       '#### ': HeadingLevel.HEADING_4,
     };
 
-    let matched = false;
+    let matchedHeading = false;
     for (const [prefix, level] of Object.entries(headingMap)) {
       if (line.startsWith(prefix)) {
-        children.push(new Paragraph({ text: line.slice(prefix.length), heading: level }));
-        matched = true;
+        children.push(
+          new Paragraph({
+            heading: level,
+            children: buildInlineRuns(line.slice(prefix.length), TextRun, ExternalHyperlink),
+          })
+        );
+        matchedHeading = true;
         break;
       }
     }
-    if (matched) continue;
+    if (matchedHeading) continue;
 
-    if (line.startsWith('- ') || line.startsWith('• ')) {
-      const text = line.replace(/^[-•] /, '').replace(/\*\*(.+?)\*\*/g, '$1');
-      children.push(new Paragraph({ text, bullet: { level: 0 } }));
+    if (line.startsWith('- ') || line.startsWith('• ') || /^\d+\.\s/.test(line)) {
+      const stripped = line.replace(/^(?:[-•]\s|\d+\.\s)/, '');
+      children.push(
+        new Paragraph({
+          bullet: { level: 0 },
+          children: buildInlineRuns(stripped, TextRun, ExternalHyperlink),
+        })
+      );
       continue;
     }
 
-    // Handle inline bold
-    const parts = line.split(/(\*\*[^*]+\*\*)/g);
-    if (parts.length > 1) {
+    if (line.startsWith('> ')) {
       children.push(
         new Paragraph({
-          children: parts.map(p =>
-            p.startsWith('**') && p.endsWith('**')
-              ? new TextRun({ text: p.slice(2, -2), bold: true })
-              : new TextRun({ text: p })
-          ),
+          children: [new TextRun({ text: line.slice(2), italics: true, color: '555555' })],
         })
       );
-    } else {
-      children.push(new Paragraph({ text: line }));
+      continue;
     }
+
+    children.push(
+      new Paragraph({
+        children: buildInlineRuns(line, TextRun, ExternalHyperlink),
+      })
+    );
   }
 
-  // Meta description footer
   children.push(
     new Paragraph({ text: '' }),
     new Paragraph({
-      children: [new TextRun({ text: `Meta: ${blog.meta_description}`, italics: true, color: '777777', size: 18 })],
+      children: [
+        new TextRun({ text: `Meta: ${blog.meta_description}`, italics: true, color: '777777', size: 18 }),
+      ],
     })
   );
 
   const doc = new Document({ sections: [{ properties: {}, children }] });
   return Packer.toBlob(doc);
+}
+
+/**
+ * Trigger a browser download for a blob. The filename is sanitized through
+ * `safeFilename` so a Title with slashes/colons can't break the OS save
+ * dialog. The extension is forced to match the format. Returns the final
+ * filename for diagnostic logging.
+ */
+export function triggerBlogDownload(blob: Blob, blog: Blog, format: ExportFormat): string {
+  const info = EXPORT_FILE_INFO[format];
+  const base = safeFilename(blog.slug || blog.title || blog.target_keyword);
+  const filename = `${base}.${info.ext}`;
+  triggerDownload(blob, filename);
+  return filename;
 }
 
 export function triggerDownload(blob: Blob, filename: string) {
@@ -174,6 +256,349 @@ export function triggerDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+// ─── Markdown → HTML ───────────────────────────────────────────────────────
+
+/**
+ * Conservative block-level Markdown → HTML converter. We don't pull in a
+ * full markdown library because the generator already produces clean,
+ * predictable subsets — we just need headings, paragraphs, lists, links,
+ * images, blockquotes, code, hr, and tables to render properly in the
+ * downloaded `.html` file.
+ */
+function renderMarkdownToHtml(markdown: string): string {
+  const lines = markdown.split('\n');
+  const out: string[] = [];
+
+  let i = 0;
+  let inUl = false;
+  let inOl = false;
+
+  const closeLists = () => {
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (inOl) { out.push('</ol>'); inOl = false; }
+  };
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    const line = raw.trim();
+
+    // Blank line → flush lists.
+    if (!line) {
+      closeLists();
+      i++;
+      continue;
+    }
+
+    // Horizontal rule.
+    if (/^(---|\*\*\*|___)$/.test(line)) {
+      closeLists();
+      out.push('<hr>');
+      i++;
+      continue;
+    }
+
+    // Heading.
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      closeLists();
+      const level = heading[1].length;
+      out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    // Standalone image — render as a <figure> so the alt text becomes a
+    // caption in the downloaded HTML.
+    const standaloneImage = line.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+    if (standaloneImage) {
+      closeLists();
+      const alt = escapeHTML(standaloneImage[1]);
+      const src = escapeAttr(standaloneImage[2]);
+      out.push(
+        `<figure><img src="${src}" alt="${alt}" loading="lazy">${alt ? `<figcaption>${alt}</figcaption>` : ''}</figure>`
+      );
+      i++;
+      continue;
+    }
+
+    // Blockquote.
+    if (line.startsWith('> ')) {
+      closeLists();
+      const buf: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith('> ')) {
+        buf.push(lines[i].trim().slice(2));
+        i++;
+      }
+      out.push(`<blockquote>${renderInline(buf.join(' '))}</blockquote>`);
+      continue;
+    }
+
+    // Fenced code block.
+    if (line.startsWith('```')) {
+      closeLists();
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++;
+      out.push(`<pre><code>${escapeHTML(buf.join('\n'))}</code></pre>`);
+      continue;
+    }
+
+    // Unordered list item.
+    const ulItem = line.match(/^[-*+]\s+(.+)$/);
+    if (ulItem) {
+      if (!inUl) { closeLists(); out.push('<ul>'); inUl = true; }
+      out.push(`<li>${renderInline(ulItem[1])}</li>`);
+      i++;
+      continue;
+    }
+
+    // Ordered list item.
+    const olItem = line.match(/^\d+\.\s+(.+)$/);
+    if (olItem) {
+      if (!inOl) { closeLists(); out.push('<ol>'); inOl = true; }
+      out.push(`<li>${renderInline(olItem[1])}</li>`);
+      i++;
+      continue;
+    }
+
+    // Pipe table — at least 2 lines (header + separator).
+    if (
+      line.startsWith('|') &&
+      i + 1 < lines.length &&
+      /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1].trim())
+    ) {
+      closeLists();
+      const headerCells = splitPipes(line);
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        rows.push(splitPipes(lines[i].trim()));
+        i++;
+      }
+      out.push('<table><thead><tr>');
+      for (const cell of headerCells) out.push(`<th>${renderInline(cell)}</th>`);
+      out.push('</tr></thead><tbody>');
+      for (const row of rows) {
+        out.push('<tr>');
+        for (const cell of row) out.push(`<td>${renderInline(cell)}</td>`);
+        out.push('</tr>');
+      }
+      out.push('</tbody></table>');
+      continue;
+    }
+
+    // Default — accumulate into a paragraph until blank line / block start.
+    closeLists();
+    const buf: string[] = [line];
+    i++;
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !/^(#{1,6}\s|>\s|---|\*\*\*|___|```|[-*+]\s|\d+\.\s|\|)/.test(lines[i].trim()) &&
+      !/^!\[/.test(lines[i].trim())
+    ) {
+      buf.push(lines[i].trim());
+      i++;
+    }
+    out.push(`<p>${renderInline(buf.join(' '))}</p>`);
+  }
+
+  closeLists();
+  return out.join('\n');
+}
+
+/**
+ * Render inline markdown (links, images, bold, italic, code) inside a
+ * block-level container. We carefully escape ranges that aren't matched as
+ * markdown so user-provided text can't break out of attributes.
+ */
+function renderInline(text: string): string {
+  const tokens: { html: string }[] = [];
+  let cursor = 0;
+  // Order matters: image > link > code > bold > italic.
+  const inlineRegex = /!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*|__([^_]+)__|_([^_]+)_/g;
+
+  let m: RegExpExecArray | null;
+  while ((m = inlineRegex.exec(text)) !== null) {
+    if (m.index > cursor) tokens.push({ html: escapeHTML(text.slice(cursor, m.index)) });
+
+    if (m[2] !== undefined) {
+      // Image: ![alt](src)
+      tokens.push({
+        html: `<img src="${escapeAttr(m[2])}" alt="${escapeHTML(m[1] ?? '')}" loading="lazy">`,
+      });
+    } else if (m[4] !== undefined) {
+      // Link: [text](href)
+      const href = escapeAttr(m[4]);
+      const isExternal = /^https?:\/\//i.test(m[4]);
+      tokens.push({
+        html: `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''}>${renderInline(m[3])}</a>`,
+      });
+    } else if (m[5] !== undefined) {
+      tokens.push({ html: `<code>${escapeHTML(m[5])}</code>` });
+    } else if (m[6] !== undefined) {
+      tokens.push({ html: `<strong>${renderInline(m[6])}</strong>` });
+    } else if (m[7] !== undefined) {
+      tokens.push({ html: `<em>${renderInline(m[7])}</em>` });
+    } else if (m[8] !== undefined) {
+      tokens.push({ html: `<strong>${renderInline(m[8])}</strong>` });
+    } else if (m[9] !== undefined) {
+      tokens.push({ html: `<em>${renderInline(m[9])}</em>` });
+    }
+
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < text.length) tokens.push({ html: escapeHTML(text.slice(cursor)) });
+  return tokens.map(t => t.html).join('');
+}
+
+function splitPipes(row: string): string[] {
+  return row
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map(c => c.trim());
+}
+
+// ─── DOCX inline builders ─────────────────────────────────────────────────
+
+type DocxClasses = typeof import('docx');
+
+function buildInlineRuns(
+  text: string,
+  TextRun: DocxClasses['TextRun'],
+  ExternalHyperlink: DocxClasses['ExternalHyperlink']
+): Array<InstanceType<DocxClasses['TextRun']> | InstanceType<DocxClasses['ExternalHyperlink']>> {
+  const runs: Array<InstanceType<DocxClasses['TextRun']> | InstanceType<DocxClasses['ExternalHyperlink']>> = [];
+
+  // Strip image markdown — images are emitted on their own paragraphs above.
+  const cleaned = text.replace(/!\[[^\]]*\]\([^)]+\)/g, '');
+
+  const linkRegex = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = linkRegex.exec(cleaned)) !== null) {
+    if (m.index > cursor) {
+      runs.push(...buildBoldItalicRuns(cleaned.slice(cursor, m.index), TextRun));
+    }
+    const anchor = m[1];
+    const href = m[2];
+    if (/^https?:\/\//i.test(href)) {
+      runs.push(
+        new ExternalHyperlink({
+          link: href,
+          children: [new TextRun({ text: anchor, color: '1863DC', underline: {} })],
+        })
+      );
+    } else {
+      // Internal/relative URLs aren't clickable in DOCX without a real
+      // target — render the anchor text only.
+      runs.push(new TextRun({ text: anchor }));
+    }
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < cleaned.length) {
+    runs.push(...buildBoldItalicRuns(cleaned.slice(cursor), TextRun));
+  }
+  return runs;
+}
+
+function buildBoldItalicRuns(
+  text: string,
+  TextRun: DocxClasses['TextRun']
+): Array<InstanceType<DocxClasses['TextRun']>> {
+  const out: Array<InstanceType<DocxClasses['TextRun']>> = [];
+  const regex = /\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`/g;
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > cursor) out.push(new TextRun({ text: text.slice(cursor, m.index) }));
+    if (m[1] !== undefined) out.push(new TextRun({ text: m[1], bold: true }));
+    else if (m[2] !== undefined) out.push(new TextRun({ text: m[2], italics: true }));
+    else if (m[3] !== undefined) out.push(new TextRun({ text: m[3], font: 'Consolas' }));
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < text.length) out.push(new TextRun({ text: text.slice(cursor) }));
+  return out;
+}
+
+async function loadImageBytes(
+  url: string,
+  cache: Map<string, Uint8Array>
+): Promise<Uint8Array | null> {
+  if (cache.has(url)) return cache.get(url)!;
+  try {
+    if (url.startsWith('data:')) {
+      const comma = url.indexOf(',');
+      if (comma === -1) return null;
+      const meta = url.slice(0, comma);
+      const payload = url.slice(comma + 1);
+      const isB64 = meta.includes(';base64');
+      const bytes = isB64
+        ? base64ToBytes(payload)
+        : new TextEncoder().encode(decodeURIComponent(payload));
+      cache.set(url, bytes);
+      return bytes;
+    }
+    if (/^https?:\/\//i.test(url)) {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const buf = new Uint8Array(await res.arrayBuffer());
+      cache.set(url, buf);
+      return buf;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const cleaned = b64.replace(/\s+/g, '');
+  if (typeof atob === 'function') {
+    const bin = atob(cleaned);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  // Server-side fallback (used only if the helper ever runs in Node).
+  return new Uint8Array(Buffer.from(cleaned, 'base64'));
+}
+
+function detectImageType(url: string): 'png' | 'jpg' | 'gif' | 'bmp' {
+  // docx@9 only accepts these four types for `ImageRun`. SVG would need a
+  // raster fallback we don't carry, so we map it (and webp) to png — Word
+  // can decode the bytes regardless of the declared marker.
+  const lc = url.toLowerCase();
+  if (lc.startsWith('data:image/jpeg') || lc.startsWith('data:image/jpg')) return 'jpg';
+  if (lc.startsWith('data:image/gif')) return 'gif';
+  if (lc.startsWith('data:image/bmp')) return 'bmp';
+  if (lc.endsWith('.jpg') || lc.endsWith('.jpeg')) return 'jpg';
+  if (lc.endsWith('.gif')) return 'gif';
+  if (lc.endsWith('.bmp')) return 'bmp';
+  return 'png';
+}
+
+// ─── Escape helpers ────────────────────────────────────────────────────────
+
 function escapeHTML(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(str: string): string {
+  return str.replace(/"/g, '%22').replace(/</g, '%3C').replace(/>/g, '%3E');
+}
+
+function escapeYaml(str: string): string {
+  return (str ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }

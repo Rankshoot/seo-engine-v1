@@ -243,6 +243,11 @@ export interface CalendarEntry {
   status: CalendarStatus;
   /** Set when a calendar entry is created from an AI suggestion. Format: "AI · <page>" e.g. "AI · keywords" */
   ai_source?: string;
+  /**
+   * Full Content Health snapshot when the row was queued from the audit UI.
+   * Fed into `generateBlog` as writer notes so the new draft resolves these findings.
+   */
+  content_health_audit?: unknown | null;
   created_at: string;
   keywords?: Keyword;
   /** Joined from `blogs.title` in `getCalendarEntries` when a blog exists. */

@@ -9,6 +9,7 @@ import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
+import { formatContentHealthAuditForWriter } from '@/lib/content-health-calendar';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
   const user = await currentUser();
@@ -121,6 +122,13 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       // Brief is optional at the DB layer — generation must still work if it's missing.
     }
 
+    const auditWriterBlock = formatContentHealthAuditForWriter(
+      (entry as { content_health_audit?: unknown }).content_health_audit
+    );
+    const mergedWriterNotes = [writerNotes?.trim(), auditWriterBlock || '']
+      .filter(Boolean)
+      .join('\n\n---\n\n');
+
     const blogData = await generateBlogPost(
       entry,
       project,
@@ -129,7 +137,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       existingBlogs,
       brief,
       ahrefsContext ?? undefined,
-      writerNotes?.trim() ? writerNotes.trim() : undefined,
+      mergedWriterNotes || undefined,
     );
     const images = await generateBlogImages({
       title: blogData.title,

@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { criticalityFromScore } from '@/lib/audit-criticality';
 import { auditBlogUrl, type BlogAuditAnalysis, type BlogAuditRecord } from '@/lib/content-audit';
-import { fetchBlogUrls, isContentUrl, BLOG_URL_INVENTORY_MAX } from '@/lib/jina';
+import { fetchBlogUrls, fetchSitemapUrls, isContentUrl, BLOG_URL_INVENTORY_MAX } from '@/lib/jina';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 

@@ -200,7 +200,8 @@ function slugify(value: string): string {
 export async function addKeywordToCalendarOnDate(
   keywordId: string,
   projectId: string,
-  date: string
+  date: string,
+  options?: { contentHealthAudit?: Record<string, unknown> | null }
 ) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
@@ -249,11 +250,16 @@ export async function addKeywordToCalendarOnDate(
     return { success: false, error: 'Another keyword is already scheduled on this date' };
   }
 
+  const auditPatch =
+    options?.contentHealthAudit !== undefined && options?.contentHealthAudit !== null
+      ? { content_health_audit: options.contentHealthAudit }
+      : {};
+
   // RESCHEDULE: keyword already has an entry → just move it to the new date
   if (existingKw) {
     const { data, error } = await supabaseAdmin
       .from('calendar_entries')
-      .update({ scheduled_date: date })
+      .update({ scheduled_date: date, ...auditPatch })
       .eq('id', existingKw.id)
       .select()
       .single();
@@ -274,6 +280,7 @@ export async function addKeywordToCalendarOnDate(
       focus_keyword: kw.keyword,
       secondary_keywords: kw.secondary_keywords ?? [],
       status: 'scheduled',
+      ...auditPatch,
     })
     .select()
     .single();
@@ -313,7 +320,7 @@ function slugKey(s: string): string {
  */
 export async function addContentHealthKeywordToCalendar(
   projectId: string,
-  opts: { focusKeyword: string; auditUrl?: string }
+  opts: { focusKeyword: string; auditUrl?: string; contentHealthAudit?: Record<string, unknown> | null }
 ) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' as const };
@@ -394,8 +401,15 @@ export async function addContentHealthKeywordToCalendar(
   const scheduledDate = await nextOpenCalendarDate(projectId);
   if (!scheduledDate) return { success: false, error: 'No open calendar date found' as const };
 
+  const auditPayload =
+    opts.contentHealthAudit !== undefined && opts.contentHealthAudit !== null
+      ? { content_health_audit: opts.contentHealthAudit }
+      : {};
+
   if (keywordId) {
-    return addKeywordToCalendarOnDate(keywordId, projectId, scheduledDate);
+    return addKeywordToCalendarOnDate(keywordId, projectId, scheduledDate, {
+      contentHealthAudit: opts.contentHealthAudit ?? null,
+    });
   }
 
   const titleBase = canonical.slice(0, 120) || 'Content improvement';
@@ -413,12 +427,113 @@ export async function addContentHealthKeywordToCalendar(
       focus_keyword: canonical,
       secondary_keywords: secondary,
       status: 'scheduled',
+      ...auditPayload,
     })
     .select()
     .single();
 
   if (error) return { success: false, error: error.message };
   return { success: true, data, scheduled_date: scheduledDate };
+}
+
+/**
+ * Approve an AI-suggested keyword and schedule it in the content calendar.
+ * Used by the chatbot's "Add to calendar" button on keyword suggestion cards.
+ */
+export async function approveAISuggestionToCalendar(params: {
+  projectId: string;
+  keyword: string;
+  keywordId?: string;
+  source: string;
+  page: string;
+  volume?: number;
+  kd?: number;
+  cpc?: number;
+  intent?: string;
+}): Promise<{ success: boolean; error?: string; scheduledDate?: string; alreadyExists?: boolean }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const { projectId, keyword, keywordId, page, volume = 0, kd = 0, cpc = 0, intent = '' } = params;
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!project) return { success: false, error: 'Project not found' };
+
+  let resolvedKeywordId = keywordId;
+  if (!resolvedKeywordId) {
+    const { data: existing } = await supabaseAdmin
+      .from('keywords')
+      .select('id')
+      .eq('project_id', projectId)
+      .ilike('keyword', keyword.trim())
+      .maybeSingle();
+
+    if (existing) {
+      resolvedKeywordId = existing.id;
+    } else {
+      const { data: newKw, error: kwErr } = await supabaseAdmin
+        .from('keywords')
+        .insert({
+          project_id: projectId,
+          keyword: keyword.trim(),
+          volume,
+          kd,
+          cpc,
+          intent: intent || null,
+          status: 'approved',
+          ai_score: 0,
+          trend: '',
+          monthly_searches: [],
+          secondary_keywords: [],
+        })
+        .select('id')
+        .single();
+
+      if (kwErr || !newKw) return { success: false, error: kwErr?.message ?? 'Failed to create keyword' };
+      resolvedKeywordId = newKw.id;
+    }
+  }
+
+  const { data: existingEntry } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id, scheduled_date')
+    .eq('project_id', projectId)
+    .eq('keyword_id', resolvedKeywordId)
+    .maybeSingle();
+
+  if (existingEntry) {
+    return { success: false, error: `Already in calendar (${existingEntry.scheduled_date})`, alreadyExists: true };
+  }
+
+  const scheduledDate = await nextOpenCalendarDate(projectId);
+  if (!scheduledDate) return { success: false, error: 'No open calendar date found' };
+
+  const aiSource = `AI · ${page}`;
+  const slug = keyword.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+
+  const { error } = await supabaseAdmin
+    .from('calendar_entries')
+    .insert({
+      project_id: projectId,
+      keyword_id: resolvedKeywordId,
+      scheduled_date: scheduledDate,
+      title: '',
+      article_type: 'Blog Post',
+      slug,
+      focus_keyword: keyword.trim(),
+      secondary_keywords: [],
+      status: 'scheduled',
+      ai_source: aiSource,
+    });
+
+  if (error) return { success: false, error: error.message };
+  return { success: true, scheduledDate };
 }
 
 export async function updateCalendarEntry(

@@ -109,6 +109,30 @@ function KdCell({ kd }: { kd?: number | null }) {
   return <span className="text-[12px] font-bold text-brand-coral">Hard</span>;
 }
 
+/** Blog title from the calendar entry: prefer the generated blog title, fall back to the placeholder title. */
+function entryBlogTitle(entry: { title?: string; focus_keyword?: string; blog?: { title?: string } | null } | null): string {
+  if (!entry) return "—";
+  const bt = (entry as { blog?: { title?: string } }).blog?.title?.trim();
+  if (bt) return bt;
+  const et = entry.title?.trim();
+  return et || entry.focus_keyword || "—";
+}
+
+function OriginPills({ resolved }: { resolved: ResolvedCalendarOrigin }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${resolved.badgeClass}`}>
+        {resolved.label}
+      </span>
+      {resolved.aiBadge && (
+        <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold ${resolved.aiBadge.className}`}>
+          {resolved.aiBadge.label}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function CalendarPage() {

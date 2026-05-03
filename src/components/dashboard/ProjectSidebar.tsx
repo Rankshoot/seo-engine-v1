@@ -92,6 +92,11 @@ export default function ProjectSidebar({
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  /** Nav count badges use React Query + Redux; values can differ SSR vs first client paint — defer badges until mounted to avoid hydration mismatch. */
+  const [navCountsReady, setNavCountsReady] = useState(false);
+  useEffect(() => {
+    setNavCountsReady(true);
+  }, []);
 
   // Prefetch helpers. Each one warms one or two query keys for the destination
   // page so by the time the user clicks the link, the data is already cached.
@@ -157,7 +162,7 @@ export default function ProjectSidebar({
       icon: Icon.search,
       label: "Keywords",
       href: `${base}/keywords`,
-      badge: liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
+      badge: navCountsReady && liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
     },
     {
       icon: Icon.target,
@@ -168,20 +173,20 @@ export default function ProjectSidebar({
       icon: Icon.audit,
       label: "Content Health",
       href: `${base}/audit`,
-      badge: liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
-      badgeColor: liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
+      badge: navCountsReady && liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
+      badgeColor: navCountsReady && liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
     },
     {
       icon: Icon.calendar,
       label: "Calendar",
       href: `${base}/calendar`,
-      badge: liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
+      badge: navCountsReady && liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
     },
     {
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
-      badge: liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
+      badge: navCountsReady && liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
     },
   ];
 
@@ -340,7 +345,9 @@ export default function ProjectSidebar({
                   {isCollapsed && (
                     <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
                       {item.label}
-                      {item.badge && <span className="ml-2 text-text-tertiary">({item.badge})</span>}
+                      {navCountsReady && item.badge && (
+                        <span className="ml-2 text-text-tertiary">({item.badge})</span>
+                      )}
                     </div>
                   )}
                 </Link>

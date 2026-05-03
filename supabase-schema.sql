@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS calendar_entries (
   focus_keyword TEXT NOT NULL,
   secondary_keywords TEXT[] DEFAULT '{}',
   status TEXT DEFAULT 'scheduled',
+  content_health_audit JSONB DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

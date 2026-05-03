@@ -57,6 +57,11 @@ function sourceInfo(
         label: "Gap",
         color: "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20",
       };
+    case "competitor_benchmark":
+      return {
+        label: "Competitor",
+        color: "bg-[#8b5cf6]/10 text-[#8b5cf6] border-[#8b5cf6]/20",
+      };
     case "quick_win":
       return {
         label: "Competitor",

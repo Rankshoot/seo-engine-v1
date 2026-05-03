@@ -26,11 +26,16 @@ export type KeywordStatus = 'pending' | 'approved' | 'rejected';
 
 /**
  * Provenance for a keyword row.
- * - `industry`        — Keywords-Explorer / seed-driven (legacy + future).
- * - `competitor_gap`  — competitor ranks for it, we do not.
- * - `quick_win`       — we already rank for it at positions 4–20.
+ * - `industry`               — Keywords-Explorer / seed-driven (legacy + future).
+ * - `competitor_gap`         — competitor ranks for it, we do not (discovery pipeline).
+ * - `competitor_benchmark`   — approved from the Competitors benchmark opportunity table.
+ * - `quick_win`              — we already rank for it at positions 4–20.
  */
-export type KeywordSourceType = 'industry' | 'competitor_gap' | 'quick_win';
+export type KeywordSourceType =
+  | 'industry'
+  | 'competitor_gap'
+  | 'competitor_benchmark'
+  | 'quick_win';
 
 /** Multi-intent flags as Ahrefs returns them. Structurally matches `AhrefsIntentObject`. */
 export interface KeywordIntents {

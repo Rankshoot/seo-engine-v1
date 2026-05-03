@@ -852,6 +852,7 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
         kd: gap?.kd ?? 0,
         trend: gap?.trend ?? '+0%',
         status: 'approved',
+        source_type: 'competitor_benchmark',
         source_url: gap?.top_competitor_url ?? '',
         gap_competitor: gap?.top_competitor_domain ?? '',
         ai_score: gap?.opportunity_score ?? 0,

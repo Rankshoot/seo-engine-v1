@@ -103,6 +103,30 @@ function scoreColor(score: number) {
   return "text-text-tertiary border-border-subtle bg-surface-elevated";
 }
 
+const GAP_APPROVED_STORAGE_PREFIX = "seo-engine-gap-approved:";
+
+function loadApprovedGapKeywords(projectId: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = sessionStorage.getItem(`${GAP_APPROVED_STORAGE_PREFIX}${projectId}`);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.map(String).map(s => s.toLowerCase()));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistApprovedGapKeywords(projectId: string, next: Set<string>) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(`${GAP_APPROVED_STORAGE_PREFIX}${projectId}`, JSON.stringify([...next]));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 export default function CompetitorsPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
@@ -116,6 +140,7 @@ export default function CompetitorsPage() {
   const [expandedCompetitor, setExpandedCompetitor] = useState<string | null>(null);
   const [gapFilter, setGapFilter] = useState<"all" | GapType>("all");
   const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null);
+  const [approvedGapKeywords, setApprovedGapKeywords] = useState<Set<string>>(new Set());
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
   const aiSuggestedGapKeywords = useAppSelector(state =>
     selectAiSuggestedGapKeywords(state, projectId)
@@ -132,6 +157,11 @@ export default function CompetitorsPage() {
     staleTime: Infinity,
     gcTime: 30 * 60_000,
   });
+
+  useEffect(() => {
+    if (!projectId) return;
+    setApprovedGapKeywords(loadApprovedGapKeywords(projectId));
+  }, [projectId]);
 
   const handleRun = async () => {
     setRunning(true);
@@ -163,6 +193,13 @@ export default function CompetitorsPage() {
     const res = await generateBlogFromOpportunity(projectId, keyword);
     setGeneratingKeyword(null);
     if (res.success) {
+      const key = keyword.toLowerCase();
+      setApprovedGapKeywords(prev => {
+        const next = new Set(prev);
+        next.add(key);
+        persistApprovedGapKeywords(projectId, next);
+        return next;
+      });
       router.push(`/projects/${projectId}/calendar`);
     } else {
       setError(res.error ?? "Could not create calendar entry.");
@@ -304,6 +341,7 @@ export default function CompetitorsPage() {
               onGapFilterChange={setGapFilter}
               averages={averages}
               generatingKeyword={generatingKeyword}
+              approvedGapKeywords={approvedGapKeywords}
               onGenerateBlog={handleGenerateBlog}
               aiGapKeywordSet={aiGapKeywordSet}
             />
@@ -324,6 +362,7 @@ export default function CompetitorsPage() {
               gapFilter={gapFilter}
               onGapFilterChange={setGapFilter}
               generatingKeyword={generatingKeyword}
+              approvedGapKeywords={approvedGapKeywords}
               onGenerateBlog={handleGenerateBlog}
               aiGapKeywordSet={aiGapKeywordSet}
             />
@@ -463,6 +502,7 @@ function OpportunityDashboard({
   onGapFilterChange,
   averages,
   generatingKeyword,
+  approvedGapKeywords,
   onGenerateBlog,
   aiGapKeywordSet,
 }: {
@@ -472,6 +512,7 @@ function OpportunityDashboard({
   onGapFilterChange: (f: "all" | GapType) => void;
   averages?: BenchmarkState["averages"];
   generatingKeyword: string | null;
+  approvedGapKeywords: Set<string>;
   onGenerateBlog: (keyword: string) => void;
   aiGapKeywordSet: Set<string>;
 }) {
@@ -517,7 +558,7 @@ function OpportunityDashboard({
                   <th className="px-4 py-3 text-center">Weakness</th>
                   <th className="px-4 py-3 text-center">Opportunity</th>
                   <th className="px-4 py-3">Ranking page</th>
-                  <th className="px-4 py-3 text-center">Action</th>
+                  <th className="px-4 py-3 text-center">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle/60">
@@ -584,14 +625,20 @@ function OpportunityDashboard({
                       ) : null}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() => onGenerateBlog(g.keyword)}
-                        disabled={generatingKeyword === g.keyword}
-                        className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                      >
-                        {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
-                      </button>
+                      {approvedGapKeywords.has(g.keyword.toLowerCase()) ? (
+                        <span className="inline-block rounded-[4px] border border-[#10b981]/25 bg-[#10b981]/10 px-3 py-1.5 text-[12px] font-medium text-[#34d399]">
+                          Approved
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onGenerateBlog(g.keyword)}
+                          disabled={generatingKeyword === g.keyword}
+                          className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
+                        >
+                          {generatingKeyword === g.keyword ? "Queuing…" : "Pending"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -734,6 +781,7 @@ function KeywordGapTable({
   gapFilter,
   onGapFilterChange,
   generatingKeyword,
+  approvedGapKeywords,
   onGenerateBlog,
   aiGapKeywordSet,
 }: {
@@ -742,6 +790,7 @@ function KeywordGapTable({
   gapFilter: "all" | GapType;
   onGapFilterChange: (f: "all" | GapType) => void;
   generatingKeyword: string | null;
+  approvedGapKeywords: Set<string>;
   onGenerateBlog: (keyword: string) => void;
   aiGapKeywordSet: Set<string>;
 }) {
@@ -765,7 +814,7 @@ function KeywordGapTable({
                   <th className="px-4 py-3 text-center">Trend</th>
                   <th className="px-4 py-3 text-center">Score</th>
                   <th className="px-4 py-3">Ranking page</th>
-                  <th className="px-4 py-3 text-center">Action</th>
+                  <th className="px-4 py-3 text-center">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle/60">
@@ -814,14 +863,20 @@ function KeywordGapTable({
                       ) : null}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() => onGenerateBlog(g.keyword)}
-                        disabled={generatingKeyword === g.keyword}
-                        className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                      >
-                        {generatingKeyword === g.keyword ? "Queuing…" : "Generate blog"}
-                      </button>
+                      {approvedGapKeywords.has(g.keyword.toLowerCase()) ? (
+                        <span className="inline-block rounded-[4px] border border-[#10b981]/25 bg-[#10b981]/10 px-3 py-1.5 text-[12px] font-medium text-[#34d399]">
+                          Approved
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onGenerateBlog(g.keyword)}
+                          disabled={generatingKeyword === g.keyword}
+                          className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
+                        >
+                          {generatingKeyword === g.keyword ? "Queuing…" : "Pending"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

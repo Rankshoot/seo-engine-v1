@@ -29,22 +29,55 @@ interface SEOScore {
   checks: SEOCheck[];
 }
 
+/** Lowercase + collapse whitespace — use for all case-insensitive substring checks. */
+function normalizeKeyword(keyword: string): string {
+  return keyword.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * True if the target keyword appears in haystack (caller passes haystack already lowercased).
+ * - Always accepts full-phrase substring (covers "rpo", "RPO" in title, "(rpo)", etc.).
+ * - For multi-word keys, also passes when each "content" token (length ≥ 3) appears — ignores ≤2-char glue words like "to", "in".
+ * Replaces the old `some(w => w.length > 3)` rule, which wrongly failed every keyword of length ≤ 3 (e.g. RPO, SEO, AI).
+ */
+function keywordInText(keywordNorm: string, haystackLower: string): boolean {
+  if (!keywordNorm || !haystackLower) return false;
+  if (haystackLower.includes(keywordNorm)) return true;
+  const tokens = keywordNorm.split(" ").filter(Boolean);
+  if (tokens.length <= 1) return false;
+  return tokens.every(t => t.length < 3 || haystackLower.includes(t));
+}
+
+/** First ~100 words of body as plain lowercase text (strip headings / link syntax) for intro keyword check. */
+function openingPlainLower(md: string, maxWords: number): string {
+  const noFront = md.replace(/^---[\s\S]*?---\s*/m, "");
+  const flat = noFront
+    .replace(/^#{1,6}\s+.+$/gm, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`>#-]/g, " ")
+    .toLowerCase();
+  return flat.split(/\s+/).filter(Boolean).slice(0, maxWords).join(" ");
+}
+
 function computeSEOScore(blog: Blog): SEOScore {
-  const kw      = blog.target_keyword?.toLowerCase() ?? "";
+  const kw      = normalizeKeyword(blog.target_keyword ?? "");
   const content = blog.content ?? "";
   const title   = blog.title?.toLowerCase() ?? "";
-  const meta    = blog.meta_description ?? "";
+  const meta    = (blog.meta_description ?? "").toLowerCase();
 
   const firstParaMatch = content.match(/^#.+\n+(.+)/m);
   const firstPara = firstParaMatch ? firstParaMatch[1].toLowerCase() : content.slice(0, 500).toLowerCase();
+  const opening100 = openingPlainLower(content, 100);
+  const introHaystack = `${opening100} ${firstPara}`.trim();
 
   const h2Count = (content.match(/^## /gm) ?? []).length;
   const h3Count = (content.match(/^### /gm) ?? []).length;
 
   const markdownExternalLinks = (content.match(/\[([^\]]+)\]\(https?:\/\//g) ?? []).length;
   const markdownInternalLinks = (content.match(/\[([^\]]+)\]\(\//g) ?? []).length;
-  const externalLinks = blog.external_links?.length ?? markdownExternalLinks;
-  const internalLinks = blog.internal_links?.length ?? markdownInternalLinks;
+  // `??` does not fall back when DB arrays exist but are empty ([] → length 0); merge with markdown-derived counts.
+  const externalLinks = Math.max(blog.external_links?.length ?? 0, markdownExternalLinks);
+  const internalLinks = Math.max(blog.internal_links?.length ?? 0, markdownInternalLinks);
 
   const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(content);
 
@@ -60,21 +93,21 @@ function computeSEOScore(blog: Blog): SEOScore {
     {
       key: "title_keyword",
       label: "Target keyword in title",
-      pass: kw.split(" ").some(w => w.length > 3 && title.includes(w)),
+      pass: keywordInText(kw, title),
       points: 15,
       hint: "Include the target keyword in your H1 title",
     },
     {
       key: "intro_keyword",
       label: "Keyword in first 100 words",
-      pass: kw.split(" ").some(w => w.length > 3 && firstPara.includes(w)),
+      pass: keywordInText(kw, introHaystack),
       points: 10,
       hint: "Mention the target keyword within the opening paragraph",
     },
     {
       key: "meta_keyword",
       label: "Meta description has keyword",
-      pass: kw.split(" ").some(w => w.length > 3 && meta.toLowerCase().includes(w)),
+      pass: keywordInText(kw, meta),
       points: 10,
       hint: "Include the target keyword in your meta description",
     },

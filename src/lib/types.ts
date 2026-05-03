@@ -241,8 +241,12 @@ export interface CalendarEntry {
   focus_keyword: string;
   secondary_keywords: string[];
   status: CalendarStatus;
+  /** Set when a calendar entry is created from an AI suggestion. Format: "AI · <page>" e.g. "AI · keywords" */
+  ai_source?: string;
   created_at: string;
   keywords?: Keyword;
+  /** Joined from `blogs.title` in `getCalendarEntries` when a blog exists. */
+  blog_title?: string | null;
 }
 
 export interface Blog {
@@ -270,7 +274,7 @@ export interface Blog {
 
 /** Calendar row plus optional blog summary from `getCalendarWithBlogs`. */
 export type CalendarEntryWithBlog = CalendarEntry & {
-  blog: Pick<Blog, "id" | "entry_id" | "word_count" | "status" | "research_sources"> | null;
+  blog: Pick<Blog, "id" | "entry_id" | "title" | "word_count" | "status" | "research_sources"> | null;
 };
 
 export const ARTICLE_TYPES = [

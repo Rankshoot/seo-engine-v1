@@ -34,6 +34,7 @@ const Icon = {
   chevronRight: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
   chevronLeft: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
   check: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>,
+  ai: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9.8 15.9 9 18.8l-.8-2.9a4.5 4.5 0 0 0-3.1-3.1L2.3 12l2.8-.8a4.5 4.5 0 0 0 3.1-3.1L9 5.3l.8 2.8a4.5 4.5 0 0 0 3.1 3.1l2.8.8-2.8.8a4.5 4.5 0 0 0-3.1 3.1Z"/><path d="M19 2v4"/><path d="M21 4h-4"/><path d="M19 18v4"/><path d="M21 20h-4"/></svg>,
 };
 
 interface ProjectSidebarProps {
@@ -42,6 +43,7 @@ interface ProjectSidebarProps {
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
+  onOpenAI?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -49,7 +51,8 @@ export default function ProjectSidebar({
   stats, 
   allProjects,
   isCollapsed,
-  setIsCollapsed
+  setIsCollapsed,
+  onOpenAI,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -348,6 +351,28 @@ export default function ProjectSidebar({
 
         <div className={`border-t border-border-subtle pt-6 transition-all duration-300 ease-in-out ${isCollapsed ? "flex justify-center" : ""}`}>
           <ul className="space-y-1.5 w-full">
+            {onOpenAI && (
+              <li>
+                <button
+                  onClick={onOpenAI}
+                  className={`w-full flex items-center rounded-[8px] text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all duration-300 ease-in-out border border-transparent group relative
+                    ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
+                  `}
+                >
+                  <span className="text-text-tertiary group-hover:text-brand-action transition-colors shrink-0">
+                    {Icon.ai}
+                  </span>
+                  <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
+                    AI Assistant
+                  </span>
+                  {isCollapsed && (
+                    <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
+                      AI Assistant
+                    </div>
+                  )}
+                </button>
+              </li>
+            )}
             <li>
               <Link 
                 href="/projects" 

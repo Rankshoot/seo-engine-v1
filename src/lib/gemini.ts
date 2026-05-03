@@ -182,7 +182,9 @@ export async function generateBlogPost(
   research?: ResearchContext,
   existingBlogs?: Array<{ title: string; slug: string; target_keyword: string }>,
   brief?: BusinessBrief | null,
-  ahrefsContext?: AhrefsBlogContext | null
+  ahrefsContext?: AhrefsBlogContext | null,
+  /** Optional user instructions (angle, tone, must-cover points) — merged into the writer prompt. */
+  writerNotes?: string
 ): Promise<GeneratedBlog> {
   // Internal linking pool:
   //   (a) Pages from the user's actual website (from the Business Brief's
@@ -214,6 +216,11 @@ export async function generateBlogPost(
 
   // Company grounding from the Business Brief so the draft sounds like this
   // specific company rather than a generic explainer.
+  const writerNotesBlock =
+    writerNotes && writerNotes.length > 0
+      ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, 2500)}\n`
+      : "";
+
   const briefBlock = brief
     ? `\nCOMPANY CONTEXT (use as grounding — the article must sound like it was written by ${project.company}, for their audience; weave products/entities in naturally; do NOT pitch competitor names)
 - Summary: ${brief.summary || '(none)'}
@@ -273,7 +280,7 @@ export async function generateBlogPost(
 
   const prompt = `You are an expert SEO content strategist and writer. Your job is to produce a blog post that ranks in Google, gets cited by AI Overviews, and converts readers for ${project.company}.
 
-Follow the 5-step blog-creation process below exactly. Think through each step before writing.
+CRITICAL OUTPUT RULE: Your response must contain ONLY the final Markdown blog post followed by the ---META--- block. Do NOT write out any planning steps, reasoning, step numbers, step headers, or process notes. All planning (steps 1–4 below) is INTERNAL THINKING ONLY — never appear in the output.
 
 ════════════════════════════════════════
 INPUTS
@@ -285,7 +292,7 @@ TARGET AUDIENCE: ${project.target_audience}
 INDUSTRY/NICHE:  ${project.niche}
 COMPANY:         ${project.company} (${project.domain})
 WORD COUNT:      ~${wordCount} words
-${briefBlock}${internalLinksBlock}
+${writerNotesBlock}${briefBlock}${internalLinksBlock}
 
 SECONDARY KEYWORDS / TERMS MATCH (from Ahrefs — these become your H2 topics):
 ${termsMatchList}
@@ -298,45 +305,55 @@ ${researchBlock}
 ${ahrefsBlock}
 
 ════════════════════════════════════════
-STEP 1 — DECIDE H2 STRUCTURE
+INTERNAL PLANNING — do this mentally, output NOTHING from these steps
 ════════════════════════════════════════
-Using the SECONDARY KEYWORDS / TERMS MATCH list above (real Ahrefs data sorted by search volume), select the 7–10 most search-intent-relevant ones and convert each into a clear, SEO-friendly H2 heading.
+
+[PLAN STEP 1 — H2 STRUCTURE — keep internal]
+Using the SECONDARY KEYWORDS / TERMS MATCH list above (real Ahrefs data sorted by search volume), mentally select the 7–10 most search-intent-relevant ones and decide each H2 heading.
 Rules for H2 headings:
 • Use plain, direct language — no "navigating", "nuances", "at a glance", "unlocking", "delving", "comprehensive", "in today's world", or any GPT-style filler.
 • Each H2 must answer a specific reader question or address a specific subtopic.
 • Write headings as short noun phrases or direct questions (e.g. "How to Hire AI Engineers", "AI Engineer Salary in 2024", "Top Skills Every AI Engineer Needs").
 • Keep them under 8 words where possible.
 
-════════════════════════════════════════
-STEP 2 — MAP QUESTIONS TO FAQ
-════════════════════════════════════════
-From the QUESTIONS FROM AHREFS + PEOPLE ALSO ASK list above, pick 3–4 of the highest-volume questions for the FAQ section. Add 3–6 more common questions around this topic so the FAQ has 7–10 questions total.
+[PLAN STEP 2 — FAQ MAPPING — keep internal]
+From the QUESTIONS FROM AHREFS + PEOPLE ALSO ASK list above, mentally pick 3–4 of the highest-volume questions for the FAQ section. Add 3–6 more common questions around this topic so the FAQ has 7–10 questions total.
 Each FAQ answer must be:
 • Crisp and ≤50 words.
 • Answer-first (first sentence directly answers the question).
 • Written in active voice.
 
-════════════════════════════════════════
-STEP 3 — AUTHORITY-BUILDING SECTIONS FOR ${project.company}
-════════════════════════════════════════
-Based on the primary keyword and the company's niche (${project.niche}), identify 2–4 H2 sections that let ${project.company} demonstrate expertise subtly.
+[PLAN STEP 3 — AUTHORITY SECTIONS — keep internal]
+Based on the primary keyword and the company's niche (${project.niche}), mentally identify 2–4 H2 sections that let ${project.company} demonstrate expertise subtly.
 Think: what challenges, solutions, strategies, or industry insights can you include that naturally lead the reader toward ${project.company}'s value — without a sales pitch?
 Examples of authority angles: hiring/operational challenges, step-by-step solutions, industry-specific use cases, data-backed trends the company solves for.
 Weave ${project.company} mentions naturally (1–2 times max in the full body), tied to a genuine insight or solution.
 
-════════════════════════════════════════
-STEP 4 — DESIGN THE FULL SEO STRUCTURE
-════════════════════════════════════════
-Combine the H2s from Step 1 + authority sections from Step 3 into a final outline. The structure must:
+[PLAN STEP 4 — FINAL STRUCTURE — keep internal]
+Mentally combine the H2s from Step 1 + authority sections from Step 3 into a final outline. The structure must:
 • Fulfil informational search intent (the reader leaves knowing the topic deeply).
 • Flow logically: define → explain → apply → evaluate → act.
 • Not sound like an ad. Mention ${project.company} only where it adds real value.
 • Include a FAQPage section (from Step 2) before the Conclusion.
 
 ════════════════════════════════════════
-STEP 5 — WRITE THE FULL BLOG
+NOW WRITE THE FULL BLOG — this is the ONLY thing you output
 ════════════════════════════════════════
-Now write the complete blog post using the structure from Step 4.
+Write the complete blog post using the structure you planned above. Begin immediately with the # H1 title.
+
+SEO SCORE REQUIREMENTS — every item below is machine-checked and scored:
+┌─────────────────────────────────────────────────────────────────────┐
+│ ✦ WORD COUNT        Minimum ${Math.max(wordCount, 1500)} words (target ${wordCount}). Never end early.
+│ ✦ TITLE KEYWORD     Primary keyword MUST appear in the # H1.
+│ ✦ INTRO KEYWORD     Primary keyword MUST appear within the first 100 words.
+│ ✦ KEYWORD DENSITY   Mention the primary keyword naturally 1× per ~150–200 words (0.5–3% density). Spread mentions evenly — not just intro + conclusion.
+│ ✦ H2 HEADINGS       At least 5 × ## headings (the checker requires ≥ 3).
+│ ✦ H3 SUB-HEADINGS   At least 2 × ### headings inside the body sections.
+│ ✦ FAQ SECTION       MUST have a heading that reads exactly "## Frequently Asked Questions". Include 7–10 Q&A pairs, each as ### Question / Answer.
+│ ✦ EXTERNAL LINKS    Include at least 5 credible external links (checker requires ≥ 3). Format: [anchor text](https://...).
+│ ✦ INTERNAL LINKS    Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or [anchor](https://domain/path).
+│ ✦ META DESCRIPTION  140–165 characters. Must contain the primary keyword. Written as a sentence.
+└─────────────────────────────────────────────────────────────────────┘
 
 WRITING RULES — follow every rule without exception:
 
@@ -349,6 +366,7 @@ INTRO (first ~150 words):
 EACH H2 SECTION:
 • Open with a snippet-friendly paragraph of exactly 40–50 words that directly answers what the H2 promises. This paragraph alone must make sense if pulled out of context.
 • Follow with deeper content: mix of short paragraphs (3–4 lines, 10–12 words per sentence) + bullet lists + tables where comparisons or data are present.
+• Use at least one ### H3 sub-heading within the two longest H2 sections to break them into scannable sub-topics.
 • Use transition words — "because", "for example", "however", "as a result", "in contrast", "specifically" — to connect sentences and paragraphs naturally.
 
 SENTENCE & PARAGRAPH STYLE:
@@ -363,76 +381,117 @@ IMAGES:
 • Never write a literal placeholder such as IMAGE_PLACEHOLDER.
 • Never reference an image by URL.
 
-LINKS:
-• External links: cite ONLY credible institutional reports and research (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Do NOT link to competitor blogs, Medium posts, Quora, Reddit, or generic websites.
-• Every external URL must be a real, currently-live page. Prefer the publication's main domain over deep-linked article slugs that decay quickly. If you are not confident a URL resolves, do NOT include it.
-• Internal links: 2–4 from the INTERNAL LINKING pools above. Place them where they genuinely help the reader — not just appended. Do NOT invent internal URLs.
+LINKS (machine-checked — these directly affect your SEO score):
+• External links: include AT LEAST 5 credible institutional citations (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Spread them across different sections. Do NOT link to competitor blogs, random marketing blogs, Medium posts, Quora, Reddit, or thin affiliate pages — prefer primary reports and official publications.
+• Every external URL must be a real, currently-live page. Prefer the publication's main domain (e.g. https://www.mckinsey.com) over deep-linked article slugs that decay. If you are not confident a URL resolves, use the root domain only.
+• Internal links: include AT LEAST 2 from the INTERNAL LINKING pools above, woven naturally into body sections. Do NOT invent internal URLs.
+• If you genuinely cannot place 2 natural in-body internal links, add a section ## Also read immediately BEFORE "## Frequently Asked Questions" with 2–3 bullets. Each bullet must be a single markdown link from the INTERNAL LINKING pool plus one short sentence on why it matters. Do not duplicate URLs already linked in the body.
 • Format all links as [anchor text](url).
+
+KEYWORD DENSITY:
+• The primary keyword "${entry.focus_keyword}" must appear once every ~150–200 words on average.
+• Spread uses naturally across: intro, at least 2 H2 sections, and the conclusion.
+• Do not cluster all uses in one section. Do not keyword-stuff (max 3% density).
+• Secondary keywords should each appear once naturally in their corresponding H2 section.
 
 CONTENT QUALITY:
 • Cover at least one angle that the top-ranking competitor pages miss.
 • Back every claim with data. If no data is available from context, use hedged language ("research suggests", "industry estimates").
-• Do NOT keyword-stuff. Each secondary keyword should appear once naturally in its corresponding section.
 • Do NOT include schema JSON-LD, raw HTML, or code blocks in the article body.
 
 ════════════════════════════════════════
-OUTPUT FORMAT
+OUTPUT FORMAT — begin your response here, nothing before it
 ════════════════════════════════════════
 
-# [Compelling H1 — improve "${entry.title}" if needed, include primary keyword]
+# [Compelling H1 — improve "${entry.title}" if needed, MUST include primary keyword]
 
-[Opening data point with inline citation link]
+[Opening data point with inline citation link — e.g. "According to [Source](https://...), stat..."]
 
 [Answer-first paragraph — ≤80 words, primary keyword in first 100 words total]
 
-## [H2 from Step 1/3]
+## [H2 — section 1]
 [40–50 word snippet paragraph]
 [Deeper paragraphs, bullets, or table]
 
-## [H2 from Step 1/3]
-[40–50 word snippet paragraph]
-[Deeper paragraphs, bullets, or table]
+### [H3 sub-topic inside this section]
+[Body]
 
-## [H2 — authority-building section for ${project.company}]
+## [H2 — section 2]
+[40–50 word snippet paragraph]
+[Body]
+
+## [H2 — section 3]
+[40–50 word snippet paragraph]
+
+### [H3 sub-topic]
+[Body]
+
+## [H2 — section 4 — authority-building for ${project.company}]
 [40–50 word snippet paragraph]
 [Content that demonstrates ${project.company}'s expertise, no hard sell]
 
-## [Continue sections…]
+## [H2 — section 5+, continue as needed to reach word count target]
 
 ## Frequently Asked Questions
 
-### [Question 1 — from PAA]
+### [Question 1 — from PAA or Ahrefs questions]
 [Answer ≤50 words, answer-first]
 
-### [Question 2 — from PAA]
+### [Question 2]
 [Answer ≤50 words]
 
-### [Question 3 — from PAA or common search]
+### [Question 3]
 [Answer ≤50 words]
 
-[…7–10 FAQs total]
+### [Question 4]
+[Answer ≤50 words]
+
+### [Question 5]
+[Answer ≤50 words]
+
+### [Question 6]
+[Answer ≤50 words]
+
+### [Question 7 — add up to 10 total]
+[Answer ≤50 words]
 
 ## Conclusion
-[Strong, actionable closing — 3–5 sentences. End with a subtle pointer to ${project.company} if relevant.]
+[Strong, actionable closing — 3–5 sentences. Include primary keyword once. End with a subtle pointer to ${project.company} if relevant.]
 
 FORMAT: Valid Markdown only. Use [text](url) for all links. Never output raw HTML.
 
-After the article, output EXACTLY this block (no extra text):
+After the article, output EXACTLY this block (no extra text, no trailing comma, valid JSON):
 ---META---
-{"meta_description":"150–160 chars including primary keyword","slug":"url-slug-from-title","external_links":["url1","url2"],"internal_links":["url-or-slug-1","url-or-slug-2"]}`;
+{"meta_description":"[140–165 chars, must include '${entry.focus_keyword}', written as a clear sentence]","slug":"url-slug-from-h1","external_links":["https://url1","https://url2","https://url3","https://url4","https://url5"],"internal_links":["/slug-or-absolute-url-1","/slug-or-absolute-url-2"]}`;
 
   const text = await geminiGenerate(prompt);
 
+  // Safety strip: remove any leaked planning-step headers the LLM may have output
+  // despite the INTERNAL PLANNING instruction. These lines begin with "STEP N —"
+  // or are the ════ separator lines used in the planning section.
+  function stripLeakedStepContent(raw: string): string {
+    return raw
+      // Remove lines that are exactly the ════ separator (8+ chars)
+      .replace(/^[═]{8,}\s*$/gm, '')
+      // Remove lines like "STEP 1 — ..." or "STEP 1: ..."
+      .replace(/^STEP\s+\d+\s*[—–:-].*$/gm, '')
+      // Remove [PLAN STEP …] markers if they leaked
+      .replace(/^\[PLAN STEP.*?\].*$/gm, '')
+      // Collapse 3+ consecutive blank lines into 2
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
   // Parse content + metadata
   const sepIdx = text.indexOf('---META---');
-  let content = text.trim();
+  let content = stripLeakedStepContent(text.trim());
   let meta_description = '';
   let slug = entry.slug;
   let external_links: string[] = [];
   let internal_links: string[] = [];
 
   if (sepIdx !== -1) {
-    content = text.substring(0, sepIdx).trim();
+    content = stripLeakedStepContent(text.substring(0, sepIdx).trim());
     try {
       const metaRaw = text.substring(sepIdx + 10).trim();
       const metaJson = JSON.parse(metaRaw);

@@ -38,6 +38,16 @@ export function executeAgentAction(action: ContextualActionType, options: Execut
     return;
   }
 
+  // Navigation actions — jump to the relevant project page.
+  if (action === "OPEN_CALENDAR" && typeof window !== "undefined") {
+    window.location.href = `/projects/${projectId}/calendar`;
+    return;
+  }
+  if (action === "OPEN_KEYWORDS" && typeof window !== "undefined") {
+    window.location.href = `/projects/${projectId}/keywords`;
+    return;
+  }
+
   dispatch(
     aiAssistantMemoryUpdated({
       projectId,

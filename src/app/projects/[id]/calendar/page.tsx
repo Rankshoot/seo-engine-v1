@@ -24,6 +24,7 @@ import {
 } from "@/app/actions/calendar-actions";
 import { getKeywords } from "@/app/actions/keyword-actions";
 import type { CalendarEntry } from "@/lib/types";
+import { resolveCalendarKeywordOrigin, type ResolvedCalendarOrigin } from "@/lib/calendar-keyword-origin";
 import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
@@ -350,7 +351,7 @@ export default function CalendarPage() {
 
         {loadingKeywords || loadingEntries ? (
           <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-            <TableSkeleton rows={6} columns={6} />
+            <TableSkeleton rows={6} columns={7} />
           </div>
         ) : approvedKeywords.length === 0 && repairEntries.length === 0 ? (
           <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
@@ -381,20 +382,26 @@ export default function CalendarPage() {
               <table className="w-full text-left border-collapse">
                 <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                   <tr>
+                    <th className="px-3 py-3 w-12 text-center">#</th>
                     <th className="px-5 py-3">Keyword</th>
-                    <th className="px-4 py-3 w-28">Source</th>
+                    <th className="px-4 py-3 w-[9.5rem]">Origin</th>
+                    <th className="px-4 py-3 min-w-[10rem] max-w-[14rem]">Blog title</th>
                     <th className="px-4 py-3 w-24 text-right">Volume</th>
                     <th className="px-4 py-3 w-20 text-center">KD</th>
-                    <th className="px-4 py-3 w-52">Status</th>
-                    <th className="px-4 py-3 w-40 text-right pr-5">Schedule</th>
+                    <th className="px-4 py-3 w-44">Status</th>
+                    <th className="px-4 py-3 w-44 text-right pr-5">Schedule</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle/60">
 
                   {/* ── approved keyword rows ── */}
-                  {approvedKeywords.map((kw) => {
+                  {approvedKeywords.map((kw, kwIndex) => {
                     const entry = findEntryForKeyword(kw);
-                    const src = sourceInfo(kw.source_type);
+                    const origin = resolveCalendarKeywordOrigin({
+                      keywordSourceType: kw.source_type,
+                      articleType: entry?.article_type,
+                      aiSource: entry?.ai_source,
+                    });
                     const isPickingThis = pickingDateFor === kw.id;
 
                     // effectiveStatus / effectiveDate: server entry wins; Redux
@@ -416,6 +423,11 @@ export default function CalendarPage() {
                     return (
                       <tr key={kw.id} className="hover:bg-surface-hover/50 transition-colors group">
 
+                        {/* serial number */}
+                        <td className="px-3 py-3 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
+                          {kwIndex + 1}
+                        </td>
+
                         {/* keyword */}
                         <td className="px-5 py-3.5 align-middle max-w-xs">
                           <p className="truncate text-[14px] font-medium text-text-primary">
@@ -428,11 +440,16 @@ export default function CalendarPage() {
                           ) : null}
                         </td>
 
-                        {/* source */}
+                        {/* origin (keyword pipeline + optional AI) */}
                         <td className="px-4 py-3.5 align-middle">
-                          <span className={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-full border ${src.color}`}>
-                            {src.label}
-                          </span>
+                          <OriginPills resolved={origin} />
+                        </td>
+
+                        {/* blog title (from generated blog or calendar placeholder) */}
+                        <td className="px-4 py-3.5 align-middle max-w-[14rem]">
+                          <p className="truncate text-[12px] text-text-secondary" title={entryBlogTitle(entry)}>
+                            {entryBlogTitle(entry)}
+                          </p>
                         </td>
 
                         {/* volume */}
@@ -520,7 +537,11 @@ export default function CalendarPage() {
                     const kwData = entry.keywords as
                       | { source_type?: string | null; volume?: number | null; kd?: number | null }
                       | undefined;
-                    const src = sourceInfo(kwData?.source_type, "Repair");
+                    const origin = resolveCalendarKeywordOrigin({
+                      keywordSourceType: kwData?.source_type,
+                      articleType: entry.article_type,
+                      aiSource: entry.ai_source,
+                    });
                     const isLocked =
                       entry.status === "generated" || entry.status === "downloaded" || entry.status === "approved" || entry.status === "published";
 
@@ -533,9 +554,12 @@ export default function CalendarPage() {
                           <p className="mt-0.5 text-[11px] text-text-tertiary italic">Repair draft</p>
                         </td>
                         <td className="px-4 py-3.5 align-middle">
-                          <span className={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-full border ${src.color}`}>
-                            {src.label}
-                          </span>
+                          <OriginPills resolved={origin} />
+                        </td>
+                        <td className="px-4 py-3.5 align-middle max-w-[14rem]">
+                          <p className="truncate text-[12px] text-text-secondary" title={entryBlogTitle(entry)}>
+                            {entryBlogTitle(entry)}
+                          </p>
                         </td>
                         <td className="px-4 py-3.5 align-middle text-right text-[13px] font-mono text-text-secondary tabular-nums">
                           {kwData?.volume ? kwData.volume.toLocaleString() : "—"}
@@ -544,24 +568,28 @@ export default function CalendarPage() {
                           <KdCell kd={kwData?.kd} />
                         </td>
                         <td className="px-4 py-3.5 align-middle">
-                          <div className="flex flex-col gap-1">
+                          {entry.status && STATUS_CONFIG[entry.status]?.label ? (
+                            <StatusBadge status={entry.status} />
+                          ) : (
+                            <span className="text-[13px] text-text-tertiary">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3.5 align-middle text-right pr-5">
+                          <div className="flex flex-col items-end gap-1.5">
                             <span className="text-[12px] font-medium text-text-primary tabular-nums">
                               {fmtDate(entry.scheduled_date)}
                             </span>
-                            <StatusBadge status={entry.status} />
+                            <Link
+                              href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+                              className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border text-[11px] font-semibold transition-colors ${
+                                isLocked
+                                  ? "bg-[#10b981]/10 border-[#10b981]/20 text-[#10b981] hover:bg-[#10b981]/20"
+                                  : "border-border-subtle bg-surface-elevated text-text-secondary hover:text-text-primary"
+                              }`}
+                            >
+                              {isLocked ? "View Blog" : "Generate"}
+                            </Link>
                           </div>
-                        </td>
-                        <td className="px-4 py-3.5 align-middle text-right pr-5">
-                          <Link
-                            href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                            className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border text-[11px] font-semibold transition-colors ${
-                              isLocked
-                                ? "bg-[#10b981]/10 border-[#10b981]/20 text-[#10b981] hover:bg-[#10b981]/20"
-                                : "border-border-subtle bg-surface-elevated text-text-secondary hover:text-text-primary"
-                            }`}
-                          >
-                            {isLocked ? "View Blog" : "Generate"}
-                          </Link>
                         </td>
                       </tr>
                     );
@@ -588,82 +616,6 @@ export default function CalendarPage() {
             onDatePick={() => {}}
             onCancelSchedule={() => {}}
           />
-        </section>
-      )}
-
-      {/* ── SCHEDULED ENTRIES LIST ──────────────────────────────────────── */}
-      {!loadingEntries && entries.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-[13px] font-bold uppercase tracking-widest text-text-tertiary">
-            Scheduled Content ({entries.length})
-          </h2>
-          <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
-                  <tr>
-                    <th className="px-5 py-3 w-32">Date</th>
-                    <th className="px-4 py-3">Keyword / Title</th>
-                    <th className="px-4 py-3 w-28">Source</th>
-                    <th className="px-4 py-3 w-32 text-center">Status</th>
-                    <th className="px-4 py-3 w-28 text-right pr-5">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border-subtle/60">
-                  {entries
-                    .slice()
-                    .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
-                    .map((entry) => {
-                      const src = sourceInfo(
-                        (entry.keywords as { source_type?: string | null } | undefined)?.source_type,
-                        entry.article_type
-                      );
-                      const isReady =
-                        entry.status === "generated" || entry.status === "downloaded" || entry.status === "approved" || entry.status === "published";
-                      return (
-                        <tr key={entry.id} className="hover:bg-surface-hover/50 transition-colors">
-                          <td className="px-5 py-3 align-middle">
-                            <span className="text-[12px] font-medium text-text-primary tabular-nums">
-                              {fmtDate(entry.scheduled_date)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 align-middle max-w-sm">
-                            <p className="text-[13px] font-medium text-text-primary truncate">
-                              {entry.title || entry.focus_keyword}
-                            </p>
-                            {entry.title && (
-                              <p className="mt-0.5 text-[11px] font-mono text-brand-action/70 truncate">
-                                {entry.focus_keyword}
-                              </p>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 align-middle">
-                            <span className={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-full border ${src.color}`}>
-                              {src.label}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 align-middle text-center">
-                            <StatusBadge status={entry.status} />
-                          </td>
-                          <td className="px-4 py-3 align-middle text-right pr-5">
-                            <Link
-                              href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                              className={`inline-flex h-7 items-center justify-center rounded-full border px-3 text-[11px] font-semibold uppercase tracking-wide transition-colors ${
-                                isReady
-                                  ? "bg-[#10b981]/10 text-[#10b981] border-[#10b981]/20 hover:bg-[#10b981]/20"
-                                  : "bg-surface-elevated text-text-secondary border-border-subtle hover:text-text-primary hover:border-border-strong"
-                              }`}
-                            >
-                              {isReady ? "View Blog" : "Generate"}
-                            </Link>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </section>
       )}
 

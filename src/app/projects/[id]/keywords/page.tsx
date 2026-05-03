@@ -694,40 +694,14 @@ export default function KeywordsPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             <Link
-              href={`/projects/${projectId}`}
-              className="rounded-[4px] px-4 py-2 text-[14px] text-text-secondary hover:text-text-primary hover:underline"
-            >
-              Overview
-            </Link>
-            <Link
-              href={`/projects/${projectId}/competitors`}
+              href={`/projects/${projectId}/calendar`}
               className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             >
-              Competitors
+              Calendar
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
             </Link>
-            <Link
-              href={`/projects/${projectId}/audit`}
-              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-            >
-              Content health
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-              </svg>
-            </Link>
-            {counts.approved >= 5 ? (
-              <Link
-                href={`/projects/${projectId}/calendar`}
-                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-              >
-                Calendar
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                </svg>
-              </Link>
-            ) : null}
             <button
               type="button"
               onClick={handleDiscover}
@@ -1433,11 +1407,19 @@ export default function KeywordsPage() {
                           )}
                         </td>
                         <td className="px-4 py-3 text-center align-middle">
-                          <span
-                            className={`inline-block rounded-[4px] border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
+                          <select
+                            value={kw.status}
+                            onChange={e => {
+                              e.stopPropagation();
+                              void handleStatusUpdate(kw.id, e.target.value as KeywordStatus);
+                            }}
+                            disabled={busyRowId === kw.id}
+                            className={`rounded-[6px] border px-2 py-1 text-[11px] font-bold capitalize cursor-pointer outline-none transition-colors disabled:opacity-50 ${STATUS_COLORS[kw.status]}`}
                           >
-                            {kw.status}
-                          </span>
+                            <option value="pending">Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="rejected">Rejected</option>
+                          </select>
                         </td>
                         <td className="px-2 py-3 align-middle" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center gap-1 justify-center">

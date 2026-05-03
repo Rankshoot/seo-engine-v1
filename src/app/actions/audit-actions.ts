@@ -277,6 +277,199 @@ export async function deleteBlogAudits(projectId: string) {
   return { success: true };
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 1 additions: page discovery + selective audit.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface SitemapPage {
+  url: string;
+  /** URL path segment used for grouping: /blog, /blogs, /hr-glossary, etc. */
+  basePath: string;
+  /** Whether this URL already has an audit row stored. */
+  audited: boolean;
+  /** Health score from existing audit (undefined when not yet audited). */
+  healthScore?: number;
+  severity?: 'high' | 'medium' | 'low';
+  primaryKeyword?: string;
+}
+
+/**
+ * Discover every content-like page from the project's sitemap.
+ *
+ * Returns the full list grouped by base path (e.g. "/blog", "/blogs",
+ * "/hr-glossary"). The UI can then filter by base path and let the user
+ * select individual pages to audit.
+ *
+ * @param basePath - Optional filter: only return pages whose path starts with
+ *   this prefix (e.g. "/blogs"). When empty, return all content pages.
+ */
+export async function getAllSitemapPages(
+  projectId: string,
+  basePath?: string
+): Promise<{
+  success: boolean;
+  error?: string;
+  pages: SitemapPage[];
+  /** Distinct base paths found in the sitemap (for the filter dropdown). */
+  basePaths: string[];
+  total: number;
+}> {
+  const { project, error } = await ensureOwner(projectId);
+  if (error || !project)
+    return { success: false, error: error ?? 'Project not found', pages: [], basePaths: [], total: 0 };
+
+  const domain = (project as { domain?: string }).domain ?? '';
+  if (!domain)
+    return { success: false, error: 'No domain configured', pages: [], basePaths: [], total: 0 };
+
+  // Fetch all sitemap URLs and filter to content-like pages.
+  const allUrls = (await fetchSitemapUrls(domain, 2000)).filter(isContentUrl);
+  if (!allUrls.length)
+    return {
+      success: false,
+      error: 'No content pages found in your sitemap. Make sure sitemap.xml is reachable.',
+      pages: [],
+      basePaths: [],
+      total: 0,
+    };
+
+  // Extract base paths for grouping.
+  function getBasePath(url: string): string {
+    try {
+      const path = new URL(url).pathname;
+      const segments = path.split('/').filter(Boolean);
+      if (segments.length >= 2) return '/' + segments[0];
+      return '/';
+    } catch {
+      return '/';
+    }
+  }
+
+  const basePathCounts = new Map<string, number>();
+  for (const url of allUrls) {
+    const bp = getBasePath(url);
+    basePathCounts.set(bp, (basePathCounts.get(bp) ?? 0) + 1);
+  }
+  const basePaths = [...basePathCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([bp]) => bp);
+
+  // Load existing audit rows to mark which pages are already audited.
+  const { data: existingAudits } = await supabaseAdmin
+    .from('blog_audits')
+    .select('url, health_score, severity, primary_keyword')
+    .eq('project_id', projectId);
+  const auditMap = new Map(
+    (existingAudits ?? []).map(a => [a.url, a])
+  );
+
+  // Filter by basePath if provided.
+  let filtered = allUrls;
+  if (basePath && basePath !== '/') {
+    filtered = allUrls.filter(url => {
+      try {
+        return new URL(url).pathname.startsWith(basePath);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  const pages: SitemapPage[] = filtered.map(url => {
+    const audit = auditMap.get(url);
+    return {
+      url,
+      basePath: getBasePath(url),
+      audited: Boolean(audit),
+      healthScore: audit ? (audit.health_score as number) ?? undefined : undefined,
+      severity: audit
+        ? ((audit.severity as string) === 'high' || (audit.severity as string) === 'medium' || (audit.severity as string) === 'low'
+          ? (audit.severity as 'high' | 'medium' | 'low')
+          : undefined)
+        : undefined,
+      primaryKeyword: audit ? (audit.primary_keyword as string) ?? undefined : undefined,
+    };
+  });
+
+  return { success: true, pages, basePaths, total: allUrls.length };
+}
+
+/**
+ * Audit a specific set of URLs (max 5). Used when the user selects
+ * individual pages from the page listing.
+ *
+ * Falls back to the existing `auditBlogUrl` pipeline which runs Ahrefs
+ * signals + optional Jina scrape + Gemini diagnosis.
+ */
+export async function auditSelectedUrls(
+  projectId: string,
+  urls: string[]
+): Promise<{
+  success: boolean;
+  error?: string;
+  audited: number;
+  failed: number;
+  results: PersistedBlogAudit[];
+}> {
+  const MAX = 5;
+  if (urls.length > MAX)
+    return { success: false, error: `Maximum ${MAX} pages at once`, audited: 0, failed: 0, results: [] };
+  if (!urls.length)
+    return { success: false, error: 'No URLs provided', audited: 0, failed: 0, results: [] };
+
+  const { project, error } = await ensureOwner(projectId);
+  if (error || !project)
+    return { success: false, error: error ?? 'Project not found', audited: 0, failed: 0, results: [] };
+
+  let brief = await fetchCachedBrief(projectId);
+  if (!brief) {
+    const gen = await generateBusinessBrief(projectId, { force: false });
+    if (gen.success && gen.brief) brief = gen.brief;
+  }
+
+  const domain = (project as { domain?: string }).domain ?? '';
+  const blogUrls = (await fetchBlogUrls(domain, 500)).filter(isContentUrl);
+  const region = (project as { target_region?: string }).target_region || 'us';
+  const language = (project as { target_language?: string }).target_language || 'en';
+
+  let audited = 0;
+  let failed = 0;
+  const results: PersistedBlogAudit[] = [];
+
+  // Run sequentially to limit external API pressure.
+  for (const url of urls) {
+    try {
+      const r = await auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language });
+      const row = {
+        project_id: projectId,
+        url: r.url,
+        title: r.title,
+        word_count: r.word_count,
+        health_score: r.health_score,
+        severity: r.severity,
+        primary_keyword: r.primary_keyword,
+        analysis: r.analysis,
+        scraped_chars: r.scraped_chars,
+        error: r.error ?? '',
+        updated_at: new Date().toISOString(),
+      };
+      const { error: upErr } = await supabaseAdmin
+        .from('blog_audits')
+        .upsert(row, { onConflict: 'project_id,url' });
+      if (upErr) {
+        failed++;
+      } else {
+        audited++;
+        results.push({ ...r, updated_at: row.updated_at });
+      }
+    } catch (e) {
+      failed++;
+    }
+  }
+
+  return { success: true, audited, failed, results };
+}
+
 function emptyCoverage(): AuditCoverage {
   return {
     blogs_found: 0,

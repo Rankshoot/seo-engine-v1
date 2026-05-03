@@ -10,7 +10,7 @@ import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
 
-export async function generateBlog(entryId: string, wordCount: number = 2500) {
+export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
@@ -129,6 +129,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
       existingBlogs,
       brief,
       ahrefsContext ?? undefined,
+      writerNotes?.trim() ? writerNotes.trim() : undefined,
     );
     const images = await generateBlogImages({
       title: blogData.title,
@@ -200,7 +201,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500) {
 
     await supabaseAdmin
       .from('calendar_entries')
-      .update({ status: 'generated' })
+      .update({ status: 'generated', title: blogData.title })
       .eq('id', entryId);
 
     return { success: true, data: blog };
@@ -673,6 +674,405 @@ Return JSON with this exact shape:
   return { success: true, data: data as Blog };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Targeted blog editing helpers used by the AI assistant.
+// These let the user say things like:
+//   "rewrite the 4th paragraph to be more concrete"
+//   "expand the H2 about <topic> with examples"
+//   "add 2 internal links"
+//   "add credible citations from McKinsey or SHRM"
+// without regenerating the whole article.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Split blog content into top-level "blocks" (intro, H2 sections, FAQ). */
+function splitIntoH2Sections(markdown: string): Array<{ heading: string | null; body: string; start: number; end: number }> {
+  const lines = markdown.split('\n');
+  const sections: Array<{ heading: string | null; body: string; start: number; end: number }> = [];
+  let currentHeading: string | null = null;
+  let bufferStart = 0;
+  let buffer: string[] = [];
+
+  const flush = (endLine: number) => {
+    sections.push({
+      heading: currentHeading,
+      body: buffer.join('\n').trim(),
+      start: bufferStart,
+      end: endLine,
+    });
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^##\s+/.test(line)) {
+      if (buffer.length || currentHeading !== null) flush(i - 1);
+      currentHeading = line.replace(/^##\s+/, '').trim();
+      buffer = [line];
+      bufferStart = i;
+    } else {
+      buffer.push(line);
+    }
+  }
+  if (buffer.length) flush(lines.length - 1);
+  return sections;
+}
+
+/** Split a markdown blob into paragraphs, treating two newlines as a separator. */
+function splitParagraphs(markdown: string): string[] {
+  return markdown.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+}
+
+async function persistBlogPatch(blogId: string, newContent: string, projectDomain: string): Promise<{ success: boolean; error?: string; data: Blog | null }> {
+  const cleaned = sanitizeBlogMarkdown(newContent);
+  const { externalLinks, internalLinks } = extractMarkdownLinks(cleaned, projectDomain);
+  const { data, error } = await supabaseAdmin
+    .from('blogs')
+    .update({
+      content: cleaned,
+      word_count: countWords(cleaned),
+      external_links: externalLinks,
+      internal_links: internalLinks,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', blogId)
+    .select()
+    .single();
+  if (error) return { success: false, error: error.message, data: null };
+  return { success: true, data: data as Blog };
+}
+
+/**
+ * Replace one paragraph (1-indexed) with an LLM-rewritten version.
+ * The LLM is given the full article for context but instructed to ONLY
+ * return the new paragraph text.
+ */
+export async function editBlogParagraph(
+  blogId: string,
+  paragraphIndex: number,
+  instruction: string
+): Promise<{ success: boolean; error?: string; data: Blog | null; before?: string; after?: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null };
+  if (!instruction?.trim()) return { success: false, error: 'Missing edit instruction', data: null };
+  if (paragraphIndex < 1) return { success: false, error: 'Paragraph index must be ≥ 1', data: null };
+
+  const { data: blog } = await supabaseAdmin.from('blogs').select('*').eq('id', blogId).single();
+  if (!blog) return { success: false, error: 'Blog not found', data: null };
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, error: 'Not authorized', data: null };
+
+  const paragraphs = splitParagraphs(blog.content as string);
+  const idx = paragraphIndex - 1;
+  if (idx >= paragraphs.length) {
+    return {
+      success: false,
+      error: `This blog only has ${paragraphs.length} paragraphs.`,
+      data: null,
+    };
+  }
+  const before = paragraphs[idx];
+
+  const prompt = `You are rewriting ONE paragraph in an existing blog post. Return ONLY the rewritten paragraph — no explanations, no headings, no quotes, no surrounding markdown.
+
+Blog title: ${blog.title}
+Target keyword: ${blog.target_keyword}
+Paragraph index (1-based): ${paragraphIndex} of ${paragraphs.length}
+
+Edit instruction from user:
+"${instruction.trim()}"
+
+Current paragraph:
+"""
+${before}
+"""
+
+Surrounding context (paragraph before / after for tone & flow):
+BEFORE: ${idx > 0 ? paragraphs[idx - 1] : '(start of article)'}
+AFTER:  ${idx + 1 < paragraphs.length ? paragraphs[idx + 1] : '(end of article)'}
+
+Rules:
+1. Output ONLY the new paragraph text. No code fences, no labels.
+2. Keep the same approximate length unless the instruction explicitly asks to expand/shrink.
+3. Preserve any inline links the original paragraph had unless the instruction says otherwise.
+4. Match the tone of the surrounding paragraphs.
+5. Markdown is allowed for emphasis (**bold**, *italic*, [link](url)).`;
+
+  let after: string;
+  try {
+    after = (await geminiGenerate(prompt, 1)).trim();
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'LLM call failed', data: null };
+  }
+  // Strip surrounding quotes / code fences the LLM sometimes adds
+  after = after.replace(/^"+|"+$/g, '').replace(/^```[a-z]*\n?|```$/g, '').trim();
+  if (!after) return { success: false, error: 'LLM returned empty paragraph', data: null };
+
+  paragraphs[idx] = after;
+  const newContent = paragraphs.join('\n\n');
+  const res = await persistBlogPatch(blogId, newContent, project.domain as string);
+  return { ...res, before, after };
+}
+
+/**
+ * Rewrite or expand a whole H2 section identified by heading text.
+ */
+export async function editBlogSection(
+  blogId: string,
+  headingMatch: string,
+  instruction: string
+): Promise<{ success: boolean; error?: string; data: Blog | null; section?: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null };
+  if (!instruction?.trim()) return { success: false, error: 'Missing edit instruction', data: null };
+  if (!headingMatch?.trim()) return { success: false, error: 'Missing heading text', data: null };
+
+  const { data: blog } = await supabaseAdmin.from('blogs').select('*').eq('id', blogId).single();
+  if (!blog) return { success: false, error: 'Blog not found', data: null };
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, error: 'Not authorized', data: null };
+
+  const sections = splitIntoH2Sections(blog.content as string);
+  const needle = headingMatch.toLowerCase().trim();
+  const target = sections.find(
+    s => s.heading && (s.heading.toLowerCase().includes(needle) || needle.includes(s.heading.toLowerCase()))
+  );
+  if (!target) {
+    const available = sections.filter(s => s.heading).map(s => `"${s.heading}"`).join(', ');
+    return {
+      success: false,
+      error: `Could not find an H2 matching "${headingMatch}". Available H2s: ${available || '(none)'}`,
+      data: null,
+    };
+  }
+
+  const prompt = `Rewrite ONE H2 section of an existing blog. Return the full new section starting with the "## " line, in valid Markdown. Do NOT add any explanation outside the section.
+
+Blog title: ${blog.title}
+Target keyword: ${blog.target_keyword}
+Section heading: ${target.heading}
+
+Edit instruction:
+"${instruction.trim()}"
+
+Current section:
+"""
+${target.body}
+"""
+
+Rules:
+1. Begin with the "## " heading on its own line. You may improve the heading wording but keep the same topic.
+2. Use the same tone as the rest of the article.
+3. Allow ###, bullet lists, and inline links.
+4. No FAQ-style headings unless the original section was the FAQ.
+5. Output ONLY the section markdown.`;
+
+  let newSection: string;
+  try {
+    newSection = (await geminiGenerate(prompt, 1)).trim();
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'LLM call failed', data: null };
+  }
+  if (!newSection.startsWith('## ')) newSection = `## ${target.heading}\n\n${newSection}`;
+
+  const lines = (blog.content as string).split('\n');
+  const before = lines.slice(0, target.start).join('\n');
+  const afterLines = lines.slice(target.end + 1).join('\n');
+  const newContent = [before.trim(), newSection.trim(), afterLines.trim()].filter(Boolean).join('\n\n');
+
+  const res = await persistBlogPatch(blogId, newContent, project.domain as string);
+  return { ...res, section: target.heading ?? '' };
+}
+
+/**
+ * Add `count` internal links from the project's brief link pool, placed in
+ * paragraphs that don't already contain a link.
+ */
+export async function addInternalLinksToBlog(
+  blogId: string,
+  count: number = 2
+): Promise<{ success: boolean; error?: string; data: Blog | null; added: number }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null, added: 0 };
+
+  const { data: blog } = await supabaseAdmin.from('blogs').select('*').eq('id', blogId).single();
+  if (!blog) return { success: false, error: 'Blog not found', data: null, added: 0 };
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, error: 'Not authorized', data: null, added: 0 };
+
+  // Grab the brief's internal_link_candidates pool.
+  const { data: briefRow } = await supabaseAdmin
+    .from('project_briefs')
+    .select('brief')
+    .eq('project_id', blog.project_id)
+    .maybeSingle();
+  const brief = briefRow?.brief as { internal_link_candidates?: Array<{ url: string; title?: string; topic?: string }>; blog_urls?: string[] } | undefined;
+  const pool = (brief?.internal_link_candidates ?? []).filter(l => l.url?.startsWith('http'));
+  const blogUrls = (brief?.blog_urls ?? []).filter(u => u.startsWith('http'));
+
+  const candidates = [
+    ...pool.map(l => ({ url: l.url, label: l.title || l.topic || l.url })),
+    ...blogUrls.map(u => ({ url: u, label: u.replace(/^https?:\/\/[^/]+\//, '').replace(/\/$/, '').replace(/[-_/]/g, ' ') || 'Related article' })),
+  ].slice(0, 25);
+  if (!candidates.length) {
+    return { success: false, error: 'No internal link candidates available in your business brief.', data: null, added: 0 };
+  }
+
+  const content = blog.content as string;
+  const existingUrls = new Set([...(blog.internal_links ?? []), ...(blog.external_links ?? [])]);
+  const fresh = candidates.filter(c => !existingUrls.has(c.url));
+  if (!fresh.length) {
+    return { success: false, error: 'All internal link candidates are already used.', data: null, added: 0 };
+  }
+
+  const prompt = `Insert exactly ${Math.min(count, fresh.length)} internal links into this blog. For each link, pick a paragraph that does NOT already contain a link, find a natural anchor phrase, and replace it with [anchor](url) markdown — DO NOT add new sentences.
+
+Available links (use these EXACT URLs):
+${fresh.slice(0, 8).map((c, i) => `${i + 1}. ${c.url}  (topic: ${c.label})`).join('\n')}
+
+Return the FULL revised blog markdown only — no commentary, no fences. Preserve every other word, heading, list, and link unchanged.
+
+BLOG:
+"""
+${content}
+"""`;
+  let updated: string;
+  try {
+    updated = (await geminiGenerate(prompt, 1)).trim();
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'LLM call failed', data: null, added: 0 };
+  }
+  updated = updated.replace(/^```[a-z]*\n?|```$/g, '').trim();
+  if (updated.length < content.length * 0.7) {
+    return { success: false, error: 'LLM returned a truncated draft — change rejected', data: null, added: 0 };
+  }
+
+  const res = await persistBlogPatch(blogId, updated, project.domain as string);
+  const addedCount = ((res.data?.internal_links?.length ?? 0) - (blog.internal_links?.length ?? 0)) | 0;
+  return { ...res, added: Math.max(0, addedCount) };
+}
+
+/**
+ * Add credible external citations to existing claims.
+ * The LLM is instructed to only insert links into sentences that already
+ * make a factual or statistical claim.
+ */
+export async function addCitationsToBlog(
+  blogId: string,
+  preferredSources?: string[]
+): Promise<{ success: boolean; error?: string; data: Blog | null; added: number }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null, added: 0 };
+
+  const { data: blog } = await supabaseAdmin.from('blogs').select('*').eq('id', blogId).single();
+  if (!blog) return { success: false, error: 'Blog not found', data: null, added: 0 };
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, error: 'Not authorized', data: null, added: 0 };
+
+  const sources = preferredSources?.length
+    ? preferredSources.join(', ')
+    : 'McKinsey, Gartner, Deloitte, SHRM, LinkedIn Talent Blog, Statista, World Economic Forum, Accenture, EY, government or peer-reviewed sources';
+
+  const prompt = `You are an SEO editor adding inline citations to an existing blog post. Add 2–4 NEW external citation links to sentences that already make claims about industry data, statistics, hiring trends, market size, or workplace research.
+
+Rules:
+1. Only add a link where there is already a claim that benefits from sourcing — don't fabricate new sentences.
+2. Cite ONLY: ${sources}.
+3. Use the publication's main domain (e.g. https://www.mckinsey.com) — do NOT make up deep article URLs.
+4. Each citation = inline markdown link [anchor](url) inserted into the existing sentence as the source of the claim.
+5. Skip sentences that already have a link.
+6. Preserve every word, heading, paragraph break, list, and existing link.
+7. Return the FULL revised blog markdown only — no commentary.
+
+BLOG:
+"""
+${blog.content}
+"""`;
+  let updated: string;
+  try {
+    updated = (await geminiGenerate(prompt, 1)).trim();
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'LLM call failed', data: null, added: 0 };
+  }
+  updated = updated.replace(/^```[a-z]*\n?|```$/g, '').trim();
+  if (updated.length < (blog.content as string).length * 0.7) {
+    return { success: false, error: 'LLM returned a truncated draft — change rejected', data: null, added: 0 };
+  }
+
+  const res = await persistBlogPatch(blogId, updated, project.domain as string);
+  const before = blog.external_links?.length ?? 0;
+  const after = res.data?.external_links?.length ?? 0;
+  return { ...res, added: Math.max(0, after - before) };
+}
+
+/**
+ * Apply the user's free-form instruction to the entire blog (smaller-scope
+ * fallback when the user's request doesn't match a paragraph or section).
+ *
+ * Used for instructions like "make the tone more conversational" or
+ * "tighten the intro and use fewer adjectives".
+ */
+export async function applyBlogInstruction(
+  blogId: string,
+  instruction: string
+): Promise<{ success: boolean; error?: string; data: Blog | null }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null };
+  if (!instruction?.trim()) return { success: false, error: 'Missing instruction', data: null };
+
+  const { data: blog } = await supabaseAdmin.from('blogs').select('*').eq('id', blogId).single();
+  if (!blog) return { success: false, error: 'Blog not found', data: null };
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, error: 'Not authorized', data: null };
+
+  const prompt = `You are an editor making a SMALL targeted change to an existing blog post. Apply the user's instruction MINIMALLY — only modify the parts the instruction asks about. Preserve all other content, headings, links, FAQ, and meta exactly.
+
+User instruction:
+"${instruction.trim()}"
+
+Current blog:
+"""
+${blog.content}
+"""
+
+Return the FULL revised blog markdown only — no commentary, no code fences.`;
+  let updated: string;
+  try {
+    updated = (await geminiGenerate(prompt, 1)).trim();
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'LLM call failed', data: null };
+  }
+  updated = updated.replace(/^```[a-z]*\n?|```$/g, '').trim();
+  if (updated.length < (blog.content as string).length * 0.6) {
+    return { success: false, error: 'LLM returned a truncated draft — change rejected', data: null };
+  }
+  return await persistBlogPatch(blogId, updated, project.domain as string);
+}
+
 export async function getCalendarWithBlogs(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: [] };
@@ -687,7 +1087,7 @@ export async function getCalendarWithBlogs(projectId: string) {
 
   const { data: blogs } = await supabaseAdmin
     .from('blogs')
-    .select('id, entry_id, word_count, status, research_sources')
+    .select('id, entry_id, title, word_count, status, research_sources')
     .eq('project_id', projectId);
 
   const blogMap = new Map((blogs ?? []).map(b => [b.entry_id, b]));

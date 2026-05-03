@@ -1,16 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query-keys";
 import {
   auditExistingBlogs,
+  auditSelectedUrls,
   deleteBlogAudits,
+  getAllSitemapPages,
   getBlogAudits,
   type AuditCoverage,
   type PersistedBlogAudit,
+  type SitemapPage,
 } from "@/app/actions/audit-actions";
 import { repairBlogFromAudit } from "@/app/actions/repair-actions";
 import { addContentHealthKeywordToCalendar } from "@/app/actions/calendar-actions";
@@ -173,6 +176,60 @@ export default function ContentHealthPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [repairing, setRepairing] = useState<string | null>(null);
   const [calendarAddingUrl, setCalendarAddingUrl] = useState<string | null>(null);
+
+  // ── Page discovery state ──────────────────────────────────────────────
+  const [discoverTab, setDiscoverTab] = useState<"discover" | "audited">("audited");
+  const [selectedBasePath, setSelectedBasePath] = useState<string>("");
+  const [manualUrl, setManualUrl] = useState("");
+  const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
+  const [auditingSelected, setAuditingSelected] = useState(false);
+  const [discoverError, setDiscoverError] = useState("");
+
+  const { data: pagesData, isLoading: pagesLoading, refetch: refetchPages } = useQuery({
+    queryKey: ["sitemap-pages", projectId, selectedBasePath] as const,
+    queryFn: () => getAllSitemapPages(projectId, selectedBasePath || undefined),
+    enabled: discoverTab === "discover",
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+  });
+  const sitemapPages: SitemapPage[] = pagesData?.success ? pagesData.pages : [];
+  const basePaths: string[] = pagesData?.basePaths ?? [];
+
+  const togglePageSelect = useCallback((url: string) => {
+    setSelectedUrls(prev => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else if (next.size < 5) next.add(url);
+      return next;
+    });
+  }, []);
+
+  const handleAuditSelected = async () => {
+    const urls = [...selectedUrls];
+    if (manualUrl.trim() && /^https?:\/\//i.test(manualUrl.trim())) {
+      urls.push(manualUrl.trim());
+    }
+    if (!urls.length) return;
+    if (urls.length > 5) { setDiscoverError("Maximum 5 pages at once"); return; }
+
+    setAuditingSelected(true);
+    setDiscoverError("");
+    const res = await auditSelectedUrls(projectId, urls.slice(0, 5));
+    if (res.success) {
+      setRunSummary(`Audited ${res.audited} page(s)${res.failed ? `, ${res.failed} failed` : ""}.`);
+      setSelectedUrls(new Set());
+      setManualUrl("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: AUDITS_KEY }),
+        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+        refetchPages(),
+      ]);
+      setDiscoverTab("audited");
+    } else {
+      setDiscoverError(res.error ?? "Audit failed");
+    }
+    setAuditingSelected(false);
+  };
 
   const BATCH_SIZE = 10;
 
@@ -386,6 +443,198 @@ export default function ContentHealthPage() {
           tooltip="Blogs with at least one high-severity issue — actively blocked from ranking or AI citation today."
         />
       </div>
+
+      {/* ── Discover / Audited Tab Switcher ────────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex gap-1 rounded-[10px] border border-border-subtle bg-surface-secondary p-1 w-fit">
+          <button
+            type="button"
+            onClick={() => setDiscoverTab("audited")}
+            className={`rounded-[7px] px-5 py-2 text-[13px] font-medium transition-all duration-150 ${
+              discoverTab === "audited"
+                ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
+                : "text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            Audited ({coverage.blogs_audited})
+          </button>
+          <button
+            type="button"
+            onClick={() => setDiscoverTab("discover")}
+            className={`rounded-[7px] px-5 py-2 text-[13px] font-medium transition-all duration-150 ${
+              discoverTab === "discover"
+                ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
+                : "text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            Discover Pages
+          </button>
+        </div>
+        {discoverTab === "discover" && basePaths.length > 0 && (
+          <div className="flex items-center gap-2">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Filter</label>
+            <select
+              value={selectedBasePath}
+              onChange={e => { setSelectedBasePath(e.target.value); setSelectedUrls(new Set()); }}
+              className="rounded-[8px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[13px] text-text-primary outline-none"
+            >
+              <option value="">All pages ({pagesData?.total ?? 0})</option>
+              {basePaths.map(bp => (
+                <option key={bp} value={bp}>{bp} ({sitemapPages.filter(p => p.basePath === bp).length || "…"})</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {/* ── Discover Pages View ────────────────────────────────────────────── */}
+      {discoverTab === "discover" && (
+        <div className="space-y-4">
+          {discoverError && (
+            <div className="flex items-start gap-3 p-4 rounded-[12px] bg-brand-coral/10 border border-brand-coral/20 text-brand-coral text-[13px]">
+              {discoverError}
+            </div>
+          )}
+
+          {/* Manual URL input */}
+          <div className="flex items-center gap-2">
+            <input
+              type="url"
+              value={manualUrl}
+              onChange={e => setManualUrl(e.target.value)}
+              placeholder="Paste a URL to audit manually…"
+              className="flex-1 rounded-[10px] border border-border-subtle bg-surface-elevated px-4 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 transition-colors"
+            />
+            <button
+              type="button"
+              disabled={auditingSelected || (!selectedUrls.size && !manualUrl.trim())}
+              onClick={() => void handleAuditSelected()}
+              className="inline-flex h-10 items-center gap-2 rounded-[32px] bg-brand-primary px-5 text-[13px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50 shrink-0"
+            >
+              {auditingSelected ? (
+                <>
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
+                  Auditing…
+                </>
+              ) : (
+                `Audit${selectedUrls.size ? ` ${selectedUrls.size} selected` : manualUrl.trim() ? " URL" : ""} (max 5)`
+              )}
+            </button>
+          </div>
+
+          {pagesLoading ? (
+            <div className="space-y-2">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className="h-14 animate-pulse rounded-[12px] border border-border-subtle bg-surface-elevated" />
+              ))}
+            </div>
+          ) : sitemapPages.length === 0 ? (
+            <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-12 text-center">
+              <p className="text-[14px] text-text-tertiary">No pages found in your sitemap. Make sure sitemap.xml is reachable.</p>
+            </div>
+          ) : (
+            <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+                    <tr>
+                      <th className="px-3 py-3 w-10 text-center">
+                        <span className="sr-only">Select</span>
+                      </th>
+                      <th className="px-4 py-3">URL</th>
+                      <th className="px-4 py-3 w-28">Section</th>
+                      <th className="px-4 py-3 w-28 text-center">Status</th>
+                      <th className="px-4 py-3 w-24 text-center">Score</th>
+                      <th className="px-4 py-3 w-32">Keyword</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-subtle/60">
+                    {sitemapPages.slice(0, 100).map(page => {
+                      const isSelected = selectedUrls.has(page.url);
+                      return (
+                        <tr
+                          key={page.url}
+                          onClick={() => togglePageSelect(page.url)}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected ? "bg-brand-action/5" : "hover:bg-surface-hover/50"
+                          }`}
+                        >
+                          <td className="px-3 py-2.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => togglePageSelect(page.url)}
+                              disabled={!isSelected && selectedUrls.size >= 5}
+                              className="h-4 w-4 rounded border-border-subtle accent-brand-action"
+                            />
+                          </td>
+                          <td className="px-4 py-2.5 max-w-[400px]">
+                            <a
+                              href={page.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              className="block truncate text-[13px] text-brand-action hover:underline"
+                              title={page.url}
+                            >
+                              {(() => { try { return new URL(page.url).pathname; } catch { return page.url; } })()}
+                            </a>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className="rounded-[4px] bg-surface-tertiary px-2 py-0.5 text-[11px] font-mono text-text-tertiary">
+                              {page.basePath}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            {page.audited ? (
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                page.severity === "high"
+                                  ? "border-rose-500/30 bg-rose-500/10 text-rose-400"
+                                  : page.severity === "medium"
+                                  ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-400"
+                                  : "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                              }`}>
+                                {page.severity ?? "audited"}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-text-tertiary">Pending</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            {page.audited && page.healthScore !== undefined ? (
+                              <span className={`font-mono text-[13px] font-bold ${healthColor(page.healthScore)}`}>
+                                {page.healthScore}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-text-tertiary">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            {page.primaryKeyword ? (
+                              <span className="text-[12px] text-text-secondary truncate block max-w-[120px]">{page.primaryKeyword}</span>
+                            ) : (
+                              <span className="text-[11px] text-text-tertiary">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {sitemapPages.length > 100 && (
+                <div className="border-t border-border-subtle px-4 py-3 bg-surface-secondary/50 text-[12px] text-text-tertiary">
+                  Showing first 100 of {sitemapPages.length} pages. Use the section filter to narrow down.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Audited Results View ──────────────────────────────────────────── */}
+      {discoverTab === "audited" && (
+        <>
 
       {coverage.blogs_found === 0 && !loading && (
         <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
@@ -732,6 +981,10 @@ export default function ContentHealthPage() {
             );
           })}
         </div>
+      )}
+
+      {/* close discoverTab === "audited" */}
+      </>
       )}
     </div>
   );

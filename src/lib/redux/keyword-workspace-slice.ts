@@ -89,6 +89,42 @@ type ProjectKeywordWorkspace = {
     selectedKeywordIds: string[];
     lastAction: string | null;
     preferredFilter: "all" | "low_competition" | "long_tail" | "ai";
+    recentQueries: string[];
+    chatHistory: Array<{
+      id: string;
+      sessionId: string;
+      role: "user" | "assistant";
+      text: string;
+      page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+      timestamp: string;
+      /**
+       * Tool execution results that were rendered alongside this message.
+       * Persisted so the chat scroll-back keeps showing them after the next
+       * turn instead of disappearing with `result` state.
+       */
+      toolCalls?: Array<{
+        id: string;
+        params: Record<string, unknown>;
+        durationMs: number;
+        result: {
+          success: boolean;
+          message: string;
+          error?: string;
+          data?: unknown;
+          sideEffect?: string;
+        };
+      }>;
+      /** Suggestion cards rendered alongside this message. Stored loosely so
+       * Redux doesn't depend on the chatbot's internal types. */
+      suggestions?: Array<Record<string, unknown> | unknown>;
+    }>;
+    chatSessions: Array<{
+      id: string;
+      title: string;
+      page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+      createdAt: string;
+      lastMessageAt: string;
+    }>;
   };
 };
 
@@ -122,6 +158,9 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
       selectedKeywordIds: [],
       lastAction: null,
       preferredFilter: "all",
+      recentQueries: [],
+      chatHistory: [],
+      chatSessions: [],
     },
   };
   // Backfill for existing persisted state that predates this field
@@ -134,7 +173,12 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
     selectedKeywordIds: [],
     lastAction: null,
     preferredFilter: "all",
+    recentQueries: [],
+    chatHistory: [],
+    chatSessions: [],
   };
+  // Backfill chatSessions for persisted state that predates this field
+  (state.projects[projectId].aiAssistant as { chatSessions?: unknown[] }).chatSessions ??= [];
   return state.projects[projectId];
 }
 
@@ -289,6 +333,14 @@ export const keywordWorkspaceSlice = createSlice({
     },
 
     /**
+     * Bump when calendar-backed data changes off the calendar route (e.g. blog
+     * generated on Blogs page) so the calendar query invalidates on next visit.
+     */
+    calendarRefreshBump(state, action: PayloadAction<{ projectId: string }>) {
+      ensureProject(state, action.payload.projectId).calendarRefreshVersion += 1;
+    },
+
+    /**
      * Store the full keyword list so the next navigation to the keywords page
      * renders instantly from this cache instead of hitting the API.
      */
@@ -383,6 +435,35 @@ export const keywordWorkspaceSlice = createSlice({
         selectedKeywordIds?: string[];
         lastAction?: string | null;
         preferredFilter?: "all" | "low_competition" | "long_tail" | "ai";
+        recentQueries?: string[];
+        chatHistory?: Array<{
+          id: string;
+          sessionId: string;
+          role: "user" | "assistant";
+          text: string;
+          page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+          timestamp: string;
+          toolCalls?: Array<{
+            id: string;
+            params: Record<string, unknown>;
+            durationMs: number;
+            result: {
+              success: boolean;
+              message: string;
+              error?: string;
+              data?: unknown;
+              sideEffect?: string;
+            };
+          }>;
+          suggestions?: Array<Record<string, unknown> | unknown>;
+        }>;
+        chatSessions?: Array<{
+          id: string;
+          title: string;
+          page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+          createdAt: string;
+          lastMessageAt: string;
+        }>;
       }>
     ) {
       const project = ensureProject(state, action.payload.projectId);
@@ -408,6 +489,15 @@ export const keywordWorkspaceSlice = createSlice({
       if (action.payload.preferredFilter) {
         current.preferredFilter = action.payload.preferredFilter;
       }
+      if (action.payload.recentQueries) {
+        current.recentQueries = action.payload.recentQueries.slice(-12);
+      }
+      if (action.payload.chatHistory) {
+        current.chatHistory = action.payload.chatHistory.slice(-100);
+      }
+      if (action.payload.chatSessions) {
+        current.chatSessions = action.payload.chatSessions.slice(-50);
+      }
     },
   },
 });
@@ -422,6 +512,7 @@ export const {
   hydrateProjectStats,
   calendarEntriesLoaded,
   calendarSyncVersionUpdated,
+  calendarRefreshBump,
   keywordsLoaded,
   clearKeywordsCache,
   briefLoaded,

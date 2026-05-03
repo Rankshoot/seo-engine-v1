@@ -1,22 +1,30 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query-keys";
 import { getCalendarWithBlogs, generateBlog, updateBlogStatus } from "@/app/actions/blog-actions";
-import { BlogStatus, WORD_COUNT_OPTIONS } from "@/lib/types";
+import { BlogStatus, WORD_COUNT_OPTIONS, type CalendarEntryWithBlog } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
+import { TableSkeleton } from "@/components/Skeleton";
 
 type CalendarWithBlogsResponse = Awaited<ReturnType<typeof getCalendarWithBlogs>>;
 
-const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-  scheduled: { label: "Scheduled", color: "bg-surface-secondary text-text-tertiary border-border-subtle" },
-  generating: { label: "Generating...", color: "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20 animate-pulse" },
-  generated: { label: "Generated", color: "bg-[#10b981]/10 text-[#10b981] border-[#10b981]/20" },
-  approved: { label: "Approved", color: "bg-brand-action/10 text-brand-action border-brand-action/20" },
-  published: { label: "Published", color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" },
+const STATUS_CONFIG: Record<string, { label: string; color: string; dot?: string }> = {
+  scheduled: { label: "Scheduled", color: "text-text-tertiary" },
+  generating: {
+    label: "Generating…",
+    color: "text-[#f59e0b]",
+    dot: "bg-[#f59e0b] animate-pulse",
+  },
+  generated: { label: "Generated", color: "text-[#10b981]", dot: "bg-[#10b981]" },
+  downloaded: { label: "Generated", color: "text-[#10b981]", dot: "bg-[#10b981]" },
+  approved: { label: "Approved", color: "text-brand-action", dot: "bg-brand-action" },
+  published: { label: "Published", color: "text-cyan-400", dot: "bg-cyan-400" },
 };
 
 const BLOG_STATUSES: Array<{ value: BlogStatus; label: string }> = [
@@ -29,39 +37,54 @@ function asBlogStatus(status: string | undefined): BlogStatus {
   return status === "approved" || status === "published" ? status : "generated";
 }
 
+function fmtDate(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function rowTitle(entry: CalendarEntryWithBlog): string {
+  const bt = entry.blog?.title?.trim();
+  if (bt) return bt;
+  const et = entry.title?.trim();
+  return et || "—";
+}
+
 export default function BlogsPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const highlightEntry = searchParams.get("entry");
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
 
   const ENTRIES_KEY = qk.calendarWithBlogs(projectId);
+  const CALENDAR_KEY = qk.calendar(projectId);
 
   const [generating, setGenerating] = useState<string | null>(null);
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
+  const [writerNotes, setWriterNotes] = useState<Record<string, string>>({});
   const [downloading, setDownloading] = useState<string | null>(null);
   const [savingStatus, setSavingStatus] = useState<string | null>(null);
   const [error, setError] = useState<Record<string, string>>({});
-  const highlightRef = useRef<HTMLDivElement>(null);
+  const [notesOpenFor, setNotesOpenFor] = useState<string | null>(null);
+  const highlightRef = useRef<HTMLTableRowElement>(null);
 
   const { data: entriesData, isLoading: loading } = useQuery<CalendarWithBlogsResponse>({
     queryKey: ENTRIES_KEY,
     queryFn: () => getCalendarWithBlogs(projectId),
     enabled: !!projectId,
-    // Always refetch on mount — the Calendar page may have rescheduled an
-    // entry while this page was unmounted. Stale dates here would mislead
-    // the user about when their blogs are due.
     staleTime: 0,
     gcTime: 30 * 60_000,
-    refetchOnMount: 'always',
+    refetchOnMount: "always",
   });
-  const entries: any[] = entriesData?.success ? entriesData.data : [];
+  const entries: CalendarEntryWithBlog[] = entriesData?.success ? (entriesData.data as CalendarEntryWithBlog[]) : [];
 
-  /** Patch the cached entries list. Used for optimistic blog generation/status. */
-  const patchEntries = (mutator: (list: any[]) => any[]) => {
+  const patchEntries = (mutator: (list: CalendarEntryWithBlog[]) => CalendarEntryWithBlog[]) => {
     queryClient.setQueryData(ENTRIES_KEY, (prev: CalendarWithBlogsResponse | undefined) => {
       if (!prev?.success) return prev;
-      return { ...prev, data: mutator(prev.data as any[]) } as CalendarWithBlogsResponse;
+      return { ...prev, data: mutator(prev.data as CalendarEntryWithBlog[]) } as CalendarWithBlogsResponse;
     });
   };
 
@@ -74,267 +97,311 @@ export default function BlogsPage() {
   const handleGenerate = async (entryId: string) => {
     const wc = wordCounts[entryId] ?? 2500;
     setGenerating(entryId);
-    setError(prev => ({ ...prev, [entryId]: "" }));
+    setError((prev) => ({ ...prev, [entryId]: "" }));
 
-    // Optimistic UI: flip to "generating" immediately.
-    patchEntries(list => list.map(e => e.id === entryId ? { ...e, status: "generating" } : e));
+    patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "generating" } : e)));
 
-    const res = await generateBlog(entryId, wc);
+    const notes = writerNotes[entryId]?.trim();
+    const res = await generateBlog(entryId, wc, notes || undefined);
     if (res.success && res.data) {
-      // res.data already contains all server-side fields (slug, word_count, etc.)
-      // so the optimistic patch is the final state — no extra network call needed.
-      patchEntries(list => list.map(e => e.id === entryId ? { ...e, status: "generated", blog: res.data } : e));
-      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      patchEntries((list) =>
+        list.map((e) =>
+          e.id === entryId
+            ? { ...e, status: "generated", title: res.data!.title, blog: res.data as CalendarEntryWithBlog["blog"] }
+            : e
+        )
+      );
+      dispatch(calendarRefreshBump({ projectId }));
+      void queryClient.invalidateQueries({ queryKey: CALENDAR_KEY });
+      void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     } else {
-      patchEntries(list => list.map(e => e.id === entryId ? { ...e, status: "scheduled" } : e));
-      setError(prev => ({ ...prev, [entryId]: res.error ?? "Generation failed" }));
+      patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "scheduled" } : e)));
+      setError((prev) => ({ ...prev, [entryId]: res.error ?? "Generation failed" }));
     }
     setGenerating(null);
   };
 
   const handleStatusChange = async (entryId: string, blogId: string, status: BlogStatus) => {
     setSavingStatus(blogId);
-    setError(prev => ({ ...prev, [entryId]: "" }));
+    setError((prev) => ({ ...prev, [entryId]: "" }));
     const previous = queryClient.getQueryData<CalendarWithBlogsResponse>(ENTRIES_KEY);
-    patchEntries(list =>
-      list.map(e => e.id === entryId && e.blog ? { ...e, blog: { ...e.blog, status } } : e)
+    patchEntries((list) =>
+      list.map((e) => (e.id === entryId && e.blog ? { ...e, blog: { ...e.blog, status } } : e))
     );
 
     const res = await updateBlogStatus(blogId, status);
     if (!res.success) {
       if (previous) queryClient.setQueryData(ENTRIES_KEY, previous);
-      setError(prev => ({ ...prev, [entryId]: res.error ?? "Could not update blog status" }));
+      setError((prev) => ({ ...prev, [entryId]: res.error ?? "Could not update blog status" }));
     } else {
-      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      dispatch(calendarRefreshBump({ projectId }));
+      void queryClient.invalidateQueries({ queryKey: CALENDAR_KEY });
+      void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     }
     setSavingStatus(null);
   };
 
-  const handleDownload = async (entry: any, format: "markdown" | "html" | "txt" | "docx") => {
+  const handleDownload = async (entry: CalendarEntryWithBlog, format: "markdown" | "html" | "txt" | "docx") => {
     if (!entry.blog) return;
     setDownloading(entry.id + format);
 
-    // Fetch full blog
     const { getBlogById } = await import("@/app/actions/blog-actions");
     const res = await getBlogById(entry.blog.id);
-    if (!res.success || !res.data) { setDownloading(null); return; }
+    if (!res.success || !res.data) {
+      setDownloading(null);
+      return;
+    }
 
     const blog = res.data;
     const slug = blog.slug || blog.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 
     let blob: Blob;
     let ext: string;
-    if (format === "markdown") { blob = exportToMarkdown(blog); ext = "md"; }
-    else if (format === "html") { blob = exportToHTML(blog); ext = "html"; }
-    else if (format === "txt") { blob = exportToText(blog); ext = "txt"; }
-    else { blob = await exportToDocx(blog); ext = "docx"; }
+    if (format === "markdown") {
+      blob = exportToMarkdown(blog);
+      ext = "md";
+    } else if (format === "html") {
+      blob = exportToHTML(blog);
+      ext = "html";
+    } else if (format === "txt") {
+      blob = exportToText(blog);
+      ext = "txt";
+    } else {
+      blob = await exportToDocx(blog);
+      ext = "docx";
+    }
 
     triggerDownload(blob, `${slug}.${ext}`);
     setDownloading(null);
   };
 
-  const readyCount = entries.filter(e => e.blog).length;
+  const readyCount = entries.filter((e) => e.blog).length;
 
   return (
-    <div className="space-y-10 pb-16 pl-4 pr-4 mx-auto">
-      {/* ── HEADER ─────────────────────────────────────────────────────────── */}
-      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
+      <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
             Blog Generator
           </h1>
-          <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
-            Generate blogs one at a time. Review each before downloading.
+          <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
+            Generate and export blogs from your content calendar. Titles update here and on the calendar when generation completes.
           </p>
         </div>
-        {readyCount > 0 && (
-          <div className="text-right">
-            <p className="text-[28px] font-normal tracking-tight text-text-primary font-display">{readyCount}</p>
-            <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary">blogs generated</p>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-3">
+          {readyCount > 0 && (
+            <span className="text-[13px] text-text-tertiary">
+              <span className="font-semibold text-text-primary">{readyCount}</span> with drafts
+            </span>
+          )}
+          <Link
+            href={`/projects/${projectId}/calendar`}
+            className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+          >
+            Content calendar
+          </Link>
+        </div>
       </div>
 
       {loading ? (
-        <div className="space-y-4">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-32 animate-pulse bg-surface-elevated rounded-[16px] border border-border-subtle" />
-          ))}
+        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
+          <TableSkeleton rows={8} columns={7} />
         </div>
       ) : entries.length === 0 ? (
-        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
-          <div className="mb-6 flex justify-center">
-            <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
-              <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-              </svg>
-            </div>
-          </div>
-          <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No calendar yet</h3>
-          <p className="mb-8 text-[16px] text-text-tertiary max-w-md mx-auto">
-            Generate your content calendar first.
-          </p>
-          <Link href={`/projects/${projectId}/calendar`} className="inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90">
-            Go to Calendar
+        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
+          <p className="text-[15px] font-medium text-text-secondary">No scheduled entries yet</p>
+          <p className="mt-1 text-[13px] text-text-tertiary">Schedule keywords on the content calendar first.</p>
+          <Link
+            href={`/projects/${projectId}/calendar`}
+            className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+          >
+            Open calendar
           </Link>
         </div>
       ) : (
-        <div className="space-y-6">
-          {entries.map((entry: any, i: number) => {
-            const hasBlog = Boolean(entry.blog);
-            const blogStatus = asBlogStatus(entry.blog?.status);
-            const cfg = hasBlog ? STATUS_CONFIG[blogStatus] : (STATUS_CONFIG[entry.status] ?? STATUS_CONFIG.scheduled);
-            const isHighlighted = entry.id === highlightEntry;
-            const isGenerating = generating === entry.id;
-            const wc = wordCounts[entry.id] ?? 2500;
+        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+                <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+                <tr>
+                  <th className="px-3 py-3 w-12 text-center">#</th>
+                  <th className="px-4 py-3 w-28">Date</th>
+                  <th className="px-4 py-3 min-w-[8rem]">Keyword</th>
+                  <th className="px-4 py-3 min-w-[12rem]">Title</th>
+                  <th className="px-4 py-3 w-24">Type</th>
+                  <th className="px-4 py-3 w-36">Status</th>
+                  <th className="px-4 py-3 text-right pr-4 w-[14rem]">Actions</th>
+                </tr>
+                </thead>
+              <tbody className="divide-y divide-border-subtle/60">
+                {entries.map((entry, entryIndex) => {
+                  const hasBlog = Boolean(entry.blog);
+                  const blogStatus = asBlogStatus(entry.blog?.status);
+                  const effStatus = entry.status;
+                  const statusCfg =
+                    effStatus === "generating"
+                      ? STATUS_CONFIG.generating
+                      : hasBlog
+                        ? STATUS_CONFIG[blogStatus] ?? STATUS_CONFIG.generated
+                        : STATUS_CONFIG[effStatus] ?? STATUS_CONFIG.scheduled;
+                  const isHighlighted = entry.id === highlightEntry;
+                  const isGenerating = generating === entry.id;
+                  const wc = wordCounts[entry.id] ?? 2500;
+                  const notesOpen = notesOpenFor === entry.id;
 
-            return (
-              <div
-                key={entry.id}
-                ref={isHighlighted ? highlightRef : null}
-                className={`rounded-[16px] border border-border-subtle bg-surface-elevated p-6 transition-all ${
-                  isHighlighted ? "ring-2 ring-brand-action/40 border-brand-action/30" : ""
-                }`}
-              >
-                <div className="flex flex-col md:flex-row items-start gap-6">
-                  {/* Day number */}
-                  <div className="w-16 h-16 rounded-[12px] bg-surface-secondary border border-border-subtle flex flex-col items-center justify-center shrink-0">
-                    <span className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
-                      {new Date(entry.scheduled_date + "T00:00:00").toLocaleDateString("en-US", { month: "short" })}
-                    </span>
-                    <span className="text-[20px] font-bold text-text-primary leading-none mt-1 font-mono">
-                      {new Date(entry.scheduled_date + "T00:00:00").getDate()}
-                    </span>
-                  </div>
-
-                  {/* Content */}
-                  <div className="flex-1 min-w-0 w-full">
-                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-4">
-                      <div>
-                        <h3 className="text-[18px] font-medium text-text-primary leading-snug">
-                          {entry.title && entry.title.trim()
-                            ? entry.title
-                            : <span className="text-text-tertiary italic">{entry.focus_keyword}</span>}
-                        </h3>
-                        <div className="flex flex-wrap items-center gap-3 mt-2">
-                          <span className="text-[12px] font-mono text-brand-action/70">{entry.focus_keyword}</span>
-                          <span className="text-[13px] text-text-tertiary/40">·</span>
-                          <span className="text-[13px] text-text-tertiary">{entry.article_type}</span>
-                          {hasBlog && (
-                            <>
-                              <span className="text-[13px] text-text-tertiary/40">·</span>
-                              <span className="text-[13px] text-text-tertiary">{entry.blog.word_count.toLocaleString()} words</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <span className={`inline-flex items-center justify-center text-[11px] font-bold px-2.5 py-1 rounded-full border shrink-0 uppercase tracking-widest ${cfg.color}`}>
-                        {cfg.label}
-                      </span>
-                    </div>
-
-                    {error[entry.id] && (
-                      <p className="text-[13px] text-brand-coral mb-4">{error[entry.id]}</p>
-                    )}
-
-                    {hasBlog && (
-                      <div className="mb-4 inline-flex items-center gap-3 rounded-[8px] border border-border-subtle bg-surface-secondary px-3 py-2">
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
-                          Status
-                        </span>
-                        <select
-                          value={blogStatus}
-                          onChange={e => handleStatusChange(entry.id, entry.blog.id, e.target.value as BlogStatus)}
-                          disabled={savingStatus === entry.blog.id}
-                          className="bg-transparent text-[13px] font-medium text-text-primary outline-none disabled:opacity-60 cursor-pointer"
-                        >
-                          {BLOG_STATUSES.map(status => (
-                            <option key={status.value} value={status.value}>
-                              {status.label}
-                            </option>
-                          ))}
-                        </select>
-                        {savingStatus === entry.blog.id && (
-                          <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
-                        )}
-                      </div>
-                    )}
-
-                    {/* Actions */}
-                    <div className="flex flex-wrap items-center gap-3">
-                      {!hasBlog ? (
-                        <>
-                          {/* Word count selector */}
-                          <select
-                            value={wc}
-                            onChange={e => setWordCounts(prev => ({ ...prev, [entry.id]: +e.target.value }))}
-                            className="text-[13px] font-medium bg-surface-secondary border border-border-subtle rounded-[4px] px-3 py-2 text-text-secondary outline-none hover:border-brand-action transition-colors cursor-pointer"
-                          >
-                            {WORD_COUNT_OPTIONS.map(opt => (
-                              <option key={opt} value={opt}>{opt.toLocaleString()} words</option>
-                            ))}
-                          </select>
-
-                          <button
-                            onClick={() => handleGenerate(entry.id)}
-                            disabled={isGenerating || generating !== null}
-                            className="rounded-[32px] bg-brand-primary px-5 py-2 text-[13px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60 flex items-center gap-2"
-                          >
-                            {isGenerating ? (
-                              <><div className="w-3.5 h-3.5 border-2 border-brand-on-primary/30 border-t-brand-on-primary rounded-full animate-spin" /> Writing blog...</>
-                            ) : "Generate Blog"}
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <Link
-                            href={`/projects/${projectId}/blogs/${entry.blog.id}`}
-                            className="rounded-[30px] border border-border-subtle bg-surface-secondary px-5 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
-                          >
-                            View Blog
-                          </Link>
-
-                          {/* Download buttons */}
-                          <div className="flex flex-wrap items-center gap-2 border-l border-border-subtle pl-3 ml-1">
-                            {(["markdown", "html", "txt", "docx"] as const).map(fmt => (
-                              <button
-                                key={fmt}
-                                onClick={() => handleDownload(entry, fmt)}
-                                disabled={downloading === entry.id + fmt}
-                                className="rounded-[4px] bg-surface-secondary text-text-secondary border border-border-subtle px-3 py-2 text-[11px] font-bold uppercase tracking-widest hover:bg-surface-hover hover:text-text-primary transition-all disabled:opacity-60"
+                  return (
+                    <Fragment key={entry.id}>
+                      <tr
+                        ref={isHighlighted ? highlightRef : null}
+                        className={`hover:bg-surface-hover/50 transition-colors ${isHighlighted ? "bg-brand-action/6" : ""}`}
+                      >
+                        <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
+                  {entryIndex + 1}
+                </td>
+                <td className="px-4 py-2.5 align-middle tabular-nums text-[12px] text-text-primary whitespace-nowrap">
+                          {fmtDate(entry.scheduled_date)}
+                        </td>
+                        <td className="px-4 py-2.5 align-middle max-w-[11rem]">
+                          <p className="truncate text-[13px] font-medium text-text-primary" title={entry.focus_keyword}>
+                            {entry.focus_keyword}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 align-middle max-w-[18rem]">
+                          <p className="truncate text-[13px] text-text-secondary" title={rowTitle(entry)}>
+                            {rowTitle(entry)}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 align-middle text-[11px] text-text-tertiary whitespace-nowrap">
+                          {entry.article_type}
+                        </td>
+                        <td className="px-4 py-2.5 align-middle">
+                          <div className="flex flex-col gap-1">
+                            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${statusCfg.color}`}>
+                              {statusCfg.dot ? (
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusCfg.dot}`} />
+                              ) : null}
+                              {statusCfg.label}
+                            </span>
+                            {hasBlog && entry.blog && (
+                              <select
+                                value={blogStatus}
+                                onChange={(e) =>
+                                  handleStatusChange(entry.id, entry.blog!.id, e.target.value as BlogStatus)
+                                }
+                                disabled={savingStatus === entry.blog.id}
+                                className="max-w-[9.5rem] rounded-md border border-border-subtle bg-surface-secondary px-2 py-1 text-[11px] text-text-primary outline-none disabled:opacity-50"
                               >
-                                {downloading === entry.id + fmt ? "..." : `.${fmt === "markdown" ? "md" : fmt}`}
-                              </button>
-                            ))}
+                                {BLOG_STATUSES.map((s) => (
+                                  <option key={s.value} value={s.value}>
+                                    {s.label}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
-
-                          {/* Regenerate with word count */}
-                          <div className="flex flex-wrap items-center gap-2 border-l border-border-subtle pl-3 ml-1">
+                        </td>
+                        <td className="px-4 py-2.5 align-middle text-right">
+                          <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setNotesOpenFor((id) => (id === entry.id ? null : entry.id))}
+                              className="h-8 px-2.5 rounded-full border border-border-subtle text-[11px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                              title="Writer notes"
+                            >
+                              Notes
+                            </button>
                             <select
                               value={wc}
-                              onChange={e => setWordCounts(prev => ({ ...prev, [entry.id]: +e.target.value }))}
-                              className="text-[13px] font-medium bg-surface-secondary border border-border-subtle rounded-[4px] px-3 py-2 text-text-secondary outline-none hover:border-brand-action transition-colors cursor-pointer"
+                              onChange={(e) =>
+                                setWordCounts((prev) => ({ ...prev, [entry.id]: +e.target.value }))
+                              }
+                              disabled={isGenerating || generating !== null}
+                              className="h-8 rounded-full border border-border-subtle bg-surface-secondary px-2 text-[11px] text-text-primary outline-none disabled:opacity-50"
                             >
-                              {WORD_COUNT_OPTIONS.map(opt => (
-                                <option key={opt} value={opt}>{opt.toLocaleString()}w</option>
+                              {WORD_COUNT_OPTIONS.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt >= 1000 ? `${opt / 1000}k` : opt}w
+                                </option>
                               ))}
                             </select>
-                            <button
-                              onClick={() => handleGenerate(entry.id)}
-                              disabled={isGenerating || generating !== null}
-                              className="rounded-[4px] border border-border-subtle bg-surface-secondary px-4 py-2 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                            >
-                              Regenerate
-                            </button>
+                            {!hasBlog ? (
+                              <button
+                                type="button"
+                                onClick={() => handleGenerate(entry.id)}
+                                disabled={isGenerating || generating !== null}
+                                className="h-8 rounded-full bg-brand-primary px-3 text-[11px] font-semibold text-brand-on-primary disabled:opacity-50"
+                              >
+                                {isGenerating ? "…" : "Generate"}
+                              </button>
+                            ) : (
+                              <>
+                                <Link
+                                  href={`/projects/${projectId}/blogs/${entry.blog!.id}`}
+                                  className="inline-flex h-8 items-center rounded-full border border-border-subtle px-3 text-[11px] font-semibold text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                                >
+                                  Open
+                                </Link>
+                                <select
+                                  defaultValue=""
+                                  onChange={(e) => {
+                                    const v = e.target.value as "markdown" | "html" | "txt" | "docx";
+                                    if (v) void handleDownload(entry, v);
+                                    e.target.value = "";
+                                  }}
+                                  disabled={!!downloading}
+                                  className="h-8 max-w-[5.5rem] rounded-full border border-border-subtle bg-surface-secondary px-2 text-[10px] font-bold uppercase tracking-wide text-text-secondary outline-none"
+                                >
+                                  <option value="">Export</option>
+                                  <option value="markdown">MD</option>
+                                  <option value="html">HTML</option>
+                                  <option value="txt">TXT</option>
+                                  <option value="docx">DOCX</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => handleGenerate(entry.id)}
+                                  disabled={isGenerating || generating !== null}
+                                  className="h-8 rounded-full border border-border-subtle px-2.5 text-[11px] font-medium text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+                                >
+                                  Redo
+                                </button>
+                              </>
+                            )}
                           </div>
-                        </>
+                        </td>
+                      </tr>
+                      {notesOpen && (
+                        <tr className="bg-surface-secondary/40">
+                          <td colSpan={7} className="px-4 py-3">
+                            {error[entry.id] ? (
+                              <p className="text-[12px] text-brand-coral mb-2">{error[entry.id]}</p>
+                            ) : null}
+                            <label className="block text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1">
+                              Optional writer notes
+                            </label>
+                            <textarea
+                              value={writerNotes[entry.id] ?? ""}
+                              onChange={(e) =>
+                                setWriterNotes((prev) => ({ ...prev, [entry.id]: e.target.value }))
+                              }
+                              placeholder={
+                                hasBlog
+                                  ? "What should change in a rewrite?"
+                                  : "Angle, tone, audience, must-cover points…"
+                              }
+                              rows={2}
+                              disabled={isGenerating || generating !== null}
+                              className="w-full max-w-2xl rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 text-[12px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 resize-y disabled:opacity-50"
+                            />
+                          </td>
+                        </tr>
                       )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

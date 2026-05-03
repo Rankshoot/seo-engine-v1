@@ -154,14 +154,39 @@ export async function getCalendarEntries(projectId: string) {
     }
   }
 
+  // Use `keywords(*)` so we get every column PostgREST knows about — avoids
+  // referencing `source_type` explicitly (which crashes on older DBs that never
+  // ran discovery-pipeline migrations) while still returning it once added.
   const { data, error } = await supabaseAdmin
     .from('calendar_entries')
-    .select('*, keywords(source_type, gap_competitor, volume, kd)')
+    .select('*, keywords(*)')
     .eq('project_id', projectId)
     .order('scheduled_date', { ascending: true });
 
   if (error) return { success: false, error: error.message, data: [] as CalendarEntry[] };
-  return { success: true, data: data as CalendarEntry[] };
+
+  const rows = data as CalendarEntry[];
+  const entryIds = rows.map(r => r.id).filter(Boolean);
+  const titlesByEntry = new Map<string, string>();
+  if (entryIds.length) {
+    const { data: blogRows } = await supabaseAdmin
+      .from('blogs')
+      .select('entry_id, title')
+      .eq('project_id', projectId)
+      .in('entry_id', entryIds);
+    for (const b of blogRows ?? []) {
+      const eid = b.entry_id as string | undefined;
+      const t = (b.title as string | undefined)?.trim();
+      if (eid && t) titlesByEntry.set(eid, t);
+    }
+  }
+
+  const enriched: CalendarEntry[] = rows.map(r => ({
+    ...r,
+    blog_title: titlesByEntry.get(r.id) ?? null,
+  }));
+
+  return { success: true, data: enriched };
 }
 
 function slugify(value: string): string {
@@ -410,4 +435,210 @@ export async function updateCalendarEntry(
 
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+
+/**
+ * Update the status of a calendar entry (and its linked blog if any).
+ * Allowed transitions: scheduled → generating, scheduled → approved, etc.
+ * The blog status is mirrored when present.
+ */
+export async function updateCalendarEntryStatus(
+  entryId: string,
+  status: 'scheduled' | 'generating' | 'generated' | 'downloaded' | 'approved' | 'published'
+) {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const { data: entry } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id, project_id')
+    .eq('id', entryId)
+    .maybeSingle();
+  if (!entry) return { success: false, error: 'Calendar entry not found' };
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', entry.project_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (!project) return { success: false, error: 'Not authorized' };
+
+  const { error } = await supabaseAdmin
+    .from('calendar_entries')
+    .update({ status })
+    .eq('id', entryId);
+  if (error) return { success: false, error: error.message };
+
+  // Mirror to linked blog if applicable.
+  if (status === 'approved' || status === 'published' || status === 'generated') {
+    await supabaseAdmin
+      .from('blogs')
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq('entry_id', entryId);
+  }
+  return { success: true };
+}
+
+/**
+ * Vacate a calendar slot — used by the AI assistant when the user asks
+ * "free up April 3rd" or "remove this from the calendar".
+ *
+ * mode = 'delete'    → drop the entry entirely (default; safest)
+ * mode = 'unschedule' → keep the entry but clear scheduled_date (not currently
+ *                       supported by schema — falls back to delete)
+ *
+ * Identification: pass either `entryId` OR (`projectId` + `date`) OR
+ * (`projectId` + `keyword`). First match wins.
+ */
+export async function vacateCalendarSlot(params: {
+  entryId?: string;
+  projectId?: string;
+  date?: string;
+  keyword?: string;
+}): Promise<{ success: boolean; error?: string; removed: number }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', removed: 0 };
+
+  let query = supabaseAdmin.from('calendar_entries').select('id, project_id, focus_keyword, scheduled_date');
+
+  if (params.entryId) {
+    query = query.eq('id', params.entryId);
+  } else if (params.projectId) {
+    query = query.eq('project_id', params.projectId);
+    if (params.date) query = query.eq('scheduled_date', params.date);
+    if (params.keyword) query = query.ilike('focus_keyword', params.keyword.trim());
+  } else {
+    return { success: false, error: 'Must provide entryId or projectId+date/keyword', removed: 0 };
+  }
+
+  const { data: rows, error: selErr } = await query;
+  if (selErr) return { success: false, error: selErr.message, removed: 0 };
+  if (!rows?.length) return { success: false, error: 'No matching calendar entry found', removed: 0 };
+
+  // Verify project ownership for all returned rows
+  const projectIds = [...new Set(rows.map(r => r.project_id))];
+  const { data: ownedProjects } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .in('id', projectIds)
+    .eq('user_id', user.id);
+  const ownedSet = new Set((ownedProjects ?? []).map(p => p.id));
+  const removable = rows.filter(r => ownedSet.has(r.project_id));
+  if (!removable.length) return { success: false, error: 'Not authorized', removed: 0 };
+
+  const { error: delErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .delete()
+    .in(
+      'id',
+      removable.map(r => r.id)
+    );
+  if (delErr) return { success: false, error: delErr.message, removed: 0 };
+  return { success: true, removed: removable.length };
+}
+
+/**
+ * Bulk-schedule every approved keyword that is not yet on the calendar.
+ * Used when the user says "schedule the rest" / "fill the calendar with my
+ * approved keywords".
+ *
+ * - Skips dates already taken (one-keyword-per-day rule).
+ * - Default cadence is 1 entry per `cadenceDays` days starting `startDate`
+ *   (or tomorrow when omitted).
+ */
+export async function scheduleRemainingApprovedKeywords(params: {
+  projectId: string;
+  startDate?: string; // YYYY-MM-DD; defaults to tomorrow
+  cadenceDays?: number; // gap between entries; default 3
+  limit?: number; // safety cap; default 30
+}): Promise<{ success: boolean; error?: string; scheduled: number; entries: Array<{ keyword: string; date: string }> }> {
+  const user = await currentUser();
+  if (!user)
+    return { success: false, error: 'Not authenticated', scheduled: 0, entries: [] };
+
+  const { projectId, cadenceDays = 3, limit = 30 } = params;
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (!project) return { success: false, error: 'Project not found', scheduled: 0, entries: [] };
+
+  const [{ data: approved }, { data: scheduled }] = await Promise.all([
+    supabaseAdmin
+      .from('keywords')
+      .select('id, keyword, secondary_keywords')
+      .eq('project_id', projectId)
+      .eq('status', 'approved')
+      .order('created_at', { ascending: true }),
+    supabaseAdmin
+      .from('calendar_entries')
+      .select('keyword_id, scheduled_date')
+      .eq('project_id', projectId),
+  ]);
+
+  const scheduledIds = new Set((scheduled ?? []).map(s => s.keyword_id).filter(Boolean));
+  const takenDates = new Set((scheduled ?? []).map(s => s.scheduled_date));
+
+  const candidates = (approved ?? []).filter(k => !scheduledIds.has(k.id)).slice(0, limit);
+  if (!candidates.length) {
+    return { success: true, scheduled: 0, entries: [] };
+  }
+
+  const startBase = params.startDate ? new Date(params.startDate + 'T00:00:00') : (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d;
+  })();
+
+  const slugify = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+
+  const inserts: Array<{
+    project_id: string;
+    keyword_id: string;
+    scheduled_date: string;
+    title: string;
+    article_type: string;
+    slug: string;
+    focus_keyword: string;
+    secondary_keywords: string[];
+    status: string;
+    ai_source: string;
+  }> = [];
+  const used = new Set(takenDates);
+  let cursor = new Date(startBase);
+
+  for (const k of candidates) {
+    while (used.has(cursor.toISOString().split('T')[0])) {
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    const iso = cursor.toISOString().split('T')[0];
+    inserts.push({
+      project_id: projectId,
+      keyword_id: k.id,
+      scheduled_date: iso,
+      title: '',
+      article_type: 'Blog Post',
+      slug: slugify(k.keyword),
+      focus_keyword: k.keyword,
+      secondary_keywords: k.secondary_keywords ?? [],
+      status: 'scheduled',
+      ai_source: 'AI · calendar',
+    });
+    used.add(iso);
+    cursor.setDate(cursor.getDate() + cadenceDays);
+  }
+
+  const { error } = await supabaseAdmin.from('calendar_entries').insert(inserts);
+  if (error) return { success: false, error: error.message, scheduled: 0, entries: [] };
+
+  return {
+    success: true,
+    scheduled: inserts.length,
+    entries: inserts.map(i => ({ keyword: i.focus_keyword, date: i.scheduled_date })),
+  };
 }

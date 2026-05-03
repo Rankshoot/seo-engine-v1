@@ -14,22 +14,21 @@
  *      `fix`. We treat the blog standalone — we do NOT compare it to the
  *      business brief (per product feedback) except for the light touch of
  *      suggesting internal links to peer URLs.
- *   5. (Optional) Ask DataForSEO what the primary keyword's current monthly
- *      search volume + 12-month trend are, so the user can see "is this
- *      keyword still worth targeting?" at a glance.
+ *   5. (Optional) `fetchKeywordVitals` (Ahrefs-first in this codebase) for the
+ *      primary keyword so demand can surface on the card.
  *   6. Compute a deterministic 0–100 health score blending structural signals
  *      + LLM quality score. Persist everything in `blog_audits`.
  */
 
-// Hybrid scraper kept for potential fallback, currently unused in Ahrefs-first path.
+import { criticalityFromScore } from './audit-criticality';
 import type { BusinessBrief } from './business-brief';
-import type { ScrapedPageMarkdown as JinaPage } from '@/services/hybridScraper';
+import { hybridReadUrl, type ScrapedPageMarkdown as JinaPage } from '@/services/hybridScraper';
+import { fetchKeywordVitals, type KeywordVitals } from './dataforseo';
 import {
   ahrefsAnchors,
   ahrefsCrawledPages,
   ahrefsPagesByInternalLinks,
   ahrefsUrlOrganicKeywords,
-  type AhrefsCrawledPage,
   type AhrefsUrlKeyword,
 } from './ahrefs';
 
@@ -86,6 +85,19 @@ export interface BlogAuditAnalysis {
   plain_language_verdict?: string;
   /** Type of page detected (helps the UI decide tone). */
   page_status: 'ok' | 'broken' | 'redirected' | 'empty';
+  /**
+   * Deterministic checklist vs SerpCraft blog quality rules (GEO + on-page SEO).
+   * Computed server-side from the live scrape — not from the LLM.
+   */
+  quality_rubric?: QualityRubricRow[];
+}
+
+/** One row in the Content Health "rules" checklist. */
+export interface QualityRubricRow {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail';
+  detail: string;
 }
 
 export interface BlogAuditRecord {
@@ -132,8 +144,7 @@ interface StructuralSignals {
 export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditRecord> {
   const { url, brief, sitePeerUrls, region = 'us', language = 'en' } = input;
 
-  // 1. Pre-flight via Ahrefs crawl (preferred). Only fall back to a real fetch
-  //    when Ahrefs has no record for this URL.
+  // 1. Pre-flight — dead URLs skip scrape + LLM spend.
   const ahrefsCrawl = await ahrefsCrawledPages(url);
   if (ahrefsCrawl) {
     if (ahrefsCrawl.http_code && (ahrefsCrawl.http_code === 404 || ahrefsCrawl.http_code === 410)) {
@@ -143,7 +154,6 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
       return redirectToHomepageRecord(url, url);
     }
   } else {
-    // Fallback: lightweight fetch to avoid blind spots if Ahrefs hasn't crawled it yet.
     const pre = await preflight(url);
     if (pre.status === 'broken') return brokenUrlRecord(url, pre.reason);
     if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
@@ -151,42 +161,88 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
     }
   }
 
-  // 2. Ahrefs signals — ranking, anchors, internal links. No body scrape unless
-  //    we truly need it.
-  const [urlKeywords, anchors, internalLinks] = await Promise.all([
+  // 2. Live body + Ahrefs context (ranking + inbound links + authority).
+  const [page, urlKeywords, anchors, internalLinksInbound] = await Promise.all([
+    hybridReadUrl(url, { timeoutMs: 25_000 }),
     ahrefsUrlOrganicKeywords(url, region, 40),
     ahrefsAnchors(url, 25),
     ahrefsPagesByInternalLinks(url, 1),
   ]);
 
-  const signals: StructuralSignals = {
-    title: '',
-    word_count: 0,
-    heading_count: 0,
-    h2_count: 0,
-    h3_count: 0,
-    faq_section: false,
-    internal_link_count: internalLinks[0]?.links_to_target ?? 0,
-    external_link_count: 0, // approximated via anchors? anchors cover inbound; outgoing unavailable without scrape
-    answer_first: false,
-    has_schema_hints: false,
-    first_paragraph: '',
-    url_rating: ahrefsCrawl?.url_rating ?? null,
-    refdomains: anchors.reduce((s, a) => s + a.refdomains, 0),
+  if (!page.ok || page.markdown.trim().length < 160) {
+    return thinOrUnreadableRecord(url, page.error ?? 'Could not read enough text from this page.');
+  }
+
+  const signals = extractSignals(page);
+  signals.url_rating = ahrefsCrawl?.url_rating ?? null;
+  signals.refdomains = anchors.reduce((s, a) => s + a.refdomains, 0);
+
+  const inboundPeerLinks = internalLinksInbound[0]?.links_to_target ?? 0;
+
+  let analysis = await diagnoseWithGemini({ url, page, signals, brief, sitePeerUrls });
+
+  const geminiSkipped =
+    analysis.issues.length === 0 &&
+    (analysis.summary.startsWith('GEMINI_API_KEY') || analysis.summary.startsWith('LLM diagnosis failed'));
+
+  if (geminiSkipped) {
+    const ah = ahrefsOnlyAnalysis(url, urlKeywords);
+    analysis = {
+      ...ah,
+      plain_language_verdict: analysis.summary,
+      page_status: 'ok',
+    };
+  }
+
+  const ahrefsPrimary = urlKeywords[0]?.keyword?.trim().toLowerCase() ?? '';
+  if (!analysis.primary_keyword?.trim() && ahrefsPrimary) {
+    analysis = { ...analysis, primary_keyword: ahrefsPrimary };
+  }
+
+  const kwLookup = analysis.primary_keyword.trim();
+  const vitalsMap = await fetchKeywordVitals(kwLookup ? [kwLookup] : [], region, language);
+  const vitals = kwLookup ? vitalsMap.get(kwLookup.toLowerCase()) : undefined;
+  const demand = vitalsToKeywordDemand(vitals);
+
+  const quality_rubric = buildQualityRubric(signals, page.markdown, inboundPeerLinks);
+
+  if (!geminiSkipped && urlKeywords.length === 0) {
+    const dup = analysis.issues.some(i => i.label === 'Not ranking for any keyword');
+    if (!dup) {
+      analysis = {
+        ...analysis,
+        issues: [
+          ...analysis.issues,
+          {
+            label: 'No tracked ranking keywords yet',
+            category: 'seo',
+            severity: 'medium',
+            detail:
+              'Ahrefs shows no keywords sending traffic to this URL yet (the page may be new, not indexed, or still building authority).',
+            why_it_matters:
+              'That limits measurable organic traffic for now, even if the on-page article reads well.',
+            fix: 'Request indexing, strengthen internal links from higher-traffic posts, and recheck rankings after a few weeks.',
+            impact: 'medium',
+          },
+        ],
+      };
+    }
+  }
+
+  analysis = {
+    ...analysis,
+    keyword_demand: demand,
+    quality_rubric,
+    plain_language_verdict: analysis.plain_language_verdict || synthesizeVerdict(signals, { ...analysis, keyword_demand: demand }),
   };
 
-  const analysis = ahrefsOnlyAnalysis(url, urlKeywords);
-
-  // Optional: if you still want content-level checks, fall back to a scrape.
-  // Currently disabled to honor "use Ahrefs instead of fetch/scrape".
-
-  const { healthScore, severity } = scoreFromSignals(signals, analysis);
+  const { healthScore, severity } = computeHealthScore(signals, analysis);
 
   return {
     url,
-    title: analysis.primary_keyword ? `${analysis.primary_keyword} (Ahrefs)` : url,
+    title: signals.title || analysis.primary_keyword || url,
     word_count: signals.word_count,
-    scraped_chars: 0,
+    scraped_chars: page.markdown.length,
     health_score: healthScore,
     severity,
     primary_keyword: analysis.primary_keyword,
@@ -312,6 +368,46 @@ function redirectToHomepageRecord(url: string, finalUrl: string): BlogAuditRecor
   };
 }
 
+function thinOrUnreadableRecord(url: string, reason: string): BlogAuditRecord {
+  return {
+    url,
+    title: '(could not read page)',
+    word_count: 0,
+    scraped_chars: 0,
+    health_score: 12,
+    severity: 'high',
+    primary_keyword: '',
+    analysis: {
+      summary:
+        'We could not extract enough readable article text from this URL. It may block scrapers, require JavaScript in a way our reader cannot handle, or return very little body content.',
+      primary_keyword: '',
+      secondary_keywords: [],
+      issues: [
+        {
+          label: 'Page body not readable',
+          category: 'technical',
+          severity: 'high',
+          detail: reason,
+          why_it_matters:
+            'If our reader cannot see the article, the audit cannot score real word count, headings, or links — and search crawlers may struggle too.',
+          fix: 'Check that the URL returns public HTML with visible article text, not an empty shell or hard bot block.',
+          impact: 'high',
+        },
+      ],
+      content_gaps: [],
+      internal_link_opportunities: [],
+      suggested_funnel_stage: '',
+      llm_quality_score: undefined,
+      keyword_demand: null,
+      plain_language_verdict:
+        'Fix fetchability first — once the live article text is readable, re-run the audit for a full content score.',
+      page_status: 'empty',
+      quality_rubric: [],
+    },
+    error: reason,
+  };
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Structural extraction (deterministic, no LLM)
 
@@ -401,6 +497,182 @@ function hasSharedNoun(a: string, b: string): boolean {
   return false;
 }
 
+function firstBodyPlainText(md: string): string {
+  const body = md.replace(/^---[\s\S]*?---\n?/m, '').trim();
+  const blocks = body.split(/\n\n+/);
+  for (const raw of blocks) {
+    const b = raw.trim();
+    if (!b || b.startsWith('#') || b.startsWith('![') || b.startsWith('>')) continue;
+    return b.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/[*_`>#]/g, ' ');
+  }
+  return '';
+}
+
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Best-effort: Article + FAQPage JSON-LD blocks in the markdown/HTML snapshot. */
+function jsonLdArticleFaqInMarkdown(md: string): { article: boolean; faq: boolean } {
+  let article = false;
+  let faq = false;
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(md))) {
+    const inner = m[1];
+    if (/"@type"\s*:\s*"\s*Article\s*"/i.test(inner) || /"@type"\s*:\s*\[[^\]]*"Article"/i.test(inner)) article = true;
+    if (/"@type"\s*:\s*"\s*FAQPage\s*"/i.test(inner) || /"@type"\s*:\s*\[[^\]]*"FAQPage"/i.test(inner)) faq = true;
+    if (/"@graph"\s*:\s*\[/i.test(inner)) {
+      if (/Article/i.test(inner)) article = true;
+      if (/FAQPage/i.test(inner)) faq = true;
+    }
+  }
+  if (!article && /"Article"/i.test(md) && /@type/i.test(md)) article = true;
+  if (!faq && /"FAQPage"/i.test(md) && /@type/i.test(md)) faq = true;
+  return { article, faq };
+}
+
+function vitalsToKeywordDemand(vitals: KeywordVitals | undefined): KeywordDemand | null {
+  if (!vitals) return null;
+  const vol = vitals.volume;
+  const tp = vitals.trend_pct;
+  let verdict: KeywordDemand['verdict'] = 'unknown';
+  if (vol === 0) verdict = 'unknown';
+  else if (vol < 40) verdict = 'niche';
+  else if (tp >= 8) verdict = 'trending';
+  else if (tp <= -12) verdict = 'declining';
+  else verdict = 'stable';
+  return {
+    keyword: vitals.keyword,
+    volume: vol,
+    trend_pct: tp,
+    monthly_searches: vitals.monthly_searches ?? [],
+    verdict,
+  };
+}
+
+function buildQualityRubric(
+  signals: StructuralSignals,
+  markdown: string,
+  inboundPeerLinks: number
+): QualityRubricRow[] {
+  const firstBlock = firstBodyPlainText(markdown);
+  const first80 = firstBlock.split(/\s+/).filter(Boolean).slice(0, 80).join(' ');
+  const w80 = countWords(first80);
+  let intro: 'pass' | 'warn' | 'fail' = 'fail';
+  if (w80 >= 55 && (signals.answer_first || firstBlock.length >= 280)) intro = 'pass';
+  else if (w80 >= 38) intro = 'warn';
+
+  let sections: 'pass' | 'warn' | 'fail' = 'fail';
+  if (signals.h2_count >= 4 && signals.h3_count >= 2) sections = 'pass';
+  else if (signals.h2_count >= 2) sections = 'warn';
+
+  const { article, faq } = jsonLdArticleFaqInMarkdown(markdown);
+  const hasFaqHeading = signals.faq_section;
+  let schemaRow: 'pass' | 'warn' | 'fail' = 'fail';
+  if (article && faq) schemaRow = 'pass';
+  else if (article || faq || signals.has_schema_hints) schemaRow = 'warn';
+
+  let faqRow: 'pass' | 'warn' | 'fail' = 'fail';
+  if (hasFaqHeading && faq) faqRow = 'pass';
+  else if (hasFaqHeading || faq) faqRow = 'warn';
+
+  let externalRow: 'pass' | 'warn' | 'fail' = 'fail';
+  if (signals.external_link_count >= 2) externalRow = 'pass';
+  else if (signals.external_link_count === 1) externalRow = 'warn';
+
+  let internalRow: 'pass' | 'warn' | 'fail' = 'fail';
+  if (signals.internal_link_count >= 2) internalRow = 'pass';
+  else if (signals.internal_link_count === 1 || inboundPeerLinks >= 2) internalRow = 'warn';
+
+  let depth: 'pass' | 'warn' | 'fail' = 'fail';
+  if (signals.word_count >= 1400) depth = 'pass';
+  else if (signals.word_count >= 700) depth = 'warn';
+
+  return [
+    {
+      id: 'direct_answer_first_80w',
+      label: 'Direct answer in first ~80 words (GEO)',
+      status: intro,
+      detail:
+        intro === 'pass'
+          ? `First ~80 words look substantive (${w80} words in opening block).`
+          : intro === 'warn'
+            ? `Opening block is only ~${w80} words or weakly tied to the topic — strengthen the upfront answer.`
+            : 'Opening is too thin or missing a clear direct answer in the first screenful.',
+    },
+    {
+      id: 'modular_h2_h3',
+      label: 'Modular H2 / H3 structure',
+      status: sections,
+      detail:
+        sections === 'pass'
+          ? `${signals.h2_count} H2s, ${signals.h3_count} H3s — good hierarchy.`
+          : sections === 'warn'
+            ? `${signals.h2_count} H2s, ${signals.h3_count} H3s — add more subheads to break up the article.`
+            : 'Very few subheads — readers and AI summaries both struggle.',
+    },
+    {
+      id: 'faq_and_schema',
+      label: 'FAQ content + Article / FAQPage JSON-LD',
+      status: schemaRow === 'pass' && faqRow !== 'fail' ? 'pass' : schemaRow === 'fail' && faqRow === 'fail' ? 'fail' : 'warn',
+      detail:
+        schemaRow === 'pass' && faqRow !== 'fail'
+          ? 'FAQ-style coverage and Article + FAQPage structured data detected.'
+          : `Article schema: ${article ? 'yes' : 'no'} · FAQPage schema: ${faq ? 'yes' : 'no'} · FAQ heading section: ${hasFaqHeading ? 'yes' : 'no'}.`,
+    },
+    {
+      id: 'external_citations',
+      label: 'Outbound citations (credible external links)',
+      status: externalRow,
+      detail:
+        externalRow === 'pass'
+          ? `${signals.external_link_count} external links in the body — good for trust and GEO citations.`
+          : externalRow === 'warn'
+            ? 'Only one external citation — add at least one more reputable source.'
+            : 'No external links to sources — add 2+ citations to authoritative pages.',
+    },
+    {
+      id: 'internal_links',
+      label: 'Internal links to related posts (2–4 target)',
+      status: internalRow,
+      detail: (() => {
+        if (internalRow === 'pass') {
+          const tail = inboundPeerLinks
+            ? ` Ahrefs also sees ${inboundPeerLinks} inbound internal link(s) from your domain.`
+            : '';
+          return `${signals.internal_link_count} in-article internal link(s).${tail}`;
+        }
+        if (internalRow === 'warn') {
+          if (inboundPeerLinks >= 2 && signals.internal_link_count === 0) {
+            return 'Other pages link here, but the article body shows no internal links out — add 2+ contextual links to peers.';
+          }
+          return 'Only one internal link in the body — aim for at least two.';
+        }
+        return 'No internal links in the article body — weave in 2–4 links to related posts.';
+      })(),
+    },
+    {
+      id: 'content_depth',
+      label: 'Content depth (word count)',
+      status: depth,
+      detail:
+        depth === 'pass'
+          ? `~${signals.word_count.toLocaleString()} words — sufficient depth for most topics.`
+          : depth === 'warn'
+            ? `~${signals.word_count.toLocaleString()} words — acceptable but thin for competitive queries.`
+            : `~${signals.word_count.toLocaleString()} words — likely too thin to compete.`,
+    },
+  ];
+}
+
+function structuralScoreFromRubric(rows: QualityRubricRow[]): number {
+  if (!rows.length) return 55;
+  const w: Record<QualityRubricRow['status'], number> = { pass: 1, warn: 0.58, fail: 0.28 };
+  const sum = rows.reduce((s, r) => s + w[r.status], 0);
+  return Math.round((sum / rows.length) * 100);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // LLM diagnosis (blog standalone)
 
@@ -430,7 +702,14 @@ async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalys
     ? `SITE CONTEXT (for light grounding only — do NOT penalize this blog for "not matching" the brief): ${brief.summary}`
     : '';
 
-  const prompt = `You are a senior SEO + GEO auditor. Audit the blog post below on its own merits — do NOT compare it to a business brief or other pages. Decide WHY this specific blog may not be getting traffic.
+  const prompt = `You are a senior SEO + GEO auditor for SerpCraft. Audit the blog post below on its own merits — do NOT compare it to a business brief or other pages. Decide WHY this specific blog may not be getting traffic.
+
+SerpCraft-generated blogs target these quality bars (use them when judging issues and when picking llm_quality_score):
+- A direct, useful answer in the first ~80 words (AI Overviews / GEO).
+- Modular H2/H3 sections (clear hierarchy, RAG-friendly).
+- FAQ section and BOTH Article + FAQPage JSON-LD where applicable.
+- At least 2 real outbound citations (external links to reputable sources).
+- At least 2–4 natural internal links to related posts on the same site when peers exist.
 
 Your answer must be understandable to a non-technical business owner (e.g. the company founder). Avoid jargon. When you must use an SEO term, explain it in one half-sentence inside "why_it_matters".
 
@@ -491,6 +770,7 @@ CATEGORY GUIDE:
 - "ux": reader experience — walls of text, no subheads, no images implied, no lists, no takeaways box.
 
 RULES:
+- Set "llm_quality_score" to an integer 0–100 (not the placeholder 0): holistic SEO+GEO quality vs the SerpCraft bars in the intro. 90+ = meets or nearly meets all bars; 70–89 = solid with gaps; 50–69 = several misses; below 50 = thin or structurally weak. Use 0 only if the body is empty or unusable.
 - Maximum 8 issues. Order by severity desc then impact desc.
 - "high" severity = likely blocks ranking or AI Overview citation today. "medium" = dents CTR/engagement. "low" = polish.
 - Each fix must be specific to THIS post (reference the actual topic or heading when possible). No generic "write better content".
@@ -640,46 +920,45 @@ function emptyAnalysis(reason: string): BlogAuditAnalysis {
     keyword_demand: null,
     plain_language_verdict: '',
     page_status: 'ok',
+    quality_rubric: [],
   };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // Scoring + verdict synthesis
 
-function scoreFromSignals(
+function computeHealthScore(
   signals: StructuralSignals,
   analysis: BlogAuditAnalysis
 ): { healthScore: number; severity: AuditSeverity } {
-  let score = 100;
+  const rubric = analysis.quality_rubric ?? [];
+  const structural = structuralScoreFromRubric(rubric);
+  const llm = analysis.llm_quality_score;
 
-  // Authority proxies
-  if (signals.url_rating != null && signals.url_rating < 10) score -= 10;
-  if (signals.refdomains != null && signals.refdomains < 5) score -= 8;
+  let blended =
+    typeof llm === 'number' && !Number.isNaN(llm)
+      ? Math.round(llm * 0.48 + structural * 0.52)
+      : structural;
 
-  // Internal links
-  if (signals.internal_link_count === 0) score -= 15;
-  else if (signals.internal_link_count < 2) score -= 8;
+  if (signals.url_rating != null && signals.url_rating < 8) blended -= 4;
+  if (signals.refdomains != null && signals.refdomains > 0 && signals.refdomains < 4) blended -= 3;
 
-  // Keyword demand / coverage
   const demand = analysis.keyword_demand;
   if (demand) {
-    if (demand.volume === 0) score -= 15;
-    else if (demand.volume < 50) score -= 8;
-    if (demand.trend_pct <= -25) score -= 10;
-    else if (demand.trend_pct <= -10) score -= 5;
+    if (demand.volume === 0) blended -= 6;
+    else if (demand.volume < 50) blended -= 3;
+    if (demand.verdict === 'declining') blended -= 5;
+    if (demand.verdict === 'trending') blended += 3;
   }
 
-  // Ranking presence
-  if (!analysis.primary_keyword) score -= 15;
+  const highIssues = analysis.issues.filter(i => i.severity === 'high').length;
+  blended -= Math.min(18, highIssues * 6);
 
-  const severity: AuditSeverity = analysis.issues.some(i => i.severity === 'high')
-    ? 'high'
-    : analysis.issues.some(i => i.severity === 'medium')
-      ? 'medium'
-      : 'low';
+  const healthScore = Math.max(0, Math.min(100, blended));
+  const severity = criticalityFromScore(healthScore, analysis.page_status) as AuditSeverity;
 
   return {
-    healthScore: Math.max(0, Math.min(100, score)),
+    healthScore,
     severity,
   };
 }
@@ -769,5 +1048,6 @@ function ahrefsOnlyAnalysis(url: string, kws: AhrefsUrlKeyword[]): BlogAuditAnal
     keyword_demand: keywordDemand,
     plain_language_verdict: '',
     page_status: 'ok',
+    quality_rubric: [],
   };
 }

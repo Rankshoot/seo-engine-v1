@@ -2,8 +2,9 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
+import { criticalityFromScore } from '@/lib/audit-criticality';
 import { auditBlogUrl, type BlogAuditAnalysis, type BlogAuditRecord } from '@/lib/content-audit';
-import { fetchBlogUrls, isContentUrl } from '@/lib/jina';
+import { fetchBlogUrls, isContentUrl, BLOG_URL_INVENTORY_MAX } from '@/lib/jina';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 
@@ -61,9 +62,14 @@ export async function getBlogAudits(projectId: string): Promise<{
   }
 
   const brief = await fetchCachedBrief(projectId);
-  // Trust the brief's cached inventory; the audit-run will re-crawl and
-  // correct this on the next click.
-  const blogs_found = (brief?.blog_urls ?? []).filter(isContentUrl).length;
+  // Live sitemap inventory so Content Health matches the real blog count (brief
+  // used to cap at 200 and could go stale). Fall back to cached brief if fetch fails.
+  let blogs_found = (brief?.blog_urls ?? []).filter(isContentUrl).length;
+  try {
+    blogs_found = (await fetchBlogUrls(project.domain, BLOG_URL_INVENTORY_MAX)).filter(isContentUrl).length;
+  } catch {
+    // keep brief-derived count
+  }
 
   const { data, error: dbErr } = await supabaseAdmin
     .from('blog_audits')
@@ -88,7 +94,7 @@ export async function getBlogAudits(projectId: string): Promise<{
     avg_health: rows.length
       ? Math.round(rows.reduce((s, r) => s + r.health_score, 0) / rows.length)
       : 0,
-    high_severity: rows.filter(r => r.severity === 'high').length,
+    high_severity: rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === 'high').length,
   };
 
   return { success: true, data: rows, coverage };
@@ -136,7 +142,7 @@ export async function auditExistingBlogs(
   // cached brief — the crawler improved since some briefs were written, and
   // we don't want old blog URL lists (or lists containing .xml garbage) to
   // leak through into new audit runs.
-  const blogUrls = (await fetchBlogUrls(project.domain, 500)).filter(isContentUrl);
+  const blogUrls = (await fetchBlogUrls(project.domain, BLOG_URL_INVENTORY_MAX)).filter(isContentUrl);
 
   if (!blogUrls.length) {
     return {
@@ -222,6 +228,7 @@ export async function auditExistingBlogs(
             keyword_demand: null,
             plain_language_verdict: '',
             page_status: 'empty' as const,
+            quality_rubric: [],
           },
           error: e instanceof Error ? e.message : String(e),
         }))
@@ -316,6 +323,7 @@ function rowToRecord(row: AuditRow): PersistedBlogAudit {
       keyword_demand: null,
       plain_language_verdict: '',
       page_status: 'ok',
+      quality_rubric: [],
     },
     error: row.error || undefined,
     updated_at: row.updated_at ?? undefined,

@@ -70,7 +70,7 @@ export async function fetchSitemapUrls(domain: string, max = 500): Promise<strin
     const prioritized = [
       ...children.filter(c => /blog|post|article|resource|insight|news|guide|learn|stor(y|ies)/i.test(c)),
       ...children.filter(c => !/blog|post|article|resource|insight|news|guide|learn|stor(y|ies)/i.test(c)),
-    ].slice(0, 15);
+    ].slice(0, 80);
 
     for (const child of prioritized) {
       if (out.length >= max) break;
@@ -188,14 +188,21 @@ export async function pickBriefUrls(domain: string, limit = 10): Promise<string[
   return out;
 }
 
+/** Upper bound for blog-post URLs we keep per project (brief + Content Health). */
+export const BLOG_URL_INVENTORY_MAX = 10_000;
+
 /**
  * Return every blog-post URL we can find on the user's domain. Used by the
  * Content Health audit, which wants the full inventory (not just the handful
  * we'd scrape for the brief).
  */
-export async function fetchBlogUrls(domain: string, max = 500): Promise<string[]> {
+export async function fetchBlogUrls(domain: string, max = BLOG_URL_INVENTORY_MAX): Promise<string[]> {
   const base = normalizeDomain(domain);
-  const sitemapUrls = (await fetchSitemapUrls(domain, 2000)).filter(isContentUrl);
+  // Pull enough raw sitemap URLs that mixed indexes (pages + products + posts)
+  // don't exhaust the cap before we reach blog-specific sitemaps.
+  const sitemapUrls = (await fetchSitemapUrls(domain, Math.min(50_000, Math.max(5_000, max * 5)))).filter(
+    isContentUrl
+  );
 
   // Primary pass: URLs that clearly live under a blog-style prefix.
   const primary = sitemapUrls.filter(u => BLOG_PATH_REGEX.test(u));

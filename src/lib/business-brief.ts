@@ -8,6 +8,7 @@
 
 import {
   fetchBlogUrls,
+  BLOG_URL_INVENTORY_MAX,
   pickBriefUrls,
   normalizeDomain,
 } from './jina';
@@ -85,7 +86,7 @@ export async function buildBusinessBrief(input: BuildBriefInput): Promise<BuildB
   //    link candidates (not just marketing pages).
   const [userUrls, blogUrls] = await Promise.all([
     pickBriefUrls(input.domain, 10),
-    fetchBlogUrls(input.domain, 200),
+    fetchBlogUrls(input.domain, BLOG_URL_INVENTORY_MAX),
   ]);
 
   const competitorUrls = (input.competitors ?? [])

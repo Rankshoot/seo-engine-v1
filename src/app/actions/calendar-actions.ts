@@ -257,6 +257,145 @@ export async function addKeywordToCalendarOnDate(
   return { success: true, data };
 }
 
+async function nextOpenCalendarDate(projectId: string): Promise<string | null> {
+  const { data: rows } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('scheduled_date')
+    .eq('project_id', projectId);
+  const taken = new Set((rows ?? []).map(r => String(r.scheduled_date).slice(0, 10)));
+  const anchor = new Date();
+  for (let add = 1; add <= 400; add++) {
+    const d = new Date(anchor.getTime());
+    d.setUTCDate(anchor.getUTCDate() + add);
+    const key = d.toISOString().slice(0, 10);
+    if (!taken.has(key)) return key;
+  }
+  return null;
+}
+
+function normKw(s: string): string {
+  return (s ?? '').toLowerCase().trim();
+}
+
+function slugKey(s: string): string {
+  return normKw(s).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Schedule the audited blog's focus keyword on the next free calendar day.
+ * If the phrase matches an existing `keywords` row, links `keyword_id`; otherwise
+ * creates a calendar row with `keyword_id` null (healed on read when you add the keyword later).
+ */
+export async function addContentHealthKeywordToCalendar(
+  projectId: string,
+  opts: { focusKeyword: string; auditUrl?: string }
+) {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' as const };
+
+  const focusRaw = opts.focusKeyword.trim();
+  if (!focusRaw) return { success: false, error: 'No focus keyword for this audit row' as const };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Project not found' as const };
+
+  const { data: kws } = await supabaseAdmin
+    .from('keywords')
+    .select('id, keyword, secondary_keywords')
+    .eq('project_id', projectId);
+
+  let keywordId: string | null = null;
+  let canonical = focusRaw;
+  let secondary: string[] = [];
+
+  if (kws?.length) {
+    const byNorm = new Map(kws.map(k => [normKw(k.keyword), k]));
+    const bySlug = new Map(kws.map(k => [slugKey(k.keyword), k]));
+    const exact = byNorm.get(normKw(focusRaw));
+    if (exact) {
+      keywordId = exact.id;
+      canonical = exact.keyword;
+      secondary = (exact.secondary_keywords as string[]) ?? [];
+    } else {
+      const slugHit = bySlug.get(slugKey(focusRaw));
+      if (slugHit) {
+        keywordId = slugHit.id;
+        canonical = slugHit.keyword;
+        secondary = (slugHit.secondary_keywords as string[]) ?? [];
+      } else {
+        const fs = slugKey(focusRaw);
+        for (const k of kws) {
+          const ks = slugKey(k.keyword);
+          if (fs && (fs.includes(ks) || ks.includes(fs))) {
+            keywordId = k.id;
+            canonical = k.keyword;
+            secondary = (k.secondary_keywords as string[]) ?? [];
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const { data: existingSame } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id, scheduled_date, focus_keyword, keyword_id')
+    .eq('project_id', projectId);
+
+  const dup = (existingSame ?? []).find(e => normKw(e.focus_keyword as string) === normKw(canonical));
+  if (dup) {
+    return {
+      success: false,
+      error: `Already on your calendar for ${String(dup.scheduled_date).slice(0, 10)} (${dup.focus_keyword}).`,
+    };
+  }
+
+  if (keywordId) {
+    const takenById = (existingSame ?? []).find(e => e.keyword_id === keywordId);
+    if (takenById) {
+      return {
+        success: false,
+        error: `That keyword is already scheduled on ${String(takenById.scheduled_date).slice(0, 10)}.`,
+      };
+    }
+  }
+
+  const scheduledDate = await nextOpenCalendarDate(projectId);
+  if (!scheduledDate) return { success: false, error: 'No open calendar date found' as const };
+
+  if (keywordId) {
+    return addKeywordToCalendarOnDate(keywordId, projectId, scheduledDate);
+  }
+
+  const titleBase = canonical.slice(0, 120) || 'Content improvement';
+  const title = opts.auditUrl ? `Refresh: ${titleBase}` : titleBase;
+
+  const { data, error } = await supabaseAdmin
+    .from('calendar_entries')
+    .insert({
+      project_id: projectId,
+      keyword_id: null,
+      scheduled_date: scheduledDate,
+      title,
+      article_type: 'Blog Post',
+      slug: slugify(canonical),
+      focus_keyword: canonical,
+      secondary_keywords: secondary,
+      status: 'scheduled',
+    })
+    .select()
+    .single();
+
+  if (error) return { success: false, error: error.message };
+  return { success: true, data, scheduled_date: scheduledDate };
+}
+
 export async function updateCalendarEntry(
   entryId: string,
   updates: { title?: string; article_type?: string; slug?: string }

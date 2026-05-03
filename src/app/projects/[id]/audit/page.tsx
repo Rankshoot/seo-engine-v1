@@ -13,7 +13,9 @@ import {
   type PersistedBlogAudit,
 } from "@/app/actions/audit-actions";
 import { repairBlogFromAudit } from "@/app/actions/repair-actions";
-import type { IssueCategory } from "@/lib/content-audit";
+import { addContentHealthKeywordToCalendar } from "@/app/actions/calendar-actions";
+import { criticalityFromScore } from "@/lib/audit-criticality";
+import type { IssueCategory, QualityRubricRow } from "@/lib/content-audit";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
 type AuditsResponse = Awaited<ReturnType<typeof getBlogAudits>>;
@@ -37,9 +39,9 @@ const SEVERITY_COLORS: Record<"high" | "medium" | "low", string> = {
 };
 
 const SEVERITY_TOOLTIP: Record<"high" | "medium" | "low", string> = {
-  high: "High severity — blocks this page from ranking or getting cited by AI answers. Fix these first.",
-  medium: "Medium severity — hurts click-through and engagement, but the page can still rank. Fix once the high items are done.",
-  low: "Low severity — polish. Nice-to-haves that incrementally lift the page.",
+  high: "High criticality — health score under 45, or the page is broken / unreadable. Prioritize fixes or a rewrite.",
+  medium: "Medium criticality — health score 45–71. Worth improving soon; the page has meaningful gaps vs our blog quality bar.",
+  low: "Low criticality — health score 72+. Solid shape; remaining items are polish.",
 };
 
 const IMPACT_TOOLTIP: Record<"high" | "medium" | "low", string> = {
@@ -88,6 +90,12 @@ const CATEGORY_META: Record<IssueCategory, { label: string; tooltip: string; ico
 
 const CATEGORY_ORDER: IssueCategory[] = ["technical", "keyword_demand", "seo", "content", "ux"];
 
+const RUBRIC_STATUS: Record<QualityRubricRow["status"], { label: string; className: string }> = {
+  pass: { label: "Pass", className: "border-accent-500/40 bg-accent-500/10 text-accent-400" },
+  warn: { label: "Warn", className: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400" },
+  fail: { label: "Fail", className: "border-rose-500/40 bg-rose-500/10 text-rose-400" },
+};
+
 const DEMAND_VERDICT: Record<
   NonNullable<PersistedBlogAudit["analysis"]["keyword_demand"]>["verdict"],
   { label: string; color: string; tooltip: string }
@@ -131,6 +139,25 @@ function scoreBar(score: number): string {
   return "bg-rose-500";
 }
 
+/** Focus phrase for calendar: primary keyword, demand keyword, or URL slug fallback. */
+function focusKeywordForCalendar(row: PersistedBlogAudit): string {
+  if (row.primary_keyword.trim()) return row.primary_keyword.trim();
+  const d = row.analysis.keyword_demand?.keyword?.trim();
+  if (d) return d;
+  try {
+    const u = new URL(row.url);
+    const segs = u.pathname.split("/").filter(Boolean);
+    const slug = segs[segs.length - 1] ?? "";
+    const fromSlug = slug.replace(/-/g, " ").trim();
+    if (fromSlug) return fromSlug;
+  } catch {
+    /* noop */
+  }
+  const t = row.title.trim();
+  if (t && !t.startsWith("http")) return t.slice(0, 120);
+  return "Blog content refresh";
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 export default function ContentHealthPage() {
   const { id: projectId } = useParams<{ id: string }>();
@@ -145,6 +172,7 @@ export default function ContentHealthPage() {
   const [filter, setFilter] = useState<SeverityFilter>("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [repairing, setRepairing] = useState<string | null>(null);
+  const [calendarAddingUrl, setCalendarAddingUrl] = useState<string | null>(null);
 
   const BATCH_SIZE = 10;
 
@@ -214,9 +242,39 @@ export default function ContentHealthPage() {
     }
   };
 
+  const handleAddToCalendar = async (row: PersistedBlogAudit) => {
+    const focus = focusKeywordForCalendar(row);
+    if (focus.length < 2) {
+      setError("This audit row has no usable focus keyword to schedule.");
+      return;
+    }
+    setCalendarAddingUrl(row.url);
+    setError("");
+    setRunSummary("");
+    const res = await addContentHealthKeywordToCalendar(projectId, { focusKeyword: focus, auditUrl: row.url });
+    if (res.success) {
+      const r = res as { data?: { scheduled_date?: string }; scheduled_date?: string };
+      const scheduled = (typeof r.scheduled_date === "string" ? r.scheduled_date : undefined) ?? r.data?.scheduled_date;
+      setRunSummary(
+        scheduled
+          ? `Added “${focus}” to your calendar for ${scheduled}.`
+          : `Added “${focus}” to your calendar. Open Calendar to see it.`
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+      ]);
+    } else {
+      const msg = "error" in res && typeof res.error === "string" ? res.error : "Could not add to calendar";
+      setError(msg);
+    }
+    setCalendarAddingUrl(null);
+  };
+
   const filtered = useMemo(() => {
     if (filter === "all") return rows;
-    return rows.filter(r => r.severity === filter);
+    return rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === filter);
   }, [rows, filter]);
 
   const toggleExpanded = (url: string) =>
@@ -364,7 +422,11 @@ export default function ContentHealthPage() {
                 filter === f ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
               }`}
             >
-              {f} ({f === "all" ? rows.length : rows.filter(r => r.severity === f).length})
+              {f} (
+              {f === "all"
+                ? rows.length
+                : rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === f).length}
+              )
             </button>
           ))}
         </div>
@@ -396,6 +458,7 @@ export default function ContentHealthPage() {
             const isBroken = a.page_status === "broken" || a.page_status === "redirected";
             const canRepair =
               !isBroken && row.scraped_chars > 400 && a.issues.length > 0 && !repairing;
+            const crit = criticalityFromScore(row.health_score, a.page_status);
 
             return (
               <div
@@ -406,12 +469,12 @@ export default function ContentHealthPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-1">
                       <span
-                        title={SEVERITY_TOOLTIP[row.severity]}
+                        title={SEVERITY_TOOLTIP[crit]}
                         className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase cursor-help ${
-                          SEVERITY_COLORS[row.severity]
+                          SEVERITY_COLORS[crit]
                         }`}
                       >
-                        {row.severity}
+                        {crit}
                       </span>
                       {row.primary_keyword && (
                         <span
@@ -468,7 +531,7 @@ export default function ContentHealthPage() {
 
                   <div className="flex flex-col items-end gap-2 min-w-[160px]">
                     <div
-                      title="Health score 0–100. 75+ = solid, 50–74 = worth fixing, <50 = needs serious work."
+                      title="Health score 0–100. Criticality: under 45 = high, 45–71 = medium, 72+ = low (broken pages always high)."
                       className="flex items-center gap-2 cursor-help"
                     >
                       <div className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-elevated">
@@ -481,13 +544,29 @@ export default function ContentHealthPage() {
                         {row.health_score}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col items-end gap-2 w-full max-w-[220px]">
                       <button
                         type="button"
                         onClick={() => toggleExpanded(row.url)}
-                        className="text-xs font-bold text-brand-400 hover:text-brand-300"
+                        className="text-xs font-bold text-brand-400 hover:text-brand-300 self-end"
                       >
                         {isOpen ? "Hide details" : "See fixes"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddToCalendar(row)}
+                        disabled={calendarAddingUrl !== null || !!repairing}
+                        title="Put this row's focus keyword on the next free day in your content calendar (links to an existing keyword row when the text matches)."
+                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2 text-[11px] font-bold text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 transition-colors"
+                      >
+                        {calendarAddingUrl === row.url ? (
+                          <>
+                            <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/30 border-t-text-secondary" />
+                            Adding…
+                          </>
+                        ) : (
+                          "Add to calendar"
+                        )}
                       </button>
                       {canRepair && (
                         <button
@@ -495,7 +574,7 @@ export default function ContentHealthPage() {
                           onClick={() => handleRepair(row)}
                           disabled={!!repairing}
                           title="Use AI to rewrite this blog addressing every issue flagged. Opens the repaired draft in the blog editor — you can review and download or schedule it from there."
-                          className="flex items-center gap-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm shadow-brand-500/30 hover:from-brand-400 hover:to-brand-500 disabled:opacity-60"
+                          className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 px-3 py-2 text-[11px] font-bold text-white shadow-sm shadow-brand-500/30 hover:from-brand-400 hover:to-brand-500 disabled:opacity-60"
                         >
                           {repairing === row.url ? (
                             <>
@@ -518,6 +597,39 @@ export default function ContentHealthPage() {
 
                 {isOpen && (
                   <div className="mt-5 space-y-5">
+                    {a.quality_rubric && a.quality_rubric.length > 0 && (
+                      <div className="rounded-[12px] border border-border-subtle bg-surface-secondary/80 p-4">
+                        <h4 className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary mb-3">
+                          SerpCraft blog quality rubric
+                        </h4>
+                        <p className="text-[12px] text-text-tertiary mb-3 leading-relaxed">
+                          Each row is checked against the same rules we use for AI-generated posts (direct answer in the first ~80 words, H2/H3
+                          structure, FAQ + JSON-LD, external citations, internal links, depth). Pass / warn / fail is computed from your live page
+                          text.
+                        </p>
+                        <ul className="space-y-2">
+                          {a.quality_rubric.map(row => {
+                            const meta = RUBRIC_STATUS[row.status];
+                            return (
+                              <li
+                                key={row.id}
+                                className="flex flex-wrap items-start gap-2 rounded-[8px] border border-border-subtle bg-surface-elevated px-3 py-2"
+                              >
+                                <span
+                                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase border ${meta.className}`}
+                                >
+                                  {meta.label}
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[13px] font-medium text-text-primary">{row.label}</p>
+                                  <p className="text-[12px] text-text-tertiary mt-0.5 leading-relaxed">{row.detail}</p>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )}
                     {/* Grouped issues, by category */}
                     {a.issues.length === 0 ? (
                       <p className="text-xs text-text-tertiary">No explicit issues flagged.</p>

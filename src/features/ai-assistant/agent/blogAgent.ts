@@ -13,9 +13,7 @@
  *
  * DATA SOURCES (mirrors what generateBlog() uses server-side)
  *   ① DataForSEO — keyword.secondary_keywords, volume, kd, cpc, intent
- *   ② Ahrefs    — fetched live during generateBlog() (matching terms,
- *                  questions, SERP); not in chatbot context
- *   ③ Serper    — fetched live during generateBlog() (PAA, top articles)
+ *   ② Serper    — fetched live during generateBlog() (PAA, top articles)
  */
 
 import { geminiGenerate } from "@/lib/gemini";
@@ -61,7 +59,7 @@ export function blogActions(): ContextualAction[] {
     {
       type: "GENERATE_BLOG",
       label: "Generate Blog",
-      description: "Generate the highest-priority queued blog (Ahrefs + Serper research applied).",
+      description: "Generate the highest-priority queued blog (Serper + keyword research applied).",
     },
     {
       type: "IMPROVE_BLOG",
@@ -264,7 +262,7 @@ POOL TYPES:
 Full data:
 ${JSON.stringify(blogContext, null, 2)}
 
-NOTE FOR GENERATION: When the user clicks Generate Blog, the system additionally calls Ahrefs Matching Terms (richer H2 seeds), Ahrefs Questions, Serper PAA, and Serper top articles. The chatbot preview uses DataForSEO subtopics only — the generated article will be richer.
+NOTE FOR GENERATION: When the user clicks Generate Blog, the system additionally calls Serper PAA and top articles alongside keyword research. The chatbot preview uses DataForSEO subtopics only — the generated article will be richer.
 
 USER QUESTION: "${prompt || "What should I write next?"}"
 
@@ -410,7 +408,7 @@ export async function runBlogAgent(context: AIContext, prompt: string): Promise<
     ]
       .filter(Boolean)
       .join(", ") +
-    ". Full generation enriches H2s with Ahrefs matching terms and Serper PAA.";
+    ". Full generation enriches H2s with live keyword research and Serper PAA.";
 
   const enriched = await addBlogReasoningWithLLM(context, prompt, candidates, fallbackSummary);
 

@@ -942,7 +942,7 @@ export default function KeywordsPage() {
 
           {loading || discovering ? (
             // Skeleton stays visible for the whole discovery run — including
-            // the DataForSEO fallback path that fires when Ahrefs is exhausted —
+            // the DataForSEO fallback path when the primary provider is exhausted —
             // so the table never freezes between "Discover clicked" and
             // "fresh keywords arrived".
             <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
@@ -990,7 +990,7 @@ export default function KeywordsPage() {
                           <button type="button" className={thBtn} onClick={() => toggleSortColumn("est_traffic")}>
                             Est. traffic{sortMark("est_traffic")}
                           </button>
-                          <Tooltip placement="below" content="Ahrefs-style estimate of monthly visits the top result could earn for this term.">
+                          <Tooltip placement="below" content="Estimated monthly visits the top result could earn for this term.">
                             <InfoIcon />
                           </Tooltip>
                         </div>

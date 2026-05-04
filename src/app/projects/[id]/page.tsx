@@ -16,7 +16,6 @@ import { calendarApi } from "@/frontend/api/calendar";
 import { projectsApi } from "@/frontend/api/projects";
 import type { CalendarEntryWithBlog, ProjectCompetitor } from "@/lib/types";
 import { TARGET_REGIONS } from "@/lib/types";
-import { SiteExplorerSection } from "@/components/projects/SiteExplorerSection";
 import { BusinessBriefSection } from "@/components/projects/BusinessBriefSection";
 import { Skeleton } from "@/components/Skeleton";
 
@@ -113,7 +112,7 @@ export default function ProjectOverviewPage() {
         <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
           <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
             <span className="h-2 w-2 rounded-full bg-brand-action" />
-            Site Explorer
+            Overview
           </span>
           <span className="font-mono text-text-primary">{target || project.domain}</span>
           <span className="opacity-30">/</span>
@@ -154,9 +153,6 @@ export default function ProjectOverviewPage() {
       </div>
 
       <BusinessBriefSection projectId={id} />
-
-      {/* ── AHREFS SITE EXPLORER (cached in DB + React Query, manual refresh only) ── */}
-      <SiteExplorerSection projectId={id} />
 
       {/* ── UPCOMING CONTENT ───────────────────────────────────────────────── */}
       {calLoading ? (

@@ -120,7 +120,7 @@ export default function ProjectSidebar({
         safePrefetch(qk.audits(id), () => auditsApi.list(id));
         break;
       default:
-        // Overview — data is fetched client-side by SiteExplorerSection.
+        // Overview — project + calendar data from shared React Query keys.
         break;
     }
   };

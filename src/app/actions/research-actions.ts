@@ -111,7 +111,7 @@ export async function findCompetitorGaps(projectId: string): Promise<FindCompeti
       return {
         success: false,
         error:
-          "Ahrefs returned 0 organic competitors for this domain. Add a couple of known competitors on the project overview and re-run.",
+          "No organic competitors could be discovered for this domain. Add a few known competitors on the project overview and re-run.",
         data: [],
       };
     }
@@ -122,7 +122,8 @@ export async function findCompetitorGaps(projectId: string): Promise<FindCompeti
   if (!isAhrefsConfigured()) {
     return {
       success: false,
-      error: 'AHREFS_API_KEY is not configured — Ahrefs is now the only data source for gap analysis.',
+      error:
+        'Competitor keyword gap analysis is unavailable because the rank-data integration is not configured. Add competitors manually or try again later.',
       data: [],
     };
   }

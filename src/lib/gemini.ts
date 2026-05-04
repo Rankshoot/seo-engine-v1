@@ -19,16 +19,16 @@ function safeHost(url: string): string | null {
 }
 
 /**
- * Render the Ahrefs Keywords-Explorer + SERP context into a prompt-ready
- * block. Kept here (not in research.ts) so the gemini prompt is the single
- * place that decides how Ahrefs data influences the article.
+ * Render optional keyword + SERP context into a prompt-ready block.
+ * Kept here (not in research.ts) so the gemini prompt is the single place
+ * that decides how this data influences the article.
  */
 function formatAhrefsContextForPrompt(ctx: {
   ideas: Array<{ keyword: string; volume: number; difficulty: number | null; cpc: number | null }>;
   serp: Array<{ position: number; url: string; title: string; domain: string; domain_rating: number | null; traffic: number | null }>;
 }): string {
   const lines: string[] = [];
-  lines.push('=== AHREFS CONTEXT (real Keywords-Explorer + SERP data — use to expand topical coverage) ===\n');
+  lines.push('=== KEYWORD + SERP CONTEXT (live research data — use to expand topical coverage) ===\n');
 
   if (ctx.ideas.length) {
     lines.push('ADJACENT QUERIES TO ANSWER (from matching-terms + related-terms + search-suggestions):');
@@ -41,7 +41,7 @@ function formatAhrefsContextForPrompt(ctx: {
   }
 
   if (ctx.serp.length) {
-    lines.push('LIVE TOP-10 SERP (Ahrefs):');
+    lines.push('LIVE TOP-10 SERP:');
     lines.push('These are the pages currently winning for the target keyword. Beat them by going deeper on whatever they cover, AND covering at least one angle they miss.');
     ctx.serp.slice(0, 10).forEach(p => {
       const dr = p.domain_rating != null ? ` · DR ${Math.round(p.domain_rating)}` : '';
@@ -51,7 +51,7 @@ function formatAhrefsContextForPrompt(ctx: {
     lines.push('');
   }
 
-  lines.push('=== END AHREFS CONTEXT ===');
+  lines.push('=== END KEYWORD + SERP CONTEXT ===');
   return lines.join('\n');
 }
 
@@ -235,16 +235,13 @@ export async function generateBlogPost(
   // Research context block
   const researchBlock = research ? formatResearchForPrompt(research) : '';
 
-  // Ahrefs Keywords-Explorer context. Lets the writer see exactly which
-  // adjacent searches it must answer (matching+related+suggestions) AND what
-  // already ranks in the top 10 (live SERP). Captures real search volume so
-  // the article picks up the long tail naturally.
+  // Optional live keyword + SERP context (when provided by the caller).
   const ahrefsBlock = ahrefsContext && (ahrefsContext.ideas.length || ahrefsContext.serp.length)
     ? formatAhrefsContextForPrompt(ahrefsContext)
     : '';
 
   // Build the ordered H2 list.
-  // Priority: Ahrefs "Matching terms → All" tab > entry.secondary_keywords > fallback instruction.
+  // Priority: live matching terms > entry.secondary_keywords > fallback instruction.
   // We take the top 10 by volume so the LLM gets the most-searched sub-topics first.
   const termsMatchList = ahrefsContext?.matchingTerms?.length
     ? ahrefsContext.matchingTerms
@@ -259,7 +256,7 @@ export async function generateBlogPost(
       : 'none — derive 7–8 topically relevant H2s from the primary keyword';
 
   // Build FAQ seed list.
-  // Priority: Ahrefs "Matching terms → Questions" tab > Serper PAA > fallback instruction.
+  // Priority: live question terms > Serper PAA > fallback instruction.
   const ahrefsQuestions = ahrefsContext?.questions?.length
     ? ahrefsContext.questions
         .slice(0, 10)
@@ -274,7 +271,7 @@ export async function generateBlogPost(
         .join('\n')
     : '';
 
-  // Combine: Ahrefs questions first (real volume), then PAA (freshness/context).
+  // Combine: research question terms first (volume-ranked), then PAA (freshness/context).
   const faqSeeds = [ahrefsQuestions, paaQuestions].filter(Boolean).join('\n') ||
     'none available — use the most common search questions around this topic';
 
@@ -294,10 +291,10 @@ COMPANY:         ${project.company} (${project.domain})
 WORD COUNT:      ~${wordCount} words
 ${writerNotesBlock}${briefBlock}${internalLinksBlock}
 
-SECONDARY KEYWORDS / TERMS MATCH (from Ahrefs — these become your H2 topics):
+SECONDARY KEYWORDS / TERMS MATCH (from keyword research — these become your H2 topics):
 ${termsMatchList}
 
-QUESTIONS FROM AHREFS + PEOPLE ALSO ASK (use 3–4 verbatim in the FAQ section):
+QUESTIONS FROM RESEARCH + PEOPLE ALSO ASK (use 3–4 verbatim in the FAQ section):
 ${faqSeeds}
 
 ${researchBlock}
@@ -309,7 +306,7 @@ INTERNAL PLANNING — do this mentally, output NOTHING from these steps
 ════════════════════════════════════════
 
 [PLAN STEP 1 — H2 STRUCTURE — keep internal]
-Using the SECONDARY KEYWORDS / TERMS MATCH list above (real Ahrefs data sorted by search volume), mentally select the 7–10 most search-intent-relevant ones and decide each H2 heading.
+Using the SECONDARY KEYWORDS / TERMS MATCH list above (sorted by search volume where available), mentally select the 7–10 most search-intent-relevant ones and decide each H2 heading.
 Rules for H2 headings:
 • Use plain, direct language — no "navigating", "nuances", "at a glance", "unlocking", "delving", "comprehensive", "in today's world", or any GPT-style filler.
 • Each H2 must answer a specific reader question or address a specific subtopic.
@@ -317,7 +314,7 @@ Rules for H2 headings:
 • Keep them under 8 words where possible.
 
 [PLAN STEP 2 — FAQ MAPPING — keep internal]
-From the QUESTIONS FROM AHREFS + PEOPLE ALSO ASK list above, mentally pick 3–4 of the highest-volume questions for the FAQ section. Add 3–6 more common questions around this topic so the FAQ has 7–10 questions total.
+From the QUESTIONS FROM RESEARCH + PEOPLE ALSO ASK list above, mentally pick 3–4 of the highest-volume questions for the FAQ section. Add 3–6 more common questions around this topic so the FAQ has 7–10 questions total.
 Each FAQ answer must be:
 • Crisp and ≤50 words.
 • Answer-first (first sentence directly answers the question).
@@ -434,7 +431,7 @@ OUTPUT FORMAT — begin your response here, nothing before it
 
 ## Frequently Asked Questions
 
-### [Question 1 — from PAA or Ahrefs questions]
+### [Question 1 — from PAA or research questions]
 [Answer ≤50 words, answer-first]
 
 ### [Question 2]

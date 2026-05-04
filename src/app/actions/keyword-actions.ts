@@ -352,17 +352,15 @@ export async function discoverKeywords(projectId: string) {
   );
 
   if (!rawKeywords.length) {
-    const ahrefsErr = discoveryTrace.find(
-      t => t.label.includes('ahrefs') && t.label.includes('error')
-    );
     const cfgErr = discoveryTrace.find(t => t.label === '(config)');
+    const fetchErr = discoveryTrace.find(t => t.fetchError);
     const detail =
       cfgErr?.fetchError ||
-      ahrefsErr?.fetchError ||
-      'Ahrefs returned 0 rows for these seeds.';
+      fetchErr?.fetchError ||
+      'No rows returned for these seeds.';
     return {
       success: false,
-      error: `No keywords returned by Ahrefs (${detail}). Open DevTools console for the full trace.`,
+      error: `No keywords returned (${detail}). Open DevTools console for the full trace.`,
       discoveryTrace,
       briefSummary: briefSummary(brief),
     };

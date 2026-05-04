@@ -11,8 +11,6 @@ export default function NewProjectPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [competitors, setCompetitors] = useState(["", "", ""]);
-  const [rankTrackerId, setRankTrackerId] = useState("");
-
   const addCompetitor = () => setCompetitors(prev => [...prev, ""]);
   const updateCompetitor = (i: number, val: string) =>
     setCompetitors(prev => prev.map((c, idx) => idx === i ? val : c));
@@ -25,7 +23,6 @@ export default function NewProjectPage() {
     setLoading(true);
 
     const fd = new FormData(e.currentTarget);
-    const rtId = rankTrackerId.trim() ? Number(rankTrackerId.trim()) : null;
     const result = await projectsApi.create({
       name: fd.get("name") as string,
       domain: fd.get("domain") as string,
@@ -36,7 +33,7 @@ export default function NewProjectPage() {
       target_language: "en",
       description: fd.get("description") as string,
       competitors: competitors.filter(c => c.trim()),
-      ahrefs_rank_tracker_project_id: rtId,
+      ahrefs_rank_tracker_project_id: null,
     });
 
     if (result.success && result.data) {
@@ -165,22 +162,6 @@ export default function NewProjectPage() {
               ))}
             </div>
 
-            <div className="pt-2 border-t border-border-subtle">
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">
-                Ahrefs Rank Tracker Project ID
-                <span className="ml-1 text-[10px] font-normal text-text-tertiary">(optional)</span>
-              </label>
-              <input
-                value={rankTrackerId}
-                onChange={e => setRankTrackerId(e.target.value)}
-                placeholder="e.g. 8024646"
-                className="input-field w-full"
-                inputMode="numeric"
-              />
-              <p className="text-[10px] text-text-tertiary mt-1">
-                Found in Ahrefs → Rank Tracker → your project URL. Enables richer competitor data from your tracked keywords.
-              </p>
-            </div>
           </div>
 
           {error && (

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Keyword Detail Modal — Ahrefs-style drilldown.
+ * Keyword Detail Modal — live keyword drilldown.
  *
  * Mounted by the keywords page. Opens immediately with a skeleton frame, then
  * lazily fetches `GET /api/v1/projects/:projectId/keywords/:keywordId/details`
@@ -19,7 +19,7 @@
  *   • Country flags use Unicode regional-indicator emoji (no asset bundle).
  *   • Skeleton placeholders match the final card sizes — no layout shift on
  *     fetch resolve.
- *   • Ahrefs failure path: API still returns 200 with empty arrays / null
+ *   • Enrichment failure path: API still returns 200 with empty arrays / null
  *     overview; we fall back to the row data we already had (volume, kd, cpc)
  *     and render a soft "Live enrichment unavailable" notice instead of an
  *     error.
@@ -67,7 +67,7 @@ interface ModalIntents {
 }
 
 /**
- * SERP feature entries from Ahrefs are heterogeneous — sometimes a plain
+ * SERP feature entries from the rank-data API are heterogeneous — sometimes a plain
  * string, sometimes `{ type }`, sometimes `{ feature }` or `{ name }`. We
  * accept anything and normalize at render time via `serpFeatureLabel`.
  */
@@ -164,7 +164,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
     setActiveTab("termsMatch");
   }, [keyword?.id]);
 
-  /** Fetch the Ahrefs drilldown. `force` bypasses the server-side 7d cache. */
+  /** Fetch live keyword drilldown. `force` bypasses the server-side 7d cache. */
   const fetchKeywordDetails = async (force = false) => {
     const url = `${API_V1}${V1Routes.keywordDetails(projectId, keyword!.id)}${force ? "?refresh=1" : ""}`;
     const res = await fetch(url, { credentials: "include" });
@@ -175,9 +175,9 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
     return json.data as KeywordModalApiData;
   };
 
-  // Cached fetch of the Ahrefs drilldown. We deliberately disable every
-  // automatic refetch (window focus, reconnect, mount) — Ahrefs costs real
-  // money. The user controls refreshes via the explicit Refresh button.
+  // Cached fetch of the drilldown. We deliberately disable every automatic
+  // refetch (window focus, reconnect, mount) — paid API costs. The user
+  // controls refreshes via the explicit Refresh button.
   const {
     data: rawData,
     isLoading,
@@ -242,7 +242,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
 
   const overview = data?.overview ?? null;
   // Prefer freshly fetched values; fall back to the row data so the modal
-  // shows numbers IMMEDIATELY instead of waiting for Ahrefs.
+  // shows numbers IMMEDIATELY instead of waiting for live enrichment.
   const displayedVolume = overview?.volume ?? keyword.volume ?? 0;
   const displayedKd = overview?.difficulty ?? keyword.kd ?? 0;
   const displayedCpc = overview?.cpc ?? keyword.cpc ?? 0;
@@ -325,7 +325,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
             />
           </div>
 
-          {/* SERP features pills — Ahrefs sends mixed shapes; we normalize. */}
+          {/* SERP features pills — API sends mixed shapes; we normalize. */}
           {(() => {
             const features = (overview?.serpFeatures ?? [])
               .map(serpFeatureLabel)
@@ -456,7 +456,7 @@ function Header({
           type="button"
           onClick={onRefresh}
           disabled={refreshing || loading}
-          title="Re-fetch this keyword from Ahrefs. Bypasses the 7-day server cache and uses Ahrefs API credits."
+          title="Re-fetch live keyword details. Bypasses the 7-day server cache and may use paid API credits."
           className="inline-flex items-center gap-1.5 rounded-xl border border-border-subtle bg-surface-elevated px-3 py-2 text-xs font-bold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {refreshing ? (
@@ -1066,7 +1066,7 @@ function fmtMoney(v: number | null | undefined): string {
 }
 
 /**
- * Normalize the messy SERP-feature payload Ahrefs returns. The field can be a
+ * Normalize the messy SERP-feature payload the API returns. The field can be a
  * plain string (`"sitelinks"`), or an object using one of several keys
  * (`type`, `feature`, `name`). Anything else collapses to `null` and the row
  * is filtered out by the caller.

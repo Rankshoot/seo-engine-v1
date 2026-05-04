@@ -31,7 +31,7 @@ const mockKeywords = [
 ];
 
 const features = [
-  { icon: Icon.search, color: "brand", title: "Smart Keyword Discovery", desc: "Find trending, high-value keywords for your industry and target region. Get search volume, difficulty scores, and trend data — like Ahrefs, but automated." },
+  { icon: Icon.search, color: "brand", title: "Smart Keyword Discovery", desc: "Find trending, high-value keywords for your industry and target region. Get search volume, difficulty scores, and trend data — automated end to end." },
   { icon: Icon.target, color: "cyan", title: "Competitor Analysis", desc: "Analyze competitor websites to see what keywords they rank for, what content they publish, and where their gaps lie — so you can outperform them." },
   { icon: Icon.bar, color: "accent", title: "Content Gap Scoring", desc: "AI scores every keyword opportunity by search volume, competition, trend growth, and content gap potential to prioritize what to write first." },
   { icon: Icon.calendar, color: "warm", title: "30-Day Content Calendar", desc: "Auto-generated publishing schedule — one blog per day, each targeting a top keyword. Stay consistent without the planning overhead." },

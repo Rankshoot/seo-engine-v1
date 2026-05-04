@@ -148,7 +148,7 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
   const ahrefsCrawl = await ahrefsCrawledPages(url);
   if (ahrefsCrawl) {
     if (ahrefsCrawl.http_code && (ahrefsCrawl.http_code === 404 || ahrefsCrawl.http_code === 410)) {
-      return brokenUrlRecord(url, `Ahrefs crawl shows HTTP ${ahrefsCrawl.http_code}.`);
+      return brokenUrlRecord(url, `Site check shows HTTP ${ahrefsCrawl.http_code}.`);
     }
     if (ahrefsCrawl.redirects_to_target && ahrefsCrawl.redirects_to_target > 0) {
       return redirectToHomepageRecord(url, url);
@@ -218,7 +218,7 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
             category: 'seo',
             severity: 'medium',
             detail:
-              'Ahrefs shows no keywords sending traffic to this URL yet (the page may be new, not indexed, or still building authority).',
+              'Rank tracking shows no keywords sending traffic to this URL yet (the page may be new, not indexed, or still building authority).',
             why_it_matters:
               'That limits measurable organic traffic for now, even if the on-page article reads well.',
             fix: 'Request indexing, strengthen internal links from higher-traffic posts, and recheck rankings after a few weeks.',
@@ -639,7 +639,7 @@ function buildQualityRubric(
       detail: (() => {
         if (internalRow === 'pass') {
           const tail = inboundPeerLinks
-            ? ` Ahrefs also sees ${inboundPeerLinks} inbound internal link(s) from your domain.`
+            ? ` We also see ${inboundPeerLinks} inbound internal link(s) from your domain.`
             : '';
           return `${signals.internal_link_count} in-article internal link(s).${tail}`;
         }
@@ -970,7 +970,7 @@ function synthesizeVerdict(signals: StructuralSignals, analysis: BlogAuditAnalys
   const parts: string[] = [];
   if (demand) {
     if (demand.volume === 0) {
-      parts.push('Ahrefs shows zero monthly searches for this phrase — consider retargeting a related keyword with demand.');
+      parts.push('Keyword data shows zero monthly searches for this phrase — consider retargeting a related keyword with demand.');
     } else if (demand.trend_pct <= -25) {
       parts.push(`Searches for this keyword are down ${Math.abs(demand.trend_pct)}% — demand itself is fading.`);
     } else if (demand.volume > 500 && demand.trend_pct >= 0) {
@@ -992,7 +992,7 @@ function ahrefsOnlyAnalysis(url: string, kws: AhrefsUrlKeyword[]): BlogAuditAnal
       label: 'Not ranking for any keyword',
       category: 'seo',
       severity: 'high',
-      detail: 'Ahrefs shows no keywords driving traffic to this URL.',
+      detail: 'Rank data shows no keywords driving traffic to this URL.',
       why_it_matters: 'If the page has no ranking keywords, it cannot earn organic traffic.',
       fix: 'Align the page to a focus keyword with demand and add internal links from related posts.',
       impact: 'high',
@@ -1037,7 +1037,7 @@ function ahrefsOnlyAnalysis(url: string, kws: AhrefsUrlKeyword[]): BlogAuditAnal
     : undefined;
 
   return {
-    summary: primary ? `Ahrefs: ranks for "${primary.keyword}"` : 'Ahrefs: no ranking keywords found',
+    summary: primary ? `Ranks for "${primary.keyword}"` : 'No ranking keywords found',
     primary_keyword: primary?.keyword ?? '',
     secondary_keywords: kws.slice(1, 6).map(k => k.keyword),
     issues,

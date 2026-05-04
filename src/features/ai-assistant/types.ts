@@ -18,7 +18,7 @@ export interface AIBusinessContext {
 export interface AIContextMemory {
   lastAction: string | null;
   selectedKeywordIds: string[];
-  preferredFilter: "all" | "low_competition" | "long_tail" | "ai";
+  preferredFilter: "all" | "ai";
   recentQueries: string[];
   chatHistory: Array<{
     role: "user" | "assistant";

@@ -17,6 +17,7 @@ import { projectsApi } from "@/frontend/api/projects";
 import type { CalendarEntryWithBlog, ProjectCompetitor } from "@/lib/types";
 import { TARGET_REGIONS } from "@/lib/types";
 import { SiteExplorerSection } from "@/components/projects/SiteExplorerSection";
+import { BusinessBriefSection } from "@/components/projects/BusinessBriefSection";
 import { Skeleton } from "@/components/Skeleton";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -151,6 +152,8 @@ export default function ProjectOverviewPage() {
           </div>
         </div>
       </div>
+
+      <BusinessBriefSection projectId={id} />
 
       {/* ── AHREFS SITE EXPLORER (cached in DB + React Query, manual refresh only) ── */}
       <SiteExplorerSection projectId={id} />

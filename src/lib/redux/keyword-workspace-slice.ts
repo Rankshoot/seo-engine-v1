@@ -6,19 +6,14 @@ export type CalendarScheduledKeyword = {
   status: string;
 };
 
-export type KeywordFilterTab =
-  | "all"
-  | "ai"
-  | "low_competition"
-  | "long_tail"
-  | KeywordStatus;
+export type KeywordFilterTab = "all" | "ai" | KeywordStatus;
 export type KeywordTableSortColumn =
   | "keyword"
   | "volume"
+  | "est_traffic"
   | "kd"
   | "cpc"
   | "intent"
-  | "ai_score"
   | "analysis_score"
   | "status";
 export type KeywordSortDir = "asc" | "desc";
@@ -61,7 +56,7 @@ export type ProjectKeywordWorkspace = {
     longTailKeywordIds: string[];
     selectedKeywordIds: string[];
     lastAction: string | null;
-    preferredFilter: "all" | "low_competition" | "long_tail" | "ai";
+    preferredFilter: "all" | "ai";
     recentQueries: string[];
     chatHistory: Array<{
       id: string;
@@ -150,7 +145,14 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
   };
   // Backfill chatSessions for persisted state that predates this field
   (state.projects[projectId].aiAssistant as { chatSessions?: unknown[] }).chatSessions ??= [];
-  return state.projects[projectId];
+  const proj = state.projects[projectId];
+  const f = proj.prefs.filter as string;
+  if (f === "low_competition" || f === "long_tail") proj.prefs.filter = "all";
+  const col = proj.prefs.tableSort.column as string;
+  if (col === "ai_score") proj.prefs.tableSort.column = "analysis_score";
+  const pf = proj.aiAssistant.preferredFilter as string;
+  if (pf === "low_competition" || pf === "long_tail") proj.aiAssistant.preferredFilter = "all";
+  return proj;
 }
 
 function approvedDelta(previousStatus: KeywordStatus | undefined, nextStatus: KeywordStatus) {
@@ -163,10 +165,6 @@ function approvedDelta(previousStatus: KeywordStatus | undefined, nextStatus: Ke
 function applyStatsDelta(project: ProjectKeywordWorkspace, delta: number) {
   if (!project.stats || delta === 0) return;
   project.stats.approvedKeywords = Math.max(0, project.stats.approvedKeywords + delta);
-  if (delta > 0) {
-    project.stats.calendarEntries += delta;
-    project.calendarRefreshVersion += 1;
-  }
 }
 
 export const keywordWorkspaceSlice = createSlice({
@@ -342,7 +340,7 @@ export const keywordWorkspaceSlice = createSlice({
         longTailKeywordIds?: string[];
         selectedKeywordIds?: string[];
         lastAction?: string | null;
-        preferredFilter?: "all" | "low_competition" | "long_tail" | "ai";
+        preferredFilter?: "all" | "ai";
         recentQueries?: string[];
         chatHistory?: Array<{
           id: string;

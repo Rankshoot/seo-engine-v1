@@ -465,12 +465,7 @@ export async function POST(req: Request) {
       selectedKeywordIds: Array.isArray(memory?.selectedKeywordIds)
         ? memory.selectedKeywordIds.filter((id): id is string => typeof id === "string").slice(0, 80)
         : [],
-      preferredFilter:
-        memory?.preferredFilter === "low_competition" ||
-        memory?.preferredFilter === "long_tail" ||
-        memory?.preferredFilter === "ai"
-          ? memory.preferredFilter
-          : "all",
+      preferredFilter: memory?.preferredFilter === "ai" ? "ai" : "all",
       recentQueries: Array.isArray(memory?.recentQueries)
         ? memory.recentQueries.filter((q): q is string => typeof q === "string").slice(-12)
         : [],

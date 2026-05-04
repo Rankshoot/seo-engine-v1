@@ -1523,6 +1523,8 @@ export interface CompetitorKeywordsForSiteRow {
   kd: number;
   cpc: number;
   intent: Intent;
+  /** Populated when the upstream payload includes an ETV-style estimate. */
+  estimated_monthly_traffic?: number | null;
   /** Keywords For Site does not return SERP rank — always 0. */
   competitor_position: number;
   /** Site-level landing URL for the competitor (no per-keyword URL from API). */
@@ -1535,6 +1537,10 @@ interface DfsGoogleAdsKeywordForSiteItem {
   cpc?: number | string | null;
   competition?: string | null;
   competition_index?: number | null;
+  /** Some responses include organic traffic estimates (field name varies). */
+  etv?: number | null;
+  estimated_traffic?: number | null;
+  monthly_traffic?: number | null;
 }
 
 function competitionLevelToKdHint(level: string | null | undefined): number {
@@ -1615,12 +1621,17 @@ export async function fetchGoogleAdsKeywordsForSite(
           ? Math.max(0, Math.min(100, Math.round(idx)))
           : competitionLevelToKdHint(it.competition ?? null);
 
+      const etvRaw = it.etv ?? it.estimated_traffic ?? it.monthly_traffic;
+      const estimated_monthly_traffic =
+        typeof etvRaw === 'number' && Number.isFinite(etvRaw) && etvRaw > 0 ? Math.round(etvRaw) : null;
+
       return {
         keyword,
         volume,
         kd,
         cpc,
         intent: '',
+        estimated_monthly_traffic,
         competitor_position: 0,
         competitor_url: baseUrl,
       };

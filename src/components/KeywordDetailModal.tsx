@@ -401,6 +401,18 @@ function Header({
         <h2 className="mt-1 break-words text-xl font-bold text-text-primary md:text-2xl">
           {keyword.keyword}
         </h2>
+        <p className="mt-2 text-[12px] text-text-secondary">
+          <span className="font-semibold text-text-tertiary">AI relevance</span>{" "}
+          <span className="font-mono tabular-nums text-text-primary">{keyword.ai_score}</span>
+          <span className="text-text-tertiary"> /10</span>
+          {typeof keyword.keyword_analysis_score === "number" && keyword.keyword_analysis_score > 0 ? (
+            <>
+              <span className="mx-2 text-text-tertiary/50">·</span>
+              <span className="font-semibold text-text-tertiary">Analysis</span>{" "}
+              <span className="font-mono tabular-nums text-brand-action">{Math.round(keyword.keyword_analysis_score)}</span>
+            </>
+          ) : null}
+        </p>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-text-tertiary">
           {data ? (
             <span

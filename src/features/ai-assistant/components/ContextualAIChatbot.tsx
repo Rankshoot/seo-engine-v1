@@ -119,27 +119,55 @@ const QUICK_PROMPTS: Record<AIPageExtended, Array<{ id: string; label: string; p
   ],
 };
 
-function groupSessionsByDate(sessions: ChatSession[]) {
-  const now = new Date();
-  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
-  const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-  const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - 7);
+function startOfLocalDay(d: Date): number {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x.getTime();
+}
 
-  const groups: { label: string; sessions: ChatSession[] }[] = [];
-  const buckets = { Today: [] as ChatSession[], Yesterday: [] as ChatSession[], "This Week": [] as ChatSession[], Older: [] as ChatSession[] };
+/** Banner label for a calendar day (local), e.g. Today / Yesterday / Fri, May 2, 2026 */
+function formatSessionDayBanner(dayKey: string): string {
+  const day = new Date(dayKey + "T12:00:00");
+  const today = startOfLocalDay(new Date());
+  const y = new Date(today);
+  y.setDate(y.getDate() - 1);
+  const yesterday = y.getTime();
+  const d0 = startOfLocalDay(day);
+  if (d0 === today) return "Today";
+  if (d0 === yesterday) return "Yesterday";
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(day);
+}
 
+function localDayKeyFromTimestamp(iso: string): string {
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${da}`;
+}
+
+/** Group sessions under calendar-day banners (newest day first, local dates). */
+function groupSessionsByCalendarDay(sessions: ChatSession[]) {
+  const map = new Map<string, ChatSession[]>();
   for (const s of sessions) {
-    const d = new Date(s.lastMessageAt);
-    if (d >= todayStart) buckets.Today.push(s);
-    else if (d >= yesterdayStart) buckets.Yesterday.push(s);
-    else if (d >= weekStart) buckets["This Week"].push(s);
-    else buckets.Older.push(s);
+    const key = localDayKeyFromTimestamp(s.lastMessageAt);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(s);
   }
-
-  for (const [label, list] of Object.entries(buckets)) {
-    if (list.length) groups.push({ label, sessions: list });
+  for (const list of map.values()) {
+    list.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
   }
-  return groups;
+  const keys = [...map.keys()].sort((a, b) => b.localeCompare(a));
+  return keys.map(dateKey => ({
+    dateKey,
+    label: formatSessionDayBanner(dateKey),
+    sessions: map.get(dateKey)!,
+  }));
 }
 
 function TypingDots() {
@@ -607,6 +635,8 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
     keyword: string;
     sessionId: string;
   } | null>(null);
+  const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
+  const historyMenuRef = useRef<HTMLDivElement>(null);
 
   const lowCompetitionIds = useAppSelector(s => selectAiLowCompetitionKeywordIds(s, project.id));
   const longTailIds = useAppSelector(s => selectAiLongTailKeywordIds(s, project.id));
@@ -633,6 +663,17 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
       setTimeout(() => inputRef.current?.focus(), 300);
     }
   }, [aiMode, panelMounted]);
+
+  useEffect(() => {
+    if (!historyMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (historyMenuRef.current && !historyMenuRef.current.contains(e.target as Node)) {
+        setHistoryMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [historyMenuOpen]);
 
   // Reset session when page changes
   useEffect(() => {
@@ -701,15 +742,11 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
     const brief = briefData?.success ? briefData.brief ?? null : null;
     const keywordsRaw = keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.data : [];
     const aiSet = new Set(suggestedKeywordIds);
-    const lowSet = new Set(lowCompetitionIds);
-    const longSet = new Set(longTailIds);
     const keywords = keywordsRaw
       .map(k => (keywordStatuses[k.id] ? { ...k, status: keywordStatuses[k.id] } : k))
       .filter(k => {
         if (page !== "keywords") return true;
         if (keywordPrefs.filter === "ai") return aiSet.has(k.id);
-        if (keywordPrefs.filter === "low_competition") return lowSet.has(k.id);
-        if (keywordPrefs.filter === "long_tail") return longSet.has(k.id);
         if (keywordPrefs.filter === "pending" || keywordPrefs.filter === "approved" || keywordPrefs.filter === "rejected") {
           return k.status === keywordPrefs.filter;
         }
@@ -795,7 +832,7 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
     return Array.from(map.values()).reverse();
   }, [chatHistory, chatSessions]);
 
-  const groupedSessions = useMemo(() => groupSessionsByDate(sessions), [sessions]);
+  const groupedSessions = useMemo(() => groupSessionsByCalendarDay(sessions), [sessions]);
 
   /** Live keyword metrics for calendar cards (join + persisted tool payloads). */
   const keywordMetricById = useMemo(() => {
@@ -1165,8 +1202,10 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
                 </div>
               ) : (
                 groupedSessions.map(group => (
-                  <div key={group.label}>
-                    <p className="px-2 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-text-tertiary">{group.label}</p>
+                  <div key={group.dateKey}>
+                    <div className="px-2 py-1.5 mb-1 rounded-[6px] bg-brand-action/8 border border-brand-action/15">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-brand-action">{group.label}</p>
+                    </div>
                     <div className="space-y-0.5">
                       {group.sessions.map(session => {
                         const isActive = activeSession === session.id;
@@ -1200,7 +1239,77 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
           <div className="flex flex-col flex-1 min-w-0">
             {/* Header */}
             <header className="shrink-0 border-b border-border-subtle bg-surface-primary px-4 py-3">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                {aiMode === "mini" ? (
+                  <div className="relative shrink-0" ref={historyMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryMenuOpen(o => !o)}
+                      aria-expanded={historyMenuOpen}
+                      aria-haspopup="listbox"
+                      title="Chat history"
+                      className={`flex h-8 w-8 items-center justify-center rounded-[8px] border transition-colors ${
+                        historyMenuOpen
+                          ? "border-brand-action/40 bg-brand-action/10 text-brand-action"
+                          : "border-border-subtle bg-surface-elevated text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                      }`}
+                    >
+                      <HistoryIcon className="h-4 w-4" />
+                    </button>
+                    {historyMenuOpen ? (
+                      <div
+                        role="listbox"
+                        className="absolute left-0 top-[calc(100%+6px)] z-100 w-[min(320px,calc(100vw-2.5rem))] max-h-[min(340px,45vh)] overflow-y-auto rounded-[12px] border border-border-subtle bg-surface-elevated py-2 shadow-2xl shadow-black/50"
+                      >
+                        {groupedSessions.length === 0 ? (
+                          <div className="px-4 py-6 text-center">
+                            <p className="text-[12px] text-text-tertiary">No chat history yet</p>
+                            <p className="mt-1 text-[11px] text-text-tertiary/80">Send a message to start a thread</p>
+                          </div>
+                        ) : (
+                          groupedSessions.map(group => (
+                            <div key={group.dateKey} className="px-2 pb-2 last:pb-0">
+                              <div className="sticky top-0 z-10 -mx-1 mb-1.5 rounded-[6px] bg-surface-secondary px-2 py-1.5 border border-brand-action/20">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-brand-action">{group.label}</p>
+                              </div>
+                              <div className="space-y-0.5">
+                                {group.sessions.map(session => {
+                                  const isActive = activeSession === session.id;
+                                  return (
+                                    <button
+                                      key={session.id}
+                                      type="button"
+                                      role="option"
+                                      aria-selected={isActive}
+                                      onClick={() => {
+                                        setActiveSessionId(session.id);
+                                        setHistoryMenuOpen(false);
+                                      }}
+                                      className={[
+                                        "w-full text-left px-2.5 py-2 rounded-[8px] transition-colors",
+                                        isActive
+                                          ? "bg-brand-action/10 border border-brand-action/25"
+                                          : "hover:bg-surface-hover border border-transparent",
+                                      ].join(" ")}
+                                    >
+                                      <p
+                                        className={`truncate text-[12px] font-medium ${isActive ? "text-brand-action" : "text-text-primary"}`}
+                                      >
+                                        {session.title}
+                                      </p>
+                                      <p className="text-[10px] text-text-tertiary capitalize mt-0.5">{session.page}</p>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="flex items-center gap-2.5 flex-1 min-w-0">
                   <div className="w-8 h-8 shrink-0 rounded-[8px] bg-brand-primary flex items-center justify-center">
                     <SparkleIcon className="h-[18px] w-[18px] text-brand-on-primary" />
@@ -1214,18 +1323,32 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
                 </div>
 
                 {page && (
-                  <span className="shrink-0 rounded-full border border-border-subtle px-2.5 py-1 text-[11px] font-medium text-text-secondary capitalize bg-surface-elevated">
+                  <span className="hidden sm:inline-flex shrink-0 rounded-full border border-border-subtle px-2.5 py-1 text-[11px] font-medium text-text-secondary capitalize bg-surface-elevated">
                     {page}
                   </span>
                 )}
 
-                <div className="flex items-center gap-1 shrink-0">
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      startNewChat();
+                      setHistoryMenuOpen(false);
+                    }}
+                    title="New chat"
+                    className="flex h-8 w-8 items-center justify-center rounded-[8px] text-text-tertiary hover:bg-surface-hover hover:text-brand-action transition-colors"
+                  >
+                    <NewChatIcon className="h-[18px] w-[18px]" />
+                  </button>
                   {aiMode === "mini" ? (
                     <button
                       type="button"
-                      onClick={() => setAiMode("full")}
+                      onClick={() => {
+                        setHistoryMenuOpen(false);
+                        setAiMode("full");
+                      }}
                       title="Expand to full view"
-                      className="flex h-7 w-7 items-center justify-center rounded-[6px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                      className="flex h-8 w-8 items-center justify-center rounded-[8px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors"
                     >
                       <ExpandIcon className="h-4 w-4" />
                     </button>
@@ -1234,16 +1357,19 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
                       type="button"
                       onClick={() => setAiMode("mini")}
                       title="Collapse to mini"
-                      className="flex h-7 w-7 items-center justify-center rounded-[6px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                      className="flex h-8 w-8 items-center justify-center rounded-[8px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors"
                     >
                       <CollapseIcon className="h-4 w-4" />
                     </button>
                   )}
                   <button
                     type="button"
-                    onClick={() => setAiMode("closed")}
+                    onClick={() => {
+                      setHistoryMenuOpen(false);
+                      setAiMode("closed");
+                    }}
                     title="Close"
-                    className="flex h-7 w-7 items-center justify-center rounded-[6px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                    className="flex h-8 w-8 items-center justify-center rounded-[8px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors"
                   >
                     <CloseIcon className="h-4 w-4" />
                   </button>
@@ -1470,7 +1596,9 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
               </div>
               {blogGenLocksThisView && (
                 <p className="mt-2 text-[11px] text-amber-200/90">
-                  This chat is paused until the blog finishes. Use <span className="font-semibold">New</span> in the sidebar to start a separate conversation.
+                  This chat is paused until the blog finishes. Use{" "}
+                  <span className="font-semibold">New chat</span>{" "}
+                  {aiMode === "full" ? "in the sidebar" : "above"} to start a separate conversation.
                 </p>
               )}
               {!page && (
@@ -1488,6 +1616,26 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
 }
 
 // ── SVG icon components ──
+
+function HistoryIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function NewChatIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"
+      />
+    </svg>
+  );
+}
 
 function SparkleIcon({ className }: { className?: string }) {
   return (

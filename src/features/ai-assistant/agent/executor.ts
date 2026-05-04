@@ -13,11 +13,11 @@ export function executeAgentAction(action: ContextualActionType, options: Execut
   const { dispatch, projectId, lowCompetitionIds, longTailIds } = options;
 
   if (action === "FILTER_LOW_COMPETITION") {
-    dispatch(rememberKeywordFilter({ projectId, filter: "low_competition" }));
+    dispatch(rememberKeywordFilter({ projectId, filter: "all" }));
     dispatch(
       aiAssistantMemoryUpdated({
         projectId,
-        preferredFilter: "low_competition",
+        preferredFilter: "all",
         selectedKeywordIds: lowCompetitionIds,
         lastAction: action,
       })
@@ -26,11 +26,11 @@ export function executeAgentAction(action: ContextualActionType, options: Execut
   }
 
   if (action === "SUGGEST_LONG_TAIL") {
-    dispatch(rememberKeywordFilter({ projectId, filter: "long_tail" }));
+    dispatch(rememberKeywordFilter({ projectId, filter: "all" }));
     dispatch(
       aiAssistantMemoryUpdated({
         projectId,
-        preferredFilter: "long_tail",
+        preferredFilter: "all",
         selectedKeywordIds: longTailIds,
         lastAction: action,
       })

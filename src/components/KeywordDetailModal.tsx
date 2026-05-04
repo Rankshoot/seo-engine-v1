@@ -4,7 +4,7 @@
  * Keyword Detail Modal — Ahrefs-style drilldown.
  *
  * Mounted by the keywords page. Opens immediately with a skeleton frame, then
- * lazily fetches `GET /api/projects/:projectId/keywords/:keywordId/details`
+ * lazily fetches `GET /api/v1/projects/:projectId/keywords/:keywordId/details`
  * (which itself caches in `keyword_details` for 7 days). Renders:
  *
  *   • Header with keyword title, cache badge, Approve / Reject / Close
@@ -28,7 +28,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/Skeleton";
-import { qk } from "@/lib/query-keys";
+import { API_V1 } from "@/frontend/api/http";
+import { V1Routes } from "@/frontend/api/routes";
+import { qk } from "@/lib/query";
 import type { Keyword, KeywordStatus } from "@/lib/types";
 
 /**
@@ -164,7 +166,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
 
   /** Fetch the Ahrefs drilldown. `force` bypasses the server-side 7d cache. */
   const fetchKeywordDetails = async (force = false) => {
-    const url = `/api/projects/${projectId}/keywords/${keyword!.id}/details${force ? "?refresh=1" : ""}`;
+    const url = `${API_V1}${V1Routes.keywordDetails(projectId, keyword!.id)}${force ? "?refresh=1" : ""}`;
     const res = await fetch(url, { credentials: "include" });
     const json = await res.json();
     if (!res.ok || !json.success) {
@@ -185,11 +187,6 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
     queryKey: keyword ? qk.keywordDetails(projectId, keyword.id) : ["keyword-details", "noop"],
     queryFn: () => fetchKeywordDetails(false),
     enabled: open && !!keyword,
-    staleTime: Infinity,
-    gcTime: 60 * 60_000, // hold in memory for an hour after close
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: false,
   });
 
   // Manual refresh — bypasses both the React Query cache (we overwrite it on

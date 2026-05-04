@@ -1,16 +1,14 @@
 "use client";
 
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Project, ProjectCompetitor, TARGET_REGIONS } from "@/lib/types";
 import { projectDomainHost } from "@/lib/project-domain-host";
-import { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashboard/project-card-layout";
-import {
-  deleteProject,
-  getProject,
-  updateProject,
-} from "@/app/actions/project-actions";
+import { projectsApi } from "@/frontend/api/projects";
+
+/** Shared with `ProjectsClient` for dashed “new project” tiles in the same grid. */
+export const PROJECT_CARD_GRID_HEIGHT_CLASS = "min-h-[200px] h-full";
 
 interface ProjectCardProps {
   project: Project;
@@ -172,7 +170,7 @@ export default function ProjectCard({ project }: ProjectCardProps) {
   return (
     <>
       <div className={`relative group ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}>
-        <Link
+        <ProjectNavLink
           href={`/projects/${project.id}`}
           className={`group/card relative flex ${PROJECT_CARD_GRID_HEIGHT_CLASS} flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated p-6 transition-all duration-300 hover:border-border-strong hover:shadow-sm`}
         >
@@ -217,7 +215,7 @@ export default function ProjectCard({ project }: ProjectCardProps) {
               </svg>
             </span>
           </div>
-        </Link>
+        </ProjectNavLink>
 
         {/* Kebab menu */}
         <div className="absolute top-5 right-5" ref={menuRef}>
@@ -333,7 +331,7 @@ function EditProjectModal({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await getProject(projectId);
+      const res = await projectsApi.get(projectId);
       if (cancelled) return;
       if (res.success && res.data) {
         const p = res.data;
@@ -377,7 +375,7 @@ function EditProjectModal({
     e.preventDefault();
     setSaving(true);
     setError("");
-    const res = await updateProject(projectId, {
+    const res = await projectsApi.update(projectId, {
       ...form,
       competitors: competitors.map(c => c.trim()).filter(Boolean),
     });
@@ -563,7 +561,7 @@ function DeleteProjectModal({
   const handleDelete = async () => {
     setDeleting(true);
     setError("");
-    const res = await deleteProject(project.id);
+    const res = await projectsApi.delete(project.id);
     if (res.success) onDeleted();
     else {
       setError(res.error ?? "Failed to delete project.");

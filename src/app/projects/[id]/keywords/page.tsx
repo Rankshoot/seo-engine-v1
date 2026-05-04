@@ -1,53 +1,31 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query-keys";
+import { qk, keywordsListQueryOptions, useBusinessBrief, useProject } from "@/lib/query";
 import { Keyword, KeywordStatus, TARGET_REGIONS } from "@/lib/types";
 import {
   useAppDispatch,
   useAppSelector,
   selectKeywordPrefs,
   selectKeywordStatuses,
-  selectKeywordsCache,
-  selectBriefCache,
   selectAiSuggestedKeywordIds,
   selectAiLowCompetitionKeywordIds,
   selectAiLongTailKeywordIds,
 } from "@/lib/redux/hooks";
 import {
   bulkKeywordStatusChanged,
-  briefLoaded,
   keywordStatusChanged,
-  keywordsLoaded,
-  clearKeywordsCache,
-  clearBriefCache,
   mergeKeywordStatuses,
   rememberKeywordFilter,
   rememberKeywordSort,
   removeKeywordStatus,
 } from "@/lib/redux/keyword-workspace-slice";
-import {
-  discoverKeywords,
-  getKeywords,
-  loadMoreKeywords,
-  updateKeywordStatus,
-  bulkUpdateKeywordStatus,
-  deleteKeyword,
-  deleteAllKeywords,
-  getDomainKeywords,
-} from "@/app/actions/keyword-actions";
+import { keywordsApi } from "@/frontend/api/keywords";
 import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
-import { getCalendarEntries, addKeywordToCalendarOnDate } from "@/app/actions/calendar-actions";
-import type { CalendarEntry } from "@/lib/types";
-import { MiniCalendar } from "@/components/MiniCalendar";
-import {
-  getBusinessBrief,
-  generateBusinessBrief,
-} from "@/app/actions/brief-actions";
-import { getProject } from "@/app/actions/project-actions";
+import { briefApi } from "@/frontend/api/brief";
 import type { BusinessBrief } from "@/lib/business-brief";
 import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { TableSkeleton, BusinessBriefSkeleton } from "@/components/Skeleton";
@@ -55,9 +33,8 @@ import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordRowMenu } from "@/components/keywords/KeywordRowMenu";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
-type KeywordsResponse = Awaited<ReturnType<typeof getKeywords>>;
-type BriefResponse = Awaited<ReturnType<typeof getBusinessBrief>>;
-type ProjectResponse = Awaited<ReturnType<typeof getProject>>;
+type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
+type BriefResponse = Awaited<ReturnType<typeof briefApi.get>>;
 
 function regionName(code: string): string {
   return TARGET_REGIONS.find(r => r.code === code.toLowerCase())?.name ?? code.toUpperCase();
@@ -133,34 +110,9 @@ export default function KeywordsPage() {
   );
   const aiLongTailKeywordIds = useAppSelector(state => selectAiLongTailKeywordIds(state, projectId));
 
-  // Redux caches are backed by localStorage, which isn't available during SSR.
-  // We read them here but only apply them as React Query initialData AFTER the
-  // client has hydrated (mounted = true). This prevents the server/client HTML
-  // mismatch that would otherwise fire a hydration warning.
-  const reduxKeywordsCache = useAppSelector(state => selectKeywordsCache(state, projectId));
-  const reduxBriefCache = useAppSelector(state => selectBriefCache(state, projectId));
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
-
-  // After mount, pull from Redux so navigating back to this page is instant.
-  const keywordsCache = mounted ? reduxKeywordsCache : null;
-  const briefCache = mounted ? reduxBriefCache : null;
-
   const PAGE_SIZE = 20;
-  const KEYWORDS_KEY = qk.keywords(projectId, { limit: PAGE_SIZE, offset: 0 });
+  const KEYWORDS_KEY = qk.keywords(projectId);
   const BRIEF_KEY = qk.brief(projectId);
-  const PROJECT_KEY = qk.project(projectId);
-
-  // Build React Query initialData from the Redux caches. When present, React Query
-  // uses the data immediately AND treats it as fresh (staleTime: Infinity + initialDataUpdatedAt),
-  // so no network call fires on revisit or page refresh.
-  const keywordsInitialData: KeywordsResponse | undefined = keywordsCache
-    ? { success: true, data: keywordsCache.keywords, total: keywordsCache.total }
-    : undefined;
-
-  const briefInitialData: BriefResponse | undefined = briefCache
-    ? { success: true, brief: briefCache.brief, updated_at: briefCache.updatedAt ?? undefined }
-    : undefined;
 
   const [discovering, setDiscovering] = useState(false);
   const filter = keywordPrefs.filter as FilterTab;
@@ -170,9 +122,6 @@ export default function KeywordsPage() {
   // Source tab — "industry" shows the existing Discover flow; "domain" shows
   // live Google Ads keywords_for_site data for the project's own domain.
   const [sourceTab, setSourceTab] = useState<SourceTab>("industry");
-  const [domainKeywords, setDomainKeywords] = useState<CompetitorKeywordsForSiteRow[]>([]);
-  const [domainFetching, setDomainFetching] = useState(false);
-  const [domainError, setDomainError] = useState("");
 
   const [refreshingBrief, setRefreshingBrief] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
@@ -197,18 +146,9 @@ export default function KeywordsPage() {
   // updates that happen via `handleStatusUpdate`.
   const [modalKeywordId, setModalKeywordId] = useState<string | null>(null);
 
-  // "Add to calendar" scheduling flow
-  const [schedulingKeywordId, setSchedulingKeywordId] = useState<string | null>(null);
-  const [addingToCalendar, setAddingToCalendar] = useState(false);
-
   const { data: keywordsData, isLoading: loading } = useQuery<KeywordsResponse>({
-    queryKey: KEYWORDS_KEY,
-    queryFn: () => getKeywords(projectId, { limit: PAGE_SIZE, offset: 0 }),
+    ...keywordsListQueryOptions(projectId),
     enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
-    initialData: keywordsInitialData,
-    initialDataUpdatedAt: keywordsCache?.loadedAt,
   });
   const serverKeywords: Keyword[] =
     keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.data : [];
@@ -232,55 +172,12 @@ export default function KeywordsPage() {
         statuses: Object.fromEntries(serverKeywords.map(kw => [kw.id, kw.status])),
       })
     );
-    const total =
-      keywordsData && "success" in keywordsData && keywordsData.success
-        ? keywordsData.total ?? serverKeywords.length
-        : serverKeywords.length;
-    dispatch(keywordsLoaded({ projectId, keywords: serverKeywords, total }));
-  }, [dispatch, projectId, serverKeywords, keywordsData]);
+  }, [dispatch, projectId, serverKeywords]);
 
-  const { data: briefData, isLoading: loadingBrief } = useQuery<BriefResponse>({
-    queryKey: BRIEF_KEY,
-    queryFn: () => getBusinessBrief(projectId),
-    enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
-    initialData: briefInitialData,
-    initialDataUpdatedAt: briefCache?.loadedAt,
-  });
+  const { data: briefData, isLoading: loadingBrief } = useBusinessBrief(projectId);
 
-  // Keep Redux brief cache in sync so page-refresh is instant.
-  useEffect(() => {
-    if (!briefData?.success) return;
-    dispatch(
-      briefLoaded({
-        projectId,
-        brief: briefData.brief ?? null,
-        updatedAt: briefData.updated_at ?? null,
-      })
-    );
-  }, [dispatch, projectId, briefData]);
+  const { data: projectData } = useProject(projectId);
 
-  const { data: projectData } = useQuery<ProjectResponse>({
-    queryKey: PROJECT_KEY,
-    queryFn: () => getProject(projectId),
-    enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
-  });
-
-  const CALENDAR_KEY = qk.calendar(projectId);
-  const { data: calendarData, refetch: refetchCalendar } = useQuery({
-    queryKey: CALENDAR_KEY,
-    queryFn: () => getCalendarEntries(projectId),
-    enabled: !!projectId,
-    // Keep scheduling data perfectly in sync with the Calendar page —
-    // always refetch on mount so cross-page schedules surface here.
-    staleTime: 0,
-    gcTime: 30 * 60_000,
-    refetchOnMount: 'always',
-  });
-  const calendarEntries: CalendarEntry[] = calendarData?.success ? calendarData.data : [];
   const brief: BusinessBrief | null =
     briefData && briefData.success ? briefData.brief ?? null : null;
   const briefUpdatedAt: string | null =
@@ -290,6 +187,25 @@ export default function KeywordsPage() {
     projectData && "success" in projectData && projectData.success && projectData.data
       ? projectData.data
       : null;
+
+  const {
+    data: domainRes,
+    isFetching: domainFetching,
+    refetch: refetchDomain,
+    isError: domainIsError,
+  } = useQuery({
+    queryKey: qk.domainKeywords(projectId),
+    queryFn: () => keywordsApi.domainKeywords(projectId),
+    enabled: !!projectId && sourceTab === "domain",
+  });
+  const domainKeywords: CompetitorKeywordsForSiteRow[] =
+    domainRes && "success" in domainRes && domainRes.success ? domainRes.data : [];
+  const domainError =
+    domainRes && !domainRes.success
+      ? domainRes.error ?? "Failed to fetch domain keywords"
+      : domainIsError
+        ? "Failed to fetch domain keywords"
+        : "";
 
   const pushToast = (message: string) => {
     setToast(message);
@@ -320,15 +236,13 @@ export default function KeywordsPage() {
   const handleLoadMore = async () => {
     setLoadingMore(true);
     const currentPending = keywords.filter(k => k.status === "pending").length;
-    const res = await loadMoreKeywords(projectId, currentPending, PAGE_SIZE);
+    const res = await keywordsApi.loadMore(projectId, currentPending, PAGE_SIZE);
     if (res.success) {
       queryClient.setQueryData<KeywordsResponse>(KEYWORDS_KEY, prev => {
         if (!prev || !("success" in prev) || !prev.success) return prev;
         const seen = new Set(prev.data.map(k => k.id));
         const fresh = res.data.filter(k => !seen.has(k.id));
         const merged = [...prev.data, ...fresh];
-        // Keep the Redux cache in sync with the expanded list.
-        dispatch(keywordsLoaded({ projectId, keywords: merged, total: res.total ?? prev.total ?? merged.length }));
         return { ...prev, data: merged, total: res.total ?? prev.total };
       });
     }
@@ -338,10 +252,7 @@ export default function KeywordsPage() {
   const handleDiscover = async () => {
     setDiscovering(true);
     setError("");
-    // Clear caches so fresh discovery results are fetched instead of stale data.
-    dispatch(clearKeywordsCache({ projectId }));
-    dispatch(clearBriefCache({ projectId }));
-    const res = await discoverKeywords(projectId);
+    const res = await keywordsApi.discover(projectId);
     const typed = res as {
       discoveryTrace?: DataForSEOTraceEntry[];
       briefSummary?: {
@@ -390,7 +301,7 @@ export default function KeywordsPage() {
     if (res.success) {
       // Refresh both the keyword list and the brief that drove the run.
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: qk.keywordsAll(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
         queryClient.invalidateQueries({ queryKey: BRIEF_KEY }),
         queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
       ]);
@@ -398,32 +309,10 @@ export default function KeywordsPage() {
     setDiscovering(false);
   };
 
-  const handleFetchDomainKeywords = async () => {
-    setDomainFetching(true);
-    setDomainError("");
-    const res = await getDomainKeywords(projectId);
-    if (res.success) {
-      setDomainKeywords(res.data);
-    } else {
-      setDomainError(res.error ?? "Failed to fetch domain keywords");
-    }
-    setDomainFetching(false);
-  };
-
-  // Auto-fetch domain keywords the first time the domain tab is activated.
-  const domainFetchedRef = useRef(false);
-  useEffect(() => {
-    if (sourceTab === "domain" && !domainFetchedRef.current && domainKeywords.length === 0 && !domainFetching) {
-      domainFetchedRef.current = true;
-      void handleFetchDomainKeywords();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceTab]);
-
   const handleRefreshBrief = async () => {
     setRefreshingBrief(true);
     setError("");
-    const res = await generateBusinessBrief(projectId, { force: true });
+    const res = await briefApi.generate(projectId, { force: true });
     if (res.trace?.length) {
       console.groupCollapsed(
         `[Brief] Refresh — scraped ${res.trace.filter(t => t.label === "jina_read" && t.ok).length} pages`
@@ -441,8 +330,6 @@ export default function KeywordsPage() {
         brief: res.brief,
         updated_at: updatedAt,
       });
-      // Sync to Redux so the next page refresh serves from cache.
-      dispatch(briefLoaded({ projectId, brief: res.brief, updatedAt }));
     } else {
       setError(res.error ?? "Failed to refresh business brief");
     }
@@ -478,7 +365,7 @@ export default function KeywordsPage() {
     // Keep the menu button blocked only for a brief moment while the row
     // re-renders — then release so the user can interact again.
     setBusyRowId(kwId);
-    const res = await updateKeywordStatus(kwId, status);
+    const res = await keywordsApi.updateStatus(kwId, projectId, status);
     setBusyRowId(null);
 
     if (!res.success) {
@@ -509,7 +396,7 @@ export default function KeywordsPage() {
     const snapshot = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
     const previousStatus = keywords.find(k => k.id === kwId)?.status;
     patchKeywords(list => list.filter(k => k.id !== kwId));
-    const res = await deleteKeyword(kwId);
+    const res = await keywordsApi.deleteKeyword(projectId, kwId);
     if (!res.success) {
       if (snapshot) queryClient.setQueryData(KEYWORDS_KEY, snapshot);
       setError(("error" in res && res.error) || "Could not delete keyword");
@@ -571,7 +458,7 @@ export default function KeywordsPage() {
     dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: ids, nextStatus: "approved" }));
     console.log("[Keywords] Bulk approve → calendar", { count: ids.length, ids });
     try {
-      const res = await bulkUpdateKeywordStatus(ids, "approved");
+      const res = await keywordsApi.bulkStatus(projectId, ids, "approved");
       if (!res.success) {
         if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
         for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
@@ -600,27 +487,6 @@ export default function KeywordsPage() {
       setBulkApproving(false);
     }
   };
-
-  const handleScheduleOnDate = useCallback(async (date: string) => {
-    if (!schedulingKeywordId) return;
-    setAddingToCalendar(true);
-    const kw = keywords.find(k => k.id === schedulingKeywordId);
-    const res = await addKeywordToCalendarOnDate(schedulingKeywordId, projectId, date);
-    if (res.success) {
-      const wasRescheduled = 'rescheduled' in res && res.rescheduled;
-      pushToast(`"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${date}`);
-      setSchedulingKeywordId(null);
-      // Invalidate every cache that depends on calendar_entries so the
-      // calendar / blogs pages see the new schedule the moment they mount.
-      await refetchCalendar();
-      queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-      queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-    } else {
-      pushToast(res.error ?? "Could not schedule keyword");
-    }
-    setAddingToCalendar(false);
-  }, [schedulingKeywordId, keywords, projectId, refetchCalendar, queryClient]);
 
   const counts = {
     all: keywords.length,
@@ -693,7 +559,7 @@ export default function KeywordsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
+            <ProjectNavLink
               href={`/projects/${projectId}/calendar`}
               className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             >
@@ -701,7 +567,7 @@ export default function KeywordsPage() {
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
-            </Link>
+            </ProjectNavLink>
             <button
               type="button"
               onClick={handleDiscover}
@@ -923,10 +789,7 @@ export default function KeywordsPage() {
               </p>
               <button
                 type="button"
-                onClick={() => {
-                  domainFetchedRef.current = true;
-                  void handleFetchDomainKeywords();
-                }}
+                onClick={() => void refetchDomain()}
                 disabled={domainFetching}
                 className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 shrink-0"
               >
@@ -1069,10 +932,7 @@ export default function KeywordsPage() {
                   </p>
                   <button
                     type="button"
-                    onClick={() => {
-                      domainFetchedRef.current = true;
-                      void handleFetchDomainKeywords();
-                    }}
+                    onClick={() => void refetchDomain()}
                     className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
                   >
                     Fetch domain keywords
@@ -1423,50 +1283,6 @@ export default function KeywordsPage() {
                         </td>
                         <td className="px-2 py-3 align-middle" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center gap-1 justify-center">
-                            {/* Add-to-calendar button */}
-                            {(() => {
-                              const isAlreadyScheduled = calendarEntries.some(e => e.keyword_id === kw.id);
-                              const isSchedulingThis = schedulingKeywordId === kw.id;
-                              return (
-                                <button
-                                  type="button"
-                                  title={
-                                    isAlreadyScheduled
-                                      ? "Already on calendar"
-                                      : isSchedulingThis
-                                      ? "Cancel scheduling"
-                                      : "Add to calendar on a specific date"
-                                  }
-                                  onClick={() =>
-                                    setSchedulingKeywordId(isSchedulingThis ? null : kw.id)
-                                  }
-                                  disabled={addingToCalendar}
-                                  className={`w-7 h-7 flex items-center justify-center rounded-full border transition-colors shrink-0
-                                    ${isAlreadyScheduled
-                                      ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981] cursor-default"
-                                      : isSchedulingThis
-                                      ? "border-[#f59e0b]/40 bg-[#f59e0b]/10 text-[#f59e0b]"
-                                      : "border-border-subtle bg-surface-elevated text-text-tertiary hover:border-brand-action/40 hover:text-brand-action hover:bg-brand-action/5"
-                                    }
-                                  `}
-                                >
-                                  {isAlreadyScheduled ? (
-                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                                    </svg>
-                                  ) : (
-                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                                      <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
-                                      <line x1="16" x2="16" y1="2" y2="6" />
-                                      <line x1="8" x2="8" y1="2" y2="6" />
-                                      <line x1="3" x2="21" y1="10" y2="10" />
-                                      <line x1="12" x2="12" y1="15" y2="18" />
-                                      <line x1="10.5" x2="13.5" y1="16.5" y2="16.5" />
-                                    </svg>
-                                  )}
-                                </button>
-                              );
-                            })()}
                             <KeywordRowMenu
                               status={kw.status}
                               phrase={kw.keyword}
@@ -1534,43 +1350,6 @@ export default function KeywordsPage() {
           </div>
         )}
       </section>
-
-      {/* ── CALENDAR VIEW ─────────────────────────────────────────────────── */}
-      {(calendarEntries.length > 0 || schedulingKeywordId) && (
-        <section className="space-y-4" id="calendar-view">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">
-                Scheduled calendar
-              </h2>
-              <p className="mt-1.5 text-[14px] text-text-tertiary">
-                {schedulingKeywordId
-                  ? "Click any available date below to schedule your keyword."
-                  : "All keywords added to your content calendar."}
-              </p>
-            </div>
-            <Link
-              href={`/projects/${projectId}/calendar`}
-              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary shrink-0"
-            >
-              Full calendar
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-              </svg>
-            </Link>
-          </div>
-          <MiniCalendar
-            entries={calendarEntries}
-            projectId={projectId}
-            schedulingKeywordId={schedulingKeywordId}
-            schedulingKeywordPhrase={
-              keywords.find(k => k.id === schedulingKeywordId)?.keyword ?? ""
-            }
-            onDatePick={handleScheduleOnDate}
-            onCancelSchedule={() => setSchedulingKeywordId(null)}
-          />
-        </section>
-      )}
 
       {toast ? (
         <div

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import type { CalendarEntry } from "@/lib/types";
 
 function fmtVol(n: number | undefined | null): string {
@@ -230,7 +230,7 @@ export function MiniCalendar({
                   {volume != null && kwData?.kd ? <span className="text-[9px] text-text-tertiary/50">·</span> : null}
                   {kwData?.kd ? <span className={`text-[9px] font-bold ${kd_.cls}`}>{kd_.text}</span> : null}
                 </div>
-                <Link
+                <ProjectNavLink
                   href={`/projects/${projectId}/blogs?entry=${entry.id}`}
                   className={`mt-auto w-full text-center text-[9px] font-bold uppercase tracking-wide rounded-[4px] py-1 transition-colors
                     ${isGenerated
@@ -240,7 +240,7 @@ export function MiniCalendar({
                   `}
                 >
                   {isGenerated ? "View Blog" : "Generate →"}
-                </Link>
+                </ProjectNavLink>
               </div>
             );
           }

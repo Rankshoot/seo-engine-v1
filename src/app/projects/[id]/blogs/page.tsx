@@ -2,17 +2,18 @@
 
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query-keys";
-import { getCalendarWithBlogs, generateBlog, updateBlogStatus } from "@/app/actions/blog-actions";
+import { qk } from "@/lib/query";
+import { calendarApi } from "@/frontend/api/calendar";
+import { blogsApi } from "@/frontend/api/blogs";
 import { BlogStatus, WORD_COUNT_OPTIONS, type CalendarEntryWithBlog } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { TableSkeleton } from "@/components/Skeleton";
 
-type CalendarWithBlogsResponse = Awaited<ReturnType<typeof getCalendarWithBlogs>>;
+type CalendarWithBlogsResponse = Awaited<ReturnType<typeof calendarApi.withBlogs>>;
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; dot?: string }> = {
   scheduled: { label: "Scheduled", color: "text-text-tertiary" },
@@ -73,7 +74,7 @@ export default function BlogsPage() {
 
   const { data: entriesData, isLoading: loading } = useQuery<CalendarWithBlogsResponse>({
     queryKey: ENTRIES_KEY,
-    queryFn: () => getCalendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
     enabled: !!projectId,
     staleTime: 0,
     gcTime: 30 * 60_000,
@@ -102,7 +103,7 @@ export default function BlogsPage() {
     patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "generating" } : e)));
 
     const notes = writerNotes[entryId]?.trim();
-    const res = await generateBlog(entryId, wc, notes || undefined);
+    const res = await blogsApi.generate({ entryId, wordCount: wc, writerNotes: notes || undefined });
     if (res.success && res.data) {
       patchEntries((list) =>
         list.map((e) =>
@@ -116,7 +117,10 @@ export default function BlogsPage() {
       void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     } else {
       patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "scheduled" } : e)));
-      setError((prev) => ({ ...prev, [entryId]: res.error ?? "Generation failed" }));
+      setError((prev) => ({
+        ...prev,
+        [entryId]: !res.success ? res.error : "Generation failed",
+      }));
     }
     setGenerating(null);
   };
@@ -129,7 +133,7 @@ export default function BlogsPage() {
       list.map((e) => (e.id === entryId && e.blog ? { ...e, blog: { ...e.blog, status } } : e))
     );
 
-    const res = await updateBlogStatus(blogId, status);
+    const res = await blogsApi.updateStatus(blogId, status);
     if (!res.success) {
       if (previous) queryClient.setQueryData(ENTRIES_KEY, previous);
       setError((prev) => ({ ...prev, [entryId]: res.error ?? "Could not update blog status" }));
@@ -145,8 +149,7 @@ export default function BlogsPage() {
     if (!entry.blog) return;
     setDownloading(entry.id + format);
 
-    const { getBlogById } = await import("@/app/actions/blog-actions");
-    const res = await getBlogById(entry.blog.id);
+    const res = await blogsApi.getById(entry.blog.id);
     if (!res.success || !res.data) {
       setDownloading(null);
       return;
@@ -194,12 +197,12 @@ export default function BlogsPage() {
               <span className="font-semibold text-text-primary">{readyCount}</span> with drafts
             </span>
           )}
-          <Link
+          <ProjectNavLink
             href={`/projects/${projectId}/calendar`}
             className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
           >
             Content calendar
-          </Link>
+          </ProjectNavLink>
         </div>
       </div>
 
@@ -211,12 +214,12 @@ export default function BlogsPage() {
         <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
           <p className="text-[15px] font-medium text-text-secondary">No scheduled entries yet</p>
           <p className="mt-1 text-[13px] text-text-tertiary">Schedule keywords on the content calendar first.</p>
-          <Link
+          <ProjectNavLink
             href={`/projects/${projectId}/calendar`}
             className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
           >
             Open calendar
-          </Link>
+          </ProjectNavLink>
         </div>
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
@@ -335,12 +338,12 @@ export default function BlogsPage() {
                               </button>
                             ) : (
                               <>
-                                <Link
+                                <ProjectNavLink
                                   href={`/projects/${projectId}/blogs/${entry.blog!.id}`}
                                   className="inline-flex h-8 items-center rounded-full border border-border-subtle px-3 text-[11px] font-semibold text-text-secondary hover:bg-surface-hover hover:text-text-primary"
                                 >
                                   Open
-                                </Link>
+                                </ProjectNavLink>
                                 <select
                                   defaultValue=""
                                   onChange={(e) => {

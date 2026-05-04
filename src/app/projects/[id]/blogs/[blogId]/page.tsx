@@ -6,10 +6,10 @@ import {
   type HTMLAttributes, type ImgHTMLAttributes, type ReactNode,
 } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getBlogById, generateBlog, updateBlogStatus, updateBlogContent, fixBlogSeoIssue } from "@/app/actions/blog-actions";
+import { blogsApi } from "@/frontend/api/blogs";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
@@ -86,7 +86,7 @@ export default function BlogViewerPage() {
   const editorRef      = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    getBlogById(blogId).then(res => {
+    blogsApi.getById(blogId).then(res => {
       if (res.success && res.data) setBlog(res.data);
       setLoading(false);
     });
@@ -115,7 +115,7 @@ export default function BlogViewerPage() {
   const handleRegenerate = async () => {
     if (!blog) return;
     setRegenerating(true);
-    const res = await generateBlog(blog.entry_id, wordCount);
+    const res = await blogsApi.generate({ entryId: blog.entry_id, wordCount });
     if (res.success && res.data) setBlog(res.data);
     setRegenerating(false);
   };
@@ -141,7 +141,7 @@ export default function BlogViewerPage() {
     const title = titleEditorRef.current?.textContent?.trim() || blog.title;
     const metaDescription = descEditorRef.current?.textContent?.replace(/\s+/g, " ").trim() || "";
     const md = `# ${title}\n\n${bodyMd}`.replace(/\n{3,}/g, "\n\n").trim();
-    const res = await updateBlogContent(blog.id, md, { title, metaDescription });
+    const res = await blogsApi.updateContent(blog.id, { content: md, title, metaDescription });
     if (res.success && res.data) {
       setScoreRefreshing(true);
       setBlog(res.data); setEditMode(false); setActiveView("preview");
@@ -158,7 +158,7 @@ export default function BlogViewerPage() {
     const prev = blog;
     setSavingStatus(true); setStatusError("");
     setBlog({ ...blog, status });
-    const res = await updateBlogStatus(blog.id, status);
+    const res = await blogsApi.updateStatus(blog.id, status);
     if (res.success && res.data) setBlog(res.data);
     else { setBlog(prev); setStatusError(res.error ?? "Could not update status"); }
     setSavingStatus(false);
@@ -167,7 +167,7 @@ export default function BlogViewerPage() {
   const handleSeoFix = async (key: BlogSeoIssueKey) => {
     if (!blog || fixingIssue || editMode) return;
     setFixingIssue(key); setFixError(""); setScoreRefreshing(true);
-    const res = await fixBlogSeoIssue(blog.id, key);
+    const res = await blogsApi.fixSeo(blog.id, key);
     if (res.success && res.data) { setBlog(res.data); setScoreVersion(v => v + 1); }
     else setFixError(res.error ?? "AI fix failed. Try again.");
     setFixingIssue(null);
@@ -189,9 +189,9 @@ export default function BlogViewerPage() {
     return (
       <div className="flex flex-col items-center justify-center h-full">
         <p className="mb-4 text-[14px] text-text-tertiary">Blog not found.</p>
-        <Link href={`/projects/${projectId}/blogs`} className="text-[14px] font-medium underline underline-offset-2" style={{ color: V.action }}>
+        <ProjectNavLink href={`/projects/${projectId}/blogs`} className="text-[14px] font-medium underline underline-offset-2" style={{ color: V.action }}>
           ← Back to Blogs
-        </Link>
+        </ProjectNavLink>
       </div>
     );
   }
@@ -209,9 +209,9 @@ export default function BlogViewerPage() {
       {/* ── Top strip ───────────────────────────────────────────────────── */}
       <div className="shrink-0 flex flex-col gap-2">
         <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
-          <Link href={`/projects/${projectId}/blogs`} className="hover:text-text-primary transition-colors">
+          <ProjectNavLink href={`/projects/${projectId}/blogs`} className="hover:text-text-primary transition-colors">
             Content History
-          </Link>
+          </ProjectNavLink>
           <span className="opacity-30">›</span>
           <span className="font-medium text-text-primary truncate max-w-[380px]">{blog.title}</span>
         </div>
@@ -577,9 +577,9 @@ function RepairBanner({ sourceUrl, repairNotes, projectId }: { sourceUrl: string
               {open ? "Hide" : "Summary"}
             </button>
           )}
-          <Link href={`/projects/${projectId}/audit`} className="rounded-full px-3 py-1.5 text-[11px] font-medium border border-border-subtle text-text-primary hover:bg-surface-tertiary transition-colors">
+          <ProjectNavLink href={`/projects/${projectId}/audit`} className="rounded-full px-3 py-1.5 text-[11px] font-medium border border-border-subtle text-text-primary hover:bg-surface-tertiary transition-colors">
             ← Audit
-          </Link>
+          </ProjectNavLink>
         </div>
       </div>
       {open && repairNotes.length > 0 && (

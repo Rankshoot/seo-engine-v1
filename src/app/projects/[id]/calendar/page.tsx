@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query-keys";
+import { qk, keywordsListQueryOptions } from "@/lib/query";
 import {
   useAppDispatch,
   useAppSelector,
@@ -18,19 +18,16 @@ import {
   calendarKeywordScheduled,
   calendarEntriesHydrated,
 } from "@/lib/redux/keyword-workspace-slice";
-import {
-  getCalendarEntries,
-  addKeywordToCalendarOnDate,
-} from "@/app/actions/calendar-actions";
-import { getKeywords } from "@/app/actions/keyword-actions";
+import { calendarApi } from "@/frontend/api/calendar";
+import { keywordsApi } from "@/frontend/api/keywords";
 import type { CalendarEntry } from "@/lib/types";
 import { resolveCalendarKeywordOrigin, type ResolvedCalendarOrigin } from "@/lib/calendar-keyword-origin";
 import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 
-type CalendarResponse = Awaited<ReturnType<typeof getCalendarEntries>>;
-type KeywordsResponse = Awaited<ReturnType<typeof getKeywords>>;
+type CalendarResponse = Awaited<ReturnType<typeof calendarApi.entries>>;
+type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -154,7 +151,6 @@ export default function CalendarPage() {
   );
 
   const CALENDAR_KEY = qk.calendar(projectId);
-  const KEYWORDS_KEY = qk.keywords(projectId, { limit: 200, offset: 0 });
 
   const [pickingDateFor, setPickingDateFor] = useState<string | null>(null);
   const [savingDate, setSavingDate] = useState(false);
@@ -172,22 +168,15 @@ export default function CalendarPage() {
   const { data: entriesData, isLoading: loadingEntries, refetch: refetchCalendar } =
     useQuery<CalendarResponse>({
       queryKey: CALENDAR_KEY,
-      queryFn: () => getCalendarEntries(projectId),
+      queryFn: () => calendarApi.entries(projectId),
       enabled: !!projectId,
-      staleTime: 0,
-      gcTime: 30 * 60_000,
-      refetchOnMount: "always",
     });
   const entries: CalendarEntry[] = entriesData?.success ? entriesData.data : [];
 
   const { data: keywordsData, isLoading: loadingKeywords } =
     useQuery<KeywordsResponse>({
-      queryKey: KEYWORDS_KEY,
-      queryFn: () => getKeywords(projectId, { limit: 200, offset: 0 }),
+      ...keywordsListQueryOptions(projectId),
       enabled: !!projectId,
-      staleTime: 0,
-      gcTime: 30 * 60_000,
-      refetchOnMount: "always",
     });
   const allKeywords =
     keywordsData && "success" in keywordsData && keywordsData.success
@@ -272,7 +261,7 @@ export default function CalendarPage() {
     async (keywordId: string, date: string) => {
       setSavingDate(true);
       const kw = approvedKeywords.find((k) => k.id === keywordId);
-      const res = await addKeywordToCalendarOnDate(keywordId, projectId, date);
+      const res = await calendarApi.addKeywordOnDate(projectId, { keywordId, date });
       if (res.success) {
         // Optimistic Redux update — action column reflects new state immediately
         // before the query refetch completes.
@@ -320,7 +309,7 @@ export default function CalendarPage() {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {blogReady > 0 && (
-            <Link
+            <ProjectNavLink
               href={`/projects/${projectId}/blogs`}
               className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
             >
@@ -328,9 +317,9 @@ export default function CalendarPage() {
               <span className="rounded-full bg-[#10b981]/15 px-2 py-0.5 text-[11px] font-bold text-[#10b981]">
                 {blogReady} ready
               </span>
-            </Link>
+            </ProjectNavLink>
           )}
-          <Link
+          <ProjectNavLink
             href={`/projects/${projectId}/keywords`}
             className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
           >
@@ -338,7 +327,7 @@ export default function CalendarPage() {
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
             </svg>
-          </Link>
+          </ProjectNavLink>
         </div>
       </div>
 
@@ -393,12 +382,12 @@ export default function CalendarPage() {
             <p className="mt-1 text-[13px] text-text-tertiary">
               Go to keywords, competitor, or audit pages to approve some.
             </p>
-            <Link
+            <ProjectNavLink
               href={`/projects/${projectId}/keywords`}
               className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
             >
               Go to Keywords
-            </Link>
+            </ProjectNavLink>
           </div>
         ) : (
           <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
@@ -521,12 +510,12 @@ export default function CalendarPage() {
                               {/* View Blog link if blog exists */}
                               {isLocked && (
                                 entry ? (
-                                  <Link
+                                  <ProjectNavLink
                                     href={`/projects/${projectId}/blogs?entry=${entry.id}`}
                                     className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-[#10b981]/10 border border-[#10b981]/20 text-[11px] font-semibold text-[#10b981] hover:bg-[#10b981]/20 transition-colors"
                                   >
                                     View Blog
-                                  </Link>
+                                  </ProjectNavLink>
                                 ) : (
                                   <span className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-[#10b981]/10 border border-[#10b981]/20 text-[11px] font-semibold text-[#10b981]">
                                     Blog Ready
@@ -603,7 +592,7 @@ export default function CalendarPage() {
                             <span className="text-[12px] font-medium text-text-primary tabular-nums">
                               {fmtDate(entry.scheduled_date)}
                             </span>
-                            <Link
+                            <ProjectNavLink
                               href={`/projects/${projectId}/blogs?entry=${entry.id}`}
                               className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border text-[11px] font-semibold transition-colors ${
                                 isLocked
@@ -612,7 +601,7 @@ export default function CalendarPage() {
                               }`}
                             >
                               {isLocked ? "View Blog" : "Generate"}
-                            </Link>
+                            </ProjectNavLink>
                           </div>
                         </td>
                       </tr>

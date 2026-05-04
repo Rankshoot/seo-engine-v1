@@ -4,7 +4,7 @@
  * Lazy-loaded payload for the per-keyword drilldown modal. Implements the
  * 7-day cache + parallel Ahrefs fan-out specified in the product brief.
  *
- *   GET /api/projects/:projectId/keywords/:keywordId/details
+ *   GET /api/v1/projects/:projectId/keywords/:keywordId/details
  *     → keyword_details cache hit (≤ 7 days)  → return cached
  *     → cache miss / stale / forceRefresh    → fan out 8 Ahrefs calls in
  *       parallel, persist to keyword_details + keyword_ideas, return shape

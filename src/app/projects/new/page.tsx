@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { createProject } from "@/app/actions/project-actions";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
+import { projectsApi } from "@/frontend/api/projects";
 import { TARGET_REGIONS } from "@/lib/types";
 
 export default function NewProjectPage() {
@@ -26,7 +26,7 @@ export default function NewProjectPage() {
 
     const fd = new FormData(e.currentTarget);
     const rtId = rankTrackerId.trim() ? Number(rankTrackerId.trim()) : null;
-    const result = await createProject({
+    const result = await projectsApi.create({
       name: fd.get("name") as string,
       domain: fd.get("domain") as string,
       company: fd.get("company") as string,
@@ -51,10 +51,10 @@ export default function NewProjectPage() {
     <div className="min-h-screen bg-surface-primary flex items-start justify-center py-16 px-6">
       <div className="w-full max-w-2xl">
         {/* Back */}
-        <Link href="/projects" className="inline-flex items-center gap-2 text-sm text-text-tertiary hover:text-text-secondary mb-8 transition-colors">
+        <ProjectNavLink href="/projects" className="inline-flex items-center gap-2 text-sm text-text-tertiary hover:text-text-secondary mb-8 transition-colors">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m12 19-7-7 7-7M19 12H5"/></svg>
           Back to Projects
-        </Link>
+        </ProjectNavLink>
 
         <div className="mb-8">
           <h1 className="text-3xl font-black text-text-primary mb-2">Create New Project</h1>

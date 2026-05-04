@@ -2,15 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query-keys";
-import {
-  runCompetitorBenchmark,
-  getCompetitorBenchmark,
-  generateBlogFromOpportunity,
-  type BenchmarkState,
-} from "@/app/actions/competitor-actions";
+import { qk } from "@/lib/query";
+import type { BenchmarkState } from "@/app/actions/competitor-actions";
+import { competitorsApi } from "@/frontend/api/competitors";
 import { projectDomainHost } from "@/lib/project-domain-host";
 import type {
   Competitor,
@@ -152,10 +148,8 @@ export default function CompetitorsPage() {
 
   const { data: state, isLoading: loading } = useQuery<BenchmarkState>({
     queryKey: COMPETITORS_KEY,
-    queryFn: () => getCompetitorBenchmark(projectId),
+    queryFn: () => competitorsApi.benchmark(projectId),
     enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
   });
 
   useEffect(() => {
@@ -166,7 +160,7 @@ export default function CompetitorsPage() {
   const handleRun = async () => {
     setRunning(true);
     setError("");
-    const res = await runCompetitorBenchmark(projectId);
+    const res = await competitorsApi.runBenchmark(projectId);
     if (res.trace?.length) {
       console.groupCollapsed(
         `[Competitors] Benchmark — ${res.competitorsFound ?? 0} competitors · ${res.pagesScraped ?? 0} pages · ${res.gapsFound ?? 0} gaps`
@@ -190,7 +184,7 @@ export default function CompetitorsPage() {
 
   const handleGenerateBlog = async (keyword: string) => {
     setGeneratingKeyword(keyword);
-    const res = await generateBlogFromOpportunity(projectId, keyword);
+    const res = await competitorsApi.blogFromOpportunity(projectId, keyword);
     setGeneratingKeyword(null);
     if (res.success) {
       const key = keyword.toLowerCase();
@@ -245,12 +239,12 @@ export default function CompetitorsPage() {
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Link
+          <ProjectNavLink
             href={`/projects/${projectId}/keywords`}
             className="rounded-[30px] border border-border-subtle bg-surface-secondary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors inline-flex items-center gap-2"
           >
             Keywords
-          </Link>
+          </ProjectNavLink>
           <button
             onClick={handleRun}
             disabled={running}

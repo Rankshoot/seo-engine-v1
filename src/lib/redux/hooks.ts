@@ -30,22 +30,6 @@ export function selectCalendarLastSyncedVersion(state: RootState, projectId: str
 }
 
 /**
- * Session-cached keyword list. When non-null, the keywords page uses it as
- * React Query `initialData` so revisiting the page never triggers a network call.
- */
-export function selectKeywordsCache(state: RootState, projectId: string) {
-  return state.keywordWorkspace.projects[projectId]?.keywordsCache ?? null;
-}
-
-/**
- * Session-cached business brief. When non-null, the keywords page uses it as
- * React Query `initialData` so page-refresh doesn't re-fetch the brief.
- */
-export function selectBriefCache(state: RootState, projectId: string) {
-  return state.keywordWorkspace.projects[projectId]?.briefCache ?? null;
-}
-
-/**
  * Per-keyword calendar scheduling state. Populated on calendar page load and
  * updated optimistically when a keyword is scheduled/rescheduled.
  */

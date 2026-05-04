@@ -1,6 +1,5 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { Keyword, KeywordStatus } from "@/lib/types";
-import type { BusinessBrief } from "@/lib/business-brief";
 
 export type CalendarScheduledKeyword = {
   date: string;
@@ -36,29 +35,7 @@ type KeywordTablePrefs = {
   tableSort: { column: KeywordTableSortColumn; dir: KeywordSortDir };
 };
 
-/**
- * Session-scoped keyword list cache. Avoids a network round-trip when
- * navigating back to the keywords page. Cleared on keyword discovery.
- */
-type KeywordsCache = {
-  keywords: Keyword[];
-  total: number;
-  /** epoch-ms — used as React Query initialDataUpdatedAt so it never re-fetches */
-  loadedAt: number;
-};
-
-/**
- * Session-scoped business brief cache. Avoids re-fetching on page refresh.
- * Cleared when user explicitly clicks "Refresh brief".
- */
-type BriefCache = {
-  brief: BusinessBrief | null;
-  updatedAt: string | null;
-  /** epoch-ms — used as React Query initialDataUpdatedAt */
-  loadedAt: number;
-};
-
-type ProjectKeywordWorkspace = {
+export type ProjectKeywordWorkspace = {
   prefs: KeywordTablePrefs;
   /** Optimistic overlay: maps keyword ID → status for instant badge updates */
   statuses: Record<string, KeywordStatus>;
@@ -71,10 +48,6 @@ type ProjectKeywordWorkspace = {
    */
   calendarRefreshVersion: number;
   calendarLastSyncedVersion: number;
-  /** Full keyword list — avoids re-fetching on navigation */
-  keywordsCache: KeywordsCache | null;
-  /** Business brief — avoids re-fetching on page refresh */
-  briefCache: BriefCache | null;
   /**
    * Per-keyword calendar scheduling state. Hydrated from server on load,
    * updated optimistically when user schedules/reschedules.
@@ -147,8 +120,6 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
     statuses: {},
     calendarRefreshVersion: 0,
     calendarLastSyncedVersion: 0,
-    keywordsCache: null,
-    briefCache: null,
     calendarScheduledKeywords: {},
     aiAssistant: {
       suggestedKeywordIds: [],
@@ -247,13 +218,6 @@ export const keywordWorkspaceSlice = createSlice({
         action.payload.previousStatus ?? project.statuses[action.payload.keywordId];
       project.statuses[action.payload.keywordId] = action.payload.nextStatus;
       applyStatsDelta(project, approvedDelta(previousStatus, action.payload.nextStatus));
-
-      // Keep the cached list in sync so status badges are correct on back-navigation.
-      if (project.keywordsCache) {
-        project.keywordsCache.keywords = project.keywordsCache.keywords.map(kw =>
-          kw.id === action.payload.keywordId ? { ...kw, status: action.payload.nextStatus } : kw
-        );
-      }
     },
 
     /** Bulk approve / reject — mass-select mode. */
@@ -273,16 +237,9 @@ export const keywordWorkspaceSlice = createSlice({
         totalDelta += approvedDelta(previousStatus, action.payload.nextStatus);
       }
       applyStatsDelta(project, totalDelta);
-
-      if (project.keywordsCache) {
-        const idSet = new Set(action.payload.keywordIds);
-        project.keywordsCache.keywords = project.keywordsCache.keywords.map(kw =>
-          idSet.has(kw.id) ? { ...kw, status: action.payload.nextStatus } : kw
-        );
-      }
     },
 
-    /** Remove a keyword from the status overlay and cached list. */
+    /** Remove a keyword from the status overlay. */
     removeKeywordStatus(
       state,
       action: PayloadAction<{ projectId: string; keywordId: string; previousStatus?: KeywordStatus }>
@@ -293,12 +250,6 @@ export const keywordWorkspaceSlice = createSlice({
       delete project.statuses[action.payload.keywordId];
       if (previousStatus === "approved" && project.stats) {
         project.stats.approvedKeywords = Math.max(0, project.stats.approvedKeywords - 1);
-      }
-      if (project.keywordsCache) {
-        project.keywordsCache.keywords = project.keywordsCache.keywords.filter(
-          kw => kw.id !== action.payload.keywordId
-        );
-        project.keywordsCache.total = Math.max(0, project.keywordsCache.total - 1);
       }
     },
 
@@ -338,49 +289,6 @@ export const keywordWorkspaceSlice = createSlice({
      */
     calendarRefreshBump(state, action: PayloadAction<{ projectId: string }>) {
       ensureProject(state, action.payload.projectId).calendarRefreshVersion += 1;
-    },
-
-    /**
-     * Store the full keyword list so the next navigation to the keywords page
-     * renders instantly from this cache instead of hitting the API.
-     */
-    keywordsLoaded(
-      state,
-      action: PayloadAction<{ projectId: string; keywords: Keyword[]; total: number }>
-    ) {
-      ensureProject(state, action.payload.projectId).keywordsCache = {
-        keywords: action.payload.keywords,
-        total: action.payload.total,
-        loadedAt: Date.now(),
-      };
-    },
-
-    /**
-     * Wipe the keyword cache before discovery so fresh results are fetched
-     * rather than being shadowed by the old list.
-     */
-    clearKeywordsCache(state, action: PayloadAction<{ projectId: string }>) {
-      ensureProject(state, action.payload.projectId).keywordsCache = null;
-    },
-
-    /**
-     * Store the business brief so the keywords page renders instantly on
-     * page refresh without a round-trip to the DB.
-     */
-    briefLoaded(
-      state,
-      action: PayloadAction<{ projectId: string; brief: BusinessBrief | null; updatedAt: string | null }>
-    ) {
-      ensureProject(state, action.payload.projectId).briefCache = {
-        brief: action.payload.brief,
-        updatedAt: action.payload.updatedAt,
-        loadedAt: Date.now(),
-      };
-    },
-
-    /** Wipe the brief cache so the next render fetches a fresh copy. */
-    clearBriefCache(state, action: PayloadAction<{ projectId: string }>) {
-      ensureProject(state, action.payload.projectId).briefCache = null;
     },
 
     /**
@@ -513,10 +421,6 @@ export const {
   calendarEntriesLoaded,
   calendarSyncVersionUpdated,
   calendarRefreshBump,
-  keywordsLoaded,
-  clearKeywordsCache,
-  briefLoaded,
-  clearBriefCache,
   calendarKeywordScheduled,
   calendarEntriesHydrated,
   aiAssistantMemoryUpdated,

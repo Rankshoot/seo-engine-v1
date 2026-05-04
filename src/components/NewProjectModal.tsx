@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
-import { createProject } from "@/app/actions/project-actions";
+import { projectsApi } from "@/frontend/api/projects";
 import { TARGET_REGIONS } from "@/lib/types";
 
 interface NewProjectModalProps {
@@ -60,7 +60,7 @@ function ModalContent({ onClose }: { onClose: () => void }) {
     setLoading(true);
     const fd = new FormData(e.currentTarget);
     const rtId = rankTrackerId.trim() ? Number(rankTrackerId.trim()) : null;
-    const result = await createProject({
+    const result = await projectsApi.create({
       name: fd.get("name") as string,
       domain: fd.get("domain") as string,
       company: fd.get("company") as string,

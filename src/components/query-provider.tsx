@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+import { QUERY_GC_MS, QUERY_STALE_MS } from "@/lib/query";
 
 /**
  * Lazily create the QueryClient inside a useState initializer so it survives
@@ -13,14 +14,8 @@ function makeClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        // Data never goes stale on its own — navigating between sidebar pages
-        // and switching browser tabs should NEVER trigger a background refetch.
-        // Explicit invalidateQueries() calls (after mutations) are the only
-        // mechanism that updates cached data.
-        staleTime: Infinity,
-        // Keep cached entries for 30 minutes of inactivity.
-        gcTime: 30 * 60_000,
-        // Don't re-fetch just because a component remounted (navigation).
+        staleTime: QUERY_STALE_MS,
+        gcTime: QUERY_GC_MS,
         refetchOnMount: false,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,

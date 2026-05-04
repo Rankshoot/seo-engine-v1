@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS keywords (
   UNIQUE(project_id, keyword)
 );
 
+-- Older databases may already have `keywords` without this column; `CREATE TABLE IF NOT EXISTS`
+-- does not add new columns. Required before `idx_keywords_project_normalized` below.
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS normalized_keyword TEXT
+  GENERATED ALWAYS AS (LOWER(TRIM(keyword))) STORED;
+
 -- One-row-per-keyword modal payload (overview / history / by-country / SERP).
 CREATE TABLE IF NOT EXISTS keyword_details (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -105,6 +111,7 @@ CREATE TABLE IF NOT EXISTS keyword_details (
   volume_by_country JSONB NOT NULL DEFAULT '[]'::jsonb,
   serp_top_results JSONB NOT NULL DEFAULT '[]'::jsonb,
   top_ranking_result JSONB,
+
   last_fetched_at TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -244,6 +251,8 @@ CREATE INDEX IF NOT EXISTS idx_blog_audits_health_score ON blog_audits(health_sc
 CREATE INDEX IF NOT EXISTS idx_keywords_project_id ON keywords(project_id);
 CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(status);
 CREATE INDEX IF NOT EXISTS idx_keywords_source_type ON keywords(source_type);
+-- Fails with 23505 if case/whitespace variants of the same phrase exist.
+-- Run `supabase-migration-dedupe-keywords-normalized.sql` first, then re-run this line.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_normalized
   ON keywords(project_id, normalized_keyword);
 CREATE INDEX IF NOT EXISTS idx_keyword_ideas_keyword_id_type

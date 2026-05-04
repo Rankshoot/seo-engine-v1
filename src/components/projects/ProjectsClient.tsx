@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import Link from "next/link";
-import ProjectCard from "@/components/dashboard/ProjectCard";
-import { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashboard/project-card-layout";
+import ProjectCard, { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashboard/ProjectCard";
 import { NewProjectModal } from "@/components/NewProjectModal";
 import type { Project } from "@/lib/types";
 

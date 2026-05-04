@@ -14,13 +14,12 @@ import {
   selectKeywordStatuses,
   type ChatMsg as ImportedChatMsg,
 } from "@/lib/redux/hooks";
-import { qk } from "@/lib/query-keys";
-import { getBusinessBrief } from "@/app/actions/brief-actions";
-import { getKeywords, getDomainKeywords } from "@/app/actions/keyword-actions";
-import { getCompetitorBenchmark } from "@/app/actions/competitor-actions";
-import { getCalendarEntries } from "@/app/actions/calendar-actions";
-import { approveAISuggestionToCalendar } from "@/app/actions/calendar-actions";
-import { getBlogAudits } from "@/app/actions/audit-actions";
+import { qk, keywordsListQueryOptions } from "@/lib/query";
+import { briefApi } from "@/frontend/api/brief";
+import { keywordsApi } from "@/frontend/api/keywords";
+import { competitorsApi } from "@/frontend/api/competitors";
+import { calendarApi } from "@/frontend/api/calendar";
+import { auditsApi } from "@/frontend/api/audits";
 import { aiAssistantMemoryUpdated } from "@/lib/redux/keyword-workspace-slice";
 import { getAIContext } from "@/features/ai-assistant/context/contextManager";
 import { detectAIPageFromPath } from "@/features/ai-assistant/context/page";
@@ -32,6 +31,7 @@ import type {
   ContextualSuggestion,
 } from "@/features/ai-assistant/types";
 import type { Project } from "@/lib/types";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 
 export type AIMode = "closed" | "mini" | "full";
 
@@ -327,12 +327,12 @@ function CalendarEntryDetailCard({
           </button>
         )}
         {hasBlog && (
-          <a
+          <ProjectNavLink
             href={`/projects/${projectId}/blogs?entry=${entry.id}`}
             className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
           >
             View Blog
-          </a>
+          </ProjectNavLink>
         )}
         <p className="ml-auto font-mono text-[10px] uppercase tracking-wide text-text-tertiary">
           Status: <span className="text-text-secondary normal-case">{entry.status}</span>
@@ -652,34 +652,27 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
 
   const { data: briefData } = useQuery({
     queryKey: qk.brief(project.id),
-    queryFn: () => getBusinessBrief(project.id),
+    queryFn: () => briefApi.get(project.id),
     enabled: !!page,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
   });
 
   const { data: keywordsData } = useQuery({
-    queryKey: qk.keywords(project.id, { limit: 120, offset: 0 }),
-    queryFn: () => getKeywords(project.id, { limit: 120, offset: 0 }),
+    ...keywordsListQueryOptions(project.id),
     enabled: !!page,
-    staleTime: 0,
-    gcTime: 30 * 60_000,
   });
 
   // Domain-tab keywords (live Google Ads For Site).
   // Loaded whenever the chatbot is open so cross-page queries can use both
   // industry-cached + live-domain keyword pools.
   const { data: domainKeywordsData } = useQuery({
-    queryKey: ["domain-keywords", project.id] as const,
-    queryFn: () => getDomainKeywords(project.id),
+    queryKey: qk.domainKeywords(project.id),
+    queryFn: () => keywordsApi.domainKeywords(project.id),
     enabled: aiMode !== "closed",
-    staleTime: 10 * 60_000,
-    gcTime: 30 * 60_000,
   });
 
   const { data: competitorData } = useQuery({
     queryKey: qk.competitors(project.id),
-    queryFn: () => getCompetitorBenchmark(project.id),
+    queryFn: () => competitorsApi.benchmark(project.id),
     // Load whenever AI is open so competitor queries work from any page
     enabled: page === "competitors" || aiMode !== "closed",
     staleTime: 5 * 60_000,
@@ -688,7 +681,7 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
 
   const { data: calendarData } = useQuery({
     queryKey: qk.calendar(project.id),
-    queryFn: () => getCalendarEntries(project.id),
+    queryFn: () => calendarApi.entries(project.id),
     enabled: page === "calendar" || page === "blogs" || aiMode !== "closed",
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
@@ -696,7 +689,7 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
 
   const { data: auditData } = useQuery({
     queryKey: qk.audits(project.id),
-    queryFn: () => getBlogAudits(project.id),
+    queryFn: () => auditsApi.list(project.id),
     // Load whenever AI is open so audit queries work from any page
     enabled: page === "audit" || aiMode !== "closed",
     staleTime: 5 * 60_000,
@@ -835,8 +828,7 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
         return next;
       });
 
-      const res = await approveAISuggestionToCalendar({
-        projectId: project.id,
+      const res = await calendarApi.approveAiSuggestion(project.id, {
         keyword: s.keyword,
         keywordId: s.id,
         source: s.source,
@@ -913,7 +905,7 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
         );
         if (ranMutation) {
           queryClient.invalidateQueries({ queryKey: qk.calendar(project.id) });
-          queryClient.invalidateQueries({ queryKey: qk.keywordsAll(project.id) });
+          queryClient.invalidateQueries({ queryKey: qk.keywords(project.id) });
           queryClient.invalidateQueries({ queryKey: qk.audits(project.id) });
           if (blogId) queryClient.invalidateQueries({ queryKey: qk.blog(blogId) });
         }

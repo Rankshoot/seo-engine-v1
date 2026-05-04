@@ -2,26 +2,18 @@
 
 import { useMemo, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query-keys";
-import {
-  auditExistingBlogs,
-  auditSelectedUrls,
-  deleteBlogAudits,
-  getAllSitemapPages,
-  getBlogAudits,
-  type AuditCoverage,
-  type PersistedBlogAudit,
-  type SitemapPage,
-} from "@/app/actions/audit-actions";
-import { addContentHealthKeywordToCalendar } from "@/app/actions/calendar-actions";
+import { qk } from "@/lib/query";
+import type { AuditCoverage, PersistedBlogAudit, SitemapPage } from "@/app/actions/audit-actions";
+import { auditsApi } from "@/frontend/api/audits";
+import { calendarApi } from "@/frontend/api/calendar";
 import { AuditDetailModal } from "@/components/AuditDetailModal";
 import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
 import { criticalityFromScore } from "@/lib/audit-criticality";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
-type AuditsResponse = Awaited<ReturnType<typeof getBlogAudits>>;
+type AuditsResponse = Awaited<ReturnType<typeof auditsApi.list>>;
 
 const EMPTY_COVERAGE: AuditCoverage = {
   blogs_found: 0,
@@ -116,7 +108,7 @@ export default function ContentHealthPage() {
 
   const { data: pagesData, isLoading: pagesLoading, refetch: refetchPages } = useQuery({
     queryKey: ["sitemap-pages", projectId, selectedBasePath] as const,
-    queryFn: () => getAllSitemapPages(projectId, selectedBasePath || undefined),
+    queryFn: () => auditsApi.sitemapPages(projectId, selectedBasePath || undefined),
     enabled: discoverTab === "discover",
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
@@ -143,7 +135,7 @@ export default function ContentHealthPage() {
 
     setAuditingSelected(true);
     setDiscoverError("");
-    const res = await auditSelectedUrls(projectId, urls.slice(0, 5));
+    const res = await auditsApi.auditSelected(projectId, urls.slice(0, 5));
     if (res.success) {
       setRunSummary(`Audited ${res.audited} page(s)${res.failed ? `, ${res.failed} failed` : ""}.`);
       setSelectedUrls(new Set());
@@ -165,13 +157,11 @@ export default function ContentHealthPage() {
   const { data: auditData, isLoading: loading } = useQuery<AuditsResponse>({
     queryKey: AUDITS_KEY,
     queryFn: async () => {
-      const res = await getBlogAudits(projectId);
+      const res = await auditsApi.list(projectId);
       if (!res.success) throw new Error(res.error ?? "Failed to load audits");
       return res;
     },
     enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
   });
   const rows: PersistedBlogAudit[] = auditData?.success ? auditData.data : [];
   const coverage: AuditCoverage = auditData?.success ? auditData.coverage : EMPTY_COVERAGE;
@@ -180,7 +170,7 @@ export default function ContentHealthPage() {
     setRunning(true);
     setRunSummary("");
     setError("");
-    const res = await auditExistingBlogs(projectId, { force, limit: BATCH_SIZE });
+    const res = await auditsApi.run(projectId, { force, limit: BATCH_SIZE });
     if (res.success) {
       const remaining = Math.max(0, res.coverage.blogs_found - res.coverage.blogs_audited);
       setRunSummary(
@@ -202,7 +192,7 @@ export default function ContentHealthPage() {
   const handleClear = async () => {
     if (!confirm("Delete all audit results for this project? You can re-run the audit any time.")) return;
     setRunning(true);
-    await deleteBlogAudits(projectId);
+    await auditsApi.clear(projectId);
     // Optimistically clear rows and zero the audited count, but keep blogs_found.
     queryClient.setQueryData<AuditsResponse>(AUDITS_KEY, prev => {
       if (!prev?.success) return prev;
@@ -226,7 +216,7 @@ export default function ContentHealthPage() {
     setError("");
     setRunSummary("");
     const snapshot = buildContentHealthAuditSnapshot(row);
-    const res = await addContentHealthKeywordToCalendar(projectId, {
+    const res = await calendarApi.addContentHealth(projectId, {
       focusKeyword: focus,
       auditUrl: row.url,
       contentHealthAudit: snapshot as unknown as Record<string, unknown>,
@@ -569,12 +559,12 @@ export default function ContentHealthPage() {
             We couldn't find blog-style URLs in your sitemap. Make sure sitemap.xml includes paths like{" "}
             <code className="rounded-[4px] bg-surface-elevated px-1.5 py-0.5 text-[13px]">/blog/…</code>. Then refresh your brief.
           </p>
-          <Link
+          <ProjectNavLink
             href={`/projects/${projectId}/keywords`}
             className="inline-flex items-center justify-center rounded-[32px] border border-border-subtle bg-surface-secondary px-6 py-3 text-[14px] font-medium text-text-secondary hover:text-text-primary transition-colors"
           >
             Go refresh the brief
-          </Link>
+          </ProjectNavLink>
         </div>
       )}
 
@@ -712,12 +702,12 @@ export default function ContentHealthPage() {
                         <span className="inline-flex h-7 items-center justify-center rounded-lg border border-accent-500/35 bg-accent-500/12 text-[10px] font-bold text-accent-400">
                           On calendar
                         </span>
-                        <Link
+                        <ProjectNavLink
                           href={`/projects/${projectId}/calendar`}
                           className="text-center text-[10px] font-medium text-brand-action hover:underline"
                         >
                           Open
-                        </Link>
+                        </ProjectNavLink>
                       </div>
                     ) : calBusy ? (
                       <div className="flex h-7 items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-surface-secondary px-2 text-[10px] text-text-tertiary">

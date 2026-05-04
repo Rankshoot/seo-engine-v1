@@ -18,11 +18,13 @@ export default function KeywordsLoading() {
       {/* Business brief */}
       <BusinessBriefSkeleton />
 
-      {/* Filter pills */}
-      <div className="flex items-center gap-2">
-        {[80, 64, 72, 60, 56].map((w, i) => (
-          <Skeleton key={i} className={`h-8 w-${w === 80 ? "20" : w === 64 ? "16" : w === 72 ? "18" : w === 60 ? "16" : "14"}`} rounded="full" style={{ animationDelay: `${i * 60}ms` }} />
-        ))}
+      {/* Filter pills — fixed widths (Tailwind cannot JIT dynamic class strings). */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Skeleton className="h-8 w-20" rounded="full" style={{ animationDelay: "0ms" }} />
+        <Skeleton className="h-8 w-16" rounded="full" style={{ animationDelay: "60ms" }} />
+        <Skeleton className="h-8 w-[4.5rem]" rounded="full" style={{ animationDelay: "120ms" }} />
+        <Skeleton className="h-8 w-16" rounded="full" style={{ animationDelay: "180ms" }} />
+        <Skeleton className="h-8 w-14" rounded="full" style={{ animationDelay: "240ms" }} />
         <div className="ml-auto flex gap-2">
           <Skeleton className="h-8 w-24" rounded="full" />
           <Skeleton className="h-8 w-20" rounded="full" />
@@ -31,11 +33,17 @@ export default function KeywordsLoading() {
 
       {/* Table */}
       <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-        {/* thead skeleton */}
-        <div className="border-b border-border-subtle bg-surface-secondary px-4 py-3 grid gap-4" style={{ gridTemplateColumns: "2rem 1fr 7rem 7rem 7rem 7rem 7rem" }}>
-          {[null, 120, 64, 64, 56, 56, 56].map((w, i) => (
-            <Skeleton key={i} className={`h-3 ${w ? `w-[${w}px]` : "w-4"}`} rounded="sm" />
-          ))}
+        <div
+          className="border-b border-border-subtle bg-surface-secondary px-4 py-3 grid gap-4"
+          style={{ gridTemplateColumns: "2rem 1fr 7rem 7rem 7rem 7rem 7rem" }}
+        >
+          <Skeleton className="h-3 w-4" rounded="sm" />
+          <Skeleton className="h-3 w-[120px]" rounded="sm" />
+          <Skeleton className="h-3 w-16" rounded="sm" />
+          <Skeleton className="h-3 w-16" rounded="sm" />
+          <Skeleton className="h-3 w-14" rounded="sm" />
+          <Skeleton className="h-3 w-14" rounded="sm" />
+          <Skeleton className="h-3 w-14" rounded="sm" />
         </div>
         <TableSkeleton rows={8} columns={7} />
       </div>

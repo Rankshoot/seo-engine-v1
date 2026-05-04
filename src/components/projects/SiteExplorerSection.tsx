@@ -4,26 +4,23 @@
  * Client component — owns the full Ahrefs Site Explorer data lifecycle.
  *
  * Data flow (once per session, no timer):
- *   1. On first render React Query calls `getProjectSiteExplorerSnapshot`.
- *      The server action checks Supabase first; it only hits the Ahrefs API
+ *   1. On first render React Query calls `GET /api/v1/projects/:id/overview`
+ *      (plain JSON). The handler checks Supabase first; it only hits Ahrefs
  *      when NO cached row exists for this project (first-ever visit).
- *   2. The response is stored in React Query with `staleTime: Infinity` and
- *      `refetchOnMount: false`. Navigating away and back never triggers a new
- *      network call — the cache is served instantly.
+ *   2. The response is stored in React Query (shared default staleTime / gcTime).
+ *      Navigating away and back uses the in-memory cache until it goes stale.
  *   3. The user can manually click "Refresh data" to force an Ahrefs API call,
  *      update the Supabase row, and refresh the in-memory cache.
  *   4. There is NO automatic/timer-based refetch.
  */
 
 import * as React from "react";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getProjectSiteExplorerSnapshot,
-  refreshProjectSiteExplorerSnapshot,
-  type ProjectSiteExplorerData,
-  type SiteExplorerTraceEntry,
-} from "@/app/actions/project-actions";
+import type { ProjectSiteExplorerData, SiteExplorerTraceEntry } from "@/app/actions/project-actions";
+import { projectsApi, type SiteExplorerApiResponse } from "@/frontend/api/projects";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { logRestGet, siteExplorerFromRest } from "@/lib/redux/data-rest-slice";
 import {
   ahrefsCentsToDollars,
   ahrefsCompetitorOrganicTotal,
@@ -32,7 +29,7 @@ import {
   type AhrefsDomainOverview,
   type AhrefsTopPage,
 } from "@/lib/ahrefs";
-import { qk } from "@/lib/query-keys";
+import { qk } from "@/lib/query";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -210,9 +207,9 @@ function OrganicCompetitorsTable({
         <p className="text-[12px] text-text-tertiary">
           Ahrefs Site Explorer · domain scope · Share as returned by API
         </p>
-        <Link href={`/projects/${projectId}/competitors`} className="text-[14px] font-medium text-brand-action hover:underline">
+        <ProjectNavLink href={`/projects/${projectId}/competitors`} className="text-[14px] font-medium text-brand-action hover:underline">
           Full competitor workspace →
-        </Link>
+        </ProjectNavLink>
       </div>
     </div>
   );
@@ -255,9 +252,9 @@ function TopPagesTable({ pages, projectId }: { pages: AhrefsTopPage[]; projectId
         </table>
       </div>
       <div className="border-t border-border-subtle bg-surface-secondary p-4 text-right">
-        <Link href={`/projects/${projectId}/keywords`} className="text-[14px] font-medium text-brand-action hover:underline">
+        <ProjectNavLink href={`/projects/${projectId}/keywords`} className="text-[14px] font-medium text-brand-action hover:underline">
           Keyword opportunities →
-        </Link>
+        </ProjectNavLink>
       </div>
     </div>
   );
@@ -265,8 +262,8 @@ function TopPagesTable({ pages, projectId }: { pages: AhrefsTopPage[]; projectId
 
 // ─── public component ───────────────────────────────────────────────────────
 
-type SnapshotResponse = Awaited<ReturnType<typeof getProjectSiteExplorerSnapshot>>;
-type RefreshResponse = Awaited<ReturnType<typeof refreshProjectSiteExplorerSnapshot>>;
+type SnapshotResponse = SiteExplorerApiResponse;
+type RefreshResponse = SiteExplorerApiResponse;
 
 export interface SiteExplorerSectionProps {
   projectId: string;
@@ -274,29 +271,35 @@ export interface SiteExplorerSectionProps {
 
 export function SiteExplorerSection({ projectId }: SiteExplorerSectionProps) {
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const [justRefreshed, setJustRefreshed] = React.useState(false);
 
-  // Fetch once and cache forever. Rules:
-  //   • staleTime: Infinity → data never goes stale automatically (no timer)
-  //   • refetchOnMount: false → navigating away and back uses the cache
-  //   • refetchOnWindowFocus: false → alt-tabbing doesn't trigger a call
-  //   • Only invalidateQueries() (from the manual Refresh button) breaks the cache
+  // Cached via TanStack Query; manual Refresh uses `invalidateQueries` / mutation.
   const { data: snapData, isLoading } = useQuery<SnapshotResponse>({
     queryKey: qk.siteExplorer(projectId),
-    queryFn: () => getProjectSiteExplorerSnapshot(projectId),
+    queryFn: async () => {
+      const r = await projectsApi.overviewSnapshot(projectId);
+      dispatch(logRestGet(`/api/v1/projects/${projectId}/overview`));
+      if (r.success && r.data) {
+        dispatch(siteExplorerFromRest({ projectId, payload: r.data, trace: r.trace }));
+      }
+      return r;
+    },
     enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 60 * 60_000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: false,
   });
 
   const snapshot: ProjectSiteExplorerData | null =
     snapData?.success && snapData.data ? snapData.data : null;
 
   const refreshMutation = useMutation<RefreshResponse>({
-    mutationFn: async () => refreshProjectSiteExplorerSnapshot(projectId),
+    mutationFn: async () => {
+      const r = await projectsApi.refreshOverview(projectId);
+      dispatch(logRestGet(`POST /api/v1/projects/${projectId}/overview/refresh`));
+      if (r.success && r.data) {
+        dispatch(siteExplorerFromRest({ projectId, payload: r.data, trace: r.trace }));
+      }
+      return r;
+    },
     onSuccess: res => {
       if (res.trace?.length) {
         console.groupCollapsed(

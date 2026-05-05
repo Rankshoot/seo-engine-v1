@@ -500,6 +500,16 @@ export async function approveAISuggestionToCalendar(params: {
     }
   }
 
+  if (!resolvedKeywordId) {
+    return { success: false, error: 'Could not resolve keyword' };
+  }
+
+  const aiTag = `AI · ${page}`;
+  await supabaseAdmin
+    .from('keywords')
+    .update({ ai_source: aiTag, updated_at: new Date().toISOString() })
+    .eq('id', resolvedKeywordId);
+
   const { data: existingEntry } = await supabaseAdmin
     .from('calendar_entries')
     .select('id, scheduled_date')

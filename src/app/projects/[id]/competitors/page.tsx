@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,7 +13,10 @@ import type {
   CompetitorKeyword,
   GapType,
   KeywordGap,
+  KeywordStatus,
 } from "@/lib/types";
+import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
+import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
 
@@ -69,7 +72,7 @@ function DomainLogo({ domain }: { domain: string }) {
   );
 }
 
-type TabId = "competitors" | "gaps" | "opportunities";
+type InsightsView = "opportunities" | "competitors";
 
 const GAP_STYLES: Record<GapType, string> = {
   missing: "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
@@ -77,9 +80,16 @@ const GAP_STYLES: Record<GapType, string> = {
   untapped: "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]",
 };
 
-function formatTrend(trend: string, pct: number) {
-  if (!trend || trend === "+0%") return "—";
-  return trend;
+const GAP_FILTER_OPTIONS: Array<{ id: "all" | GapType; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "missing", label: "Missing" },
+  { id: "weak", label: "Weak" },
+  { id: "untapped", label: "Untapped" },
+];
+
+function formatMonthlyTraffic(volume: number): string {
+  if (!volume || volume <= 0) return "—";
+  return `${volume.toLocaleString()}/mo`;
 }
 
 function compactUrl(url: string) {
@@ -100,6 +110,8 @@ function scoreColor(score: number) {
 }
 
 const GAP_APPROVED_STORAGE_PREFIX = "seo-engine-gap-approved:";
+const GAP_REJECTED_STORAGE_PREFIX = "seo-engine-gap-rejected:";
+const COMPETITOR_STATUS_STORAGE_PREFIX = "seo-engine:competitor-workspace:";
 
 function loadApprovedGapKeywords(projectId: string): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -123,6 +135,55 @@ function persistApprovedGapKeywords(projectId: string, next: Set<string>) {
   }
 }
 
+function loadRejectedGapKeywords(projectId: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = sessionStorage.getItem(`${GAP_REJECTED_STORAGE_PREFIX}${projectId}`);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.map(String).map(s => s.toLowerCase()));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistRejectedGapKeywords(projectId: string, next: Set<string>) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(`${GAP_REJECTED_STORAGE_PREFIX}${projectId}`, JSON.stringify([...next]));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function loadCompetitorStatuses(projectId: string): Record<string, KeywordStatus> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(`${COMPETITOR_STATUS_STORAGE_PREFIX}${projectId}`);
+    if (!raw) return {};
+    const o = JSON.parse(raw) as unknown;
+    if (!o || typeof o !== "object") return {};
+    const out: Record<string, KeywordStatus> = {};
+    const allowed: KeywordStatus[] = ["pending", "approved", "rejected"];
+    for (const [id, v] of Object.entries(o as Record<string, unknown>)) {
+      if (typeof v === "string" && (allowed as string[]).includes(v)) out[id] = v as KeywordStatus;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistCompetitorStatuses(projectId: string, next: Record<string, KeywordStatus>) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(`${COMPETITOR_STATUS_STORAGE_PREFIX}${projectId}`, JSON.stringify(next));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 export default function CompetitorsPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
@@ -132,11 +193,18 @@ export default function CompetitorsPage() {
 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<TabId>("opportunities");
+  const [insightsView, setInsightsView] = useState<InsightsView>("opportunities");
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const viewMenuRef = useRef<HTMLDivElement>(null);
   const [expandedCompetitor, setExpandedCompetitor] = useState<string | null>(null);
   const [gapFilter, setGapFilter] = useState<"all" | GapType>("all");
+  const [massSelectMode, setMassSelectMode] = useState(false);
+  const [selectedGapIds, setSelectedGapIds] = useState<Set<string>>(new Set());
+  const [bulkApprovingGaps, setBulkApprovingGaps] = useState(false);
   const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null);
   const [approvedGapKeywords, setApprovedGapKeywords] = useState<Set<string>>(new Set());
+  const [rejectedGapKeywords, setRejectedGapKeywords] = useState<Set<string>>(new Set());
+  const [competitorStatuses, setCompetitorStatuses] = useState<Record<string, KeywordStatus>>({});
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
   const aiSuggestedGapKeywords = useAppSelector(state =>
     selectAiSuggestedGapKeywords(state, projectId)
@@ -155,7 +223,20 @@ export default function CompetitorsPage() {
   useEffect(() => {
     if (!projectId) return;
     setApprovedGapKeywords(loadApprovedGapKeywords(projectId));
+    setRejectedGapKeywords(loadRejectedGapKeywords(projectId));
+    setCompetitorStatuses(loadCompetitorStatuses(projectId));
   }, [projectId]);
+
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) {
+        setViewMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [viewMenuOpen]);
 
   const handleRun = async () => {
     setRunning(true);
@@ -197,6 +278,103 @@ export default function CompetitorsPage() {
       router.push(`/projects/${projectId}/calendar`);
     } else {
       setError(res.error ?? "Could not create calendar entry.");
+    }
+  };
+
+  const handleGapKeywordStatus = (keyword: string, next: KeywordStatus) => {
+    const k = keyword.toLowerCase();
+    if (next === "approved") {
+      setRejectedGapKeywords(prev => {
+        if (!prev.has(k)) return prev;
+        const n = new Set(prev);
+        n.delete(k);
+        persistRejectedGapKeywords(projectId, n);
+        return n;
+      });
+      if (!approvedGapKeywords.has(k)) void handleGenerateBlog(keyword);
+      return;
+    }
+    if (next === "rejected") {
+      setRejectedGapKeywords(prev => {
+        const n = new Set(prev);
+        n.add(k);
+        persistRejectedGapKeywords(projectId, n);
+        return n;
+      });
+      setApprovedGapKeywords(prev => {
+        if (!prev.has(k)) return prev;
+        const n = new Set(prev);
+        n.delete(k);
+        persistApprovedGapKeywords(projectId, n);
+        return n;
+      });
+      return;
+    }
+    setRejectedGapKeywords(prev => {
+      if (!prev.has(k)) return prev;
+      const n = new Set(prev);
+      n.delete(k);
+      persistRejectedGapKeywords(projectId, n);
+      return n;
+    });
+    setApprovedGapKeywords(prev => {
+      if (!prev.has(k)) return prev;
+      const n = new Set(prev);
+      n.delete(k);
+      persistApprovedGapKeywords(projectId, n);
+      return n;
+    });
+  };
+
+  const handleCompetitorStatus = (competitorId: string, next: KeywordStatus) => {
+    setCompetitorStatuses(prev => {
+      const merged = { ...prev, [competitorId]: next };
+      persistCompetitorStatuses(projectId, merged);
+      return merged;
+    });
+  };
+
+  const exitGapMassSelect = () => {
+    setMassSelectMode(false);
+    setSelectedGapIds(new Set());
+  };
+
+  const toggleGapRowSelected = (gapId: string) => {
+    setSelectedGapIds(prev => {
+      const next = new Set(prev);
+      if (next.has(gapId)) next.delete(gapId);
+      else next.add(gapId);
+      return next;
+    });
+  };
+
+  const handleBulkApproveGaps = async () => {
+    const rows = filteredGaps.filter(g => selectedGapIds.has(g.id));
+    if (!rows.length) return;
+    setBulkApprovingGaps(true);
+    setError("");
+    let anyOk = false;
+    try {
+      for (const g of rows) {
+        const k = g.keyword.toLowerCase();
+        if (approvedGapKeywords.has(k) || rejectedGapKeywords.has(k)) continue;
+        const res = await competitorsApi.blogFromOpportunity(projectId, g.keyword);
+        if (res.success) {
+          anyOk = true;
+          setApprovedGapKeywords(prev => {
+            const n = new Set(prev);
+            n.add(k);
+            persistApprovedGapKeywords(projectId, n);
+            return n;
+          });
+        } else {
+          setError(res.error ?? "Could not queue an opportunity.");
+        }
+      }
+      exitGapMassSelect();
+      if (anyOk) router.push(`/projects/${projectId}/calendar`);
+    } finally {
+      setBulkApprovingGaps(false);
     }
   };
 
@@ -315,50 +493,174 @@ export default function CompetitorsPage() {
             gaps={gaps}
           />
 
-          <div className="flex flex-wrap items-center gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
-            <TabButton id="opportunities" active={tab} onClick={setTab}>
-              Opportunity Dashboard ({gaps.length})
-            </TabButton>
-            <TabButton id="competitors" active={tab} onClick={setTab}>
-              Competitor List ({competitors.length})
-            </TabButton>
-            <TabButton id="gaps" active={tab} onClick={setTab}>
-              Keyword Gap Table
-            </TabButton>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <div className="relative" ref={viewMenuRef}>
+              <button
+                type="button"
+                onClick={() => setViewMenuOpen(o => !o)}
+                className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
+                aria-expanded={viewMenuOpen}
+                aria-haspopup="listbox"
+              >
+                {insightsView === "opportunities" ? "Opportunity dashboard" : "Competitor list"}
+                <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+              {viewMenuOpen ? (
+                <div
+                  role="listbox"
+                  className="absolute left-0 top-full z-50 mt-1 min-w-[14rem] rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
+                >
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={insightsView === "opportunities"}
+                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                    onClick={() => {
+                      setInsightsView("opportunities");
+                      setViewMenuOpen(false);
+                    }}
+                  >
+                    Opportunity dashboard ({gaps.length})
+                  </button>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={insightsView === "competitors"}
+                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                    onClick={() => {
+                      setInsightsView("competitors");
+                      setViewMenuOpen(false);
+                    }}
+                  >
+                    Competitor list ({competitors.length})
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            {insightsView === "opportunities" && gaps.length > 0 ? (
+              <PillTabFilterBar
+                items={GAP_FILTER_OPTIONS.map(f => ({
+                  id: f.id,
+                  label: f.label,
+                  count: gapCounts[f.id],
+                }))}
+                activeId={gapFilter}
+                onChange={setGapFilter}
+              />
+            ) : null}
+            </div>
+
+            {insightsView === "opportunities" && filteredGaps.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {!massSelectMode ? (
+                  <button
+                    type="button"
+                    aria-label="Mass select opportunities"
+                    onClick={() => {
+                      setMassSelectMode(true);
+                      setSelectedGapIds(new Set());
+                    }}
+                    className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-3 w-3 shrink-0 opacity-75"
+                      aria-hidden
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.85}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <path d="M14 17.5 16 19.5 21 13.5" />
+                    </svg>
+                    <span>Mass select</span>
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleBulkApproveGaps()}
+                      disabled={bulkApprovingGaps || selectedGapIds.size === 0}
+                      className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
+                        bulkApprovingGaps ? "animate-pulse cursor-wait" : ""
+                      }`}
+                    >
+                      <span className="block max-w-full overflow-hidden truncate text-center tabular-nums">
+                        {bulkApprovingGaps ? "…" : selectedGapIds.size > 0 ? `Approve (${selectedGapIds.size})` : "Approve"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exitGapMassSelect}
+                      disabled={bulkApprovingGaps}
+                      className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
+                      title="Leave mass-select mode"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleRun()}
+                  disabled={running}
+                  className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+                >
+                  {running ? (
+                    <>
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
+                      Refreshing…
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+                        />
+                      </svg>
+                      Refresh
+                    </>
+                  )}
+                </button>
+              </div>
+            ) : null}
           </div>
 
-          {tab === "opportunities" && (
+          {insightsView === "opportunities" && (
             <OpportunityDashboard
               gaps={filteredGaps}
-              gapCounts={gapCounts}
               gapFilter={gapFilter}
-              onGapFilterChange={setGapFilter}
+              hasGapsInProject={gaps.length > 0}
               averages={averages}
               generatingKeyword={generatingKeyword}
               approvedGapKeywords={approvedGapKeywords}
-              onGenerateBlog={handleGenerateBlog}
+              rejectedGapKeywords={rejectedGapKeywords}
+              onGapKeywordStatus={handleGapKeywordStatus}
               aiGapKeywordSet={aiGapKeywordSet}
+              massSelectMode={massSelectMode}
+              selectedGapIds={selectedGapIds}
+              onToggleGapSelected={toggleGapRowSelected}
+              bulkApprovingGaps={bulkApprovingGaps}
             />
           )}
 
-          {tab === "competitors" && (
+          {insightsView === "competitors" && (
             <CompetitorList
               competitors={competitors}
               expandedId={expandedCompetitor}
               onToggle={id => setExpandedCompetitor(prev => (prev === id ? null : id))}
-            />
-          )}
-
-          {tab === "gaps" && (
-            <KeywordGapTable
-              gaps={filteredGaps}
-              gapCounts={gapCounts}
-              gapFilter={gapFilter}
-              onGapFilterChange={setGapFilter}
-              generatingKeyword={generatingKeyword}
-              approvedGapKeywords={approvedGapKeywords}
-              onGenerateBlog={handleGenerateBlog}
-              aiGapKeywordSet={aiGapKeywordSet}
+              statusById={competitorStatuses}
+              onStatusChange={handleCompetitorStatus}
             />
           )}
         </>
@@ -370,31 +672,6 @@ export default function CompetitorsPage() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Subcomponents
 // ─────────────────────────────────────────────────────────────────────────────
-
-function TabButton({
-  id,
-  active,
-  onClick,
-  children,
-}: {
-  id: TabId;
-  active: TabId;
-  onClick: (id: TabId) => void;
-  children: React.ReactNode;
-}) {
-  const isActive = id === active;
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(id)}
-      className={`rounded-[4px] px-4 py-2 text-[14px] font-medium transition-all ${
-        isActive ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
 
 function BenchmarkOverview({
   averages,
@@ -438,38 +715,15 @@ function BenchmarkOverview({
   );
 }
 
-const GAP_FILTER_OPTIONS: Array<{ id: "all" | GapType; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "missing", label: "Missing" },
-  { id: "weak", label: "Weak" },
-  { id: "untapped", label: "Untapped" },
-];
-
-function GapFilterBar({
-  counts,
-  filter,
-  onFilterChange,
-}: {
-  counts: Record<"all" | GapType, number>;
-  filter: "all" | GapType;
-  onFilterChange: (f: "all" | GapType) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
-      {GAP_FILTER_OPTIONS.map(f => (
-        <button
-          key={f.id}
-          type="button"
-          onClick={() => onFilterChange(f.id)}
-          className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
-            filter === f.id ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
-          }`}
-        >
-          {f.label} ({counts[f.id]})
-        </button>
-      ))}
-    </div>
-  );
+function gapKeywordWorkspaceStatus(
+  keyword: string,
+  approved: Set<string>,
+  rejected: Set<string>
+): KeywordStatus {
+  const k = keyword.toLowerCase();
+  if (rejected.has(k)) return "rejected";
+  if (approved.has(k)) return "approved";
+  return "pending";
 }
 
 function StatCard({ label, value, hint, tooltip }: { label: string; value: string; hint?: string; tooltip?: string }) {
@@ -491,24 +745,32 @@ function StatCard({ label, value, hint, tooltip }: { label: string; value: strin
 
 function OpportunityDashboard({
   gaps,
-  gapCounts,
   gapFilter,
-  onGapFilterChange,
+  hasGapsInProject,
   averages,
   generatingKeyword,
   approvedGapKeywords,
-  onGenerateBlog,
+  rejectedGapKeywords,
+  onGapKeywordStatus,
   aiGapKeywordSet,
+  massSelectMode,
+  selectedGapIds,
+  onToggleGapSelected,
+  bulkApprovingGaps,
 }: {
   gaps: KeywordGap[];
-  gapCounts: Record<"all" | GapType, number>;
   gapFilter: "all" | GapType;
-  onGapFilterChange: (f: "all" | GapType) => void;
+  hasGapsInProject: boolean;
   averages?: BenchmarkState["averages"];
   generatingKeyword: string | null;
   approvedGapKeywords: Set<string>;
-  onGenerateBlog: (keyword: string) => void;
+  rejectedGapKeywords: Set<string>;
+  onGapKeywordStatus: (keyword: string, next: KeywordStatus) => void;
   aiGapKeywordSet: Set<string>;
+  massSelectMode: boolean;
+  selectedGapIds: Set<string>;
+  onToggleGapSelected: (gapId: string) => void;
+  bulkApprovingGaps: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -527,38 +789,84 @@ function OpportunityDashboard({
       ) : null}
 
       <div className="space-y-3">
-        <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary">
-          Keyword opportunities
-        </p>
-        <GapFilterBar counts={gapCounts} filter={gapFilter} onFilterChange={onGapFilterChange} />
+        <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary">Keyword opportunities</p>
       </div>
 
       {gaps.length === 0 ? (
         <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
-          {gapFilter === "all"
-            ? "No opportunities yet. Run a benchmark."
-            : "No keyword gaps match this filter."}
+          {!hasGapsInProject
+            ? "No opportunities yet. Run a benchmark or click Refresh."
+            : gapFilter === "all"
+              ? "No opportunities match this view."
+              : "No keyword gaps match this filter."}
         </div>
       ) : (
         <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
+            <table className="w-full min-w-[980px] text-left">
               <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
+                  <th
+                    scope="col"
+                    className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
+                      massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
+                    } overflow-hidden`}
+                  >
+                    <span
+                      className={`block min-h-5 transition-all duration-300 ease-out ${massSelectMode ? "opacity-100" : "opacity-0"}`}
+                      aria-hidden
+                    />
+                  </th>
                   <th className="px-4 py-3">Keyword</th>
                   <th className="px-4 py-3 text-center">Gap</th>
                   <th className="px-4 py-3 text-right">Volume</th>
-                  <th className="px-4 py-3 text-center">Trend</th>
+                  <th className="px-4 py-3 text-right">Traffic</th>
                   <th className="px-4 py-3 text-center">Weakness</th>
                   <th className="px-4 py-3 text-center">Opportunity</th>
                   <th className="px-4 py-3">Ranking page</th>
-                  <th className="px-4 py-3 text-center">Status</th>
+                  <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle/60">
                 {gaps.map(g => (
-                  <tr key={g.id} className="transition-colors hover:bg-surface-hover">
-                    <td className="px-4 py-3 max-w-[280px]">
+                  <tr
+                    key={g.id}
+                    onClick={e => {
+                      const t = e.target as HTMLElement;
+                      if (
+                        t.closest(
+                          "button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a"
+                        )
+                      )
+                        return;
+                      if (massSelectMode && !bulkApprovingGaps) onToggleGapSelected(g.id);
+                    }}
+                    className={`transition-colors hover:bg-surface-hover ${
+                      rejectedGapKeywords.has(g.keyword.toLowerCase()) ? "opacity-75" : ""
+                    } ${massSelectMode && !bulkApprovingGaps ? "cursor-pointer" : ""} ${
+                      selectedGapIds.has(g.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
+                    }`}
+                  >
+                    <td
+                      className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
+                        massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
+                      } overflow-hidden`}
+                    >
+                      <span
+                        className={`flex justify-center transition-all duration-300 ease-out ${massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedGapIds.has(g.id)}
+                          onChange={() => onToggleGapSelected(g.id)}
+                          onClick={e => e.stopPropagation()}
+                          disabled={bulkApprovingGaps || !massSelectMode}
+                          aria-label={`Select opportunity ${g.keyword}`}
+                          className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
+                        />
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 max-w-[260px]">
                       <div className="flex items-center gap-2">
                         <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
                         {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
@@ -580,13 +888,11 @@ function OpportunityDashboard({
                         {g.gap_type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
+                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
                       {g.volume > 0 ? g.volume.toLocaleString() : "—"}
                     </td>
-                    <td className="px-4 py-3 text-center text-[12px] font-bold">
-                      <span className={g.trend_pct > 0 ? "text-[#10b981]" : g.trend_pct < 0 ? "text-brand-coral" : "text-text-tertiary"}>
-                        {formatTrend(g.trend, g.trend_pct)}
-                      </span>
+                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
+                      {formatMonthlyTraffic(g.volume)}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-2">
@@ -618,21 +924,16 @@ function OpportunityDashboard({
                         </a>
                       ) : null}
                     </td>
-                    <td className="px-4 py-3 text-center">
-                      {approvedGapKeywords.has(g.keyword.toLowerCase()) ? (
-                        <span className="inline-block rounded-[4px] border border-[#10b981]/25 bg-[#10b981]/10 px-3 py-1.5 text-[12px] font-medium text-[#34d399]">
-                          Approved
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onGenerateBlog(g.keyword)}
-                          disabled={generatingKeyword === g.keyword}
-                          className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                        >
-                          {generatingKeyword === g.keyword ? "Queuing…" : "Pending"}
-                        </button>
-                      )}
+                    <td
+                      className="px-4 py-3 text-center"
+                      onClick={e => e.stopPropagation()}
+                      onPointerDown={e => e.stopPropagation()}
+                    >
+                      <KeywordActionDropdown
+                        status={gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords)}
+                        busy={generatingKeyword === g.keyword || bulkApprovingGaps}
+                        onChange={next => onGapKeywordStatus(g.keyword, next)}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -649,23 +950,33 @@ function CompetitorList({
   competitors,
   expandedId,
   onToggle,
+  statusById,
+  onStatusChange,
 }: {
   competitors: Competitor[];
   expandedId: string | null;
   onToggle: (id: string) => void;
+  statusById: Record<string, KeywordStatus>;
+  onStatusChange: (competitorId: string, next: KeywordStatus) => void;
 }) {
   return (
     <div className="space-y-4">
       {competitors.map(c => {
         const expanded = expandedId === c.id;
+        const rowStatus = statusById[c.id] ?? "pending";
         return (
-          <div key={c.id} className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
-            <button
-              type="button"
-              onClick={() => onToggle(c.id)}
-              className="w-full flex flex-wrap items-center justify-between gap-4 p-5 text-left hover:bg-surface-hover transition-colors"
-            >
-              <div className="flex items-center gap-4 min-w-0">
+          <div
+            key={c.id}
+            className={`rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden ${
+              rowStatus === "rejected" ? "opacity-75" : ""
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-4 p-5 hover:bg-surface-hover transition-colors">
+              <button
+                type="button"
+                onClick={() => onToggle(c.id)}
+                className="flex flex-1 items-center gap-4 min-w-0 text-left"
+              >
                 <DomainLogo domain={c.domain} />
                 <div className="min-w-0">
                   <p className="text-[16px] font-medium text-text-primary truncate">{c.domain}</p>
@@ -673,19 +984,29 @@ function CompetitorList({
                     {c.pages_scraped} pages analyzed · {c.top_pages?.length ?? 0} snapshots
                   </p>
                 </div>
-              </div>
-              <div className="flex items-center gap-6 text-[13px] text-text-tertiary">
-                <MiniStat label="Words" value={c.avg_word_count.toLocaleString()} />
-                <MiniStat label="H2" value={String(c.avg_h2)} />
-                <MiniStat label="H3" value={String(c.avg_h3)} />
-                <MiniStat label="FAQ" value={`${c.faq_pages_pct}%`} />
-                <span className="text-text-tertiary ml-2">
+              </button>
+              <div
+                className="flex shrink-0 items-center gap-3"
+                onClick={e => e.stopPropagation()}
+                onPointerDown={e => e.stopPropagation()}
+              >
+                <KeywordActionDropdown
+                  status={rowStatus}
+                  onChange={next => onStatusChange(c.id, next)}
+                />
+                <button
+                  type="button"
+                  onClick={() => onToggle(c.id)}
+                  aria-expanded={expanded}
+                  aria-label={expanded ? "Collapse competitor" : "Expand competitor"}
+                  className="text-text-tertiary p-1 rounded-md hover:bg-surface-secondary hover:text-text-secondary transition-colors"
+                >
                   <svg className={`w-5 h-5 transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                   </svg>
-                </span>
+                </button>
               </div>
-            </button>
+            </div>
             {expanded ? (
               <div className="border-t border-border-subtle p-5 space-y-6 bg-surface-secondary">
                 {c.recommendations?.length ? (
@@ -756,129 +1077,6 @@ function CompetitorList({
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="text-right">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>
-      <p className="text-[14px] font-medium text-text-primary mt-0.5">{value}</p>
-    </div>
-  );
-}
-
-function KeywordGapTable({
-  gaps,
-  gapCounts,
-  gapFilter,
-  onGapFilterChange,
-  generatingKeyword,
-  approvedGapKeywords,
-  onGenerateBlog,
-  aiGapKeywordSet,
-}: {
-  gaps: KeywordGap[];
-  gapCounts: Record<"all" | GapType, number>;
-  gapFilter: "all" | GapType;
-  onGapFilterChange: (f: "all" | GapType) => void;
-  generatingKeyword: string | null;
-  approvedGapKeywords: Set<string>;
-  onGenerateBlog: (keyword: string) => void;
-  aiGapKeywordSet: Set<string>;
-}) {
-  return (
-    <div className="space-y-4">
-      <GapFilterBar counts={gapCounts} filter={gapFilter} onFilterChange={onGapFilterChange} />
-
-      {gaps.length === 0 ? (
-        <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
-          No keyword gaps match this filter.
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
-                <tr>
-                  <th className="px-4 py-3">Keyword</th>
-                  <th className="px-4 py-3 text-center">Type</th>
-                  <th className="px-4 py-3 text-right">Volume</th>
-                  <th className="px-4 py-3 text-center">Trend</th>
-                  <th className="px-4 py-3 text-center">Score</th>
-                  <th className="px-4 py-3">Ranking page</th>
-                  <th className="px-4 py-3 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle/60">
-                {gaps.map(g => (
-                  <tr key={g.id} className="transition-colors hover:bg-surface-hover">
-                    <td className="px-4 py-3 max-w-[280px]">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
-                        {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
-                          <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-                            AI pick
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`inline-block rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${GAP_STYLES[g.gap_type]}`}>
-                        {g.gap_type}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary">
-                      {g.volume > 0 ? g.volume.toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-center text-[12px] font-bold">
-                      <span className={g.trend_pct > 0 ? "text-[#10b981]" : g.trend_pct < 0 ? "text-brand-coral" : "text-text-tertiary"}>
-                        {formatTrend(g.trend, g.trend_pct)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`rounded-[4px] border px-2.5 py-1 text-[12px] font-mono ${scoreColor(g.opportunity_score)}`}>
-                        {g.opportunity_score}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 max-w-[220px]">
-                      <p className="text-[12px] font-bold text-brand-action truncate">{g.top_competitor_domain}</p>
-                      {g.top_competitor_url ? (
-                        <a
-                          href={g.top_competitor_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={g.top_competitor_url}
-                          className="block truncate text-[11px] text-brand-action/80 hover:underline mt-1"
-                        >
-                          {compactUrl(g.top_competitor_url)} ↗
-                        </a>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {approvedGapKeywords.has(g.keyword.toLowerCase()) ? (
-                        <span className="inline-block rounded-[4px] border border-[#10b981]/25 bg-[#10b981]/10 px-3 py-1.5 text-[12px] font-medium text-[#34d399]">
-                          Approved
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onGenerateBlog(g.keyword)}
-                          disabled={generatingKeyword === g.keyword}
-                          className="rounded-[4px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-60"
-                        >
-                          {generatingKeyword === g.keyword ? "Queuing…" : "Pending"}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -55,6 +55,17 @@ export const keywordsApi = {
     return apiGet(V1Routes.keywordsDomain(projectId));
   },
 
+  upsertDomainKeyword(
+    projectId: string,
+    row: Pick<
+      CompetitorKeywordsForSiteRow,
+      "keyword" | "volume" | "kd" | "cpc" | "intent" | "estimated_monthly_traffic"
+    >,
+    status: KeywordStatus
+  ): Promise<{ success: true; id: string } | { success: false; error?: string }> {
+    return apiPost(V1Routes.keywordsDomain(projectId), { row, status });
+  },
+
   updateStatus(
     keywordId: string,
     projectId: string,

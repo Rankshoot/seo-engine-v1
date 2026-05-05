@@ -30,8 +30,9 @@ import type {
   ContextualAgentRequestBody,
   ContextualSuggestion,
 } from "@/features/ai-assistant/types";
-import type { Project } from "@/lib/types";
+import type { KeywordStatus, Project } from "@/lib/types";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
+import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 
 export type AIMode = "closed" | "mini" | "full";
 
@@ -451,17 +452,17 @@ function ToolResultCard({ call }: { call: ToolCallResult }) {
 function SuggestionCard({
   s,
   idx,
-  resultPage,
+  status,
   approvalState,
   approvalError,
-  onApprove,
+  onStatusChange,
 }: {
   s: ContextualSuggestion;
   idx: number;
-  resultPage: AIPageExtended;
+  status: KeywordStatus;
   approvalState: "idle" | "loading" | "success" | "error";
   approvalError?: string;
-  onApprove: (s: ContextualSuggestion, page: AIPageExtended) => void;
+  onStatusChange: (next: KeywordStatus) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -550,51 +551,15 @@ function SuggestionCard({
               <p className="text-[11px] text-brand-action/80 italic">{s.actionStep}</p>
             )}
 
-            {/* approve button */}
-            <div className="pt-1">
-              {approvalState === "success" ? (
-                <div className="flex items-center gap-1.5 text-[12px] text-green-400">
-                  <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M3 8l3.5 3.5L13 5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                  Added to calendar
-                </div>
-              ) : approvalState === "error" ? (
-                <div className="space-y-1.5">
-                  <p className="text-[11px] text-red-400">{approvalError ?? "Failed to add"}</p>
-                  <button
-                    type="button"
-                    onClick={() => onApprove(s, resultPage)}
-                    className="rounded-full border border-brand-action/30 bg-brand-action/10 px-3 py-1.5 text-[11px] font-semibold text-brand-action hover:bg-brand-action/20 transition-colors"
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  disabled={approvalState === "loading"}
-                  onClick={() => onApprove(s, resultPage)}
-                  className="flex items-center gap-1.5 rounded-full border border-green-500/30 bg-green-500/10 px-3.5 py-1.5 text-[12px] font-semibold text-green-400 hover:bg-green-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {approvalState === "loading" ? (
-                    <>
-                      <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2z" strokeOpacity="0.3"/>
-                        <path d="M8 2a6 6 0 0 1 6 6" strokeLinecap="round"/>
-                      </svg>
-                      Adding…
-                    </>
-                  ) : (
-                    <>
-                      <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M8 3v10M3 8h10" strokeLinecap="round"/>
-                      </svg>
-                      Add to Calendar
-                    </>
-                  )}
-                </button>
-              )}
+            <div className="pt-1 flex flex-wrap items-center gap-2" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+              <KeywordActionDropdown
+                status={status}
+                busy={approvalState === "loading"}
+                onChange={onStatusChange}
+              />
+              {approvalState === "error" ? (
+                <p className="text-[11px] text-red-400">{approvalError ?? "Failed to add"}</p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -626,9 +591,11 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const lastPage = useRef(page);
 
-  // Per-suggestion approval states keyed by keyword string
+  /** Per-suggestion card (`msgId::idx`) — API add-to-calendar flow. */
   const [approvalStates, setApprovalStates] = useState<Record<string, "idle" | "loading" | "success" | "error">>({});
   const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
+  /** User chose Rejected on a card (keyed like approvalStates). */
+  const [suggestionRejected, setSuggestionRejected] = useState<Record<string, boolean>>({});
   /** In-flight calendar blog gen — locks input for this session until `generateBlog` returns. */
   const [calendarBlogGen, setCalendarBlogGen] = useState<{
     entryId: string;
@@ -856,12 +823,11 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
     Boolean(calendarBlogGen) && activeSession === calendarBlogGen?.sessionId;
 
   const handleApprove = useCallback(
-    async (s: ContextualSuggestion, resultPage: AIPageExtended) => {
-      const key = s.keyword;
-      setApprovalStates(prev => ({ ...prev, [key]: "loading" }));
+    async (s: ContextualSuggestion, resultPage: AIPageExtended, cardKey: string) => {
+      setApprovalStates(prev => ({ ...prev, [cardKey]: "loading" }));
       setApprovalErrors(prev => {
         const next = { ...prev };
-        delete next[key];
+        delete next[cardKey];
         return next;
       });
 
@@ -877,13 +843,58 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
       });
 
       if (res.success) {
-        setApprovalStates(prev => ({ ...prev, [key]: "success" }));
+        setApprovalStates(prev => ({ ...prev, [cardKey]: "success" }));
+        queryClient.invalidateQueries({ queryKey: qk.calendar(project.id) });
+        queryClient.invalidateQueries({ queryKey: qk.keywords(project.id) });
       } else {
-        setApprovalStates(prev => ({ ...prev, [key]: "error" }));
-        setApprovalErrors(prev => ({ ...prev, [key]: res.error ?? "Failed to add" }));
+        setApprovalStates(prev => ({ ...prev, [cardKey]: "error" }));
+        setApprovalErrors(prev => ({ ...prev, [cardKey]: res.error ?? "Failed to add" }));
       }
     },
-    [project.id]
+    [project.id, queryClient]
+  );
+
+  const handleSuggestionWorkspaceStatus = useCallback(
+    (cardKey: string, s: ContextualSuggestion, resultPage: AIPageExtended, next: KeywordStatus) => {
+      const api = approvalStates[cardKey] ?? "idle";
+      if (next === "approved") {
+        if (api === "success") return;
+        if (api === "loading") return;
+        setSuggestionRejected(prev => {
+          const o = { ...prev };
+          delete o[cardKey];
+          return o;
+        });
+        void handleApprove(s, resultPage, cardKey);
+        return;
+      }
+      if (next === "rejected") {
+        setSuggestionRejected(prev => ({ ...prev, [cardKey]: true }));
+        setApprovalErrors(prev => {
+          const o = { ...prev };
+          delete o[cardKey];
+          return o;
+        });
+        return;
+      }
+      // pending — reset workspace so user can retry approve
+      setSuggestionRejected(prev => {
+        const o = { ...prev };
+        delete o[cardKey];
+        return o;
+      });
+      setApprovalStates(prev => {
+        const o = { ...prev };
+        delete o[cardKey];
+        return o;
+      });
+      setApprovalErrors(prev => {
+        const o = { ...prev };
+        delete o[cardKey];
+        return o;
+      });
+    },
+    [approvalStates, handleApprove]
   );
 
   const run = useCallback(
@@ -1466,17 +1477,28 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
 
                         {msg.suggestions && msg.suggestions.length > 0 && (
                           <div className="space-y-2.5">
-                            {(msg.suggestions as ContextualSuggestion[]).map((s, idx) => (
-                              <SuggestionCard
-                                key={`${msg.id}-${idx}`}
-                                s={s}
-                                idx={idx}
-                                resultPage={page!}
-                                approvalState={approvalStates[s.keyword] ?? "idle"}
-                                approvalError={approvalErrors[s.keyword]}
-                                onApprove={handleApprove}
-                              />
-                            ))}
+                            {(msg.suggestions as ContextualSuggestion[]).map((s, idx) => {
+                              const cardKey = `${msg.id}::${idx}`;
+                              const api = approvalStates[cardKey] ?? "idle";
+                              const status: KeywordStatus = suggestionRejected[cardKey]
+                                ? "rejected"
+                                : api === "success"
+                                  ? "approved"
+                                  : "pending";
+                              return (
+                                <SuggestionCard
+                                  key={cardKey}
+                                  s={s}
+                                  idx={idx}
+                                  status={status}
+                                  approvalState={api}
+                                  approvalError={approvalErrors[cardKey]}
+                                  onStatusChange={next =>
+                                    handleSuggestionWorkspaceStatus(cardKey, s, page!, next)
+                                  }
+                                />
+                              );
+                            })}
                           </div>
                         )}
                       </div>

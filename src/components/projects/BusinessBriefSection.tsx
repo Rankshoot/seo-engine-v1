@@ -111,44 +111,31 @@ export function BusinessBriefSection({ projectId }: { projectId: string }) {
                   {briefOpen ? "Hide details" : "View details"}
                 </button>
               ) : null}
-              <div className="flex flex-col items-end gap-0.5">
-                <button
-                  type="button"
-                  onClick={handleRefreshBrief}
-                  disabled={refreshingBrief}
-                  title="Re-scrape your domain and regenerate the business brief. Uses Jina Reader."
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50"
-                >
-                  {refreshingBrief ? (
-                    <>
-                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
-                      Scraping…
-                    </>
-                  ) : (
-                    <>
-                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
-                        />
-                      </svg>
-                      {brief ? "Refresh brief" : "Generate brief"}
-                    </>
-                  )}
-                </button>
-                {briefUpdatedAt && (
-                  <span className="text-[10px] text-text-tertiary" title={briefUpdatedAt}>
-                    Updated{" "}
-                    {new Intl.DateTimeFormat("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    }).format(new Date(briefUpdatedAt))}
-                  </span>
+              <button
+                type="button"
+                onClick={handleRefreshBrief}
+                disabled={refreshingBrief}
+                title="Re-scrape your domain and regenerate the business brief. Uses Jina Reader."
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50"
+              >
+                {refreshingBrief ? (
+                  <>
+                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
+                    <span className="sr-only">Refreshing brief</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+                      />
+                    </svg>
+                    {brief ? "Refresh brief" : "Generate brief"}
+                  </>
                 )}
-              </div>
+              </button>
             </div>
           </div>
 

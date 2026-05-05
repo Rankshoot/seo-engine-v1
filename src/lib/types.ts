@@ -35,7 +35,9 @@ export type KeywordSourceType =
   | 'industry'
   | 'competitor_gap'
   | 'competitor_benchmark'
-  | 'quick_win';
+  | 'quick_win'
+  /** Google Ads `keywords_for_site` — domain tab live list. */
+  | 'google_ads_domain';
 
 /** Multi-intent flags as Ahrefs returns them. Structurally matches `AhrefsIntentObject`. */
 export interface KeywordIntents {
@@ -94,6 +96,8 @@ export interface Keyword {
   intent?: string | null;
   /** Discovery-pipeline provenance. */
   source_type?: KeywordSourceType | string | null;
+  /** Set when the keyword was stamped from the AI assistant (e.g. "AI · keywords"). */
+  ai_source?: string | null;
   /** Competitor domains that rank for this keyword (sorted by traffic). */
   source_competitors?: string[] | null;
   /** Ranking page URLs aligned positionally with `source_competitors`. */

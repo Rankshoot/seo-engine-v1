@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,9 +9,11 @@ import type { AuditCoverage, PersistedBlogAudit, SitemapPage } from "@/app/actio
 import { auditsApi } from "@/frontend/api/audits";
 import { calendarApi } from "@/frontend/api/calendar";
 import { AuditDetailModal } from "@/components/AuditDetailModal";
+import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
 import { criticalityFromScore } from "@/lib/audit-criticality";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
+import type { KeywordStatus } from "@/lib/types";
 
 type AuditsResponse = Awaited<ReturnType<typeof auditsApi.list>>;
 
@@ -97,6 +99,31 @@ export default function ContentHealthPage() {
   const [calendarAddingUrl, setCalendarAddingUrl] = useState<string | null>(null);
   /** URLs we successfully queued (or already had) on the calendar this session — drives the schedule control without an extra round-trip. */
   const [calendarLinkedByUrl, setCalendarLinkedByUrl] = useState<Record<string, boolean>>({});
+  const [dismissedAuditUrls, setDismissedAuditUrls] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setDismissedAuditUrls(loadDismissedAuditUrls(projectId));
+  }, [projectId]);
+
+  const persistDismissedAuditUrls = useCallback((next: Set<string>) => {
+    try {
+      localStorage.setItem(dismissedAuditsStorageKey(projectId), JSON.stringify([...next]));
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, [projectId]);
+
+  const dismissAuditRow = useCallback(
+    (url: string) => {
+      setDismissedAuditUrls(prev => {
+        const n = new Set(prev);
+        n.add(url);
+        persistDismissedAuditUrls(n);
+        return n;
+      });
+    },
+    [persistDismissedAuditUrls]
+  );
 
   // ── Page discovery state ──────────────────────────────────────────────
   const [discoverTab, setDiscoverTab] = useState<"discover" | "audited">("audited");
@@ -247,9 +274,40 @@ export default function ContentHealthPage() {
   };
 
   const filtered = useMemo(() => {
-    if (filter === "all") return rows;
-    return rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === filter);
+    const bySeverity =
+      filter === "all" ? rows : rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === filter);
+    return bySeverity;
   }, [rows, filter]);
+
+  const handleAuditKeywordStatus = (row: PersistedBlogAudit, next: KeywordStatus) => {
+    const url = row.url;
+    const dismissed = dismissedAuditUrls.has(url);
+    const onCal = !!calendarLinkedByUrl[url];
+
+    if (next === "rejected") {
+      if (!dismissed) dismissAuditRow(url);
+      return;
+    }
+    if (next === "approved") {
+      if (!onCal) void handleAddToCalendar(row);
+      return;
+    }
+    if (dismissed) {
+      setDismissedAuditUrls(prev => {
+        const n = new Set(prev);
+        n.delete(url);
+        persistDismissedAuditUrls(n);
+        return n;
+      });
+    }
+    if (onCal) {
+      setCalendarLinkedByUrl(prev => {
+        const { [url]: _removed, ...rest } = prev;
+        return rest;
+      });
+      setRunSummary("Marked as pending. Open Calendar if you still need to delete a scheduled slot for this page.");
+    }
+  };
 
   const pendingAudits = Math.max(0, coverage.blogs_found - coverage.blogs_audited);
 
@@ -618,10 +676,18 @@ export default function ContentHealthPage() {
             const kw = extractCalendarFocusKeyword(row);
             const sno = idx + 1;
 
+            const auditRowStatus: KeywordStatus = dismissedAuditUrls.has(row.url)
+              ? "rejected"
+              : onCalendar
+                ? "approved"
+                : "pending";
+
             return (
               <div
                 key={row.url}
-                className="rounded-[16px] border border-border-subtle bg-surface-elevated p-3 shadow-sm flex flex-row gap-3 sm:items-start"
+                className={`rounded-[16px] border border-border-subtle bg-surface-elevated p-3 shadow-sm flex flex-row gap-3 sm:items-start ${
+                  dismissedAuditUrls.has(row.url) ? "opacity-75" : ""
+                }`}
               >
                 <div
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border-subtle bg-surface-secondary text-[11px] font-black tabular-nums text-text-secondary"
@@ -697,33 +763,23 @@ export default function ContentHealthPage() {
                       See fixes
                     </button>
 
-                    {onCalendar ? (
-                      <div className="flex flex-col gap-0.5">
-                        <span className="inline-flex h-7 items-center justify-center rounded-lg border border-accent-500/35 bg-accent-500/12 text-[10px] font-bold text-accent-400">
-                          On calendar
-                        </span>
-                        <ProjectNavLink
-                          href={`/projects/${projectId}/calendar`}
-                          className="text-center text-[10px] font-medium text-brand-action hover:underline"
-                        >
-                          Open
-                        </ProjectNavLink>
-                      </div>
-                    ) : calBusy ? (
+                    {calBusy ? (
                       <div className="flex h-7 items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-surface-secondary px-2 text-[10px] text-text-tertiary">
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-brand-action/30 border-t-brand-action" />
                         …
                       </div>
                     ) : (
-                      <button
-                        type="button"
-                        disabled={calLocked}
-                        onClick={() => void handleAddToCalendar(row)}
-                        title="Add to calendar — next free day; saves full audit for blog generation."
-                        className="inline-flex h-7 max-w-[112px] items-center justify-center rounded-lg border border-brand-action/35 bg-brand-action/10 px-2 text-[10px] font-semibold leading-tight text-brand-action transition-colors hover:bg-brand-action/18 disabled:opacity-45"
+                      <div
+                        className="sm:w-full [&_button]:min-h-[1.75rem] [&_button]:text-[10px]"
+                        onClick={e => e.stopPropagation()}
+                        onPointerDown={e => e.stopPropagation()}
                       >
-                        Add to calendar
-                      </button>
+                        <KeywordActionDropdown
+                          status={auditRowStatus}
+                          busy={calLocked}
+                          onChange={next => handleAuditKeywordStatus(row, next)}
+                        />
+                      </div>
                     )}
                   </div>
                 </div>
@@ -783,4 +839,18 @@ function formatVolume(v: number): string {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
   return String(v);
+}
+
+const dismissedAuditsStorageKey = (projectId: string) => `seo-engine:content-health-dismissed:${projectId}`;
+
+function loadDismissedAuditUrls(projectId: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = localStorage.getItem(dismissedAuditsStorageKey(projectId));
+    if (!raw) return new Set();
+    const a = JSON.parse(raw) as unknown;
+    return new Set(Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
 }

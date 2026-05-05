@@ -481,7 +481,7 @@ async function persistFresh(args: PersistArgs): Promise<void> {
     const { data: current } = await supabaseAdmin
       .from('keywords')
       .select(
-        'volume, kd, cpc, intent, intents, parent_topic, traffic_potential, global_volume, parent_volume, serp_features'
+        'volume, kd, cpc, intent, parent_topic, traffic_potential, global_volume, parent_volume, serp_features'
       )
       .eq('id', keywordId)
       .single();
@@ -490,12 +490,6 @@ async function persistFresh(args: PersistArgs): Promise<void> {
       if (!current.kd && ov.difficulty != null) patch.kd = Math.round(ov.difficulty);
       if (!current.cpc && ov.cpc != null) patch.cpc = centsToDollars(ov.cpc);
       if (!current.intent && ov.intents) patch.intent = inferDominantIntent(ov.intents);
-      if (
-        (!current.intents || Object.keys(current.intents as object).length === 0) &&
-        ov.intents
-      ) {
-        patch.intents = ov.intents;
-      }
       if (!current.parent_topic && ov.parent_topic) patch.parent_topic = ov.parent_topic;
       if (!current.traffic_potential && ov.traffic_potential != null) {
         patch.traffic_potential = Math.round(ov.traffic_potential);

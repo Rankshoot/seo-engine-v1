@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS keywords (
   intent TEXT DEFAULT '',
   -- Keyword-discovery pipeline columns. See supabase-migration-keyword-discovery-pipeline.sql.
   source_type TEXT DEFAULT 'industry',
+  ai_source TEXT DEFAULT '',
   source_competitors TEXT[] DEFAULT '{}',
   source_urls TEXT[] DEFAULT '{}',
   parent_topic TEXT DEFAULT '',

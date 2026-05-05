@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +8,6 @@ import { qk } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
 import { BlogStatus, WORD_COUNT_OPTIONS, type CalendarEntryWithBlog } from "@/lib/types";
-import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerDownload } from "@/lib/export";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { TableSkeleton } from "@/components/Skeleton";
@@ -66,10 +65,10 @@ export default function BlogsPage() {
   const [generating, setGenerating] = useState<string | null>(null);
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
   const [writerNotes, setWriterNotes] = useState<Record<string, string>>({});
-  const [downloading, setDownloading] = useState<string | null>(null);
   const [savingStatus, setSavingStatus] = useState<string | null>(null);
   const [error, setError] = useState<Record<string, string>>({});
-  const [notesOpenFor, setNotesOpenFor] = useState<string | null>(null);
+  /** Opens generate modal with word count + custom instructions for this entry only */
+  const [generateModalEntryId, setGenerateModalEntryId] = useState<string | null>(null);
   const highlightRef = useRef<HTMLTableRowElement>(null);
 
   const { data: entriesData, isLoading: loading } = useQuery<CalendarWithBlogsResponse>({
@@ -115,6 +114,7 @@ export default function BlogsPage() {
       dispatch(calendarRefreshBump({ projectId }));
       void queryClient.invalidateQueries({ queryKey: CALENDAR_KEY });
       void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      setGenerateModalEntryId(null);
     } else {
       patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "scheduled" } : e)));
       setError((prev) => ({
@@ -145,40 +145,10 @@ export default function BlogsPage() {
     setSavingStatus(null);
   };
 
-  const handleDownload = async (entry: CalendarEntryWithBlog, format: "markdown" | "html" | "txt" | "docx") => {
-    if (!entry.blog) return;
-    setDownloading(entry.id + format);
-
-    const res = await blogsApi.getById(entry.blog.id);
-    if (!res.success || !res.data) {
-      setDownloading(null);
-      return;
-    }
-
-    const blog = res.data;
-    const slug = blog.slug || blog.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-
-    let blob: Blob;
-    let ext: string;
-    if (format === "markdown") {
-      blob = exportToMarkdown(blog);
-      ext = "md";
-    } else if (format === "html") {
-      blob = exportToHTML(blog);
-      ext = "html";
-    } else if (format === "txt") {
-      blob = exportToText(blog);
-      ext = "txt";
-    } else {
-      blob = await exportToDocx(blog);
-      ext = "docx";
-    }
-
-    triggerDownload(blob, `${slug}.${ext}`);
-    setDownloading(null);
-  };
-
   const readyCount = entries.filter((e) => e.blog).length;
+  const generateModalEntry = generateModalEntryId
+    ? entries.find((e) => e.id === generateModalEntryId)
+    : null;
 
   return (
     <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
@@ -233,7 +203,7 @@ export default function BlogsPage() {
                   <th className="px-4 py-3 min-w-[12rem]">Title</th>
                   <th className="px-4 py-3 w-24">Type</th>
                   <th className="px-4 py-3 w-36">Status</th>
-                  <th className="px-4 py-3 text-right pr-4 w-[14rem]">Actions</th>
+                  <th className="px-4 py-3 text-right pr-4 w-[8.5rem]">Actions</th>
                 </tr>
                 </thead>
               <tbody className="divide-y divide-border-subtle/60">
@@ -249,157 +219,81 @@ export default function BlogsPage() {
                         : STATUS_CONFIG[effStatus] ?? STATUS_CONFIG.scheduled;
                   const isHighlighted = entry.id === highlightEntry;
                   const isGenerating = generating === entry.id;
-                  const wc = wordCounts[entry.id] ?? 2500;
-                  const notesOpen = notesOpenFor === entry.id;
 
                   return (
-                    <Fragment key={entry.id}>
-                      <tr
-                        ref={isHighlighted ? highlightRef : null}
-                        className={`hover:bg-surface-hover/50 transition-colors ${isHighlighted ? "bg-brand-action/6" : ""}`}
-                      >
-                        <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
-                  {entryIndex + 1}
-                </td>
-                <td className="px-4 py-2.5 align-middle tabular-nums text-[12px] text-text-primary whitespace-nowrap">
-                          {fmtDate(entry.scheduled_date)}
-                        </td>
-                        <td className="px-4 py-2.5 align-middle max-w-[11rem]">
-                          <p className="truncate text-[13px] font-medium text-text-primary" title={entry.focus_keyword}>
-                            {entry.focus_keyword}
-                          </p>
-                        </td>
-                        <td className="px-4 py-2.5 align-middle max-w-[18rem]">
-                          <p className="truncate text-[13px] text-text-secondary" title={rowTitle(entry)}>
-                            {rowTitle(entry)}
-                          </p>
-                        </td>
-                        <td className="px-4 py-2.5 align-middle text-[11px] text-text-tertiary whitespace-nowrap">
-                          {entry.article_type}
-                        </td>
-                        <td className="px-4 py-2.5 align-middle">
-                          <div className="flex flex-col gap-1">
-                            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${statusCfg.color}`}>
-                              {statusCfg.dot ? (
-                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusCfg.dot}`} />
-                              ) : null}
-                              {statusCfg.label}
-                            </span>
-                            {hasBlog && entry.blog && (
-                              <select
-                                value={blogStatus}
-                                onChange={(e) =>
-                                  handleStatusChange(entry.id, entry.blog!.id, e.target.value as BlogStatus)
-                                }
-                                disabled={savingStatus === entry.blog.id}
-                                className="max-w-[9.5rem] rounded-md border border-border-subtle bg-surface-secondary px-2 py-1 text-[11px] text-text-primary outline-none disabled:opacity-50"
-                              >
-                                {BLOG_STATUSES.map((s) => (
-                                  <option key={s.value} value={s.value}>
-                                    {s.label}
-                                  </option>
-                                ))}
-                              </select>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-2.5 align-middle text-right">
-                          <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setNotesOpenFor((id) => (id === entry.id ? null : entry.id))}
-                              className="h-8 px-2.5 rounded-full border border-border-subtle text-[11px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-                              title="Writer notes"
-                            >
-                              Notes
-                            </button>
+                    <tr
+                      key={entry.id}
+                      ref={isHighlighted ? highlightRef : null}
+                      className={`hover:bg-surface-hover/50 transition-colors ${isHighlighted ? "bg-brand-action/6" : ""}`}
+                    >
+                      <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
+                        {entryIndex + 1}
+                      </td>
+                      <td className="px-4 py-2.5 align-middle tabular-nums text-[12px] text-text-primary whitespace-nowrap">
+                        {fmtDate(entry.scheduled_date)}
+                      </td>
+                      <td className="px-4 py-2.5 align-middle max-w-[11rem]">
+                        <p className="truncate text-[13px] font-medium text-text-primary" title={entry.focus_keyword}>
+                          {entry.focus_keyword}
+                        </p>
+                      </td>
+                      <td className="px-4 py-2.5 align-middle max-w-[18rem]">
+                        <p className="truncate text-[13px] text-text-secondary" title={rowTitle(entry)}>
+                          {rowTitle(entry)}
+                        </p>
+                      </td>
+                      <td className="px-4 py-2.5 align-middle text-[11px] text-text-tertiary whitespace-nowrap">
+                        {entry.article_type}
+                      </td>
+                      <td className="px-4 py-2.5 align-middle">
+                        <div className="flex flex-col gap-1">
+                          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${statusCfg.color}`}>
+                            {statusCfg.dot ? (
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusCfg.dot}`} />
+                            ) : null}
+                            {statusCfg.label}
+                          </span>
+                          {hasBlog && entry.blog && (
                             <select
-                              value={wc}
+                              value={blogStatus}
                               onChange={(e) =>
-                                setWordCounts((prev) => ({ ...prev, [entry.id]: +e.target.value }))
+                                handleStatusChange(entry.id, entry.blog!.id, e.target.value as BlogStatus)
                               }
-                              disabled={isGenerating || generating !== null}
-                              className="h-8 rounded-full border border-border-subtle bg-surface-secondary px-2 text-[11px] text-text-primary outline-none disabled:opacity-50"
+                              disabled={savingStatus === entry.blog.id}
+                              className="max-w-[9.5rem] rounded-md border border-border-subtle bg-surface-secondary px-2 py-1 text-[11px] text-text-primary outline-none disabled:opacity-50"
                             >
-                              {WORD_COUNT_OPTIONS.map((opt) => (
-                                <option key={opt} value={opt}>
-                                  {opt >= 1000 ? `${opt / 1000}k` : opt}w
+                              {BLOG_STATUSES.map((s) => (
+                                <option key={s.value} value={s.value}>
+                                  {s.label}
                                 </option>
                               ))}
                             </select>
-                            {!hasBlog ? (
-                              <button
-                                type="button"
-                                onClick={() => handleGenerate(entry.id)}
-                                disabled={isGenerating || generating !== null}
-                                className="h-8 rounded-full bg-brand-primary px-3 text-[11px] font-semibold text-brand-on-primary disabled:opacity-50"
-                              >
-                                {isGenerating ? "…" : "Generate"}
-                              </button>
-                            ) : (
-                              <>
-                                <ProjectNavLink
-                                  href={`/projects/${projectId}/blogs/${entry.blog!.id}`}
-                                  className="inline-flex h-8 items-center rounded-full border border-border-subtle px-3 text-[11px] font-semibold text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-                                >
-                                  Open
-                                </ProjectNavLink>
-                                <select
-                                  defaultValue=""
-                                  onChange={(e) => {
-                                    const v = e.target.value as "markdown" | "html" | "txt" | "docx";
-                                    if (v) void handleDownload(entry, v);
-                                    e.target.value = "";
-                                  }}
-                                  disabled={!!downloading}
-                                  className="h-8 max-w-[5.5rem] rounded-full border border-border-subtle bg-surface-secondary px-2 text-[10px] font-bold uppercase tracking-wide text-text-secondary outline-none"
-                                >
-                                  <option value="">Export</option>
-                                  <option value="markdown">MD</option>
-                                  <option value="html">HTML</option>
-                                  <option value="txt">TXT</option>
-                                  <option value="docx">DOCX</option>
-                                </select>
-                                <button
-                                  type="button"
-                                  onClick={() => handleGenerate(entry.id)}
-                                  disabled={isGenerating || generating !== null}
-                                  className="h-8 rounded-full border border-border-subtle px-2.5 text-[11px] font-medium text-text-secondary hover:bg-surface-hover disabled:opacity-50"
-                                >
-                                  Redo
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                      {notesOpen && (
-                        <tr className="bg-surface-secondary/40">
-                          <td colSpan={7} className="px-4 py-3">
-                            {error[entry.id] ? (
-                              <p className="text-[12px] text-brand-coral mb-2">{error[entry.id]}</p>
-                            ) : null}
-                            <label className="block text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1">
-                              Optional writer notes
-                            </label>
-                            <textarea
-                              value={writerNotes[entry.id] ?? ""}
-                              onChange={(e) =>
-                                setWriterNotes((prev) => ({ ...prev, [entry.id]: e.target.value }))
-                              }
-                              placeholder={
-                                hasBlog
-                                  ? "What should change in a rewrite?"
-                                  : "Angle, tone, audience, must-cover points…"
-                              }
-                              rows={2}
-                              disabled={isGenerating || generating !== null}
-                              className="w-full max-w-2xl rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 text-[12px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 resize-y disabled:opacity-50"
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 align-middle text-right">
+                        {!hasBlog ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setError((prev) => ({ ...prev, [entry.id]: "" }));
+                              setGenerateModalEntryId(entry.id);
+                            }}
+                            disabled={isGenerating || (generating !== null && !isGenerating)}
+                            className="inline-flex h-8 items-center justify-center rounded-full bg-brand-primary min-w-[5.5rem] px-3 text-[11px] font-semibold text-brand-on-primary disabled:opacity-50"
+                          >
+                            {isGenerating ? "…" : "Generate"}
+                          </button>
+                        ) : (
+                          <ProjectNavLink
+                            href={`/projects/${projectId}/blogs/${entry.blog!.id}`}
+                            className="inline-flex h-8 items-center justify-center rounded-full border border-border-subtle min-w-[5.5rem] px-3 text-[11px] font-semibold text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                          >
+                            View Blog
+                          </ProjectNavLink>
+                        )}
+                      </td>
+                    </tr>
                   );
                 })}
               </tbody>
@@ -407,6 +301,98 @@ export default function BlogsPage() {
           </div>
         </div>
       )}
+
+      {generateModalEntry ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="blog-gen-modal-title"
+          onClick={() => (generating !== null ? undefined : setGenerateModalEntryId(null))}
+        >
+          <div
+            className="w-full max-w-lg rounded-[16px] border border-border-subtle bg-surface-elevated p-5 shadow-xl ring-1 ring-border-subtle/80"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h4 id="blog-gen-modal-title" className="text-[16px] font-medium text-text-primary">
+              Generate blog
+            </h4>
+            <p className="mt-1 text-[13px] text-text-tertiary">
+              <span className="font-medium text-text-secondary">{generateModalEntry.focus_keyword}</span>
+              <span className="text-text-tertiary"> · {fmtDate(generateModalEntry.scheduled_date)}</span>
+            </p>
+
+            {error[generateModalEntry.id] ? (
+              <p className="mt-3 text-[13px] text-brand-coral">{error[generateModalEntry.id]}</p>
+            ) : null}
+
+            <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+              Target length
+            </label>
+            <div className="relative mt-1.5">
+              <select
+                value={wordCounts[generateModalEntry.id] ?? 2500}
+                onChange={(e) =>
+                  setWordCounts((prev) => ({ ...prev, [generateModalEntry.id]: +e.target.value }))
+                }
+                disabled={generating === generateModalEntry.id}
+                className="w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary outline-none appearance-none pr-9 disabled:opacity-50"
+              >
+                {WORD_COUNT_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt.toLocaleString()} words
+                  </option>
+                ))}
+              </select>
+              <svg
+                className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+              </svg>
+            </div>
+
+            <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+              Custom instructions &amp; angle (optional)
+            </label>
+            <p className="mt-1 text-[12px] text-text-tertiary leading-relaxed">
+              Tone, audience, sections to emphasize, competitors to mention, or anything else for the model.
+            </p>
+            <textarea
+              value={writerNotes[generateModalEntry.id] ?? ""}
+              onChange={(e) =>
+                setWriterNotes((prev) => ({ ...prev, [generateModalEntry.id]: e.target.value }))
+              }
+              placeholder="e.g. Compare our pricing to X; keep paragraphs short for mobile readers…"
+              rows={4}
+              disabled={generating === generateModalEntry.id}
+              className="mt-2 w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 resize-y min-h-[96px] disabled:opacity-50"
+            />
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setGenerateModalEntryId(null)}
+                disabled={generating === generateModalEntry.id}
+                className="rounded-full border border-border-subtle px-4 py-2 text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleGenerate(generateModalEntry.id)}
+                disabled={generating !== null}
+                className="rounded-full bg-brand-primary px-5 py-2 text-[13px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                {generating === generateModalEntry.id ? "Generating…" : "Generate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

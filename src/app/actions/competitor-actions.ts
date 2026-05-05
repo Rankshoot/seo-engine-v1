@@ -713,7 +713,6 @@ function buildGapReasoning(
   else if (gapType === 'weak') bits.push('You have this keyword in your list but it is not approved yet.');
   else bits.push("You're approved for this but competitors still out-rank.");
 
-  if (volume > 0) bits.push(`${volume.toLocaleString()} searches/mo.`);
   if (weakness >= 60) bits.push('Competitor content is thin — an easy one to beat.');
   else if (weakness >= 35) bits.push('Competitor content is moderate — beatable with depth.');
   else bits.push('Competitor content is strong — plan a deeper, more original piece.');

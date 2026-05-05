@@ -1529,6 +1529,12 @@ export interface CompetitorKeywordsForSiteRow {
   competitor_position: number;
   /** Site-level landing URL for the competitor (no per-keyword URL from API). */
   competitor_url: string;
+  /** Set server-side when this phrase matches `keywords` for the project. */
+  matched_keyword_id?: string | null;
+  matched_status?: 'pending' | 'approved' | 'rejected' | null;
+  keyword_analysis_score?: number | null;
+  /** True when `keyword_analysis_score` comes from the matched industry row; false when it is an AI estimate. */
+  analysis_score_is_industry?: boolean;
 }
 
 interface DfsGoogleAdsKeywordForSiteItem {

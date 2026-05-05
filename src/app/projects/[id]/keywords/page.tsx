@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,6 +27,7 @@ import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { TableSkeleton } from "@/components/Skeleton";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
+import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
@@ -43,6 +44,19 @@ const KD_LABEL = (kd: number) =>
 type FilterTab = "all" | "ai" | KeywordStatus;
 
 type SourceTab = "industry" | "domain";
+
+function domainSelectId(phrase: string): string {
+  return `domsel:${encodeURIComponent(phrase)}`;
+}
+
+function parseDomainSelectId(id: string): string | null {
+  if (!id.startsWith("domsel:")) return null;
+  try {
+    return decodeURIComponent(id.slice(7));
+  } catch {
+    return null;
+  }
+}
 
 type TableSortColumn =
   | "keyword"
@@ -84,8 +98,12 @@ function compareDomainRows(
     case "intent":
       return m * (a.intent || "").localeCompare(b.intent || "");
     case "analysis_score":
-    case "status":
-      return 0;
+      return m * ((a.keyword_analysis_score ?? 0) - (b.keyword_analysis_score ?? 0));
+    case "status": {
+      const sa = STATUS_ORDER[(a.matched_status ?? "pending") as KeywordStatus];
+      const sb = STATUS_ORDER[(b.matched_status ?? "pending") as KeywordStatus];
+      return m * (sa - sb);
+    }
     default:
       return 0;
   }
@@ -131,8 +149,7 @@ export default function KeywordsPage() {
   const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
 
-  // Source tab — "industry" shows the existing Discover flow; "domain" shows
-  // live Google Ads keywords_for_site data for the project's own domain.
+  // Source tab — default industry (DataForSEO discovery list). "domain" = Google Ads for-site.
   const [sourceTab, setSourceTab] = useState<SourceTab>("industry");
   const [dataSourceMenuOpen, setDataSourceMenuOpen] = useState(false);
   const dataSourceRef = useRef<HTMLDivElement>(null);
@@ -196,7 +213,7 @@ export default function KeywordsPage() {
   } = useQuery({
     queryKey: qk.domainKeywords(projectId),
     queryFn: () => keywordsApi.domainKeywords(projectId),
-    enabled: !!projectId && sourceTab === "domain",
+    enabled: !!projectId,
   });
   const domainKeywords: CompetitorKeywordsForSiteRow[] =
     domainRes && "success" in domainRes && domainRes.success ? domainRes.data : [];
@@ -207,11 +224,89 @@ export default function KeywordsPage() {
         ? "Failed to fetch domain keywords"
         : "";
 
+  const effectiveDomainStatus = useCallback(
+    (row: CompetitorKeywordsForSiteRow): KeywordStatus => {
+      if (row.matched_keyword_id && keywordStatuses[row.matched_keyword_id]) {
+        return keywordStatuses[row.matched_keyword_id];
+      }
+      return (row.matched_status ?? "pending") as KeywordStatus;
+    },
+    [keywordStatuses]
+  );
+
+  const industryPhraseSet = useMemo(
+    () => new Set(keywords.map(k => k.keyword.trim().toLowerCase())),
+    [keywords]
+  );
+
+  const domainOnlyRows = useMemo(
+    () => domainKeywords.filter(d => !industryPhraseSet.has(d.keyword)),
+    [domainKeywords, industryPhraseSet]
+  );
+
+  const unifiedCounts = useMemo(() => {
+    let all = 0;
+    let ai = 0;
+    let pending = 0;
+    let approved = 0;
+    let rejected = 0;
+    for (const k of keywords) {
+      all += 1;
+      if (aiSuggestedIds.has(k.id)) ai += 1;
+      if (k.status === "pending") pending += 1;
+      if (k.status === "approved") approved += 1;
+      if (k.status === "rejected") rejected += 1;
+    }
+    for (const d of domainOnlyRows) {
+      all += 1;
+      const s = effectiveDomainStatus(d);
+      if (d.matched_keyword_id && aiSuggestedIds.has(d.matched_keyword_id)) ai += 1;
+      if (s === "pending") pending += 1;
+      if (s === "approved") approved += 1;
+      if (s === "rejected") rejected += 1;
+    }
+    return { all, ai, pending, approved, rejected };
+  }, [keywords, domainOnlyRows, aiSuggestedIds, effectiveDomainStatus]);
+
   const sortedDomainKeywords = useMemo(() => {
     const list = [...domainKeywords];
-    list.sort((a, b) => compareDomainRows(a, b, tableSort.column, tableSort.dir));
+    if (tableSort.column === "status") {
+      const m = tableSort.dir === "asc" ? 1 : -1;
+      list.sort(
+        (a, b) => m * (STATUS_ORDER[effectiveDomainStatus(a)] - STATUS_ORDER[effectiveDomainStatus(b)])
+      );
+    } else {
+      list.sort((a, b) => compareDomainRows(a, b, tableSort.column, tableSort.dir));
+    }
     return list;
-  }, [domainKeywords, tableSort.column, tableSort.dir]);
+  }, [domainKeywords, tableSort.column, tableSort.dir, effectiveDomainStatus]);
+
+  const filteredDomainKeywords = useMemo(() => {
+    return sortedDomainKeywords.filter(row => {
+      if (filter === "all") return true;
+      if (filter === "ai") {
+        const id = row.matched_keyword_id;
+        return Boolean(id && aiSuggestedIds.has(id));
+      }
+      const st = effectiveDomainStatus(row);
+      if (filter === "pending") return st === "pending";
+      if (filter === "approved") return st === "approved";
+      if (filter === "rejected") return st === "rejected";
+      return true;
+    });
+  }, [sortedDomainKeywords, filter, aiSuggestedIds, effectiveDomainStatus]);
+
+  useEffect(() => {
+    if (sourceTab !== "domain") return;
+    if (tableSort.column === "est_traffic" || tableSort.column === "intent") {
+      dispatch(
+        rememberKeywordSort({
+          projectId,
+          tableSort: { column: "volume", dir: "desc" },
+        })
+      );
+    }
+  }, [sourceTab, tableSort.column, dispatch, projectId]);
 
   useEffect(() => {
     if (!dataSourceMenuOpen) return;
@@ -333,46 +428,120 @@ export default function KeywordsPage() {
     setError("");
     const previousData = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
 
-    // Optimistic update — fire immediately so the row reflects the new state
-    // without waiting for the network round-trip.
-    patchKeywords(list => list.map(k => (k.id === kwId ? { ...k, status } : k)));
-    dispatch(
-      keywordStatusChanged({
-        projectId,
-        keywordId: kwId,
-        previousStatus,
-        nextStatus: status,
-      })
-    );
+    if (keyword) {
+      patchKeywords(list => list.map(k => (k.id === kwId ? { ...k, status } : k)));
+      dispatch(
+        keywordStatusChanged({
+          projectId,
+          keywordId: kwId,
+          previousStatus,
+          nextStatus: status,
+        })
+      );
+    }
 
-    // Show the toast now so it feels instant, then fire the API in the background.
     if (status === "approved") {
       pushToast(`"${label}" approved — go to Calendar to schedule it`);
     } else if (status === "pending") {
       pushToast(`"${label}" moved back to pending`);
     }
 
-    // Keep the menu button blocked only for a brief moment while the row
-    // re-renders — then release so the user can interact again.
     setBusyRowId(kwId);
     const res = await keywordsApi.updateStatus(kwId, projectId, status);
     setBusyRowId(null);
 
     if (!res.success) {
-      // Roll back on failure.
       if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
-      if (previousStatus) {
+      if (keyword) {
         dispatch(
           keywordStatusChanged({
             projectId,
             keywordId: kwId,
             previousStatus: status,
-            nextStatus: previousStatus,
+            nextStatus: previousStatus ?? keyword.status,
           })
         );
       }
       setError(res.error ?? "Could not update keyword status");
+      return;
     }
+
+    if (!keyword) {
+      dispatch(
+        keywordStatusChanged({
+          projectId,
+          keywordId: kwId,
+          previousStatus: undefined,
+          nextStatus: status,
+        })
+      );
+    }
+    void queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
+  };
+
+  const handleDomainStatusUpdate = async (row: CompetitorKeywordsForSiteRow, next: KeywordStatus) => {
+    const label = row.keyword;
+    const busyKey = row.matched_keyword_id ?? `dom:${row.keyword}`;
+    if (row.matched_keyword_id) {
+      await handleStatusUpdate(row.matched_keyword_id, next, label);
+      await queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
+      return;
+    }
+    setError("");
+    setBusyRowId(busyKey);
+    const res = await keywordsApi.upsertDomainKeyword(
+      projectId,
+      {
+        keyword: row.keyword,
+        volume: row.volume,
+        kd: row.kd,
+        cpc: row.cpc,
+        intent: row.intent,
+        estimated_monthly_traffic: row.estimated_monthly_traffic,
+      },
+      next
+    );
+    setBusyRowId(null);
+    if (!res.success) {
+      setError(res.error ?? "Could not save keyword");
+      return;
+    }
+    if ("id" in res && res.id) {
+      dispatch(
+        mergeKeywordStatuses({
+          projectId,
+          statuses: { [res.id]: next },
+        })
+      );
+      queryClient.setQueryData(qk.domainKeywords(projectId), (prev: unknown) => {
+        if (!prev || typeof prev !== "object" || !("success" in prev)) return prev;
+        const p = prev as { success: boolean; data?: CompetitorKeywordsForSiteRow[] };
+        if (!p.success || !p.data) return prev;
+        return {
+          ...p,
+          data: p.data.map(d =>
+            d.keyword === row.keyword
+              ? {
+                  ...d,
+                  matched_keyword_id: res.id,
+                  matched_status: next,
+                  keyword_analysis_score: d.keyword_analysis_score ?? null,
+                }
+              : d
+          ),
+        };
+      });
+    }
+    if (next === "approved") {
+      pushToast(`"${label}" approved — go to Calendar to schedule it`);
+    } else if (next === "pending") {
+      pushToast(`"${label}" moved back to pending`);
+    }
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) }),
+      queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+    ]);
   };
 
   const handleKeywordRemove = async (kwId: string, phrase: string) => {
@@ -399,7 +568,7 @@ export default function KeywordsPage() {
       if (filter === "ai") return aiSuggestedIds.has(k.id);
       return k.status === filter;
     });
-    return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir)).slice(0, 100);
+    return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
   }, [keywords, filter, tableSort, aiSuggestedIds]);
 
   /** Load-more only extends the server-side *pending* pool — hide on Approved/Rejected tabs. */
@@ -441,51 +610,75 @@ export default function KeywordsPage() {
   const handleBulkApproveToCalendar = async () => {
     const ids = [...selectedIds];
     if (!ids.length) return;
+    const domPhrases = ids.map(parseDomainSelectId).filter((p): p is string => p !== null);
+    const uuidIds = ids.filter(id => !id.startsWith("domsel:"));
+    if (!domPhrases.length && !uuidIds.length) return;
+
     setError("");
     const previousData = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
     const previousStatuses = Object.fromEntries(
-      ids.map(id => [id, keywords.find(keyword => keyword.id === id)?.status ?? "pending"])
+      uuidIds.map(id => [id, keywords.find(keyword => keyword.id === id)?.status ?? "pending"])
     ) as Record<string, KeywordStatus>;
     setBulkApproving(true);
-    patchKeywords(list =>
-      list.map(k => (ids.includes(k.id) ? { ...k, status: "approved" as const } : k))
-    );
-    dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: ids, nextStatus: "approved" }));
-    console.log("[Keywords] Bulk approve → calendar", { count: ids.length, ids });
     try {
-      const res = await keywordsApi.bulkStatus(projectId, ids, "approved");
-      if (!res.success) {
-        if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
-        for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
-          dispatch(
-            keywordStatusChanged({
-              projectId,
-              keywordId,
-              previousStatus: "approved",
-              nextStatus: previousStatus,
-            })
-          );
-        }
-        setError(res.error ?? "Could not approve keywords");
-      } else {
-        pushToast(
-          ids.length === 1
-            ? "1 keyword approved — go to Calendar to schedule it"
-            : `${ids.length} keywords approved — go to Calendar to schedule them`
+      for (const phrase of domPhrases) {
+        const row = domainKeywords.find(d => d.keyword === phrase);
+        if (!row) continue;
+        const res = await keywordsApi.upsertDomainKeyword(
+          projectId,
+          {
+            keyword: row.keyword,
+            volume: row.volume,
+            kd: row.kd,
+            cpc: row.cpc,
+            intent: row.intent,
+            estimated_monthly_traffic: row.estimated_monthly_traffic,
+          },
+          "approved"
         );
-        exitMassSelect();
+        if (res.success && "id" in res && res.id) {
+          dispatch(mergeKeywordStatuses({ projectId, statuses: { [res.id]: "approved" } }));
+        }
       }
+
+      if (uuidIds.length > 0) {
+        patchKeywords(list =>
+          list.map(k => (uuidIds.includes(k.id) ? { ...k, status: "approved" as const } : k))
+        );
+        dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: uuidIds, nextStatus: "approved" }));
+        const res = await keywordsApi.bulkStatus(projectId, uuidIds, "approved");
+        if (!res.success) {
+          if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
+          for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
+            dispatch(
+              keywordStatusChanged({
+                projectId,
+                keywordId,
+                previousStatus: "approved",
+                nextStatus: previousStatus,
+              })
+            );
+          }
+          setError(res.error ?? "Could not approve keywords");
+          return;
+        }
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+      ]);
+
+      pushToast(
+        ids.length === 1
+          ? "1 keyword approved — go to Calendar to schedule it"
+          : `${ids.length} keywords approved — go to Calendar to schedule them`
+      );
+      exitMassSelect();
     } finally {
       setBulkApproving(false);
     }
-  };
-
-  const counts = {
-    all: keywords.length,
-    ai: aiSuggestedIds.size,
-    pending: keywords.filter(k => k.status === "pending").length,
-    approved: keywords.filter(k => k.status === "approved").length,
-    rejected: keywords.filter(k => k.status === "rejected").length,
   };
 
   const sortMark = (col: TableSortColumn) =>
@@ -499,18 +692,13 @@ export default function KeywordsPage() {
       </span>
     );
 
-  const FILTER_TABS: { tab: FilterTab; label: string }[] = [
-    { tab: "all", label: "All" },
-    { tab: "ai", label: "AI picks" },
-    { tab: "pending", label: "Pending" },
-    { tab: "approved", label: "Approved" },
-    { tab: "rejected", label: "Rejected" },
+  const FILTER_TAB_ITEMS: Array<{ id: FilterTab; label: string; count: number }> = [
+    { id: "all", label: "All", count: unifiedCounts.all },
+    { id: "ai", label: "AI picks", count: unifiedCounts.ai },
+    { id: "pending", label: "Pending", count: unifiedCounts.pending },
+    { id: "approved", label: "Approved", count: unifiedCounts.approved },
+    { id: "rejected", label: "Rejected", count: unifiedCounts.rejected },
   ];
-
-  const filterPillInactive =
-    "inline-flex h-8 shrink-0 items-center rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95";
-  const filterPillActive =
-    "inline-flex h-8 shrink-0 items-center rounded-full border border-brand-action/35 bg-brand-action/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand-action shadow-sm ring-1 ring-brand-action/15";
 
   const thBtn =
     "group inline-flex items-center gap-0.5 rounded-[6px] px-1 py-0.5 -mx-1 text-left uppercase tracking-widest hover:bg-surface-hover/80 hover:text-text-secondary transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40";
@@ -594,27 +782,21 @@ export default function KeywordsPage() {
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {sourceTab === "industry" && keywords.length > 0 ? (
-              FILTER_TABS.map(({ tab, label }) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
-                  className={filter === tab ? filterPillActive : filterPillInactive}
-                >
-                  {label} ({counts[tab]})
-                </button>
-              ))
+            {keywords.length > 0 || domainKeywords.length > 0 ? (
+              <PillTabFilterBar<FilterTab>
+                items={FILTER_TAB_ITEMS}
+                activeId={filter}
+                onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
+              />
             ) : (
               <p className="text-[13px] text-text-tertiary">
-                {sourceTab === "domain"
-                  ? "Google Ads keywords for your domain — columns match the industry list where data is available."
-                  : "Run Discover to load scored keywords."}
+                Run Discover for industry keywords. Switch data source to Domain to see Google Ads keywords for your site.
               </p>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {sourceTab === "industry" && keywords.length > 0 ? (
+            {((sourceTab === "industry" && keywords.length > 0) ||
+              (sourceTab === "domain" && domainKeywords.length > 0)) ? (
               !massSelectMode ? (
                 <button
                   type="button"
@@ -686,7 +868,7 @@ export default function KeywordsPage() {
               {dataSourceMenuOpen ? (
                 <div
                   role="listbox"
-                  className="absolute right-0 top-full z-50 mt-1 min-w-[12rem] rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
+                  className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
                 >
                   <button
                     type="button"
@@ -754,12 +936,18 @@ export default function KeywordsPage() {
 
             {domainFetching ? (
               <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-                <TableSkeleton rows={8} columns={8} />
+                <TableSkeleton rows={8} columns={6} />
               </div>
             ) : domainKeywords.length > 0 ? (
+              filteredDomainKeywords.length === 0 ? (
+                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
+                  <p className="text-[14px] font-medium text-text-secondary">No keywords match this filter.</p>
+                  <p className="mt-1 text-[12px] text-text-tertiary">Switch to another tab to see domain rows.</p>
+                </div>
+              ) : (
               <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-                <div className="overflow-x-auto overflow-hidden">
-                  <table className="w-full min-w-[1060px] text-left border-collapse">
+                <div className="max-h-[min(70vh,56rem)] overflow-auto">
+                  <table className="w-full min-w-[860px] text-left border-collapse">
                     <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                       <tr>
                         <th scope="col" className="px-4 py-3">
@@ -778,16 +966,6 @@ export default function KeywordsPage() {
                               Volume{sortMark("volume")}
                             </button>
                             <Tooltip placement="below" content="Average monthly searches over the last 12 months.">
-                              <InfoIcon />
-                            </Tooltip>
-                          </div>
-                        </th>
-                        <th scope="col" className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("est_traffic")}>
-                              Est. traffic{sortMark("est_traffic")}
-                            </button>
-                            <Tooltip placement="below" content="Monthly organic traffic estimate when the API provides it; otherwise —.">
                               <InfoIcon />
                             </Tooltip>
                           </div>
@@ -814,39 +992,46 @@ export default function KeywordsPage() {
                         </th>
                         <th scope="col" className="px-4 py-3 text-center">
                           <div className="flex items-center justify-center gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("intent")}>
-                              Intent{sortMark("intent")}
-                            </button>
-                          </div>
-                        </th>
-                        <th scope="col" className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
                             <button type="button" className={thBtn} onClick={() => toggleSortColumn("analysis_score")}>
                               Analysis{sortMark("analysis_score")}
                             </button>
-                            <Tooltip placement="below" content="Opportunity score is only computed for industry-discovered keywords.">
+                            <Tooltip placement="below" content="When this phrase matches a saved industry keyword, you see that row’s analysis score. Otherwise we show an estimate from volume, difficulty, and intent so you can still sort and compare.">
                               <InfoIcon />
                             </Tooltip>
                           </div>
                         </th>
                         <th scope="col" className="px-4 py-3 text-center">
-                          <span className="uppercase tracking-widest">Action</span>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("status")}>
+                              Action{sortMark("status")}
+                            </button>
+                          </div>
                         </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border-subtle/60">
-                      {sortedDomainKeywords.map((kw, i) => (
-                        <tr key={`${kw.keyword}-${i}`} className="transition-colors duration-150 hover:bg-surface-hover/90">
+                      {filteredDomainKeywords.map((kw, i) => {
+                        const effectiveStatus = effectiveDomainStatus(kw);
+                        const busyKey = kw.matched_keyword_id ?? `dom:${kw.keyword}`;
+                        return (
+                        <tr
+                          key={`${kw.keyword}-${i}`}
+                          className={`transition-colors duration-150 hover:bg-surface-hover/90 ${
+                            effectiveStatus === "approved" ? "bg-brand-action/[0.07]" : ""
+                          }`}
+                        >
                           <td className="px-4 py-3 align-middle max-w-[260px]">
-                            <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                              {kw.matched_keyword_id && aiSuggestedIds.has(kw.matched_keyword_id) ? (
+                                <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+                                  AI pick
+                                </span>
+                              ) : null}
+                            </div>
                           </td>
                           <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
                             {kw.volume ? kw.volume.toLocaleString() : "—"}
-                          </td>
-                          <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
-                            {kw.estimated_monthly_traffic != null && kw.estimated_monthly_traffic > 0
-                              ? kw.estimated_monthly_traffic.toLocaleString()
-                              : "—"}
                           </td>
                           <td className="px-4 py-3 text-center align-middle">
                             {kw.kd > 0 ? (
@@ -869,37 +1054,46 @@ export default function KeywordsPage() {
                             {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
                           </td>
                           <td className="px-4 py-3 text-center align-middle">
-                            {kw.intent ? (
+                            {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
                               <span
-                                className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
-                                  kw.intent === "commercial" || kw.intent === "transactional"
-                                    ? "border-brand-action/20 bg-brand-action/10 text-brand-action"
-                                    : kw.intent === "informational"
-                                      ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
-                                      : "border-border-subtle bg-surface-secondary text-text-tertiary"
-                                }`}
+                                className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums"
+                                title={
+                                  kw.analysis_score_is_industry
+                                    ? "Analysis score from your matched industry keyword row"
+                                    : "Estimated score from volume, difficulty, and intent"
+                                }
                               >
-                                {kw.intent}
+                                {Math.round(kw.keyword_analysis_score)}
                               </span>
                             ) : (
                               <span className="text-[13px] text-text-tertiary">—</span>
                             )}
                           </td>
-                          <td className="px-4 py-3 text-center align-middle">
-                            <span className="text-[13px] text-text-tertiary">—</span>
+                          <td
+                            className="px-4 py-3 text-center align-middle"
+                            onClick={e => e.stopPropagation()}
+                            onPointerDown={e => e.stopPropagation()}
+                          >
+                            <KeywordActionDropdown
+                              status={effectiveStatus}
+                              busy={busyRowId === busyKey}
+                              onChange={next => void handleDomainStatusUpdate(kw, next)}
+                            />
                           </td>
-                          <td className="px-4 py-3 text-center align-middle text-[13px] text-text-tertiary">—</td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
                 <div className="border-t border-border-subtle px-6 py-4 bg-surface-secondary/50">
                   <span className="text-[12px] text-text-tertiary">
-                    {sortedDomainKeywords.length} keywords for {project?.domain ?? "your domain"} · use column headers to sort
+                    Showing {filteredDomainKeywords.length} of {sortedDomainKeywords.length} for {project?.domain ?? "your domain"}
+                    {filteredDomainKeywords.length < sortedDomainKeywords.length ? " (filter active)" : ""} · use column headers to sort
                   </span>
                 </div>
               </div>
+              )
             ) : (
               !domainFetching && (
                 <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
@@ -950,7 +1144,7 @@ export default function KeywordsPage() {
             </div>
           ) : filtered.length > 0 ? (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <div className="overflow-x-auto overflow-hidden">
+              <div className="max-h-[min(70vh,56rem)] overflow-auto">
                 <table className="w-full min-w-[1060px] text-left border-collapse">
                   <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                     <tr>

@@ -21,7 +21,9 @@ import {
 import { calendarApi } from "@/frontend/api/calendar";
 import { keywordsApi } from "@/frontend/api/keywords";
 import type { CalendarEntry } from "@/lib/types";
-import { resolveCalendarKeywordOrigin, type ResolvedCalendarOrigin } from "@/lib/calendar-keyword-origin";
+import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
+import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
+import { CalendarOriginPills } from "@/components/CalendarOriginPills";
 import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
@@ -39,60 +41,15 @@ function fmtDate(iso: string): string {
   });
 }
 
-function sourceInfo(
-  sourceType?: string | null,
-  articleType?: string | null
-): { label: string; color: string } {
-  if (articleType === "Repair") {
-    return {
-      label: "Audit",
-      color: "bg-[#ef4444]/10 text-[#ef4444] border-[#ef4444]/20",
-    };
-  }
-  switch (sourceType) {
-    case "competitor_gap":
-      return {
-        label: "Gap",
-        color: "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20",
-      };
-    case "competitor_benchmark":
-      return {
-        label: "Competitor",
-        color: "bg-[#8b5cf6]/10 text-[#8b5cf6] border-[#8b5cf6]/20",
-      };
-    case "quick_win":
-      return {
-        label: "Competitor",
-        color: "bg-[#8b5cf6]/10 text-[#8b5cf6] border-[#8b5cf6]/20",
-      };
-    default:
-      return {
-        label: "Discovery",
-        color: "bg-brand-action/10 text-brand-action border-brand-action/20",
-      };
-  }
-}
-
-/**
- * Maps a raw calendar_entries.status value to a display label + colour.
- * Uses the exact DB status names so the UI stays in sync with the backend.
- */
-const STATUS_CONFIG: Record<string, { label: string | null; color: string; dot: string }> = {
-  scheduled:  { label: null,            color: "",                        dot: ""                          },
-  generating: { label: "Generating…",  color: "text-[#f59e0b]",          dot: "bg-[#f59e0b] animate-pulse" },
-  generated:  { label: "Generated",    color: "text-[#10b981]",          dot: "bg-[#10b981]"               },
-  downloaded: { label: "Generated",    color: "text-[#10b981]",          dot: "bg-[#10b981]"               },
-  approved:   { label: "Approved",     color: "text-brand-action",       dot: "bg-brand-action"            },
-  published:  { label: "Published",    color: "text-[#10b981]",          dot: "bg-[#10b981]"               },
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.scheduled;
-  if (!cfg.label) return null;
+function LifecycleStatusBadge({
+  display,
+}: {
+  display: ReturnType<typeof resolveCalendarLifecycleStatus>;
+}) {
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${cfg.color}`}>
-      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cfg.dot}`} />
-      {cfg.label}
+    <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${display.color}`}>
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${display.dot}`} />
+      {display.label}
     </span>
   );
 }
@@ -113,21 +70,6 @@ function entryBlogTitle(entry: { title?: string; focus_keyword?: string; blog?: 
   if (bt) return bt;
   const et = entry.title?.trim();
   return et || entry.focus_keyword || "—";
-}
-
-function OriginPills({ resolved }: { resolved: ResolvedCalendarOrigin }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${resolved.badgeClass}`}>
-        {resolved.label}
-      </span>
-      {resolved.aiBadge && (
-        <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold ${resolved.aiBadge.className}`}>
-          {resolved.aiBadge.label}
-        </span>
-      )}
-    </div>
-  );
 }
 
 // ── main page ─────────────────────────────────────────────────────────────────
@@ -258,28 +200,31 @@ export default function CalendarPage() {
   // ── scheduling ────────────────────────────────────────────────────────────
 
   const handleScheduleKeyword = useCallback(
-    async (keywordId: string, date: string) => {
+    async (keywordId: string, date: string): Promise<boolean> => {
       setSavingDate(true);
       const kw = approvedKeywords.find((k) => k.id === keywordId);
-      const res = await calendarApi.addKeywordOnDate(projectId, { keywordId, date });
-      if (res.success) {
-        // Optimistic Redux update — action column reflects new state immediately
-        // before the query refetch completes.
-        dispatch(
-          calendarKeywordScheduled({ projectId, keywordId, date, status: "scheduled" })
-        );
-        const wasRescheduled = "rescheduled" in res && res.rescheduled;
-        pushToast(
-          `"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${fmtDate(date)}`
-        );
-        setPickingDateFor(null);
-        await refetchCalendar();
-        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-      } else {
+      try {
+        const res = await calendarApi.addKeywordOnDate(projectId, { keywordId, date });
+        if (res.success) {
+          dispatch(
+            calendarKeywordScheduled({ projectId, keywordId, date, status: "scheduled" })
+          );
+          const wasRescheduled = "rescheduled" in res && res.rescheduled;
+          pushToast(
+            `"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${fmtDate(date)}`
+          );
+          setPickingDateFor(null);
+          await refetchCalendar();
+          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+          return true;
+        }
         pushToast(res.error ?? "Could not schedule keyword");
+        return false;
+      } finally {
+        setSavingDate(false);
       }
-      setSavingDate(false);
     },
     [approvedKeywords, projectId, dispatch, pushToast, refetchCalendar, queryClient]
   );
@@ -291,6 +236,11 @@ export default function CalendarPage() {
     (e) => e.status === "generated" || e.status === "downloaded"
   ).length;
   const awaitingGeneration = entries.filter((e) => e.status === "scheduled").length;
+
+  const unscheduledApproved = useMemo(
+    () => approvedKeywords.filter((k) => !findEntryForKeyword(k)),
+    [approvedKeywords, findEntryForKeyword]
+  );
 
   // ── render ────────────────────────────────────────────────────────────────
 
@@ -413,7 +363,8 @@ export default function CalendarPage() {
                     const origin = resolveCalendarKeywordOrigin({
                       keywordSourceType: kw.source_type,
                       articleType: entry?.article_type,
-                      aiSource: entry?.ai_source,
+                      aiSourceFromEntry: entry?.ai_source,
+                      aiSourceFromKeyword: kw.ai_source,
                     });
                     const isPickingThis = pickingDateFor === kw.id;
 
@@ -422,6 +373,12 @@ export default function CalendarPage() {
                     const reduxState = scheduledKeywordsMap[kw.id];
                     const effectiveStatus = entry?.status ?? reduxState?.status;
                     const effectiveDate = entry?.scheduled_date ?? reduxState?.date;
+                    const hasCalendarRow = !!entry || (!!effectiveDate && !!effectiveStatus);
+
+                    const lifecycleDisplay = resolveCalendarLifecycleStatus({
+                      hasCalendarEntry: hasCalendarRow,
+                      calendarStatus: effectiveStatus,
+                    });
 
                     // All branch decisions use effectiveStatus — NOT entry?.status
                     // — so the optimistic Redux update is reflected immediately.
@@ -431,7 +388,6 @@ export default function CalendarPage() {
                       effectiveStatus === "approved"  ||
                       effectiveStatus === "published";
                     const isGenerating = effectiveStatus === "generating";
-                    const isScheduledOnly = !!effectiveDate && !isLocked && !isGenerating;
 
                     return (
                       <tr key={kw.id} className="hover:bg-surface-hover/50 transition-colors group">
@@ -455,7 +411,7 @@ export default function CalendarPage() {
 
                         {/* origin (keyword pipeline + optional AI) */}
                         <td className="px-4 py-3.5 align-middle">
-                          <OriginPills resolved={origin} />
+                          <CalendarOriginPills resolved={origin} />
                         </td>
 
                         {/* blog title (from generated blog or calendar placeholder) */}
@@ -475,13 +431,9 @@ export default function CalendarPage() {
                           <KdCell kd={kw.kd} />
                         </td>
 
-                        {/* status — blog status label only (Generated / Approved / Published) */}
+                        {/* status — calendar lifecycle (not keyword pending/reject; those live on Keywords page) */}
                         <td className="px-4 py-3.5 align-middle">
-                          {effectiveStatus && STATUS_CONFIG[effectiveStatus]?.label ? (
-                            <StatusBadge status={effectiveStatus} />
-                          ) : (
-                            <span className="text-[13px] text-text-tertiary">—</span>
-                          )}
+                          <LifecycleStatusBadge display={lifecycleDisplay} />
                         </td>
 
                         {/* schedule — date + hover-reveal pencil, plus View Blog / Pick date */}
@@ -553,13 +505,21 @@ export default function CalendarPage() {
                     const origin = resolveCalendarKeywordOrigin({
                       keywordSourceType: kwData?.source_type,
                       articleType: entry.article_type,
-                      aiSource: entry.ai_source,
+                      aiSourceFromEntry: entry.ai_source,
+                      aiSourceFromKeyword: null,
+                    });
+                    const repairLifecycle = resolveCalendarLifecycleStatus({
+                      hasCalendarEntry: true,
+                      calendarStatus: entry.status,
                     });
                     const isLocked =
                       entry.status === "generated" || entry.status === "downloaded" || entry.status === "approved" || entry.status === "published";
 
                     return (
                       <tr key={entry.id} className="hover:bg-surface-hover/50 transition-colors group">
+                        <td className="px-3 py-3 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
+                          —
+                        </td>
                         <td className="px-5 py-3.5 align-middle max-w-xs">
                           <p className="truncate text-[14px] font-medium text-text-primary">
                             {entry.focus_keyword}
@@ -567,7 +527,7 @@ export default function CalendarPage() {
                           <p className="mt-0.5 text-[11px] text-text-tertiary italic">Repair draft</p>
                         </td>
                         <td className="px-4 py-3.5 align-middle">
-                          <OriginPills resolved={origin} />
+                          <CalendarOriginPills resolved={origin} />
                         </td>
                         <td className="px-4 py-3.5 align-middle max-w-[14rem]">
                           <p className="truncate text-[12px] text-text-secondary" title={entryBlogTitle(entry)}>
@@ -581,11 +541,7 @@ export default function CalendarPage() {
                           <KdCell kd={kwData?.kd} />
                         </td>
                         <td className="px-4 py-3.5 align-middle">
-                          {entry.status && STATUS_CONFIG[entry.status]?.label ? (
-                            <StatusBadge status={entry.status} />
-                          ) : (
-                            <span className="text-[13px] text-text-tertiary">—</span>
-                          )}
+                          <LifecycleStatusBadge display={repairLifecycle} />
                         </td>
                         <td className="px-4 py-3.5 align-middle text-right pr-5">
                           <div className="flex flex-col items-end gap-1.5">
@@ -616,7 +572,7 @@ export default function CalendarPage() {
       </section>
 
       {/* ── VISUAL CALENDAR OVERVIEW ─────────────────────────────────────── */}
-      {entries.length > 0 && (
+      {(entries.length > 0 || unscheduledApproved.length > 0) && (
         <section className="space-y-3">
           <h2 className="text-[13px] font-bold uppercase tracking-widest text-text-tertiary">
             Schedule Overview
@@ -628,6 +584,15 @@ export default function CalendarPage() {
             schedulingKeywordPhrase=""
             onDatePick={() => {}}
             onCancelSchedule={() => {}}
+            unscheduledKeywords={unscheduledApproved.map((k) => ({
+              id: k.id,
+              keyword: k.keyword,
+              volume: k.volume,
+              kd: k.kd,
+              traffic: k.traffic_potential ?? null,
+            }))}
+            onScheduleKeywordOnDate={(keywordId, date) => handleScheduleKeyword(keywordId, date)}
+            scheduleBusy={savingDate}
           />
         </section>
       )}

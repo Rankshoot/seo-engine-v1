@@ -63,3 +63,33 @@ Flow: audit card → `repair-actions.ts#repairBlogFromAudit` → `gemini.ts#repa
 - Blog viewer (`src/app/projects/[id]/blogs/[blogId]/page.tsx`) shows a "Repair draft" banner when `article_type='Repair'` and `source_url` is set, linking back to `/audit`.
 - Schema change: `blogs.source_url TEXT DEFAULT ''` — migration at `supabase-migration-blog-source-url.sql`.
 <!-- END:product-pillars -->
+
+## Cursor Cloud specific instructions
+
+### Architecture
+Single Next.js 16 app (App Router + Server Actions). No Docker, no local database. All backend services (Supabase, Gemini, DataForSEO, Serper) are external hosted APIs accessed via env vars.
+
+### Running the dev server
+```bash
+npm run dev          # starts on http://localhost:3000
+```
+
+### Lint / Build / Test
+```bash
+npm run lint         # ESLint (pre-existing warnings/errors in codebase)
+npm run build        # production build (validates TypeScript + static generation)
+```
+There is no test suite configured (`npm test` is not defined).
+
+### Environment variables (`.env.local`)
+Required for the app to start without errors:
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` — must use a valid format: `pk_test_<base64 of "domain$">`. A working dev placeholder: `pk_test_Y2xlcmsuZXhhbXBsZS5jb20k`
+- `CLERK_SECRET_KEY` — any string starting with `sk_test_` works for local dev (auth calls will fail but app renders)
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — placeholder values work for dev startup; real values needed for data operations
+- `GEMINI_API_KEY`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `SERPER_API_KEY` — placeholders work for app startup; real values needed for API-dependent features
+
+### Gotchas
+- **Clerk key format is strict**: `pk_test_` must be followed by valid base64 encoding of `<frontendApiDomain>$` (including the `$` suffix before encoding). An invalid key causes a runtime crash on all routes.
+- **Middleware deprecation warning**: Next.js 16 shows "middleware is deprecated, use proxy" — this is cosmetic and does not affect functionality.
+- **Node.js**: Use Node 22 LTS via nvm. The update script handles installation.
+- **`.env.local` is gitignored**: Each agent session needs to create it. The update script does NOT create it — agents should create it if missing before running `npm run dev`.

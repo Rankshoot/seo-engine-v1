@@ -35,4 +35,16 @@ export const blogsApi = {
   ): Promise<{ success: boolean; error?: string; data: Blog | null }> {
     return apiPost(V1Routes.blogFixSeo(blogId), { issueKey });
   },
+
+  rewriteSelection(
+    blogId: string,
+    body: { selectedText: string; instruction: string }
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    rewritten?: string;
+    trace?: Array<{ label: string; ok: boolean; ms?: number; detail?: string }>;
+  }> {
+    return apiPost(V1Routes.blogRewriteSelection(blogId), body);
+  },
 };

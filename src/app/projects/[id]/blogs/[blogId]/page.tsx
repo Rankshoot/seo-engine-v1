@@ -1,10 +1,12 @@
 "use client";
 
 import {
-  useState, useEffect, useMemo, useRef,
+  useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo,
   type AnchorHTMLAttributes, type ComponentType,
   type HTMLAttributes, type ImgHTMLAttributes, type ReactNode,
+  type RefObject,
 } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -13,6 +15,7 @@ import { blogsApi } from "@/frontend/api/blogs";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
+import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
 
@@ -62,6 +65,188 @@ function SLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Multi-line selections often expose a zero-size client rect on the Range; merge getClientRects(). */
+function rangeSelectionViewportRect(range: Range): DOMRect | null {
+  const rects = range.getClientRects();
+  if (!rects.length) return null;
+  let minL = Infinity;
+  let minT = Infinity;
+  let maxR = -Infinity;
+  let maxB = -Infinity;
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (r.width === 0 && r.height === 0) continue;
+    minL = Math.min(minL, r.left);
+    minT = Math.min(minT, r.top);
+    maxR = Math.max(maxR, r.right);
+    maxB = Math.max(maxB, r.bottom);
+  }
+  if (minL === Infinity) return null;
+  return new DOMRect(minL, minT, maxR - minL, maxB - minT);
+}
+
+/**
+ * Positions the Ai fix control imperatively so selectionchange does not trigger
+ * parent re-renders (which would reset contentEditable / React-managed children).
+ */
+function editArticleSeedPropsEqual(prev: { blog: Blog }, next: { blog: Blog }): boolean {
+  const pi = prev.blog.internal_links ?? [];
+  const ni = next.blog.internal_links ?? [];
+  if (pi.length !== ni.length) return false;
+  for (let i = 0; i < pi.length; i++) if (pi[i] !== ni[i]) return false;
+  return (
+    prev.blog.id === next.blog.id &&
+    prev.blog.content === next.blog.content &&
+    prev.blog.meta_description === next.blog.meta_description &&
+    prev.blog.title === next.blog.title
+  );
+}
+
+/** Isolated from parent re-renders (e.g. AI modal) so React does not clear contentEditable DOM. */
+const MemoizedVisualBlogEditors = memo(
+  function MemoizedVisualBlogEditors({
+    blog,
+    titleRef,
+    descRef,
+    bodyRef,
+  }: {
+    blog: Blog;
+    titleRef: RefObject<HTMLHeadingElement | null>;
+    descRef: RefObject<HTMLParagraphElement | null>;
+    bodyRef: RefObject<HTMLDivElement | null>;
+  }) {
+    useLayoutEffect(() => {
+      const h = titleRef.current;
+      const p = descRef.current;
+      const bodyEl = bodyRef.current;
+      if (!h || !p || !bodyEl) return;
+      const { heroTitle, body } = stripHeroHeading(blog);
+      h.textContent = heroTitle;
+      p.textContent = blog.meta_description ?? "";
+      bodyEl.innerHTML = markdownBodyToHtml(body, internalSetForBlog(blog));
+    }, [blog, titleRef, descRef, bodyRef]);
+
+    return (
+      <>
+        <header className="mb-10 pb-8 border-b border-border-subtle">
+          <h1 ref={titleRef} contentEditable suppressContentEditableWarning spellCheck
+            className="mb-4 outline-none text-text-primary"
+            style={{ fontSize: 36, fontWeight: 800, lineHeight: 1.15, letterSpacing: -0.5 }}
+          />
+          <p ref={descRef} contentEditable suppressContentEditableWarning spellCheck
+            className="outline-none text-text-tertiary" style={{ fontSize: 17, lineHeight: 1.7 }}
+          />
+        </header>
+        <div ref={bodyRef} contentEditable suppressContentEditableWarning spellCheck
+          className="editorial-body visual-blog-editor min-h-[50vh] space-y-5 outline-none text-text-secondary"
+          style={{ fontSize: 17, lineHeight: 1.78 }}
+        />
+      </>
+    );
+  },
+  editArticleSeedPropsEqual
+);
+
+function BlogEditAiFixOverlay({
+  active,
+  getRoots,
+  panelRef,
+  onOpen,
+}: {
+  active: boolean;
+  getRoots: () => Array<HTMLElement | null>;
+  panelRef: RefObject<HTMLElement | null>;
+  onOpen: (payload: { text: string; range: Range }) => void;
+}) {
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+
+  const tick = useCallback(() => {
+    const btn = btnRef.current;
+    if (!btn) return;
+    if (!active) {
+      btn.style.display = "none";
+      return;
+    }
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      btn.style.display = "none";
+      return;
+    }
+    const roots = getRoots().filter(Boolean) as HTMLElement[];
+    const node: Node | null = sel.anchorNode;
+    if (!node) {
+      btn.style.display = "none";
+      return;
+    }
+    const walk = node.nodeType === Node.TEXT_NODE ? (node.parentElement as HTMLElement | null) : (node as HTMLElement);
+    if (!walk || !roots.some(r => r.contains(walk))) {
+      btn.style.display = "none";
+      return;
+    }
+    if (!sel.toString().trim()) {
+      btn.style.display = "none";
+      return;
+    }
+    const rect = rangeSelectionViewportRect(sel.getRangeAt(0));
+    if (!rect) {
+      btn.style.display = "none";
+      return;
+    }
+    btn.style.display = "block";
+    btn.style.position = "fixed";
+    btn.style.top = `${rect.bottom + 6}px`;
+    btn.style.left = `${rect.left}px`;
+    btn.style.zIndex = "70";
+  }, [active, getRoots]);
+
+  useEffect(() => {
+    if (!active) {
+      const btn = btnRef.current;
+      if (btn) btn.style.display = "none";
+      return;
+    }
+    const schedule = () => requestAnimationFrame(tick);
+    document.addEventListener("selectionchange", schedule);
+    document.addEventListener("keyup", schedule);
+    document.addEventListener("mouseup", schedule);
+    const panel = panelRef.current;
+    panel?.addEventListener("scroll", schedule, { passive: true });
+    schedule();
+    return () => {
+      document.removeEventListener("selectionchange", schedule);
+      document.removeEventListener("keyup", schedule);
+      document.removeEventListener("mouseup", schedule);
+      panel?.removeEventListener("scroll", schedule);
+    };
+  }, [active, tick, panelRef]);
+
+  if (!active) return null;
+
+  return (
+    <button
+      ref={btnRef}
+      type="button"
+      className="pointer-events-auto rounded-full border border-border-default px-2.5 py-1 text-[11px] font-semibold shadow-lg"
+      style={{ display: "none", background: "var(--text-primary)", color: "var(--surface-primary)" }}
+      onMouseDown={e => {
+        e.preventDefault();
+        const sel = window.getSelection();
+        if (!sel?.rangeCount || sel.isCollapsed) return;
+        const roots = getRoots().filter(Boolean) as HTMLElement[];
+        const node: Node | null = sel.anchorNode;
+        if (!node) return;
+        const walk = node.nodeType === Node.TEXT_NODE ? (node.parentElement as HTMLElement | null) : (node as HTMLElement);
+        if (!walk || !roots.some(r => r.contains(walk))) return;
+        const text = sel.toString();
+        if (!text.trim()) return;
+        onOpen({ text, range: sel.getRangeAt(0).cloneRange() });
+      }}
+    >
+      Ai fix
+    </button>
+  );
+}
+
 export default function BlogViewerPage() {
   const { id: projectId, blogId } = useParams<{ id: string; blogId: string }>();
 
@@ -84,6 +269,20 @@ export default function BlogViewerPage() {
   const titleEditorRef = useRef<HTMLHeadingElement | null>(null);
   const descEditorRef  = useRef<HTMLParagraphElement | null>(null);
   const editorRef      = useRef<HTMLDivElement | null>(null);
+  const blogPanelRef   = useRef<HTMLDivElement | null>(null);
+  const selectionSnapshotRef = useRef<{ range: Range } | null>(null);
+
+  const [editSessionKey, setEditSessionKey] = useState(0);
+  const [aiRewriter, setAiRewriter] = useState<{ open: boolean; text: string }>({ open: false, text: "" });
+
+  const getEditRoots = useCallback(() => [titleEditorRef.current, descEditorRef.current, editorRef.current], []);
+
+  useEffect(() => {
+    if (!editMode) {
+      setAiRewriter({ open: false, text: "" });
+      selectionSnapshotRef.current = null;
+    }
+  }, [editMode]);
 
   useEffect(() => {
     blogsApi.getById(blogId).then(res => {
@@ -127,8 +326,49 @@ export default function BlogViewerPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const startEditing  = () => { if (!blog) return; setEditError(""); setActiveView("preview"); setEditMode(true); };
-  const cancelEditing = () => { setEditMode(false); setEditError(""); };
+  const startEditing  = () => {
+    if (!blog) return;
+    setEditError("");
+    setActiveView("preview");
+    setEditSessionKey(k => k + 1);
+    setEditMode(true);
+  };
+  const cancelEditing = () => {
+    setEditMode(false);
+    setEditError("");
+    setAiRewriter({ open: false, text: "" });
+    selectionSnapshotRef.current = null;
+  };
+
+  const handleAiRewriterInsert = (rewritten: string) => {
+    const snap = selectionSnapshotRef.current;
+    if (!snap?.range) {
+      setEditError("Couldn't apply rewrite — select text again.");
+      setAiRewriter({ open: false, text: "" });
+      return;
+    }
+    try {
+      const range = snap.range.cloneRange();
+      if (!document.contains(range.startContainer)) {
+        setEditError("Editor changed — select text again.");
+        setAiRewriter({ open: false, text: "" });
+        return;
+      }
+      range.deleteContents();
+      const tn = document.createTextNode(rewritten);
+      range.insertNode(tn);
+      range.setStartAfter(tn);
+      range.collapse(true);
+      const s = window.getSelection();
+      s?.removeAllRanges();
+      s?.addRange(range);
+      selectionSnapshotRef.current = null;
+      setAiRewriter({ open: false, text: "" });
+      setEditError("");
+    } catch {
+      setEditError("Couldn't insert rewritten text.");
+    }
+  };
 
   const saveEditing = async () => {
     if (!blog) return;
@@ -243,7 +483,7 @@ export default function BlogViewerPage() {
       <div className="flex gap-5 flex-1 min-h-0">
 
         {/* LEFT: blog content */}
-        <div className="flex-1 min-w-0 overflow-y-auto blog-content-panel rounded-[10px] border border-border-subtle bg-surface-primary">
+        <div ref={blogPanelRef} className="flex-1 min-w-0 overflow-y-auto blog-content-panel rounded-[10px] border border-border-subtle bg-surface-primary">
 
           {/* Sticky toolbar */}
           <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-2.5 border-b border-border-subtle bg-surface-primary">
@@ -297,24 +537,13 @@ export default function BlogViewerPage() {
             <div>
               <ArticleMetaRow blog={blog} />
               <article className="mx-auto max-w-[860px] px-8 py-12">
-                <header className="mb-10 pb-8 border-b border-border-subtle">
-                  <h1 ref={titleEditorRef} contentEditable suppressContentEditableWarning spellCheck
-                    className="mb-4 outline-none text-text-primary"
-                    style={{ fontSize: 36, fontWeight: 800, lineHeight: 1.15, letterSpacing: -0.5 }}>
-                    {stripHeroHeading(blog).heroTitle}
-                  </h1>
-                  <p ref={descEditorRef} contentEditable suppressContentEditableWarning spellCheck
-                    className="outline-none text-text-tertiary" style={{ fontSize: 17, lineHeight: 1.7 }}>
-                    {blog.meta_description}
-                  </p>
-                </header>
-                <div ref={editorRef} contentEditable suppressContentEditableWarning spellCheck
-                  className="editorial-body visual-blog-editor min-h-[50vh] space-y-5 outline-none text-text-secondary"
-                  style={{ fontSize: 17, lineHeight: 1.78 }}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSetForBlog(blog))} urlTransform={markdownUrlTransform}>
-                    {stripHeroHeading(blog).body}
-                  </ReactMarkdown>
-                </div>
+                <MemoizedVisualBlogEditors
+                  key={editSessionKey}
+                  blog={blog}
+                  titleRef={titleEditorRef}
+                  descRef={descEditorRef}
+                  bodyRef={editorRef}
+                />
                 <footer className="mt-14 pt-6 text-[11px] text-text-tertiary border-t border-border-subtle">
                   — End of article —
                 </footer>
@@ -525,6 +754,27 @@ export default function BlogViewerPage() {
         </div>
 
       </div>
+
+      <BlogEditAiFixOverlay
+        active={editMode && !aiRewriter.open}
+        getRoots={getEditRoots}
+        panelRef={blogPanelRef}
+        onOpen={({ text, range }) => {
+          selectionSnapshotRef.current = { range };
+          setAiRewriter({ open: true, text });
+        }}
+      />
+
+      <BlogAiRewriterModal
+        open={aiRewriter.open}
+        blogId={blog.id}
+        selectedText={aiRewriter.text}
+        onClose={() => {
+          setAiRewriter({ open: false, text: "" });
+          selectionSnapshotRef.current = null;
+        }}
+        onInsert={handleAiRewriterInsert}
+      />
     </div>
   );
 }
@@ -739,4 +989,13 @@ function flattenChildren(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(flattenChildren).join("");
   return "";
+}
+
+/** One-time HTML for the visual body editor — avoids React children inside contentEditable. */
+function markdownBodyToHtml(markdown: string, internalSet: Set<string>): string {
+  return renderToStaticMarkup(
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSet)} urlTransform={markdownUrlTransform}>
+      {markdown}
+    </ReactMarkdown>
+  );
 }

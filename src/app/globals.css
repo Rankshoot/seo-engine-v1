@@ -244,6 +244,15 @@
   background: var(--border-strong);
 }
 
+/* Visual blog editor: reliable native selection inside contentEditable */
+.visual-blog-editor {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.visual-blog-editor a {
+  cursor: text;
+}
+
 /* Right sidebar inner scroll: animated auto-hide → gradient on reveal */
 .blog-sidebar-scroll {
   scrollbar-width: thin;

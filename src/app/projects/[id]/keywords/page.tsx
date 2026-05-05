@@ -38,8 +38,6 @@ function regionName(code: string): string {
 
 const KD_COLOR = (kd: number) =>
   kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
-const KD_LABEL = (kd: number) =>
-  kd === 0 ? "—" : kd < 30 ? "Easy" : kd < 60 ? "Medium" : "Hard";
 
 type FilterTab = "all" | "ai" | KeywordStatus;
 
@@ -1044,7 +1042,7 @@ export default function KeywordsPage() {
                                     style={{ width: `${kw.kd}%` }}
                                   />
                                 </div>
-                                <span className={`text-[12px] font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
+                                <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
                               </div>
                             ) : (
                               <span className="text-[13px] text-text-tertiary">—</span>
@@ -1330,7 +1328,7 @@ export default function KeywordsPage() {
                                   style={{ width: `${kw.kd}%` }}
                                 />
                               </div>
-                              <span className={`text-[12px] font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
+                              <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
                             </div>
                           ) : (
                             <span className="text-[13px] text-text-tertiary">—</span>

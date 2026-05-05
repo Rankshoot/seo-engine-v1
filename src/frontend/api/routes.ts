@@ -51,4 +51,5 @@ export const V1Routes = {
   blogContent: (blogId: string) => `/blogs/${blogId}/content`,
   blogStatus: (blogId: string) => `/blogs/${blogId}/status`,
   blogFixSeo: (blogId: string) => `/blogs/${blogId}/fix-seo`,
+  blogRewriteSelection: (blogId: string) => `/blogs/${blogId}/rewrite-selection`,
 } as const;

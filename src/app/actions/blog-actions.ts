@@ -1038,6 +1038,99 @@ Return the FULL revised blog markdown only — no commentary, no code fences.`;
   return await persistBlogPatch(blogId, updated, project.domain as string);
 }
 
+export type BlogEditorRewriteTrace = Array<{ label: string; ok: boolean; ms?: number; detail?: string }>;
+
+/**
+ * Rewrite text the user selected in the visual blog editor (contentEditable).
+ * Does not persist — the client replaces the selection and the user saves when ready.
+ */
+export async function rewriteBlogEditorSelection(
+  blogId: string,
+  selectedPlainText: string,
+  instruction: string
+): Promise<{
+  success: boolean;
+  error?: string;
+  rewritten?: string;
+  trace?: BlogEditorRewriteTrace;
+}> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const sel = selectedPlainText.trim();
+  const instr = instruction.trim();
+  if (!sel) return { success: false, error: 'Select some text to rewrite.' };
+  if (!instr) return { success: false, error: 'Add an instruction or pick a quick action.' };
+  if (sel.length > 12_000) return { success: false, error: 'Selection is too long (max 12,000 characters).' };
+  if (instr.length > 4_000) return { success: false, error: 'Instruction is too long.' };
+
+  const { data: blog } = await supabaseAdmin.from('blogs').select('id, title, target_keyword, project_id').eq('id', blogId).single();
+  if (!blog) return { success: false, error: 'Blog not found' };
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, error: 'Not authorized' };
+
+  const prompt = `You are rewriting a short excerpt from an existing blog post. Return ONLY the rewritten excerpt — no title lines, no preamble, no quotes around the answer, no code fences.
+
+Blog title: ${blog.title}
+Target keyword: ${blog.target_keyword}
+
+User instruction:
+"${instr}"
+
+Selected excerpt (rewrite this):
+"""
+${sel}
+"""
+
+Rules:
+1. Output plain text only — no markdown (#, **, [], backticks).
+2. Apply the instruction faithfully while staying on-topic for this article.
+3. Preserve any URLs from the original as plain https URLs if they must remain.
+4. Match the tone of a professional business blog.
+5. Unless the instruction asks otherwise, keep a similar scope (do not turn one sentence into a full article).`;
+
+  const t0 = Date.now();
+  let rewritten: string;
+  try {
+    rewritten = (await geminiGenerate(prompt, 1)).trim();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'LLM call failed';
+    return {
+      success: false,
+      error: msg,
+      trace: [
+        { label: '(gemini)', ok: false, ms: Date.now() - t0, detail: msg },
+      ],
+    };
+  }
+  const ms = Date.now() - t0;
+  rewritten = rewritten.replace(/^"+|"+$/g, '').replace(/^```[a-z]*\n?|```$/g, '').trim();
+  if (!rewritten) {
+    return {
+      success: false,
+      error: 'Model returned empty text.',
+      trace: [{ label: '(gemini)', ok: false, ms, detail: 'empty output' }],
+    };
+  }
+
+  const trace: BlogEditorRewriteTrace = [
+    {
+      label: '(gemini)',
+      ok: true,
+      ms,
+      detail: `chars in: ${sel.length + instr.length}, out: ${rewritten.length}`,
+    },
+  ];
+
+  return { success: true, rewritten, trace };
+}
+
 export async function getCalendarWithBlogs(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: [] };

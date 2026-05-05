@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -41,7 +42,7 @@ export default function Sidebar() {
 
             return (
               <li key={item.label}>
-                <Link
+                <ProjectNavLink
                   href={item.href}
                   className={`flex items-center gap-3 px-4 py-3 rounded-[8px] text-[14px] font-medium transition-colors
                     ${isActive
@@ -52,7 +53,7 @@ export default function Sidebar() {
                     {item.icon}
                   </span>
                   {item.label}
-                </Link>
+                </ProjectNavLink>
               </li>
             );
           })}

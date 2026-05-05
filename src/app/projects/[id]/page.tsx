@@ -3,22 +3,20 @@
 /**
  * Project overview page — client component.
  *
- * Project data is **hydrated synchronously** from the server-side prefetch in
- * `[id]/layout.tsx` via HydrationBoundary, so `useQuery(qk.project(id))` has
- * data on first render with zero network calls. Calendar entries are fetched
- * once on first visit, then served from the React Query in-memory cache on
- * every subsequent navigation (staleTime: Infinity, refetchOnMount: false).
+ * `useQuery(qk.project(id))` shares the cache with `ProjectLayoutClient` (same
+ * key); the first subscriber issues one `/api/v1` fetch. Calendar entries use
+ * `qk.calendarWithBlogs` with long-lived cache (refetchOnMount: false).
  */
 
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { qk } from "@/lib/query-keys";
-import { getCalendarWithBlogs } from "@/app/actions/blog-actions";
-import { getProject } from "@/app/actions/project-actions";
+import { qk } from "@/lib/query";
+import { calendarApi } from "@/frontend/api/calendar";
+import { projectsApi } from "@/frontend/api/projects";
 import type { CalendarEntryWithBlog, ProjectCompetitor } from "@/lib/types";
 import { TARGET_REGIONS } from "@/lib/types";
-import { SiteExplorerSection } from "@/components/projects/SiteExplorerSection";
+import { BusinessBriefSection } from "@/components/projects/BusinessBriefSection";
 import { Skeleton } from "@/components/Skeleton";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -68,24 +66,18 @@ function WorkflowIcon({ step }: { step: string }) {
 export default function ProjectOverviewPage() {
   const { id } = useParams<{ id: string }>();
 
-  // Hydrated from layout's server prefetch — data is available synchronously
-  // on first render, no loading state or network call needed.
-  const { data: projectRes } = useQuery({
+  const { data: projectRes, isFetched: projectFetched } = useQuery({
     queryKey: qk.project(id),
-    queryFn: () => getProject(id),
+    queryFn: () => projectsApi.get(id),
     enabled: !!id,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
   });
 
   // Calendar entries: fetched once on first visit, then cached for the session.
   // Shared with the blogs page (same query key) so navigating between them is instant.
   const { data: calRes, isLoading: calLoading } = useQuery({
     queryKey: qk.calendarWithBlogs(id),
-    queryFn: () => getCalendarWithBlogs(id),
+    queryFn: () => calendarApi.withBlogs(id),
     enabled: !!id,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
   });
 
   const project = projectRes?.success ? projectRes.data : null;
@@ -95,9 +87,23 @@ export default function ProjectOverviewPage() {
   const userCompetitors = (project?.project_competitors ?? []) as ProjectCompetitor[];
   const target = project?.domain ?? "";
 
-  // layout.tsx handles the actual not-found check on the server; here we just
-  // wait for the hydrated data (which arrives synchronously via HydrationBoundary).
-  if (!project) return null;
+  if (!project) {
+    if (!projectFetched) {
+      return (
+        <div className="space-y-10 pb-16 pl-4 pr-4">
+          <div className="pt-4 pb-8 border-b border-border-subtle">
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <Skeleton className="h-6 w-28" rounded="full" />
+              <Skeleton className="h-4 w-32" rounded="sm" />
+            </div>
+            <Skeleton className="h-[48px] w-80 max-w-full" rounded="lg" />
+          </div>
+          <Skeleton className="h-40 w-full rounded-[16px]" rounded="lg" />
+        </div>
+      );
+    }
+    return null;
+  }
 
   return (
     <div className="space-y-10 pb-16 pl-4 pr-4">
@@ -106,7 +112,7 @@ export default function ProjectOverviewPage() {
         <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
           <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
             <span className="h-2 w-2 rounded-full bg-brand-action" />
-            Site Explorer
+            Overview
           </span>
           <span className="font-mono text-text-primary">{target || project.domain}</span>
           <span className="opacity-30">/</span>
@@ -130,24 +136,23 @@ export default function ProjectOverviewPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Link
+            <ProjectNavLink
               href={`/projects/${id}/keywords`}
               className="rounded-[4px] px-4 py-2 text-[14px] text-text-secondary hover:text-text-primary hover:underline"
             >
               Keywords
-            </Link>
-            <Link
+            </ProjectNavLink>
+            <ProjectNavLink
               href={`/projects/${id}/competitors`}
               className="rounded-[32px] bg-brand-primary px-5 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
             >
               Competitors
-            </Link>
+            </ProjectNavLink>
           </div>
         </div>
       </div>
 
-      {/* ── AHREFS SITE EXPLORER (cached in DB + React Query, manual refresh only) ── */}
-      <SiteExplorerSection projectId={id} />
+      <BusinessBriefSection projectId={id} />
 
       {/* ── UPCOMING CONTENT ───────────────────────────────────────────────── */}
       {calLoading ? (
@@ -175,12 +180,12 @@ export default function ProjectOverviewPage() {
             <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">
               Upcoming content
             </h2>
-            <Link
+            <ProjectNavLink
               href={`/projects/${id}/calendar`}
               className="text-[14px] font-medium text-brand-action hover:underline"
             >
               View all →
-            </Link>
+            </ProjectNavLink>
           </div>
           <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
             {recentEntries.map((entry, i) => {

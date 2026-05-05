@@ -2,82 +2,69 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query-keys";
+import { qk, keywordsListQueryOptions, useProject } from "@/lib/query";
 import { Keyword, KeywordStatus, TARGET_REGIONS } from "@/lib/types";
 import {
   useAppDispatch,
   useAppSelector,
   selectKeywordPrefs,
   selectKeywordStatuses,
-  selectKeywordsCache,
-  selectBriefCache,
+  selectAiSuggestedKeywordIds,
 } from "@/lib/redux/hooks";
 import {
   bulkKeywordStatusChanged,
-  briefLoaded,
   keywordStatusChanged,
-  keywordsLoaded,
-  clearKeywordsCache,
-  clearBriefCache,
   mergeKeywordStatuses,
   rememberKeywordFilter,
   rememberKeywordSort,
   removeKeywordStatus,
 } from "@/lib/redux/keyword-workspace-slice";
-import {
-  discoverKeywords,
-  getKeywords,
-  loadMoreKeywords,
-  updateKeywordStatus,
-  bulkUpdateKeywordStatus,
-  deleteKeyword,
-  deleteAllKeywords,
-} from "@/app/actions/keyword-actions";
-import { getCalendarEntries, addKeywordToCalendarOnDate } from "@/app/actions/calendar-actions";
-import type { CalendarEntry } from "@/lib/types";
-import { MiniCalendar } from "@/components/MiniCalendar";
-import {
-  getBusinessBrief,
-  generateBusinessBrief,
-} from "@/app/actions/brief-actions";
-import { getProject } from "@/app/actions/project-actions";
-import type { BusinessBrief } from "@/lib/business-brief";
+import { keywordsApi } from "@/frontend/api/keywords";
+import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
 import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
-import { TableSkeleton, BusinessBriefSkeleton } from "@/components/Skeleton";
+import { TableSkeleton } from "@/components/Skeleton";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
-import { KeywordRowMenu } from "@/components/keywords/KeywordRowMenu";
+import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
+import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
-type KeywordsResponse = Awaited<ReturnType<typeof getKeywords>>;
-type BriefResponse = Awaited<ReturnType<typeof getBusinessBrief>>;
-type ProjectResponse = Awaited<ReturnType<typeof getProject>>;
+type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
 function regionName(code: string): string {
   return TARGET_REGIONS.find(r => r.code === code.toLowerCase())?.name ?? code.toUpperCase();
 }
-
-const STATUS_COLORS: Record<KeywordStatus, string> = {
-  approved: "bg-brand-action/10 text-brand-action border-brand-action/20",
-  rejected: "bg-brand-coral/10 text-brand-coral border-brand-coral/20",
-  pending: "bg-surface-secondary text-text-tertiary border-border-subtle",
-};
 
 const KD_COLOR = (kd: number) =>
   kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
 const KD_LABEL = (kd: number) =>
   kd === 0 ? "—" : kd < 30 ? "Easy" : kd < 60 ? "Medium" : "Hard";
 
-type FilterTab = "all" | KeywordStatus;
+type FilterTab = "all" | "ai" | KeywordStatus;
+
+type SourceTab = "industry" | "domain";
+
+function domainSelectId(phrase: string): string {
+  return `domsel:${encodeURIComponent(phrase)}`;
+}
+
+function parseDomainSelectId(id: string): string | null {
+  if (!id.startsWith("domsel:")) return null;
+  try {
+    return decodeURIComponent(id.slice(7));
+  } catch {
+    return null;
+  }
+}
 
 type TableSortColumn =
   | "keyword"
   | "volume"
+  | "est_traffic"
   | "kd"
   | "cpc"
   | "intent"
-  | "ai_score"
   | "analysis_score"
   | "status";
 
@@ -90,6 +77,38 @@ function defaultDirForSortColumn(col: TableSortColumn): SortDir {
   return col === "keyword" || col === "intent" ? "asc" : "desc";
 }
 
+function compareDomainRows(
+  a: CompetitorKeywordsForSiteRow,
+  b: CompetitorKeywordsForSiteRow,
+  col: TableSortColumn,
+  dir: SortDir
+): number {
+  const m = dir === "asc" ? 1 : -1;
+  switch (col) {
+    case "keyword":
+      return m * a.keyword.localeCompare(b.keyword);
+    case "volume":
+      return m * (a.volume - b.volume);
+    case "est_traffic":
+      return m * ((a.estimated_monthly_traffic ?? 0) - (b.estimated_monthly_traffic ?? 0));
+    case "kd":
+      return m * (a.kd - b.kd);
+    case "cpc":
+      return m * (a.cpc - b.cpc);
+    case "intent":
+      return m * (a.intent || "").localeCompare(b.intent || "");
+    case "analysis_score":
+      return m * ((a.keyword_analysis_score ?? 0) - (b.keyword_analysis_score ?? 0));
+    case "status": {
+      const sa = STATUS_ORDER[(a.matched_status ?? "pending") as KeywordStatus];
+      const sb = STATUS_ORDER[(b.matched_status ?? "pending") as KeywordStatus];
+      return m * (sa - sb);
+    }
+    default:
+      return 0;
+  }
+}
+
 function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: SortDir): number {
   const m = dir === "asc" ? 1 : -1;
   switch (col) {
@@ -97,14 +116,14 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
       return m * a.keyword.localeCompare(b.keyword);
     case "volume":
       return m * ((a.volume || 0) - (b.volume || 0));
+    case "est_traffic":
+      return m * ((a.traffic_potential ?? 0) - (b.traffic_potential ?? 0));
     case "kd":
       return m * ((a.kd || 0) - (b.kd || 0));
     case "cpc":
       return m * ((a.cpc || 0) - (b.cpc || 0));
     case "intent":
       return m * ((a.intent || "").localeCompare(b.intent || ""));
-    case "ai_score":
-      return m * ((a.ai_score || 0) - (b.ai_score || 0));
     case "analysis_score":
       return m * ((a.keyword_analysis_score ?? 0) - (b.keyword_analysis_score ?? 0));
     case "status":
@@ -120,43 +139,23 @@ export default function KeywordsPage() {
   const dispatch = useAppDispatch();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
-
-  // Redux caches are backed by localStorage, which isn't available during SSR.
-  // We read them here but only apply them as React Query initialData AFTER the
-  // client has hydrated (mounted = true). This prevents the server/client HTML
-  // mismatch that would otherwise fire a hydration warning.
-  const reduxKeywordsCache = useAppSelector(state => selectKeywordsCache(state, projectId));
-  const reduxBriefCache = useAppSelector(state => selectBriefCache(state, projectId));
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
-
-  // After mount, pull from Redux so navigating back to this page is instant.
-  const keywordsCache = mounted ? reduxKeywordsCache : null;
-  const briefCache = mounted ? reduxBriefCache : null;
+  const aiSuggestedKeywordIds = useAppSelector(state => selectAiSuggestedKeywordIds(state, projectId));
 
   const PAGE_SIZE = 20;
-  const KEYWORDS_KEY = qk.keywords(projectId, { limit: PAGE_SIZE, offset: 0 });
-  const BRIEF_KEY = qk.brief(projectId);
-  const PROJECT_KEY = qk.project(projectId);
-
-  // Build React Query initialData from the Redux caches. When present, React Query
-  // uses the data immediately AND treats it as fresh (staleTime: Infinity + initialDataUpdatedAt),
-  // so no network call fires on revisit or page refresh.
-  const keywordsInitialData: KeywordsResponse | undefined = keywordsCache
-    ? { success: true, data: keywordsCache.keywords, total: keywordsCache.total }
-    : undefined;
-
-  const briefInitialData: BriefResponse | undefined = briefCache
-    ? { success: true, brief: briefCache.brief, updated_at: briefCache.updatedAt ?? undefined }
-    : undefined;
+  const KEYWORDS_KEY = qk.keywords(projectId);
 
   const [discovering, setDiscovering] = useState(false);
   const filter = keywordPrefs.filter as FilterTab;
   const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
 
-  const [refreshingBrief, setRefreshingBrief] = useState(false);
-  const [briefOpen, setBriefOpen] = useState(false);
+  // Source tab — default industry (DataForSEO discovery list). "domain" = Google Ads for-site.
+  const [sourceTab, setSourceTab] = useState<SourceTab>("industry");
+  const [dataSourceMenuOpen, setDataSourceMenuOpen] = useState(false);
+  const dataSourceRef = useRef<HTMLDivElement>(null);
+
+  const aiSuggestedIds = useMemo(() => new Set(aiSuggestedKeywordIds), [aiSuggestedKeywordIds]);
+
 
   const [loadingMore, setLoadingMore] = useState(false);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
@@ -171,18 +170,9 @@ export default function KeywordsPage() {
   // updates that happen via `handleStatusUpdate`.
   const [modalKeywordId, setModalKeywordId] = useState<string | null>(null);
 
-  // "Add to calendar" scheduling flow
-  const [schedulingKeywordId, setSchedulingKeywordId] = useState<string | null>(null);
-  const [addingToCalendar, setAddingToCalendar] = useState(false);
-
   const { data: keywordsData, isLoading: loading } = useQuery<KeywordsResponse>({
-    queryKey: KEYWORDS_KEY,
-    queryFn: () => getKeywords(projectId, { limit: PAGE_SIZE, offset: 0 }),
+    ...keywordsListQueryOptions(projectId),
     enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
-    initialData: keywordsInitialData,
-    initialDataUpdatedAt: keywordsCache?.loadedAt,
   });
   const serverKeywords: Keyword[] =
     keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.data : [];
@@ -206,64 +196,128 @@ export default function KeywordsPage() {
         statuses: Object.fromEntries(serverKeywords.map(kw => [kw.id, kw.status])),
       })
     );
-    const total =
-      keywordsData && "success" in keywordsData && keywordsData.success
-        ? keywordsData.total ?? serverKeywords.length
-        : serverKeywords.length;
-    dispatch(keywordsLoaded({ projectId, keywords: serverKeywords, total }));
-  }, [dispatch, projectId, serverKeywords, keywordsData]);
+  }, [dispatch, projectId, serverKeywords]);
 
-  const { data: briefData, isLoading: loadingBrief } = useQuery<BriefResponse>({
-    queryKey: BRIEF_KEY,
-    queryFn: () => getBusinessBrief(projectId),
-    enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
-    initialData: briefInitialData,
-    initialDataUpdatedAt: briefCache?.loadedAt,
-  });
-
-  // Keep Redux brief cache in sync so page-refresh is instant.
-  useEffect(() => {
-    if (!briefData?.success) return;
-    dispatch(
-      briefLoaded({
-        projectId,
-        brief: briefData.brief ?? null,
-        updatedAt: briefData.updated_at ?? null,
-      })
-    );
-  }, [dispatch, projectId, briefData]);
-
-  const { data: projectData } = useQuery<ProjectResponse>({
-    queryKey: PROJECT_KEY,
-    queryFn: () => getProject(projectId),
-    enabled: !!projectId,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
-  });
-
-  const CALENDAR_KEY = qk.calendar(projectId);
-  const { data: calendarData, refetch: refetchCalendar } = useQuery({
-    queryKey: CALENDAR_KEY,
-    queryFn: () => getCalendarEntries(projectId),
-    enabled: !!projectId,
-    // Keep scheduling data perfectly in sync with the Calendar page —
-    // always refetch on mount so cross-page schedules surface here.
-    staleTime: 0,
-    gcTime: 30 * 60_000,
-    refetchOnMount: 'always',
-  });
-  const calendarEntries: CalendarEntry[] = calendarData?.success ? calendarData.data : [];
-  const brief: BusinessBrief | null =
-    briefData && briefData.success ? briefData.brief ?? null : null;
-  const briefUpdatedAt: string | null =
-    briefData && briefData.success ? briefData.updated_at ?? null : null;
+  const { data: projectData } = useProject(projectId);
 
   const project =
     projectData && "success" in projectData && projectData.success && projectData.data
       ? projectData.data
       : null;
+
+  const {
+    data: domainRes,
+    isFetching: domainFetching,
+    refetch: refetchDomain,
+    isError: domainIsError,
+  } = useQuery({
+    queryKey: qk.domainKeywords(projectId),
+    queryFn: () => keywordsApi.domainKeywords(projectId),
+    enabled: !!projectId,
+  });
+  const domainKeywords: CompetitorKeywordsForSiteRow[] =
+    domainRes && "success" in domainRes && domainRes.success ? domainRes.data : [];
+  const domainError =
+    domainRes && !domainRes.success
+      ? domainRes.error ?? "Failed to fetch domain keywords"
+      : domainIsError
+        ? "Failed to fetch domain keywords"
+        : "";
+
+  const effectiveDomainStatus = useCallback(
+    (row: CompetitorKeywordsForSiteRow): KeywordStatus => {
+      if (row.matched_keyword_id && keywordStatuses[row.matched_keyword_id]) {
+        return keywordStatuses[row.matched_keyword_id];
+      }
+      return (row.matched_status ?? "pending") as KeywordStatus;
+    },
+    [keywordStatuses]
+  );
+
+  const industryPhraseSet = useMemo(
+    () => new Set(keywords.map(k => k.keyword.trim().toLowerCase())),
+    [keywords]
+  );
+
+  const domainOnlyRows = useMemo(
+    () => domainKeywords.filter(d => !industryPhraseSet.has(d.keyword)),
+    [domainKeywords, industryPhraseSet]
+  );
+
+  const unifiedCounts = useMemo(() => {
+    let all = 0;
+    let ai = 0;
+    let pending = 0;
+    let approved = 0;
+    let rejected = 0;
+    for (const k of keywords) {
+      all += 1;
+      if (aiSuggestedIds.has(k.id)) ai += 1;
+      if (k.status === "pending") pending += 1;
+      if (k.status === "approved") approved += 1;
+      if (k.status === "rejected") rejected += 1;
+    }
+    for (const d of domainOnlyRows) {
+      all += 1;
+      const s = effectiveDomainStatus(d);
+      if (d.matched_keyword_id && aiSuggestedIds.has(d.matched_keyword_id)) ai += 1;
+      if (s === "pending") pending += 1;
+      if (s === "approved") approved += 1;
+      if (s === "rejected") rejected += 1;
+    }
+    return { all, ai, pending, approved, rejected };
+  }, [keywords, domainOnlyRows, aiSuggestedIds, effectiveDomainStatus]);
+
+  const sortedDomainKeywords = useMemo(() => {
+    const list = [...domainKeywords];
+    if (tableSort.column === "status") {
+      const m = tableSort.dir === "asc" ? 1 : -1;
+      list.sort(
+        (a, b) => m * (STATUS_ORDER[effectiveDomainStatus(a)] - STATUS_ORDER[effectiveDomainStatus(b)])
+      );
+    } else {
+      list.sort((a, b) => compareDomainRows(a, b, tableSort.column, tableSort.dir));
+    }
+    return list;
+  }, [domainKeywords, tableSort.column, tableSort.dir, effectiveDomainStatus]);
+
+  const filteredDomainKeywords = useMemo(() => {
+    return sortedDomainKeywords.filter(row => {
+      if (filter === "all") return true;
+      if (filter === "ai") {
+        const id = row.matched_keyword_id;
+        return Boolean(id && aiSuggestedIds.has(id));
+      }
+      const st = effectiveDomainStatus(row);
+      if (filter === "pending") return st === "pending";
+      if (filter === "approved") return st === "approved";
+      if (filter === "rejected") return st === "rejected";
+      return true;
+    });
+  }, [sortedDomainKeywords, filter, aiSuggestedIds, effectiveDomainStatus]);
+
+  useEffect(() => {
+    if (sourceTab !== "domain") return;
+    if (tableSort.column === "est_traffic" || tableSort.column === "intent") {
+      dispatch(
+        rememberKeywordSort({
+          projectId,
+          tableSort: { column: "volume", dir: "desc" },
+        })
+      );
+    }
+  }, [sourceTab, tableSort.column, dispatch, projectId]);
+
+  useEffect(() => {
+    if (!dataSourceMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (dataSourceRef.current && !dataSourceRef.current.contains(e.target as Node)) {
+        setDataSourceMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [dataSourceMenuOpen]);
 
   const pushToast = (message: string) => {
     setToast(message);
@@ -294,15 +348,13 @@ export default function KeywordsPage() {
   const handleLoadMore = async () => {
     setLoadingMore(true);
     const currentPending = keywords.filter(k => k.status === "pending").length;
-    const res = await loadMoreKeywords(projectId, currentPending, PAGE_SIZE);
+    const res = await keywordsApi.loadMore(projectId, currentPending, PAGE_SIZE);
     if (res.success) {
       queryClient.setQueryData<KeywordsResponse>(KEYWORDS_KEY, prev => {
         if (!prev || !("success" in prev) || !prev.success) return prev;
         const seen = new Set(prev.data.map(k => k.id));
         const fresh = res.data.filter(k => !seen.has(k.id));
         const merged = [...prev.data, ...fresh];
-        // Keep the Redux cache in sync with the expanded list.
-        dispatch(keywordsLoaded({ projectId, keywords: merged, total: res.total ?? prev.total ?? merged.length }));
         return { ...prev, data: merged, total: res.total ?? prev.total };
       });
     }
@@ -312,10 +364,7 @@ export default function KeywordsPage() {
   const handleDiscover = async () => {
     setDiscovering(true);
     setError("");
-    // Clear caches so fresh discovery results are fetched instead of stale data.
-    dispatch(clearKeywordsCache({ projectId }));
-    dispatch(clearBriefCache({ projectId }));
-    const res = await discoverKeywords(projectId);
+    const res = await keywordsApi.discover(projectId);
     const typed = res as {
       discoveryTrace?: DataForSEOTraceEntry[];
       briefSummary?: {
@@ -364,41 +413,12 @@ export default function KeywordsPage() {
     if (res.success) {
       // Refresh both the keyword list and the brief that drove the run.
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: qk.keywordsAll(projectId) }),
-        queryClient.invalidateQueries({ queryKey: BRIEF_KEY }),
+        queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.brief(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
       ]);
     } else setError(res.error ?? "Discovery failed");
     setDiscovering(false);
-  };
-
-  const handleRefreshBrief = async () => {
-    setRefreshingBrief(true);
-    setError("");
-    const res = await generateBusinessBrief(projectId, { force: true });
-    if (res.trace?.length) {
-      console.groupCollapsed(
-        `[Brief] Refresh — scraped ${res.trace.filter(t => t.label === "jina_read" && t.ok).length} pages`
-      );
-      for (const t of res.trace) {
-        console.log(t.label, { url: t.url, ok: t.ok, length: t.length, error: t.error });
-      }
-      console.groupEnd();
-    }
-    if (res.success && res.brief) {
-      const updatedAt = new Date().toISOString();
-      // Update React Query cache immediately so the UI reflects fresh brief data.
-      queryClient.setQueryData<BriefResponse>(BRIEF_KEY, {
-        success: true,
-        brief: res.brief,
-        updated_at: updatedAt,
-      });
-      // Sync to Redux so the next page refresh serves from cache.
-      dispatch(briefLoaded({ projectId, brief: res.brief, updatedAt }));
-    } else {
-      setError(res.error ?? "Failed to refresh business brief");
-    }
-    setRefreshingBrief(false);
   };
 
   const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string) => {
@@ -408,50 +428,120 @@ export default function KeywordsPage() {
     setError("");
     const previousData = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
 
-    // Optimistic update — fire immediately so the row reflects the new state
-    // without waiting for the network round-trip.
-    patchKeywords(list => list.map(k => (k.id === kwId ? { ...k, status } : k)));
-    dispatch(
-      keywordStatusChanged({
-        projectId,
-        keywordId: kwId,
-        previousStatus,
-        nextStatus: status,
-      })
-    );
+    if (keyword) {
+      patchKeywords(list => list.map(k => (k.id === kwId ? { ...k, status } : k)));
+      dispatch(
+        keywordStatusChanged({
+          projectId,
+          keywordId: kwId,
+          previousStatus,
+          nextStatus: status,
+        })
+      );
+    }
 
-    // Show the toast now so it feels instant, then fire the API in the background.
     if (status === "approved") {
       pushToast(`"${label}" approved — go to Calendar to schedule it`);
     } else if (status === "pending") {
       pushToast(`"${label}" moved back to pending`);
     }
 
-    // Keep the menu button blocked only for a brief moment while the row
-    // re-renders — then release so the user can interact again.
     setBusyRowId(kwId);
-    const res = await updateKeywordStatus(kwId, status);
+    const res = await keywordsApi.updateStatus(kwId, projectId, status);
     setBusyRowId(null);
 
     if (!res.success) {
-      // Roll back on failure.
       if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
-      if (previousStatus) {
+      if (keyword) {
         dispatch(
           keywordStatusChanged({
             projectId,
             keywordId: kwId,
             previousStatus: status,
-            nextStatus: previousStatus,
+            nextStatus: previousStatus ?? keyword.status,
           })
         );
       }
       setError(res.error ?? "Could not update keyword status");
-    } else {
-      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-      queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-      queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+      return;
     }
+
+    if (!keyword) {
+      dispatch(
+        keywordStatusChanged({
+          projectId,
+          keywordId: kwId,
+          previousStatus: undefined,
+          nextStatus: status,
+        })
+      );
+    }
+    void queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
+  };
+
+  const handleDomainStatusUpdate = async (row: CompetitorKeywordsForSiteRow, next: KeywordStatus) => {
+    const label = row.keyword;
+    const busyKey = row.matched_keyword_id ?? `dom:${row.keyword}`;
+    if (row.matched_keyword_id) {
+      await handleStatusUpdate(row.matched_keyword_id, next, label);
+      await queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
+      return;
+    }
+    setError("");
+    setBusyRowId(busyKey);
+    const res = await keywordsApi.upsertDomainKeyword(
+      projectId,
+      {
+        keyword: row.keyword,
+        volume: row.volume,
+        kd: row.kd,
+        cpc: row.cpc,
+        intent: row.intent,
+        estimated_monthly_traffic: row.estimated_monthly_traffic,
+      },
+      next
+    );
+    setBusyRowId(null);
+    if (!res.success) {
+      setError(res.error ?? "Could not save keyword");
+      return;
+    }
+    if ("id" in res && res.id) {
+      dispatch(
+        mergeKeywordStatuses({
+          projectId,
+          statuses: { [res.id]: next },
+        })
+      );
+      queryClient.setQueryData(qk.domainKeywords(projectId), (prev: unknown) => {
+        if (!prev || typeof prev !== "object" || !("success" in prev)) return prev;
+        const p = prev as { success: boolean; data?: CompetitorKeywordsForSiteRow[] };
+        if (!p.success || !p.data) return prev;
+        return {
+          ...p,
+          data: p.data.map(d =>
+            d.keyword === row.keyword
+              ? {
+                  ...d,
+                  matched_keyword_id: res.id,
+                  matched_status: next,
+                  keyword_analysis_score: d.keyword_analysis_score ?? null,
+                }
+              : d
+          ),
+        };
+      });
+    }
+    if (next === "approved") {
+      pushToast(`"${label}" approved — go to Calendar to schedule it`);
+    } else if (next === "pending") {
+      pushToast(`"${label}" moved back to pending`);
+    }
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) }),
+      queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+    ]);
   };
 
   const handleKeywordRemove = async (kwId: string, phrase: string) => {
@@ -461,7 +551,7 @@ export default function KeywordsPage() {
     const snapshot = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
     const previousStatus = keywords.find(k => k.id === kwId)?.status;
     patchKeywords(list => list.filter(k => k.id !== kwId));
-    const res = await deleteKeyword(kwId);
+    const res = await keywordsApi.deleteKeyword(projectId, kwId);
     if (!res.success) {
       if (snapshot) queryClient.setQueryData(KEYWORDS_KEY, snapshot);
       setError(("error" in res && res.error) || "Could not delete keyword");
@@ -475,10 +565,22 @@ export default function KeywordsPage() {
   const filtered = useMemo(() => {
     const list = keywords.filter(k => {
       if (filter === "all") return true;
+      if (filter === "ai") return aiSuggestedIds.has(k.id);
       return k.status === filter;
     });
-    return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir)).slice(0, 100);
-  }, [keywords, filter, tableSort]);
+    return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
+  }, [keywords, filter, tableSort, aiSuggestedIds]);
+
+  /** Load-more only extends the server-side *pending* pool — hide on Approved/Rejected tabs. */
+  const pendingLoadedCount = useMemo(
+    () => keywords.filter(k => k.status === "pending").length,
+    [keywords]
+  );
+  const loadMoreFooterVisible = useMemo(() => {
+    if (pendingTotal <= pendingLoadedCount) return false;
+    if (filter === "approved" || filter === "rejected") return false;
+    return filter === "all" || filter === "pending" || filter === "ai";
+  }, [pendingTotal, pendingLoadedCount, filter]);
 
   const toggleSortColumn = (column: TableSortColumn) =>
     dispatch(
@@ -499,7 +601,8 @@ export default function KeywordsPage() {
   const toggleRowSelected = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -507,74 +610,75 @@ export default function KeywordsPage() {
   const handleBulkApproveToCalendar = async () => {
     const ids = [...selectedIds];
     if (!ids.length) return;
+    const domPhrases = ids.map(parseDomainSelectId).filter((p): p is string => p !== null);
+    const uuidIds = ids.filter(id => !id.startsWith("domsel:"));
+    if (!domPhrases.length && !uuidIds.length) return;
+
     setError("");
     const previousData = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
     const previousStatuses = Object.fromEntries(
-      ids.map(id => [id, keywords.find(keyword => keyword.id === id)?.status ?? "pending"])
+      uuidIds.map(id => [id, keywords.find(keyword => keyword.id === id)?.status ?? "pending"])
     ) as Record<string, KeywordStatus>;
     setBulkApproving(true);
-    patchKeywords(list =>
-      list.map(k => (ids.includes(k.id) ? { ...k, status: "approved" as const } : k))
-    );
-    dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: ids, nextStatus: "approved" }));
-    console.log("[Keywords] Bulk approve → calendar", { count: ids.length, ids });
     try {
-      const res = await bulkUpdateKeywordStatus(ids, "approved");
-      if (!res.success) {
-        if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
-        for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
-          dispatch(
-            keywordStatusChanged({
-              projectId,
-              keywordId,
-              previousStatus: "approved",
-              nextStatus: previousStatus,
-            })
-          );
-        }
-        setError(res.error ?? "Could not approve keywords");
-      } else {
-        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-        queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-        queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-        pushToast(
-          ids.length === 1
-            ? "1 keyword approved — go to Calendar to schedule it"
-            : `${ids.length} keywords approved — go to Calendar to schedule them`
+      for (const phrase of domPhrases) {
+        const row = domainKeywords.find(d => d.keyword === phrase);
+        if (!row) continue;
+        const res = await keywordsApi.upsertDomainKeyword(
+          projectId,
+          {
+            keyword: row.keyword,
+            volume: row.volume,
+            kd: row.kd,
+            cpc: row.cpc,
+            intent: row.intent,
+            estimated_monthly_traffic: row.estimated_monthly_traffic,
+          },
+          "approved"
         );
-        exitMassSelect();
+        if (res.success && "id" in res && res.id) {
+          dispatch(mergeKeywordStatuses({ projectId, statuses: { [res.id]: "approved" } }));
+        }
       }
+
+      if (uuidIds.length > 0) {
+        patchKeywords(list =>
+          list.map(k => (uuidIds.includes(k.id) ? { ...k, status: "approved" as const } : k))
+        );
+        dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: uuidIds, nextStatus: "approved" }));
+        const res = await keywordsApi.bulkStatus(projectId, uuidIds, "approved");
+        if (!res.success) {
+          if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
+          for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
+            dispatch(
+              keywordStatusChanged({
+                projectId,
+                keywordId,
+                previousStatus: "approved",
+                nextStatus: previousStatus,
+              })
+            );
+          }
+          setError(res.error ?? "Could not approve keywords");
+          return;
+        }
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+      ]);
+
+      pushToast(
+        ids.length === 1
+          ? "1 keyword approved — go to Calendar to schedule it"
+          : `${ids.length} keywords approved — go to Calendar to schedule them`
+      );
+      exitMassSelect();
     } finally {
       setBulkApproving(false);
     }
-  };
-
-  const handleScheduleOnDate = useCallback(async (date: string) => {
-    if (!schedulingKeywordId) return;
-    setAddingToCalendar(true);
-    const kw = keywords.find(k => k.id === schedulingKeywordId);
-    const res = await addKeywordToCalendarOnDate(schedulingKeywordId, projectId, date);
-    if (res.success) {
-      const wasRescheduled = 'rescheduled' in res && res.rescheduled;
-      pushToast(`"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${date}`);
-      setSchedulingKeywordId(null);
-      // Invalidate every cache that depends on calendar_entries so the
-      // calendar / blogs pages see the new schedule the moment they mount.
-      await refetchCalendar();
-      queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-      queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-    } else {
-      pushToast(res.error ?? "Could not schedule keyword");
-    }
-    setAddingToCalendar(false);
-  }, [schedulingKeywordId, keywords, projectId, refetchCalendar, queryClient]);
-
-  const counts = {
-    all: keywords.length,
-    pending: keywords.filter(k => k.status === "pending").length,
-    approved: keywords.filter(k => k.status === "approved").length,
-    rejected: keywords.filter(k => k.status === "rejected").length,
   };
 
   const sortMark = (col: TableSortColumn) =>
@@ -588,11 +692,12 @@ export default function KeywordsPage() {
       </span>
     );
 
-  const FILTER_TABS: { tab: FilterTab; label: string }[] = [
-    { tab: "all", label: "All" },
-    { tab: "pending", label: "Pending" },
-    { tab: "approved", label: "Approved" },
-    { tab: "rejected", label: "Rejected" },
+  const FILTER_TAB_ITEMS: Array<{ id: FilterTab; label: string; count: number }> = [
+    { id: "all", label: "All", count: unifiedCounts.all },
+    { id: "ai", label: "AI picks", count: unifiedCounts.ai },
+    { id: "pending", label: "Pending", count: unifiedCounts.pending },
+    { id: "approved", label: "Approved", count: unifiedCounts.approved },
+    { id: "rejected", label: "Rejected", count: unifiedCounts.rejected },
   ];
 
   const thBtn =
@@ -635,41 +740,15 @@ export default function KeywordsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href={`/projects/${projectId}`}
-              className="rounded-[4px] px-4 py-2 text-[14px] text-text-secondary hover:text-text-primary hover:underline"
-            >
-              Overview
-            </Link>
-            <Link
-              href={`/projects/${projectId}/competitors`}
+            <ProjectNavLink
+              href={`/projects/${projectId}/calendar`}
               className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             >
-              Competitors
+              Calendar
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
-            </Link>
-            <Link
-              href={`/projects/${projectId}/audit`}
-              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-            >
-              Content health
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-              </svg>
-            </Link>
-            {counts.approved >= 5 ? (
-              <Link
-                href={`/projects/${projectId}/calendar`}
-                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-              >
-                Calendar
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                </svg>
-              </Link>
-            ) : null}
+            </ProjectNavLink>
             <button
               type="button"
               onClick={handleDiscover}
@@ -695,164 +774,359 @@ export default function KeywordsPage() {
         </div>
       </div>
 
-      {/* ── BUSINESS BRIEF ─────────────────────────────────────────────────── */}
-      <section className="space-y-4">
-        <div>
-          <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Business brief</h2>
-          <p className="mt-1.5 text-[14px] text-text-tertiary max-w-3xl">
-            Scraped context from your domain that seeds discovery — refresh when your site or positioning changes.
-          </p>
-        </div>
-        {loadingBrief ? (
-          <BusinessBriefSkeleton />
-        ) : (
-          <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-surface-tertiary text-text-primary">
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2Z" />
-              </svg>
-            </div>
-            <div>
-              {brief ? (
-                <p className="text-[13px] text-text-tertiary">
-                  {brief.seed_phrases.length} seeds · scraped {brief.source_urls.length} pages
-                  {briefUpdatedAt ? ` · updated ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(briefUpdatedAt))}` : ""}
-                </p>
-              ) : (
-                <p className="text-[13px] text-text-tertiary">
-                  No brief yet — we'll auto-build one on your first Discover click.
-                </p>
-              )}
-              {brief?.summary ? (
-                <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-text-secondary line-clamp-2">
-                  {brief.summary}
-                </p>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {brief ? (
-              <button
-                type="button"
-                onClick={() => setBriefOpen(o => !o)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95"
-              >
-                {briefOpen ? "Hide details" : "View details"}
-              </button>
-            ) : null}
-            <div className="flex flex-col items-end gap-0.5">
-              <button
-                type="button"
-                onClick={handleRefreshBrief}
-                disabled={refreshingBrief}
-                title="Re-scrape your domain and regenerate the business brief. Uses Jina Reader."
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50"
-              >
-                {refreshingBrief ? (
-                  <>
-                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
-                    Scraping…
-                  </>
-                ) : (
-                  <>
-                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                    </svg>
-                    {brief ? "Refresh brief" : "Generate brief"}
-                  </>
-                )}
-              </button>
-              {briefUpdatedAt && (
-                <span className="text-[10px] text-text-tertiary" title={briefUpdatedAt}>
-                  Updated {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(briefUpdatedAt))}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {briefOpen && brief ? (
-          <div className="mt-6 grid grid-cols-1 gap-6 border-t border-border-subtle pt-6 md:grid-cols-2">
-            {brief.products.length ? (
-              <div>
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Products</p>
-                <div className="flex flex-wrap gap-2">
-                  {brief.products.map(p => (
-                    <span key={p} className="rounded-[4px] bg-surface-secondary px-2.5 py-1 text-[13px] text-text-secondary">{p}</span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {brief.entities.length ? (
-              <div>
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Entities</p>
-                <div className="flex flex-wrap gap-2">
-                  {brief.entities.slice(0, 18).map(e => (
-                    <span key={e} className="rounded-[4px] bg-surface-secondary px-2.5 py-1 text-[13px] text-text-secondary">{e}</span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {brief.audiences.length ? (
-              <div>
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Audiences</p>
-                <ul className="space-y-1 text-[13px] text-text-secondary">
-                  {brief.audiences.map(a => <li key={a}>· {a}</li>)}
-                </ul>
-              </div>
-            ) : null}
-            {brief.usps.length ? (
-              <div>
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">USPs</p>
-                <ul className="space-y-1 text-[13px] text-text-secondary">
-                  {brief.usps.map(u => <li key={u}>· {u}</li>)}
-                </ul>
-              </div>
-            ) : null}
-            {brief.seed_phrases.length ? (
-              <div className="md:col-span-2">
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">
-                  Seed phrases ({brief.seed_phrases.length})
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {brief.seed_phrases.map(s => (
-                    <span key={s} className="rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2.5 py-1 text-[13px] text-brand-action">
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {brief.source_urls.length ? (
-              <div className="md:col-span-2">
-                <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Scraped pages</p>
-                <ul className="space-y-1 text-[13px]">
-                  {brief.source_urls.map(u => (
-                    <li key={u} className="truncate">
-                      <a href={u} target="_blank" rel="noopener noreferrer" className="text-brand-action hover:underline">{u}</a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-      )}
-      </section>
-
       {/* ── KEYWORD LIST ───────────────────────────────────────────────────── */}
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Keyword list</h2>
-            {keywords.length === 0 ? (
-              <p className="mt-1.5 text-[14px] text-text-tertiary">Run Discover to load keywords.</p>
+          <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Keyword list</h2>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+            {keywords.length > 0 || domainKeywords.length > 0 ? (
+              <PillTabFilterBar<FilterTab>
+                items={FILTER_TAB_ITEMS}
+                activeId={filter}
+                onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
+              />
+            ) : (
+              <p className="text-[13px] text-text-tertiary">
+                Run Discover for industry keywords. Switch data source to Domain to see Google Ads keywords for your site.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {((sourceTab === "industry" && keywords.length > 0) ||
+              (sourceTab === "domain" && domainKeywords.length > 0)) ? (
+              !massSelectMode ? (
+                <button
+                  type="button"
+                  aria-label="Mass select keywords"
+                  onClick={() => {
+                    setMassSelectMode(true);
+                    setSelectedIds(new Set());
+                  }}
+                  className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-3 w-3 shrink-0 opacity-75"
+                    aria-hidden
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.85}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                    <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                    <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
+                    <path d="M14 17.5 16 19.5 21 13.5" />
+                  </svg>
+                  <span>Mass select</span>
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkApproveToCalendar()}
+                    disabled={bulkApproving || selectedIds.size === 0}
+                    className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
+                      bulkApproving ? "animate-pulse cursor-wait" : ""
+                    }`}
+                  >
+                    <span
+                      className={`block max-w-full overflow-hidden truncate text-center ${bulkApproving ? "text-[13px] leading-none" : "tabular-nums"}`}
+                    >
+                      {bulkApproving ? "…" : selectedIds.size > 0 ? `Approve (${selectedIds.size})` : "Approve"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={exitMassSelect}
+                    disabled={bulkApproving}
+                    className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
+                    title="Leave mass-select mode"
+                  >
+                    Cancel
+                  </button>
+                </>
+              )
             ) : null}
+            <div className="relative" ref={dataSourceRef}>
+              <button
+                type="button"
+                onClick={() => setDataSourceMenuOpen(o => !o)}
+                className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
+                aria-expanded={dataSourceMenuOpen}
+                aria-haspopup="listbox"
+              >
+                {sourceTab === "industry" ? "Industry data" : "Domain data"}
+                <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                </svg>
+              </button>
+              {dataSourceMenuOpen ? (
+                <div
+                  role="listbox"
+                  className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
+                >
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={sourceTab === "industry"}
+                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                    onClick={() => {
+                      setSourceTab("industry");
+                      setDataSourceMenuOpen(false);
+                    }}
+                  >
+                    Data via industry
+                  </button>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={sourceTab === "domain"}
+                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                    onClick={() => {
+                      setSourceTab("domain");
+                      setDataSourceMenuOpen(false);
+                    }}
+                  >
+                    Data via domain
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
+
+        {/* ── DATA VIA DOMAIN ─────────────────────────────────────────── */}
+        {sourceTab === "domain" && (
+          <div className="space-y-4">
+            {domainError && (
+              <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
+                {domainError}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[14px] text-text-tertiary">
+                Live Google Ads keyword data for your domain — sorted by search volume.
+              </p>
+              <button
+                type="button"
+                onClick={() => void refetchDomain()}
+                disabled={domainFetching}
+                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 shrink-0"
+              >
+                {domainFetching ? (
+                  <>
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
+                    Fetching…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                    Refresh
+                  </>
+                )}
+              </button>
+            </div>
+
+            {domainFetching ? (
+              <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
+                <TableSkeleton rows={8} columns={6} />
+              </div>
+            ) : domainKeywords.length > 0 ? (
+              filteredDomainKeywords.length === 0 ? (
+                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
+                  <p className="text-[14px] font-medium text-text-secondary">No keywords match this filter.</p>
+                  <p className="mt-1 text-[12px] text-text-tertiary">Switch to another tab to see domain rows.</p>
+                </div>
+              ) : (
+              <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
+                <div className="max-h-[min(70vh,56rem)] overflow-auto">
+                  <table className="w-full min-w-[860px] text-left border-collapse">
+                    <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+                      <tr>
+                        <th scope="col" className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("keyword")}>
+                              Keyword{sortMark("keyword")}
+                            </button>
+                            <Tooltip placement="below" content="Search query from Google Ads keywords for your domain.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("volume")}>
+                              Volume{sortMark("volume")}
+                            </button>
+                            <Tooltip placement="below" content="Average monthly searches over the last 12 months.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("kd")}>
+                              KD{sortMark("kd")}
+                            </button>
+                            <Tooltip placement="below" content="Difficulty hint from Google Ads competition (0–100).">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("cpc")}>
+                              CPC{sortMark("cpc")}
+                            </button>
+                            <Tooltip placement="below" content="Cost Per Click (USD) from Google Ads.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("analysis_score")}>
+                              Analysis{sortMark("analysis_score")}
+                            </button>
+                            <Tooltip placement="below" content="When this phrase matches a saved industry keyword, you see that row’s analysis score. Otherwise we show an estimate from volume, difficulty, and intent so you can still sort and compare.">
+                              <InfoIcon />
+                            </Tooltip>
+                          </div>
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("status")}>
+                              Action{sortMark("status")}
+                            </button>
+                          </div>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border-subtle/60">
+                      {filteredDomainKeywords.map((kw, i) => {
+                        const effectiveStatus = effectiveDomainStatus(kw);
+                        const busyKey = kw.matched_keyword_id ?? `dom:${kw.keyword}`;
+                        return (
+                        <tr
+                          key={`${kw.keyword}-${i}`}
+                          className={`transition-colors duration-150 hover:bg-surface-hover/90 ${
+                            effectiveStatus === "approved" ? "bg-brand-action/[0.07]" : ""
+                          }`}
+                        >
+                          <td className="px-4 py-3 align-middle max-w-[260px]">
+                            <div className="flex items-center gap-2">
+                              <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                              {kw.matched_keyword_id && aiSuggestedIds.has(kw.matched_keyword_id) ? (
+                                <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+                                  AI pick
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
+                            {kw.volume ? kw.volume.toLocaleString() : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-center align-middle">
+                            {kw.kd > 0 ? (
+                              <div className="flex items-center justify-center gap-2">
+                                <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-300 ${
+                                      kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
+                                    }`}
+                                    style={{ width: `${kw.kd}%` }}
+                                  />
+                                </div>
+                                <span className={`text-[12px] font-bold ${KD_COLOR(kw.kd)}`}>{KD_LABEL(kw.kd)}</span>
+                              </div>
+                            ) : (
+                              <span className="text-[13px] text-text-tertiary">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right align-middle text-[13px] font-mono text-text-tertiary tabular-nums">
+                            {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-center align-middle">
+                            {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+                              <span
+                                className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums"
+                                title={
+                                  kw.analysis_score_is_industry
+                                    ? "Analysis score from your matched industry keyword row"
+                                    : "Estimated score from volume, difficulty, and intent"
+                                }
+                              >
+                                {Math.round(kw.keyword_analysis_score)}
+                              </span>
+                            ) : (
+                              <span className="text-[13px] text-text-tertiary">—</span>
+                            )}
+                          </td>
+                          <td
+                            className="px-4 py-3 text-center align-middle"
+                            onClick={e => e.stopPropagation()}
+                            onPointerDown={e => e.stopPropagation()}
+                          >
+                            <KeywordActionDropdown
+                              status={effectiveStatus}
+                              busy={busyRowId === busyKey}
+                              onChange={next => void handleDomainStatusUpdate(kw, next)}
+                            />
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-border-subtle px-6 py-4 bg-surface-secondary/50">
+                  <span className="text-[12px] text-text-tertiary">
+                    Showing {filteredDomainKeywords.length} of {sortedDomainKeywords.length} for {project?.domain ?? "your domain"}
+                    {filteredDomainKeywords.length < sortedDomainKeywords.length ? " (filter active)" : ""} · use column headers to sort
+                  </span>
+                </div>
+              </div>
+              )
+            ) : (
+              !domainFetching && (
+                <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
+                  <div className="mb-6 flex justify-center">
+                    <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
+                      <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                      </svg>
+                    </div>
+                  </div>
+                  <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No domain keywords found</h3>
+                  <p className="mb-8 text-[16px] text-text-tertiary max-w-md mx-auto">
+                    No Google Ads keyword data was returned for your domain. Try refreshing or check that your domain is correct.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void refetchDomain()}
+                    className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+                  >
+                    Fetch domain keywords
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        )}
+
+        {/* ── DATA VIA INDUSTRY ───────────────────────────────────────── */}
+        {sourceTab === "industry" && (
+          <div className="space-y-4">
+            {keywords.length === 0 ? (
+              <p className="text-[14px] text-text-tertiary">Run Discover to load keywords.</p>
+            ) : null}
 
           {error && (
             <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
@@ -860,95 +1134,18 @@ export default function KeywordsPage() {
             </div>
           )}
 
-          {keywords.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit transition-shadow duration-200">
-                {FILTER_TABS.map(({ tab, label }) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
-                    className={`rounded-[6px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all duration-150 ${
-                      filter === tab
-                        ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
-                        : "text-text-tertiary hover:text-text-secondary"
-                    }`}
-                  >
-                    {label} ({counts[tab]})
-                  </button>
-                ))}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {!massSelectMode ? (
-                  <button
-                    type="button"
-                    aria-label="Mass select keywords"
-                    onClick={() => {
-                      setMassSelectMode(true);
-                      setSelectedIds(new Set());
-                    }}
-                    className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-3 w-3 shrink-0 opacity-75"
-                      aria-hidden
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={1.85}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                      <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                      <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
-                      <path d="M14 17.5 16 19.5 21 13.5" />
-                    </svg>
-                    <span>Mass select</span>
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void handleBulkApproveToCalendar()}
-                      disabled={bulkApproving || selectedIds.size === 0}
-                      className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
-                        bulkApproving ? "animate-pulse cursor-wait" : ""
-                      }`}
-                    >
-                      <span
-                        className={`block max-w-full overflow-hidden truncate text-center ${bulkApproving ? "text-[13px] leading-none" : "tabular-nums"}`}
-                      >
-                        {bulkApproving ? "…" : selectedIds.size > 0 ? `Approve (${selectedIds.size})` : "Approve"}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={exitMassSelect}
-                      disabled={bulkApproving}
-                      className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
-                      title="Leave mass-select mode"
-                    >
-                      Cancel
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-
           {loading || discovering ? (
             // Skeleton stays visible for the whole discovery run — including
-            // the DataForSEO fallback path that fires when Ahrefs is exhausted —
+            // the DataForSEO fallback path when the primary provider is exhausted —
             // so the table never freezes between "Discover clicked" and
             // "fresh keywords arrived".
             <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <TableSkeleton rows={8} columns={6} />
+              <TableSkeleton rows={8} columns={8} />
             </div>
           ) : filtered.length > 0 ? (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <div className="overflow-x-auto overflow-hidden">
-                <table className="w-full min-w-[940px] text-left border-collapse">
+              <div className="max-h-[min(70vh,56rem)] overflow-auto">
+                <table className="w-full min-w-[1060px] text-left border-collapse">
                   <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                     <tr>
                       <th
@@ -978,6 +1175,16 @@ export default function KeywordsPage() {
                             Volume{sortMark("volume")}
                           </button>
                           <Tooltip placement="below" content="Average monthly searches over the last 12 months.">
+                            <InfoIcon />
+                          </Tooltip>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("est_traffic")}>
+                            Est. traffic{sortMark("est_traffic")}
+                          </button>
+                          <Tooltip placement="below" content="Estimated monthly visits the top result could earn for this term.">
                             <InfoIcon />
                           </Tooltip>
                         </div>
@@ -1014,20 +1221,10 @@ export default function KeywordsPage() {
                       </th>
                       <th scope="col" className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("ai_score")}>
-                            AI{sortMark("ai_score")}
-                          </button>
-                          <Tooltip placement="below" content="AI relevance score (1-10) matching the keyword to your business brief.">
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
                           <button type="button" className={thBtn} onClick={() => toggleSortColumn("analysis_score")}>
                             Analysis{sortMark("analysis_score")}
                           </button>
-                          <Tooltip placement="below" content="Overall opportunity score based on volume, KD, CPC, and AI relevance.">
+                          <Tooltip placement="below" content="Composite opportunity score from volume, KD, CPC, and relevance signals.">
                             <InfoIcon />
                           </Tooltip>
                         </div>
@@ -1035,24 +1232,24 @@ export default function KeywordsPage() {
                       <th scope="col" className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1.5">
                           <button type="button" className={thBtn} onClick={() => toggleSortColumn("status")}>
-                            Status{sortMark("status")}
+                            Action{sortMark("status")}
                           </button>
                         </div>
-                      </th>
-                      <th scope="col" className="w-14 px-2 py-3 text-center">
-                        <span className="sr-only">Actions menu</span>
                       </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle/60">
-                    {filtered.map(kw => (
+                    {filtered.map(kw => {
+                      const isAiPick = aiSuggestedIds.has(kw.id);
+                      return (
                       <tr
                         key={kw.id}
                         onClick={e => {
                           const t = e.target as HTMLElement;
                           if (
-                            t.closest("button, input, [role='menu'], [role='menuitem'], a") ||
-                            t.closest("[data-row-no-mass]")
+                            t.closest(
+                              "button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a"
+                            ) || t.closest("[data-row-no-mass]")
                           )
                             return;
                           if (massSelectMode && !bulkApproving) {
@@ -1063,7 +1260,9 @@ export default function KeywordsPage() {
                         }}
                         className={`group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
                           kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
-                        } ${selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""} ${
+                        } ${isAiPick ? "bg-[#8b5cf6]/[0.07] ring-1 ring-inset ring-[#8b5cf6]/20" : ""} ${
+                          selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
+                        } ${
                           massSelectMode && !bulkApproving ? "cursor-pointer" : ""
                         } ${!massSelectMode && !busyRowId ? "cursor-pointer" : ""}`}
                       >
@@ -1088,7 +1287,14 @@ export default function KeywordsPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3 align-middle max-w-[260px]">
-                          <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+                            {isAiPick ? (
+                              <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+                                AI pick
+                              </span>
+                            ) : null}
+                          </div>
                           {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
                           (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
                             <p
@@ -1107,6 +1313,11 @@ export default function KeywordsPage() {
                         </td>
                         <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
                           {kw.volume ? kw.volume.toLocaleString() : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
+                          {kw.traffic_potential != null && kw.traffic_potential > 0
+                            ? kw.traffic_potential.toLocaleString()
+                            : "—"}
                         </td>
                         <td className="px-4 py-3 text-center align-middle">
                           {kw.kd > 0 ? (
@@ -1146,11 +1357,6 @@ export default function KeywordsPage() {
                           )}
                         </td>
                         <td className="px-4 py-3 text-center align-middle">
-                          <span className="inline-block rounded-[4px] border border-border-subtle bg-surface-secondary px-2 py-0.5 text-[12px] font-mono text-text-secondary tabular-nums">
-                            {kw.ai_score}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-center align-middle">
                           {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
                             <span className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums">
                               {Math.round(kw.keyword_analysis_score)}
@@ -1159,97 +1365,63 @@ export default function KeywordsPage() {
                             <span className="text-[13px] text-text-tertiary">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center align-middle">
-                          <span
-                            className={`inline-block rounded-[4px] border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_COLORS[kw.status]}`}
-                          >
-                            {kw.status}
-                          </span>
-                        </td>
-                        <td className="px-2 py-3 align-middle" onClick={e => e.stopPropagation()}>
-                          <div className="flex items-center gap-1 justify-center">
-                            {/* Add-to-calendar button */}
-                            {(() => {
-                              const isAlreadyScheduled = calendarEntries.some(e => e.keyword_id === kw.id);
-                              const isSchedulingThis = schedulingKeywordId === kw.id;
-                              return (
-                                <button
-                                  type="button"
-                                  title={
-                                    isAlreadyScheduled
-                                      ? "Already on calendar"
-                                      : isSchedulingThis
-                                      ? "Cancel scheduling"
-                                      : "Add to calendar on a specific date"
-                                  }
-                                  onClick={() =>
-                                    setSchedulingKeywordId(isSchedulingThis ? null : kw.id)
-                                  }
-                                  disabled={addingToCalendar}
-                                  className={`w-7 h-7 flex items-center justify-center rounded-full border transition-colors shrink-0
-                                    ${isAlreadyScheduled
-                                      ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981] cursor-default"
-                                      : isSchedulingThis
-                                      ? "border-[#f59e0b]/40 bg-[#f59e0b]/10 text-[#f59e0b]"
-                                      : "border-border-subtle bg-surface-elevated text-text-tertiary hover:border-brand-action/40 hover:text-brand-action hover:bg-brand-action/5"
-                                    }
-                                  `}
-                                >
-                                  {isAlreadyScheduled ? (
-                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                                    </svg>
-                                  ) : (
-                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                                      <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
-                                      <line x1="16" x2="16" y1="2" y2="6" />
-                                      <line x1="8" x2="8" y1="2" y2="6" />
-                                      <line x1="3" x2="21" y1="10" y2="10" />
-                                      <line x1="12" x2="12" y1="15" y2="18" />
-                                      <line x1="10.5" x2="13.5" y1="16.5" y2="16.5" />
-                                    </svg>
-                                  )}
-                                </button>
-                              );
-                            })()}
-                            <KeywordRowMenu
-                              status={kw.status}
-                              phrase={kw.keyword}
-                              busy={busyRowId === kw.id}
-                              onExplore={() => setModalKeywordId(kw.id)}
-                              onApproveCalendar={() => handleStatusUpdate(kw.id, "approved", kw.keyword)}
-                              onReject={() => handleStatusUpdate(kw.id, "rejected")}
-                              onResetPending={() => handleStatusUpdate(kw.id, "pending", kw.keyword)}
-                              onRemove={() => handleKeywordRemove(kw.id, kw.keyword)}
-                            />
-                          </div>
+                        <td
+                          className="px-4 py-3 text-center align-middle"
+                          onClick={e => e.stopPropagation()}
+                          onPointerDown={e => e.stopPropagation()}
+                        >
+                          <KeywordActionDropdown
+                            status={kw.status}
+                            busy={busyRowId === kw.id}
+                            onChange={next => void handleStatusUpdate(kw.id, next)}
+                          />
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-              {(() => {
-                const pendingShown = keywords.filter(k => k.status === "pending").length;
-                if (pendingTotal <= pendingShown) return null;
-                return (
-                  <div className="flex flex-col items-center gap-3 border-t border-border-subtle px-6 py-6 bg-surface-secondary/50">
-                    <button
-                      type="button"
-                      onClick={handleLoadMore}
-                      disabled={loadingMore}
-                      className="rounded-[30px] border border-border-subtle bg-surface-elevated px-6 py-2.5 text-[14px] font-medium text-text-secondary transition-colors hover:text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {loadingMore
-                        ? "Loading more keywords…"
-                        : `Load more (${pendingTotal - pendingShown} remaining)`}
-                    </button>
-                    <span className="text-[12px] text-text-tertiary">
-                      Showing top {pendingShown} of {pendingTotal} Ahrefs-scored keywords
-                    </span>
-                  </div>
-                );
-              })()}
+              {loadMoreFooterVisible ? (
+                <div className="flex flex-col items-center gap-1 border-t border-border-subtle px-4 py-2.5 bg-surface-secondary/40">
+                  <button
+                    type="button"
+                    onClick={handleLoadMore}
+                    disabled={loadingMore}
+                    className="rounded-full border border-border-subtle bg-surface-elevated px-4 py-1.5 text-[12px] font-medium text-text-secondary transition-colors hover:text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loadingMore
+                      ? "Loading…"
+                      : `Load more (${pendingTotal - pendingLoadedCount} pending)`}
+                  </button>
+                  <span className="text-[11px] text-text-tertiary tabular-nums">
+                    Pending pool: {pendingLoadedCount} / {pendingTotal} loaded
+                    {filter === "ai" ? " · more rows may include AI picks" : ""}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : keywords.length > 0 ? (
+            <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
+              <p className="text-[14px] font-medium text-text-secondary">No keywords match this filter.</p>
+              <p className="mt-1 text-[12px] text-text-tertiary">Switch to another tab to see keywords.</p>
+              {loadMoreFooterVisible ? (
+                <div className="mt-4 flex flex-col items-center gap-1 border-t border-border-subtle/80 pt-4">
+                  <button
+                    type="button"
+                    onClick={handleLoadMore}
+                    disabled={loadingMore}
+                    className="rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-medium text-text-secondary transition-colors hover:text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loadingMore
+                      ? "Loading…"
+                      : `Load more pending (${pendingTotal - pendingLoadedCount})`}
+                  </button>
+                  <span className="text-[11px] text-text-tertiary tabular-nums">
+                    Pending pool: {pendingLoadedCount} / {pendingTotal}
+                  </span>
+                </div>
+              ) : null}
             </div>
           ) : (
             !discovering && (
@@ -1275,49 +1447,14 @@ export default function KeywordsPage() {
               </div>
             )
           )}
-      </section>
-
-      {/* ── CALENDAR VIEW ─────────────────────────────────────────────────── */}
-      {(calendarEntries.length > 0 || schedulingKeywordId) && (
-        <section className="space-y-4" id="calendar-view">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">
-                Scheduled calendar
-              </h2>
-              <p className="mt-1.5 text-[14px] text-text-tertiary">
-                {schedulingKeywordId
-                  ? "Click any available date below to schedule your keyword."
-                  : "All keywords added to your content calendar."}
-              </p>
-            </div>
-            <Link
-              href={`/projects/${projectId}/calendar`}
-              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary shrink-0"
-            >
-              Full calendar
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-              </svg>
-            </Link>
           </div>
-          <MiniCalendar
-            entries={calendarEntries}
-            projectId={projectId}
-            schedulingKeywordId={schedulingKeywordId}
-            schedulingKeywordPhrase={
-              keywords.find(k => k.id === schedulingKeywordId)?.keyword ?? ""
-            }
-            onDatePick={handleScheduleOnDate}
-            onCancelSchedule={() => setSchedulingKeywordId(null)}
-          />
-        </section>
-      )}
+        )}
+      </section>
 
       {toast ? (
         <div
           role="status"
-          className="fixed bottom-8 right-6 z-90 max-w-sm rounded-[12px] border border-brand-action/30 bg-surface-elevated px-4 py-3 text-[14px] text-text-primary shadow-lg ring-1 ring-brand-action/20 transition-opacity duration-150"
+          className="fixed bottom-24 right-6 z-80 max-w-sm rounded-[12px] border border-brand-action/30 bg-surface-elevated px-4 py-3 text-[14px] text-text-primary shadow-lg ring-1 ring-brand-action/20 transition-opacity duration-150"
         >
           {toast}
         </div>

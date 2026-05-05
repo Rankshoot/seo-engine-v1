@@ -1,20 +1,19 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { Keyword, KeywordStatus } from "@/lib/types";
-import type { BusinessBrief } from "@/lib/business-brief";
 
 export type CalendarScheduledKeyword = {
   date: string;
   status: string;
 };
 
-export type KeywordFilterTab = "all" | KeywordStatus;
+export type KeywordFilterTab = "all" | "ai" | KeywordStatus;
 export type KeywordTableSortColumn =
   | "keyword"
   | "volume"
+  | "est_traffic"
   | "kd"
   | "cpc"
   | "intent"
-  | "ai_score"
   | "analysis_score"
   | "status";
 export type KeywordSortDir = "asc" | "desc";
@@ -31,29 +30,7 @@ type KeywordTablePrefs = {
   tableSort: { column: KeywordTableSortColumn; dir: KeywordSortDir };
 };
 
-/**
- * Session-scoped keyword list cache. Avoids a network round-trip when
- * navigating back to the keywords page. Cleared on keyword discovery.
- */
-type KeywordsCache = {
-  keywords: Keyword[];
-  total: number;
-  /** epoch-ms — used as React Query initialDataUpdatedAt so it never re-fetches */
-  loadedAt: number;
-};
-
-/**
- * Session-scoped business brief cache. Avoids re-fetching on page refresh.
- * Cleared when user explicitly clicks "Refresh brief".
- */
-type BriefCache = {
-  brief: BusinessBrief | null;
-  updatedAt: string | null;
-  /** epoch-ms — used as React Query initialDataUpdatedAt */
-  loadedAt: number;
-};
-
-type ProjectKeywordWorkspace = {
+export type ProjectKeywordWorkspace = {
   prefs: KeywordTablePrefs;
   /** Optimistic overlay: maps keyword ID → status for instant badge updates */
   statuses: Record<string, KeywordStatus>;
@@ -66,16 +43,57 @@ type ProjectKeywordWorkspace = {
    */
   calendarRefreshVersion: number;
   calendarLastSyncedVersion: number;
-  /** Full keyword list — avoids re-fetching on navigation */
-  keywordsCache: KeywordsCache | null;
-  /** Business brief — avoids re-fetching on page refresh */
-  briefCache: BriefCache | null;
   /**
    * Per-keyword calendar scheduling state. Hydrated from server on load,
    * updated optimistically when user schedules/reschedules.
    * Key: keyword ID, Value: { date, status }
    */
   calendarScheduledKeywords: Record<string, CalendarScheduledKeyword>;
+  aiAssistant: {
+    suggestedKeywordIds: string[];
+    suggestedGapKeywords: string[];
+    lowCompetitionKeywordIds: string[];
+    longTailKeywordIds: string[];
+    selectedKeywordIds: string[];
+    lastAction: string | null;
+    preferredFilter: "all" | "ai";
+    recentQueries: string[];
+    chatHistory: Array<{
+      id: string;
+      sessionId: string;
+      role: "user" | "assistant";
+      text: string;
+      page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+      timestamp: string;
+      /**
+       * Tool execution results that were rendered alongside this message.
+       * Persisted so the chat scroll-back keeps showing them after the next
+       * turn instead of disappearing with `result` state.
+       */
+      toolCalls?: Array<{
+        id: string;
+        params: Record<string, unknown>;
+        durationMs: number;
+        result: {
+          success: boolean;
+          message: string;
+          error?: string;
+          data?: unknown;
+          sideEffect?: string;
+        };
+      }>;
+      /** Suggestion cards rendered alongside this message. Stored loosely so
+       * Redux doesn't depend on the chatbot's internal types. */
+      suggestions?: Array<Record<string, unknown> | unknown>;
+    }>;
+    chatSessions: Array<{
+      id: string;
+      title: string;
+      page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+      createdAt: string;
+      lastMessageAt: string;
+    }>;
+  };
 };
 
 export type KeywordWorkspaceState = {
@@ -97,13 +115,44 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
     statuses: {},
     calendarRefreshVersion: 0,
     calendarLastSyncedVersion: 0,
-    keywordsCache: null,
-    briefCache: null,
     calendarScheduledKeywords: {},
+    aiAssistant: {
+      suggestedKeywordIds: [],
+      suggestedGapKeywords: [],
+      lowCompetitionKeywordIds: [],
+      longTailKeywordIds: [],
+      selectedKeywordIds: [],
+      lastAction: null,
+      preferredFilter: "all",
+      recentQueries: [],
+      chatHistory: [],
+      chatSessions: [],
+    },
   };
   // Backfill for existing persisted state that predates this field
   state.projects[projectId].calendarScheduledKeywords ??= {};
-  return state.projects[projectId];
+  state.projects[projectId].aiAssistant ??= {
+    suggestedKeywordIds: [],
+    suggestedGapKeywords: [],
+    lowCompetitionKeywordIds: [],
+    longTailKeywordIds: [],
+    selectedKeywordIds: [],
+    lastAction: null,
+    preferredFilter: "all",
+    recentQueries: [],
+    chatHistory: [],
+    chatSessions: [],
+  };
+  // Backfill chatSessions for persisted state that predates this field
+  (state.projects[projectId].aiAssistant as { chatSessions?: unknown[] }).chatSessions ??= [];
+  const proj = state.projects[projectId];
+  const f = proj.prefs.filter as string;
+  if (f === "low_competition" || f === "long_tail") proj.prefs.filter = "all";
+  const col = proj.prefs.tableSort.column as string;
+  if (col === "ai_score") proj.prefs.tableSort.column = "analysis_score";
+  const pf = proj.aiAssistant.preferredFilter as string;
+  if (pf === "low_competition" || pf === "long_tail") proj.aiAssistant.preferredFilter = "all";
+  return proj;
 }
 
 function approvedDelta(previousStatus: KeywordStatus | undefined, nextStatus: KeywordStatus) {
@@ -116,10 +165,6 @@ function approvedDelta(previousStatus: KeywordStatus | undefined, nextStatus: Ke
 function applyStatsDelta(project: ProjectKeywordWorkspace, delta: number) {
   if (!project.stats || delta === 0) return;
   project.stats.approvedKeywords = Math.max(0, project.stats.approvedKeywords + delta);
-  if (delta > 0) {
-    project.stats.calendarEntries += delta;
-    project.calendarRefreshVersion += 1;
-  }
 }
 
 export const keywordWorkspaceSlice = createSlice({
@@ -171,13 +216,6 @@ export const keywordWorkspaceSlice = createSlice({
         action.payload.previousStatus ?? project.statuses[action.payload.keywordId];
       project.statuses[action.payload.keywordId] = action.payload.nextStatus;
       applyStatsDelta(project, approvedDelta(previousStatus, action.payload.nextStatus));
-
-      // Keep the cached list in sync so status badges are correct on back-navigation.
-      if (project.keywordsCache) {
-        project.keywordsCache.keywords = project.keywordsCache.keywords.map(kw =>
-          kw.id === action.payload.keywordId ? { ...kw, status: action.payload.nextStatus } : kw
-        );
-      }
     },
 
     /** Bulk approve / reject — mass-select mode. */
@@ -197,16 +235,9 @@ export const keywordWorkspaceSlice = createSlice({
         totalDelta += approvedDelta(previousStatus, action.payload.nextStatus);
       }
       applyStatsDelta(project, totalDelta);
-
-      if (project.keywordsCache) {
-        const idSet = new Set(action.payload.keywordIds);
-        project.keywordsCache.keywords = project.keywordsCache.keywords.map(kw =>
-          idSet.has(kw.id) ? { ...kw, status: action.payload.nextStatus } : kw
-        );
-      }
     },
 
-    /** Remove a keyword from the status overlay and cached list. */
+    /** Remove a keyword from the status overlay. */
     removeKeywordStatus(
       state,
       action: PayloadAction<{ projectId: string; keywordId: string; previousStatus?: KeywordStatus }>
@@ -217,12 +248,6 @@ export const keywordWorkspaceSlice = createSlice({
       delete project.statuses[action.payload.keywordId];
       if (previousStatus === "approved" && project.stats) {
         project.stats.approvedKeywords = Math.max(0, project.stats.approvedKeywords - 1);
-      }
-      if (project.keywordsCache) {
-        project.keywordsCache.keywords = project.keywordsCache.keywords.filter(
-          kw => kw.id !== action.payload.keywordId
-        );
-        project.keywordsCache.total = Math.max(0, project.keywordsCache.total - 1);
       }
     },
 
@@ -257,46 +282,11 @@ export const keywordWorkspaceSlice = createSlice({
     },
 
     /**
-     * Store the full keyword list so the next navigation to the keywords page
-     * renders instantly from this cache instead of hitting the API.
+     * Bump when calendar-backed data changes off the calendar route (e.g. blog
+     * generated on Blogs page) so the calendar query invalidates on next visit.
      */
-    keywordsLoaded(
-      state,
-      action: PayloadAction<{ projectId: string; keywords: Keyword[]; total: number }>
-    ) {
-      ensureProject(state, action.payload.projectId).keywordsCache = {
-        keywords: action.payload.keywords,
-        total: action.payload.total,
-        loadedAt: Date.now(),
-      };
-    },
-
-    /**
-     * Wipe the keyword cache before discovery so fresh results are fetched
-     * rather than being shadowed by the old list.
-     */
-    clearKeywordsCache(state, action: PayloadAction<{ projectId: string }>) {
-      ensureProject(state, action.payload.projectId).keywordsCache = null;
-    },
-
-    /**
-     * Store the business brief so the keywords page renders instantly on
-     * page refresh without a round-trip to the DB.
-     */
-    briefLoaded(
-      state,
-      action: PayloadAction<{ projectId: string; brief: BusinessBrief | null; updatedAt: string | null }>
-    ) {
-      ensureProject(state, action.payload.projectId).briefCache = {
-        brief: action.payload.brief,
-        updatedAt: action.payload.updatedAt,
-        loadedAt: Date.now(),
-      };
-    },
-
-    /** Wipe the brief cache so the next render fetches a fresh copy. */
-    clearBriefCache(state, action: PayloadAction<{ projectId: string }>) {
-      ensureProject(state, action.payload.projectId).briefCache = null;
+    calendarRefreshBump(state, action: PayloadAction<{ projectId: string }>) {
+      ensureProject(state, action.payload.projectId).calendarRefreshVersion += 1;
     },
 
     /**
@@ -339,6 +329,82 @@ export const keywordWorkspaceSlice = createSlice({
         };
       }
     },
+
+    aiAssistantMemoryUpdated(
+      state,
+      action: PayloadAction<{
+        projectId: string;
+        suggestedKeywordIds?: string[];
+        suggestedGapKeywords?: string[];
+        lowCompetitionKeywordIds?: string[];
+        longTailKeywordIds?: string[];
+        selectedKeywordIds?: string[];
+        lastAction?: string | null;
+        preferredFilter?: "all" | "ai";
+        recentQueries?: string[];
+        chatHistory?: Array<{
+          id: string;
+          sessionId: string;
+          role: "user" | "assistant";
+          text: string;
+          page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+          timestamp: string;
+          toolCalls?: Array<{
+            id: string;
+            params: Record<string, unknown>;
+            durationMs: number;
+            result: {
+              success: boolean;
+              message: string;
+              error?: string;
+              data?: unknown;
+              sideEffect?: string;
+            };
+          }>;
+          suggestions?: Array<Record<string, unknown> | unknown>;
+        }>;
+        chatSessions?: Array<{
+          id: string;
+          title: string;
+          page: "keywords" | "competitors" | "calendar" | "blogs" | "audit";
+          createdAt: string;
+          lastMessageAt: string;
+        }>;
+      }>
+    ) {
+      const project = ensureProject(state, action.payload.projectId);
+      const current = project.aiAssistant;
+      if (action.payload.suggestedKeywordIds) {
+        current.suggestedKeywordIds = action.payload.suggestedKeywordIds;
+      }
+      if (action.payload.suggestedGapKeywords) {
+        current.suggestedGapKeywords = action.payload.suggestedGapKeywords;
+      }
+      if (action.payload.lowCompetitionKeywordIds) {
+        current.lowCompetitionKeywordIds = action.payload.lowCompetitionKeywordIds;
+      }
+      if (action.payload.longTailKeywordIds) {
+        current.longTailKeywordIds = action.payload.longTailKeywordIds;
+      }
+      if (action.payload.selectedKeywordIds) {
+        current.selectedKeywordIds = action.payload.selectedKeywordIds;
+      }
+      if (action.payload.lastAction !== undefined) {
+        current.lastAction = action.payload.lastAction;
+      }
+      if (action.payload.preferredFilter) {
+        current.preferredFilter = action.payload.preferredFilter;
+      }
+      if (action.payload.recentQueries) {
+        current.recentQueries = action.payload.recentQueries.slice(-12);
+      }
+      if (action.payload.chatHistory) {
+        current.chatHistory = action.payload.chatHistory.slice(-100);
+      }
+      if (action.payload.chatSessions) {
+        current.chatSessions = action.payload.chatSessions.slice(-50);
+      }
+    },
   },
 });
 
@@ -352,12 +418,10 @@ export const {
   hydrateProjectStats,
   calendarEntriesLoaded,
   calendarSyncVersionUpdated,
-  keywordsLoaded,
-  clearKeywordsCache,
-  briefLoaded,
-  clearBriefCache,
+  calendarRefreshBump,
   calendarKeywordScheduled,
   calendarEntriesHydrated,
+  aiAssistantMemoryUpdated,
 } = keywordWorkspaceSlice.actions;
 
 export { defaultPrefs };

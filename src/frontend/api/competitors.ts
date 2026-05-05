@@ -1,0 +1,23 @@
+import type { BenchmarkState, RunBenchmarkResult } from "@/app/actions/competitor-actions";
+import { apiGet, apiPost } from "./http";
+import { V1Routes } from "./routes";
+
+export const competitorsApi = {
+  benchmark(projectId: string): Promise<BenchmarkState> {
+    return apiGet(V1Routes.competitorsBenchmark(projectId));
+  },
+
+  runBenchmark(projectId: string): Promise<RunBenchmarkResult> {
+    return apiPost(V1Routes.competitorsBenchmark(projectId));
+  },
+
+  blogFromOpportunity(
+    projectId: string,
+    keyword: string
+  ): Promise<
+    | { success: true; entryId: string; keywordId: string }
+    | { success: false; error: string }
+  > {
+    return apiPost(V1Routes.competitorsBlogFromOpportunity(projectId), { keyword });
+  },
+};

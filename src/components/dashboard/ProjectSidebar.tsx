@@ -2,24 +2,22 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { qk } from "@/lib/query-keys";
+import { qk, keywordsListQueryOptions } from "@/lib/query";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
-import { getKeywords } from "@/app/actions/keyword-actions";
-import { getProjectStats } from "@/app/actions/project-actions";
-import { getBusinessBrief } from "@/app/actions/brief-actions";
-import { getCalendarEntries } from "@/app/actions/calendar-actions";
-import { getCalendarWithBlogs } from "@/app/actions/blog-actions";
-import { getCompetitorBenchmark } from "@/app/actions/competitor-actions";
-import { getBlogAudits } from "@/app/actions/audit-actions";
+import { projectsApi } from "@/frontend/api/projects";
+import { briefApi } from "@/frontend/api/brief";
+import { calendarApi } from "@/frontend/api/calendar";
+import { auditsApi } from "@/frontend/api/audits";
+import { competitorsApi } from "@/frontend/api/competitors";
 
-// Stale time for hover-prefetched data. Only fetch on hover when the cache is
-// more than 5 minutes old — prevents thrashing on pages the user visits often.
+/** Passed to `prefetchQuery` so a click-prefetch does not instantly mark data stale. */
 const PREFETCH_STALE_MS = 5 * 60_000;
 
 const Icon = {
@@ -34,6 +32,7 @@ const Icon = {
   chevronRight: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
   chevronLeft: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
   check: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>,
+  ai: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9.8 15.9 9 18.8l-.8-2.9a4.5 4.5 0 0 0-3.1-3.1L2.3 12l2.8-.8a4.5 4.5 0 0 0 3.1-3.1L9 5.3l.8 2.8a4.5 4.5 0 0 0 3.1 3.1l2.8.8-2.8.8a4.5 4.5 0 0 0-3.1 3.1Z"/><path d="M19 2v4"/><path d="M21 4h-4"/><path d="M19 18v4"/><path d="M21 20h-4"/></svg>,
 };
 
 interface ProjectSidebarProps {
@@ -42,6 +41,7 @@ interface ProjectSidebarProps {
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
+  onOpenAI?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -49,22 +49,17 @@ export default function ProjectSidebar({
   stats, 
   allProjects,
   isCollapsed,
-  setIsCollapsed
+  setIsCollapsed,
+  onOpenAI,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
-  // staleTime: Infinity — the sidebar reads stats from the Redux overlay for
-  // real-time updates (keyword approvals, blog generation). The React Query
-  // entry is only needed as a reliable initial seed; it should NOT silently
-  // re-fetch on a timer because every POST fires against the current page URL.
   const { data: statsResponse } = useQuery({
     queryKey: qk.projectStats(project.id),
-    queryFn: () => getProjectStats(project.id),
+    queryFn: () => projectsApi.stats(project.id),
     enabled: !!project.id,
-    staleTime: Infinity,
-    gcTime: 30 * 60_000,
   });
   const serverStats = useMemo(() => {
     if (statsResponse?.success && statsResponse.data) {
@@ -89,12 +84,14 @@ export default function ProjectSidebar({
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  /** Nav count badges use React Query + Redux; values can differ SSR vs first client paint — defer badges until mounted to avoid hydration mismatch. */
+  const [navCountsReady, setNavCountsReady] = useState(false);
+  useEffect(() => {
+    setNavCountsReady(true);
+  }, []);
 
-  // Prefetch helpers. Each one warms one or two query keys for the destination
-  // page so by the time the user clicks the link, the data is already cached.
-  // Guard: skip any key that is already in flight — React Query deduplicates
-  // concurrent prefetches for the same key, but the guard prevents redundant
-  // prefetchQuery calls (and their overhead) when the user hovers rapidly.
+  // Warm TanStack cache on nav **click** only (not hover/focus) so moving the
+  // mouse across the sidebar does not hit `/api/v1`.
   const safePrefetch = (queryKey: readonly unknown[], queryFn: () => Promise<unknown>) => {
     if (queryClient.isFetching({ queryKey }) > 0) return;
     void queryClient.prefetchQuery({ queryKey, queryFn, staleTime: PREFETCH_STALE_MS });
@@ -103,25 +100,27 @@ export default function ProjectSidebar({
   const prefetchFor = (label: string) => {
     const id = project.id;
     switch (label) {
-      case "Keywords":
-        safePrefetch(qk.keywords(id, { limit: 20, offset: 0 }), () => getKeywords(id, { limit: 20, offset: 0 }));
-        safePrefetch(qk.brief(id), () => getBusinessBrief(id));
+      case "Keywords": {
+        const kwo = keywordsListQueryOptions(id);
+        safePrefetch(kwo.queryKey, kwo.queryFn);
+        safePrefetch(qk.brief(id), () => briefApi.get(id));
         break;
+      }
       case "Calendar":
-        safePrefetch(qk.calendar(id), () => getCalendarEntries(id));
-        safePrefetch(qk.audits(id), () => getBlogAudits(id));
+        safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
+        safePrefetch(qk.audits(id), () => auditsApi.list(id));
         break;
       case "Blogs":
-        safePrefetch(qk.calendarWithBlogs(id), () => getCalendarWithBlogs(id));
+        safePrefetch(qk.calendarWithBlogs(id), () => calendarApi.withBlogs(id));
         break;
       case "Competitors":
-        safePrefetch(qk.competitors(id), () => getCompetitorBenchmark(id));
+        safePrefetch(qk.competitors(id), () => competitorsApi.benchmark(id));
         break;
       case "Content Health":
-        safePrefetch(qk.audits(id), () => getBlogAudits(id));
+        safePrefetch(qk.audits(id), () => auditsApi.list(id));
         break;
       default:
-        // Overview — data is fetched client-side by SiteExplorerSection.
+        // Overview — project + calendar data from shared React Query keys.
         break;
     }
   };
@@ -154,7 +153,7 @@ export default function ProjectSidebar({
       icon: Icon.search,
       label: "Keywords",
       href: `${base}/keywords`,
-      badge: liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
+      badge: navCountsReady && liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
     },
     {
       icon: Icon.target,
@@ -165,20 +164,20 @@ export default function ProjectSidebar({
       icon: Icon.audit,
       label: "Content Health",
       href: `${base}/audit`,
-      badge: liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
-      badgeColor: liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
+      badge: navCountsReady && liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
+      badgeColor: navCountsReady && liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
     },
     {
       icon: Icon.calendar,
       label: "Calendar",
       href: `${base}/calendar`,
-      badge: liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
+      badge: navCountsReady && liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
     },
     {
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
-      badge: liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
+      badge: navCountsReady && liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
     },
   ];
 
@@ -284,13 +283,13 @@ export default function ProjectSidebar({
                 ))}
               </div>
               <div className="px-3 pt-2 mt-2 border-t border-border-subtle">
-                <Link 
+                <ProjectNavLink
                   href="/projects"
                   onClick={() => setIsDropdownOpen(false)}
                   className="flex items-center gap-2 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors py-1"
                 >
                   {Icon.grid} View all projects
-                </Link>
+                </ProjectNavLink>
               </div>
             </div>
           )}
@@ -307,10 +306,9 @@ export default function ProjectSidebar({
             const active = isActive(item.href);
             return (
               <li key={item.label}>
-                <Link
+                <ProjectNavLink
                   href={item.href}
-                  onMouseEnter={() => prefetchFor(item.label)}
-                  onFocus={() => prefetchFor(item.label)}
+                  onClick={() => prefetchFor(item.label)}
                   className={`flex items-center rounded-[8px] text-[14px] font-medium transition-all duration-300 ease-in-out group relative
                     ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
                     ${active
@@ -337,10 +335,12 @@ export default function ProjectSidebar({
                   {isCollapsed && (
                     <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
                       {item.label}
-                      {item.badge && <span className="ml-2 text-text-tertiary">({item.badge})</span>}
+                      {navCountsReady && item.badge && (
+                        <span className="ml-2 text-text-tertiary">({item.badge})</span>
+                      )}
                     </div>
                   )}
-                </Link>
+                </ProjectNavLink>
               </li>
             );
           })}
@@ -348,9 +348,31 @@ export default function ProjectSidebar({
 
         <div className={`border-t border-border-subtle pt-6 transition-all duration-300 ease-in-out ${isCollapsed ? "flex justify-center" : ""}`}>
           <ul className="space-y-1.5 w-full">
+            {onOpenAI && (
+              <li>
+                <button
+                  onClick={onOpenAI}
+                  className={`w-full flex items-center rounded-[8px] text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all duration-300 ease-in-out border border-transparent group relative
+                    ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
+                  `}
+                >
+                  <span className="text-text-tertiary group-hover:text-brand-action transition-colors shrink-0">
+                    {Icon.ai}
+                  </span>
+                  <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
+                    AI Assistant
+                  </span>
+                  {isCollapsed && (
+                    <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
+                      AI Assistant
+                    </div>
+                  )}
+                </button>
+              </li>
+            )}
             <li>
-              <Link 
-                href="/projects" 
+              <ProjectNavLink
+                href="/projects"
                 className={`flex items-center rounded-[8px] text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all duration-300 ease-in-out border border-transparent group relative
                   ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
                 `}
@@ -368,7 +390,7 @@ export default function ProjectSidebar({
                     All Projects
                   </div>
                 )}
-              </Link>
+              </ProjectNavLink>
             </li>
           </ul>
         </div>

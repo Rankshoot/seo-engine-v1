@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import type { KeywordStatus } from "@/lib/types";
 
 type Props = {
@@ -13,6 +12,16 @@ type Props = {
   onResetPending: () => void;
   onRemove: () => void;
 };
+
+/** Status changes use the row `<select>`; the kebab menu is retired. */
+export function KeywordRowMenu(_props: Props) {
+  return null;
+}
+
+/*
+Previous 3-dot menu (Explore / Approve / Reject / Remove). Kept for reference.
+
+import { useEffect, useRef, useState } from "react";
 
 export function KeywordRowMenu({
   status,
@@ -48,90 +57,15 @@ export function KeywordRowMenu({
           e.stopPropagation();
           setOpen(o => !o);
         }}
-        className={`flex h-8 w-8 items-center justify-center rounded-[8px] border border-border-subtle bg-surface-secondary text-text-secondary transition-all duration-150 hover:bg-surface-hover hover:text-text-primary ${
-          open ? "ring-1 ring-brand-action/30 text-text-primary" : ""
-        }`}
+        className={...}
         title="Keyword actions"
         aria-expanded={open}
         aria-haspopup="menu"
       >
-        <span className="sr-only">Open menu for {phrase}</span>
-        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-          <circle cx="12" cy="5" r="1.75" />
-          <circle cx="12" cy="12" r="1.75" />
-          <circle cx="12" cy="19" r="1.75" />
-        </svg>
+        ...
       </button>
-
-      <div
-        role="menu"
-        className={`absolute right-0 top-full z-40 mt-1 min-w-[200px] origin-top-right rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg transition-[opacity,transform] duration-150 ${
-          open ? "pointer-events-auto scale-100 opacity-100" : "pointer-events-none scale-95 opacity-0"
-        }`}
-      >
-        <button
-          type="button"
-          role="menuitem"
-          className={itemCls}
-          onClick={() => {
-            setOpen(false);
-            onExplore();
-          }}
-        >
-          Explore keyword
-        </button>
-        {status !== "approved" ? (
-          <button
-            type="button"
-            role="menuitem"
-            className={itemCls}
-            onClick={() => {
-              setOpen(false);
-              onApproveCalendar();
-            }}
-          >
-            Approve for calendar
-          </button>
-        ) : null}
-        {status !== "rejected" ? (
-          <button
-            type="button"
-            role="menuitem"
-            className={itemCls}
-            onClick={() => {
-              setOpen(false);
-              onReject();
-            }}
-          >
-            Reject
-          </button>
-        ) : null}
-        {status !== "pending" ? (
-          <button
-            type="button"
-            role="menuitem"
-            className={itemCls}
-            onClick={() => {
-              setOpen(false);
-              onResetPending();
-            }}
-          >
-            Mark pending
-          </button>
-        ) : null}
-        <hr className="my-1 border-border-subtle" />
-        <button
-          type="button"
-          role="menuitem"
-          className={`${itemCls} text-brand-coral hover:text-brand-coral hover:bg-brand-coral/10`}
-          onClick={() => {
-            setOpen(false);
-            onRemove();
-          }}
-        >
-          Remove from list…
-        </button>
-      </div>
+      <div role="menu" className={...}>...</div>
     </div>
   );
 }
+*/

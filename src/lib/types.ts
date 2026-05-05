@@ -26,11 +26,18 @@ export type KeywordStatus = 'pending' | 'approved' | 'rejected';
 
 /**
  * Provenance for a keyword row.
- * - `industry`        — Keywords-Explorer / seed-driven (legacy + future).
- * - `competitor_gap`  — competitor ranks for it, we do not.
- * - `quick_win`       — we already rank for it at positions 4–20.
+ * - `industry`               — Keywords-Explorer / seed-driven (legacy + future).
+ * - `competitor_gap`         — competitor ranks for it, we do not (discovery pipeline).
+ * - `competitor_benchmark`   — approved from the Competitors benchmark opportunity table.
+ * - `quick_win`              — we already rank for it at positions 4–20.
  */
-export type KeywordSourceType = 'industry' | 'competitor_gap' | 'quick_win';
+export type KeywordSourceType =
+  | 'industry'
+  | 'competitor_gap'
+  | 'competitor_benchmark'
+  | 'quick_win'
+  /** Google Ads `keywords_for_site` — domain tab live list. */
+  | 'google_ads_domain';
 
 /** Multi-intent flags as Ahrefs returns them. Structurally matches `AhrefsIntentObject`. */
 export interface KeywordIntents {
@@ -89,6 +96,8 @@ export interface Keyword {
   intent?: string | null;
   /** Discovery-pipeline provenance. */
   source_type?: KeywordSourceType | string | null;
+  /** Set when the keyword was stamped from the AI assistant (e.g. "AI · keywords"). */
+  ai_source?: string | null;
   /** Competitor domains that rank for this keyword (sorted by traffic). */
   source_competitors?: string[] | null;
   /** Ranking page URLs aligned positionally with `source_competitors`. */
@@ -236,8 +245,17 @@ export interface CalendarEntry {
   focus_keyword: string;
   secondary_keywords: string[];
   status: CalendarStatus;
+  /** Set when a calendar entry is created from an AI suggestion. Format: "AI · <page>" e.g. "AI · keywords" */
+  ai_source?: string;
+  /**
+   * Full Content Health snapshot when the row was queued from the audit UI.
+   * Fed into `generateBlog` as writer notes so the new draft resolves these findings.
+   */
+  content_health_audit?: unknown | null;
   created_at: string;
   keywords?: Keyword;
+  /** Joined from `blogs.title` in `getCalendarEntries` when a blog exists. */
+  blog_title?: string | null;
 }
 
 export interface Blog {
@@ -265,7 +283,7 @@ export interface Blog {
 
 /** Calendar row plus optional blog summary from `getCalendarWithBlogs`. */
 export type CalendarEntryWithBlog = CalendarEntry & {
-  blog: Pick<Blog, "id" | "entry_id" | "word_count" | "status" | "research_sources"> | null;
+  blog: Pick<Blog, "id" | "entry_id" | "title" | "word_count" | "status" | "research_sources"> | null;
 };
 
 export const ARTICLE_TYPES = [
@@ -285,6 +303,7 @@ export const ARTICLE_TYPES = [
 export const TARGET_REGIONS = [
   { code: 'us', name: 'United States', locationCode: 2840 },
   { code: 'uk', name: 'United Kingdom', locationCode: 2826 },
+  /** DataForSEO / Google Ads country location — India is 2356; US is 2840 (do not swap). */
   { code: 'in', name: 'India', locationCode: 2356 },
   { code: 'au', name: 'Australia', locationCode: 2036 },
   { code: 'ca', name: 'Canada', locationCode: 2124 },
@@ -294,6 +313,34 @@ export const TARGET_REGIONS = [
   { code: 'ae', name: 'UAE', locationCode: 2784 },
   { code: 'nz', name: 'New Zealand', locationCode: 2554 },
 ] as const;
+
+/** DataForSEO default when `target_region` cannot be resolved (United States). */
+export const DATAFORSEO_DEFAULT_LOCATION_CODE = 2840 as const;
+
+/**
+ * Maps a project's `target_region` (dropdown stores codes like `in`, `us`)
+ * to DataForSEO `location_code`. Handles case, whitespace, display names
+ * (`India`), and numeric codes that match our table. Unknown values fall back
+ * to {@link DATAFORSEO_DEFAULT_LOCATION_CODE}.
+ */
+export function locationCodeFromTargetRegion(region: string | null | undefined): number {
+  const raw = (region ?? '').trim();
+  if (!raw) return DATAFORSEO_DEFAULT_LOCATION_CODE;
+
+  const lower = raw.toLowerCase();
+  const byCode = TARGET_REGIONS.find(r => r.code === lower);
+  if (byCode) return byCode.locationCode;
+
+  const byName = TARGET_REGIONS.find(r => r.name.toLowerCase() === lower);
+  if (byName) return byName.locationCode;
+
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    if (TARGET_REGIONS.some(r => r.locationCode === n)) return n;
+  }
+
+  return DATAFORSEO_DEFAULT_LOCATION_CODE;
+}
 
 export const WORD_COUNT_OPTIONS = [500, 1000, 1500, 2500, 3000, 5000] as const;
 

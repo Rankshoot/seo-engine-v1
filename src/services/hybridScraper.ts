@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser } from 'playwright';
+import { readUrlViaJinaReader } from '@/lib/jina';
 import { analyzeWebsiteWithAI, type AIAnalysisResult } from './aiWebsiteAnalyzer';
 
 const quietJsdomConsole = new VirtualConsole();
@@ -76,18 +77,22 @@ async function fetchHtmlWithRetries(url: string, retries = 2, timeoutMs = 10000)
  * Fetch HTML using Playwright (fallback mechanism).
  */
 let playwrightAvailable = true;
-async function fetchHtmlWithPlaywright(url: string): Promise<string | null> {
+async function fetchHtmlWithPlaywright(url: string, timeoutMs = 25_000): Promise<string | null> {
   if (!playwrightAvailable) return null;
   let browser: Browser | null = null;
   try {
     browser = await chromium.launch({ headless: true });
-    const page: Page = await browser.newPage();
-    // Set typical viewport and user agent to avoid basic blocks
-    await page.setViewportSize({ width: 1280, height: 800 });
-    // Go to URL and wait until no more than 2 network connections for at least 500 ms.
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
-    const content = await page.content();
-    return content;
+    const context = await browser.newContext({
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 800 },
+      locale: 'en-US',
+    });
+    const page = await context.newPage();
+    // `networkidle` rarely completes on modern sites (analytics, websockets).
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    await new Promise<void>(r => setTimeout(r, 1200));
+    return await page.content();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // If the browser executable is missing, disable further attempts for this process.
@@ -231,10 +236,10 @@ export async function analyzeWebsite(url: string): Promise<HybridScraperResult> 
   // 1. Fetch raw HTML
   let html = await fetchHtmlWithRetries(baseUrl);
   
-  // 2. Playwright Fallback if Fetch fails
+  // 2. Playwright fallback if fetch failed (403 / empty SPA shell).
   if (!html) {
     console.log(`[hybridScraper] Using Playwright fallback for ${baseUrl}`);
-    html = await fetchHtmlWithPlaywright(baseUrl);
+    html = await fetchHtmlWithPlaywright(baseUrl, 25_000);
   }
 
   if (!html) {
@@ -287,10 +292,21 @@ export interface ScrapedPageMarkdown {
 
 export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapedPageMarkdown> {
   try {
-    let html = await fetchHtmlWithRetries(url, 1, opts.timeoutMs || 15000);
+    const timeoutMs = opts.timeoutMs ?? 15_000;
+    let html = await fetchHtmlWithRetries(url, 1, timeoutMs);
     if (!html) {
+      console.log(`[hybridScraper] Using Jina Reader for ${url}`);
+      const jina = await readUrlViaJinaReader(url, { timeoutMs });
+      if (jina.ok && jina.markdown.trim()) {
+        return {
+          url,
+          markdown: jina.markdown,
+          length: jina.markdown.length,
+          ok: true,
+        };
+      }
       console.log(`[hybridScraper] Using Playwright fallback for ${url}`);
-      html = await fetchHtmlWithPlaywright(url);
+      html = await fetchHtmlWithPlaywright(url, timeoutMs);
     }
     if (!html) {
       throw new Error(`Failed to fetch HTML for ${url}`);

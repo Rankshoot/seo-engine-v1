@@ -2,7 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { discoverKeywordsForProject } from '@/lib/dataforseo';
+import { discoverKeywordsForProject, fetchGoogleAdsKeywordsForSite, type CompetitorKeywordsForSiteRow } from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
@@ -234,7 +234,6 @@ function candidateToRow(projectId: string, c: KeywordCandidate) {
     kd: c.difficulty != null ? Math.round(c.difficulty) : 0,
     cpc: cpcDollars,
     intent: c.intent || null,
-    intents: c.intents ?? {},
     parent_topic: c.parent_topic ?? '',
     traffic_potential: c.traffic_potential != null ? Math.round(c.traffic_potential) : 0,
     source_type: c.source_type,
@@ -352,17 +351,15 @@ export async function discoverKeywords(projectId: string) {
   );
 
   if (!rawKeywords.length) {
-    const ahrefsErr = discoveryTrace.find(
-      t => t.label.includes('ahrefs') && t.label.includes('error')
-    );
     const cfgErr = discoveryTrace.find(t => t.label === '(config)');
+    const fetchErr = discoveryTrace.find(t => t.fetchError);
     const detail =
       cfgErr?.fetchError ||
-      ahrefsErr?.fetchError ||
-      'Ahrefs returned 0 rows for these seeds.';
+      fetchErr?.fetchError ||
+      'No rows returned for these seeds.';
     return {
       success: false,
-      error: `No keywords returned by Ahrefs (${detail}). Open DevTools console for the full trace.`,
+      error: `No keywords returned (${detail}). Open DevTools console for the full trace.`,
       discoveryTrace,
       briefSummary: briefSummary(brief),
     };
@@ -723,4 +720,194 @@ export async function deleteAllKeywords(projectId: string) {
 
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+
+/**
+ * Fetches keywords for the project's own domain using the Google Ads
+ * `keywords_for_site/live` endpoint. Returns live data — not persisted to the
+ * `keywords` table.
+ */
+const KEYWORD_STATUS_SET = new Set<KeywordStatus>(['pending', 'approved', 'rejected']);
+
+function parseKeywordStatus(v: unknown): KeywordStatus | null {
+  if (typeof v !== 'string') return null;
+  return KEYWORD_STATUS_SET.has(v as KeywordStatus) ? (v as KeywordStatus) : null;
+}
+
+export async function getDomainKeywords(
+  projectId: string
+): Promise<{ success: true; data: CompetitorKeywordsForSiteRow[] } | { success: false; error: string; data: CompetitorKeywordsForSiteRow[] }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: [] };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('domain, target_region, target_language')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Project not found', data: [] };
+
+  const domain: string = (project as { domain?: string | null }).domain ?? '';
+  const region: string = (project as { target_region?: string | null }).target_region ?? 'us';
+  const language: string = (project as { target_language?: string | null }).target_language ?? 'en';
+
+  if (!domain) return { success: false, error: 'No domain configured for this project', data: [] };
+
+  try {
+    const keywords = await fetchGoogleAdsKeywordsForSite(domain, region, language, 1000);
+    if (keywords.length === 0) return { success: true, data: [] };
+
+    const norm = (s: string) => (s ?? '').trim().toLowerCase();
+    const normalized = [...new Set(keywords.map(k => norm(k.keyword)))];
+    const { data: dbRows, error: dbErr } = await supabaseAdmin
+      .from('keywords')
+      .select('id, normalized_keyword, keyword_analysis_score, status')
+      .eq('project_id', projectId)
+      .in('normalized_keyword', normalized);
+
+    if (dbErr) {
+      console.warn('[getDomainKeywords] keyword join failed', dbErr.message);
+    }
+
+    const map = new Map(
+      (dbRows ?? []).map(r => [
+        norm(r.normalized_keyword as string),
+        {
+          id: r.id as string,
+          keyword_analysis_score: r.keyword_analysis_score as number | null,
+          status: parseKeywordStatus(r.status),
+        },
+      ])
+    );
+
+    const merged: CompetitorKeywordsForSiteRow[] = keywords.map(k => {
+      const key = norm(k.keyword);
+      const hit = map.get(key);
+      const dbScore = typeof hit?.keyword_analysis_score === 'number' ? hit.keyword_analysis_score : null;
+      const fallback = aiScore(k.volume, k.kd, k.intent || '');
+      const fromIndustry = dbScore != null && dbScore > 0;
+      const keyword_analysis_score =
+        fromIndustry ? dbScore : fallback > 0 ? fallback : dbScore;
+      return {
+        ...k,
+        matched_keyword_id: hit?.id ?? null,
+        keyword_analysis_score,
+        matched_status: hit?.status ?? null,
+        analysis_score_is_industry: fromIndustry,
+      };
+    });
+
+    return { success: true, data: merged };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, error: `API error: ${msg}`, data: [] };
+  }
+}
+
+type DomainSiteKeywordPayload = Pick<
+  CompetitorKeywordsForSiteRow,
+  'keyword' | 'volume' | 'kd' | 'cpc' | 'intent' | 'estimated_monthly_traffic'
+>;
+
+/**
+ * Creates or updates a `keywords` row from a Google Ads keywords-for-site row so
+ * approve / reject in the Domain tab persists like the industry list.
+ */
+export async function upsertKeywordFromDomainSite(
+  projectId: string,
+  row: DomainSiteKeywordPayload,
+  status: KeywordStatus
+): Promise<{ success: true; id: string } | { success: false; error: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const phrase = (row.keyword ?? '').trim().toLowerCase();
+  if (!phrase || phrase.length > 512) return { success: false, error: 'Invalid keyword' };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Project not found' };
+
+  const volume = Math.max(0, Math.round(Number(row.volume) || 0));
+  const kd = Math.max(0, Math.min(100, Math.round(Number(row.kd) || 0)));
+  const cpc = Math.max(0, Number(row.cpc) || 0);
+  const intentStr = row.intent || '';
+  const tp =
+    row.estimated_monthly_traffic != null &&
+    Number.isFinite(row.estimated_monthly_traffic) &&
+    row.estimated_monthly_traffic > 0
+      ? Math.round(row.estimated_monthly_traffic)
+      : 0;
+
+  const { data: existing, error: exErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, keyword_analysis_score')
+    .eq('project_id', projectId)
+    .eq('normalized_keyword', phrase)
+    .maybeSingle();
+
+  if (exErr) return { success: false, error: exErr.message };
+
+  const now = new Date().toISOString();
+
+  if (existing?.id) {
+    const { data: updated, error: upErr } = await supabaseAdmin
+      .from('keywords')
+      .update({
+        volume,
+        kd,
+        cpc,
+        intent: intentStr,
+        traffic_potential: tp,
+        status,
+        source_type: 'google_ads_domain',
+        updated_at: now,
+      })
+      .eq('id', existing.id)
+      .select('id')
+      .single();
+
+    if (upErr || !updated) return { success: false, error: upErr?.message ?? 'Update failed' };
+    return { success: true, id: updated.id as string };
+  }
+
+  const ai = aiScore(volume, kd, intentStr);
+
+  const { data: inserted, error: insErr } = await supabaseAdmin
+    .from('keywords')
+    .insert({
+      project_id: projectId,
+      keyword: phrase,
+      volume,
+      kd,
+      cpc,
+      intent: intentStr,
+      traffic_potential: tp,
+      status,
+      source_type: 'google_ads_domain',
+      trend: '+0%',
+      monthly_searches: [],
+      secondary_keywords: [],
+      ai_score: ai,
+      keyword_analysis_score: 0,
+      relevance_score: 0,
+      business_fit_score: 0,
+      competition_level: '',
+      parent_topic: '',
+      source_competitors: [],
+      source_urls: [],
+      updated_at: now,
+    })
+    .select('id')
+    .single();
+
+  if (insErr || !inserted) return { success: false, error: insErr?.message ?? 'Insert failed' };
+  return { success: true, id: inserted.id as string };
 }

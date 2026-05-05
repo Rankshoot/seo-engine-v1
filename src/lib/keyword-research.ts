@@ -42,7 +42,7 @@
  * directly — they're different products with different data shapes.
  */
 
-import { TARGET_REGIONS, type KeywordIntents } from './types';
+import { locationCodeFromTargetRegion, type KeywordIntents } from './types';
 import {
   ahrefsGetVerbose,
   isAhrefsConfigured,
@@ -176,10 +176,6 @@ function cleanSeeds(seeds: string[]): string[] {
 function ahrefsCountry(regionCode: string): string {
   const code = (regionCode || 'us').toLowerCase();
   return code === 'uk' ? 'gb' : code;
-}
-
-function locationCodeFor(regionCode: string): number {
-  return TARGET_REGIONS.find(r => r.code === regionCode)?.locationCode ?? 2840;
 }
 
 function inferIntentFromAhrefs(intents: AhrefsIntentObject | null | undefined): KeywordIntent {
@@ -632,7 +628,7 @@ export async function fetchKeywordsFromDataForSEO(
     );
   }
 
-  const locationCode = locationCodeFor(region);
+  const locationCode = locationCodeFromTargetRegion(region);
 
   // 1. Bulk seed → ideas (keyword_ideas/live).
   const ideasBody = [

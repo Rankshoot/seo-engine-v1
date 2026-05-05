@@ -1,0 +1,13 @@
+import { currentUser } from "@clerk/nextjs/server";
+import { getCalendarEntries } from "@/app/actions/calendar-actions";
+import { apiJson } from "@/server/http/json";
+
+export const runtime = "nodejs";
+
+export async function GET(_req: Request, { params }: { params: Promise<{ projectId: string }> }) {
+  const user = await currentUser();
+  if (!user) return apiJson({ success: false, error: "Not authenticated", data: [] }, { status: 401 });
+  const { projectId } = await params;
+  const result = await getCalendarEntries(projectId);
+  return apiJson(result, { status: result.success ? 200 : 500 });
+}

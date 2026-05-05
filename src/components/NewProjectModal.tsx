@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
-import { createProject } from "@/app/actions/project-actions";
+import { projectsApi } from "@/frontend/api/projects";
 import { TARGET_REGIONS } from "@/lib/types";
 
 interface NewProjectModalProps {
@@ -47,7 +47,6 @@ function ModalContent({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [competitors, setCompetitors] = useState(["", ""]);
-  const [rankTrackerId, setRankTrackerId] = useState("");
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const addCompetitor = () => setCompetitors(p => [...p, ""]);
@@ -59,8 +58,7 @@ function ModalContent({ onClose }: { onClose: () => void }) {
     setError("");
     setLoading(true);
     const fd = new FormData(e.currentTarget);
-    const rtId = rankTrackerId.trim() ? Number(rankTrackerId.trim()) : null;
-    const result = await createProject({
+    const result = await projectsApi.create({
       name: fd.get("name") as string,
       domain: fd.get("domain") as string,
       company: fd.get("company") as string,
@@ -70,7 +68,7 @@ function ModalContent({ onClose }: { onClose: () => void }) {
       target_language: "en",
       description: fd.get("description") as string,
       competitors: competitors.filter(c => c.trim()),
-      ahrefs_rank_tracker_project_id: rtId,
+      ahrefs_rank_tracker_project_id: null,
     });
     if (result.success && result.data) {
       router.push(`/projects/${result.data.id}/keywords`);
@@ -207,22 +205,6 @@ function ModalContent({ onClose }: { onClose: () => void }) {
                     )}
                   </div>
                 ))}
-              </div>
-              <div className="mt-4 pt-3 border-t border-border-subtle">
-                <Label>
-                  Ahrefs Rank Tracker Project ID
-                  <span className="ml-1 text-[10px] font-normal text-text-tertiary">(optional)</span>
-                </Label>
-                <input
-                  value={rankTrackerId}
-                  onChange={e => setRankTrackerId(e.target.value)}
-                  placeholder="e.g. 8024646"
-                  className={FIELD}
-                  inputMode="numeric"
-                />
-                <p className="mt-1 text-[11px] text-text-tertiary">
-                  Found in Ahrefs → Rank Tracker → your project URL.
-                </p>
               </div>
             </div>
 

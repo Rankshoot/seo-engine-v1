@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { createProject } from "@/app/actions/project-actions";
+import { ProjectNavLink } from "@/components/ProjectNavLink";
+import { projectsApi } from "@/frontend/api/projects";
 import { TARGET_REGIONS } from "@/lib/types";
 
 export default function NewProjectPage() {
@@ -11,8 +11,6 @@ export default function NewProjectPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [competitors, setCompetitors] = useState(["", "", ""]);
-  const [rankTrackerId, setRankTrackerId] = useState("");
-
   const addCompetitor = () => setCompetitors(prev => [...prev, ""]);
   const updateCompetitor = (i: number, val: string) =>
     setCompetitors(prev => prev.map((c, idx) => idx === i ? val : c));
@@ -25,8 +23,7 @@ export default function NewProjectPage() {
     setLoading(true);
 
     const fd = new FormData(e.currentTarget);
-    const rtId = rankTrackerId.trim() ? Number(rankTrackerId.trim()) : null;
-    const result = await createProject({
+    const result = await projectsApi.create({
       name: fd.get("name") as string,
       domain: fd.get("domain") as string,
       company: fd.get("company") as string,
@@ -36,7 +33,7 @@ export default function NewProjectPage() {
       target_language: "en",
       description: fd.get("description") as string,
       competitors: competitors.filter(c => c.trim()),
-      ahrefs_rank_tracker_project_id: rtId,
+      ahrefs_rank_tracker_project_id: null,
     });
 
     if (result.success && result.data) {
@@ -51,10 +48,10 @@ export default function NewProjectPage() {
     <div className="min-h-screen bg-surface-primary flex items-start justify-center py-16 px-6">
       <div className="w-full max-w-2xl">
         {/* Back */}
-        <Link href="/projects" className="inline-flex items-center gap-2 text-sm text-text-tertiary hover:text-text-secondary mb-8 transition-colors">
+        <ProjectNavLink href="/projects" className="inline-flex items-center gap-2 text-sm text-text-tertiary hover:text-text-secondary mb-8 transition-colors">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m12 19-7-7 7-7M19 12H5"/></svg>
           Back to Projects
-        </Link>
+        </ProjectNavLink>
 
         <div className="mb-8">
           <h1 className="text-3xl font-black text-text-primary mb-2">Create New Project</h1>
@@ -165,22 +162,6 @@ export default function NewProjectPage() {
               ))}
             </div>
 
-            <div className="pt-2 border-t border-border-subtle">
-              <label className="block text-xs font-semibold text-text-secondary mb-1.5">
-                Ahrefs Rank Tracker Project ID
-                <span className="ml-1 text-[10px] font-normal text-text-tertiary">(optional)</span>
-              </label>
-              <input
-                value={rankTrackerId}
-                onChange={e => setRankTrackerId(e.target.value)}
-                placeholder="e.g. 8024646"
-                className="input-field w-full"
-                inputMode="numeric"
-              />
-              <p className="text-[10px] text-text-tertiary mt-1">
-                Found in Ahrefs → Rank Tracker → your project URL. Enables richer competitor data from your tracked keywords.
-              </p>
-            </div>
           </div>
 
           {error && (

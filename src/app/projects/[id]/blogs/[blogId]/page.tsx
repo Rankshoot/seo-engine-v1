@@ -16,6 +16,7 @@ import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } f
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import { rangeSelectionToMarkdown } from "@/lib/editor-selection-markdown";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
 
@@ -237,9 +238,11 @@ function BlogEditAiFixOverlay({
         if (!node) return;
         const walk = node.nodeType === Node.TEXT_NODE ? (node.parentElement as HTMLElement | null) : (node as HTMLElement);
         if (!walk || !roots.some(r => r.contains(walk))) return;
-        const text = sel.toString();
+        const range = sel.getRangeAt(0).cloneRange();
+        const asMd = rangeSelectionToMarkdown(range);
+        const text = asMd.trim() ? asMd : sel.toString();
         if (!text.trim()) return;
-        onOpen({ text, range: sel.getRangeAt(0).cloneRange() });
+        onOpen({ text, range });
       }}
     >
       Ai fix
@@ -342,7 +345,7 @@ export default function BlogViewerPage() {
 
   const handleAiRewriterInsert = (rewritten: string) => {
     const snap = selectionSnapshotRef.current;
-    if (!snap?.range) {
+    if (!blog || !snap?.range) {
       setEditError("Couldn't apply rewrite — select text again.");
       setAiRewriter({ open: false, text: "" });
       return;
@@ -355,10 +358,13 @@ export default function BlogViewerPage() {
         return;
       }
       range.deleteContents();
-      const tn = document.createTextNode(rewritten);
-      range.insertNode(tn);
-      range.setStartAfter(tn);
-      range.collapse(true);
+      const frag = markdownAiSnippetToDocumentFragment(rewritten.trim(), blog, document);
+      range.insertNode(frag);
+      const end = frag.lastChild;
+      if (end) {
+        range.setStartAfter(end);
+        range.collapse(true);
+      }
       const s = window.getSelection();
       s?.removeAllRanges();
       s?.addRange(range);
@@ -769,6 +775,15 @@ export default function BlogViewerPage() {
         open={aiRewriter.open}
         blogId={blog.id}
         selectedText={aiRewriter.text}
+        renderMarkdownSnippet={md => (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={buildMarkdownComponents(internalSetForBlog(blog))}
+            urlTransform={markdownUrlTransform}
+          >
+            {md}
+          </ReactMarkdown>
+        )}
         onClose={() => {
           setAiRewriter({ open: false, text: "" });
           selectionSnapshotRef.current = null;
@@ -998,4 +1013,30 @@ function markdownBodyToHtml(markdown: string, internalSet: Set<string>): string 
       {markdown}
     </ReactMarkdown>
   );
+}
+
+/** Inserts AI rewriter output into contentEditable with the same link styling as the seeded editor. */
+function markdownAiSnippetToDocumentFragment(markdown: string, blog: Blog, doc: Document): DocumentFragment {
+  const internalSet = internalSetForBlog(blog);
+  const html = renderToStaticMarkup(
+    <div className="text-text-secondary" style={{ fontSize: 17, lineHeight: 1.78 }}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSet)} urlTransform={markdownUrlTransform}>
+        {markdown}
+      </ReactMarkdown>
+    </div>
+  );
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const wrapper = parsed.body.firstElementChild;
+  const frag = doc.createDocumentFragment();
+  if (!wrapper) {
+    frag.appendChild(doc.createTextNode(markdown));
+    return frag;
+  }
+  while (wrapper.firstChild) {
+    const next = wrapper.firstChild;
+    frag.appendChild(doc.importNode(next, true));
+    wrapper.removeChild(next);
+  }
+  if (!frag.childNodes.length) frag.appendChild(doc.createTextNode(markdown));
+  return frag;
 }

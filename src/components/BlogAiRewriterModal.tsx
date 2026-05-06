@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { blogsApi } from "@/frontend/api/blogs";
 
 const PRESETS: { label: string; instruction: string; icon: "scissors" | "sparkle" | "pencil" | "info" }[] = [
@@ -59,12 +59,22 @@ function PresetIcon({ kind }: { kind: (typeof PRESETS)[number]["icon"] }) {
 export interface BlogAiRewriterModalProps {
   open: boolean;
   blogId: string;
+  /** Markdown excerpt (may include `[label](url)` links). */
   selectedText: string;
+  /** Renders markdown for modal previews (links, emphasis) like the blog editor. */
+  renderMarkdownSnippet: (markdown: string) => ReactNode;
   onClose: () => void;
   onInsert: (rewritten: string) => void;
 }
 
-export function BlogAiRewriterModal({ open, blogId, selectedText, onClose, onInsert }: BlogAiRewriterModalProps) {
+export function BlogAiRewriterModal({
+  open,
+  blogId,
+  selectedText,
+  renderMarkdownSnippet,
+  onClose,
+  onInsert,
+}: BlogAiRewriterModalProps) {
   const [customPrompt, setCustomPrompt] = useState("");
   const [rewritten, setRewritten] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -123,7 +133,7 @@ export function BlogAiRewriterModal({ open, blogId, selectedText, onClose, onIns
 
   if (!open) return null;
 
-  const previewOriginal =
+  const truncatedOriginal =
     selectedText.length > 520 ? `${selectedText.slice(0, 520).trim()}…` : selectedText;
 
   return (
@@ -160,7 +170,9 @@ export function BlogAiRewriterModal({ open, blogId, selectedText, onClose, onIns
               </svg>
               Rewriting
             </p>
-            <p className="text-[13px] leading-relaxed text-text-secondary whitespace-pre-wrap">{previewOriginal}</p>
+            <div className="text-[13px] leading-relaxed text-text-secondary [&_p]:my-0 [&_p+_p]:mt-2">
+              {renderMarkdownSnippet(truncatedOriginal)}
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -174,7 +186,9 @@ export function BlogAiRewriterModal({ open, blogId, selectedText, onClose, onIns
                 {loading ? (
                   <p className="text-[13px] text-text-tertiary">Working…</p>
                 ) : rewritten ? (
-                  <p className="text-[13px] leading-relaxed text-text-primary whitespace-pre-wrap">{rewritten}</p>
+                  <div className="text-[13px] leading-relaxed text-text-primary [&_p]:my-0 [&_p+_p]:mt-2">
+                    {renderMarkdownSnippet(rewritten)}
+                  </div>
                 ) : (
                   <p className="text-[13px] text-text-tertiary">Pick a quick action or describe the change below.</p>
                 )}

@@ -1046,7 +1046,8 @@ export type BlogEditorRewriteTrace = Array<{ label: string; ok: boolean; ms?: nu
  */
 export async function rewriteBlogEditorSelection(
   blogId: string,
-  selectedPlainText: string,
+  /** Markdown excerpt from the editor (includes `[text](url)` for links). */
+  selectedMarkdown: string,
   instruction: string
 ): Promise<{
   success: boolean;
@@ -1057,7 +1058,7 @@ export async function rewriteBlogEditorSelection(
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
-  const sel = selectedPlainText.trim();
+  const sel = selectedMarkdown.trim();
   const instr = instruction.trim();
   if (!sel) return { success: false, error: 'Select some text to rewrite.' };
   if (!instr) return { success: false, error: 'Add an instruction or pick a quick action.' };
@@ -1083,15 +1084,15 @@ Target keyword: ${blog.target_keyword}
 User instruction:
 "${instr}"
 
-Selected excerpt (rewrite this):
+Selected excerpt (Markdown — rewrite this; links use [anchor text](url)):
 """
 ${sel}
 """
 
 Rules:
-1. Output plain text only — no markdown (#, **, [], backticks).
-2. Apply the instruction faithfully while staying on-topic for this article.
-3. Preserve any URLs from the original as plain https URLs if they must remain.
+1. Output GitHub-flavored Markdown for this excerpt only. Do not use # headings or fenced code blocks. Inline code with backticks is OK only if the original had it.
+2. Preserve every hyperlink from the excerpt as Markdown [anchor](url) using the same URL. You may shorten or rephrase the anchor text if the instruction requires it, but keep the destination URL unless the instruction says to remove the link.
+3. Apply the instruction faithfully while staying on-topic for this article.
 4. Match the tone of a professional business blog.
 5. Unless the instruction asks otherwise, keep a similar scope (do not turn one sentence into a full article).`;
 

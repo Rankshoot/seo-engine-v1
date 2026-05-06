@@ -14,6 +14,104 @@ import {
 import { normalizeDomain } from '@/lib/keyword-discovery';
 import { Project } from '@/lib/types';
 import { getBlogAudits } from '@/app/actions/audit-actions';
+import { geminiGenerate } from '@/lib/gemini';
+
+export type ProjectTargetingSuggestField = 'niche' | 'target_audience';
+
+export type ProjectTargetingSuggestTraceEntry = {
+  step: string;
+  ok: boolean;
+  ms?: number;
+  detail?: string;
+};
+
+function parseFourCommaSeparatedPhrases(raw: string): string {
+  let s = raw
+    .trim()
+    .replace(/^```[a-z]*\n?/i, '')
+    .replace(/\n?```$/i, '')
+    .trim();
+  s = s.replace(/^["']|["']$/g, '');
+  const parts = s
+    .split(',')
+    .map(p => p.replace(/^\s*\d+[\.)]\s*/, '').trim())
+    .filter(Boolean);
+  return parts.slice(0, 4).join(', ');
+}
+
+/**
+ * Gemini-backed suggestions for the new-project modal when the user is unsure
+ * about niche or target audience. Client should `console.log` the trace.
+ */
+export async function suggestProjectTargetingField(input: {
+  field: ProjectTargetingSuggestField;
+  company: string;
+  domain: string;
+  description: string;
+}): Promise<
+  | { success: true; value: string; trace: ProjectTargetingSuggestTraceEntry[] }
+  | { success: false; error: string; trace: ProjectTargetingSuggestTraceEntry[] }
+> {
+  const trace: ProjectTargetingSuggestTraceEntry[] = [];
+  const user = await currentUser();
+  if (!user) {
+    trace.push({ step: 'auth', ok: false, detail: 'not signed in' });
+    return { success: false, error: 'Not authenticated', trace };
+  }
+
+  const company = input.company.trim();
+  const domain = input.domain.trim();
+  const description = input.description.trim();
+
+  if (!company || !domain) {
+    trace.push({ step: 'validate', ok: false, detail: 'company and domain required' });
+    return {
+      success: false,
+      error: 'Add company name and website domain first so AI can infer niche and audience.',
+      trace,
+    };
+  }
+
+  const isNiche = input.field === 'niche';
+  const t0 = Date.now();
+  const prompt = isNiche
+    ? `You help configure SEO projects. Infer concise industry / niche labels for keyword discovery (not generic fluff).
+
+Company: ${company}
+Website domain: ${domain}
+Project notes (may be empty): ${description || '(none)'}
+
+Reply with ONE line only: exactly 4 short niche or industry phrases, comma-separated, no numbering, bullets, quotes, or explanation. Each phrase: 2–4 words. Ground guesses in the company name and domain.`
+    : `You help configure SEO projects. Infer plausible target reader / buyer segments for content marketing.
+
+Company: ${company}
+Website domain: ${domain}
+Project notes (may be empty): ${description || '(none)'}
+
+Reply with ONE line only: exactly 4 short audience descriptions, comma-separated, no numbering, bullets, quotes, or explanation. Each segment: 2-4 words (role + context, e.g. "HR directors at 200–2000 employee firms"). Ground guesses in the company name and domain.`;
+
+  try {
+    const raw = (await geminiGenerate(prompt, 2)).trim();
+    const value = parseFourCommaSeparatedPhrases(raw);
+    const ms = Date.now() - t0;
+    if (!value) {
+      trace.push({ step: 'gemini_targeting_suggest', ok: false, ms, detail: 'empty after parse' });
+      return { success: false, error: 'AI returned no usable text. Try again.', trace };
+    }
+    trace.push({
+      step: 'gemini_targeting_suggest',
+      ok: true,
+      ms,
+      detail: `${input.field} chars=${value.length}`,
+    });
+    return { success: true, value, trace };
+  } catch (e: unknown) {
+    const ms = Date.now() - t0;
+    const msg = e instanceof Error ? e.message : String(e);
+    trace.push({ step: 'gemini_targeting_suggest', ok: false, ms, detail: msg.slice(0, 400) });
+    return { success: false, error: msg || 'AI request failed', trace };
+  }
+}
 
 export async function createProject(data: {
   name: string;

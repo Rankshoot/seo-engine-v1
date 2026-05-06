@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { projectsApi } from "@/frontend/api/projects";
+import { suggestProjectTargetingField } from "@/app/actions/project-actions";
 import { TARGET_REGIONS } from "@/lib/types";
 
 interface NewProjectModalProps {
@@ -33,12 +34,66 @@ function SectionLabel({ n, children }: { n: number; children: React.ReactNode })
   );
 }
 
-function Label({ children, required }: { children: React.ReactNode; required?: boolean }) {
+function Label({
+  children,
+  required,
+  className = "",
+}: {
+  children: React.ReactNode;
+  required?: boolean;
+  className?: string;
+}) {
   return (
-    <label className="block text-[12px] font-medium text-text-secondary mb-1.5">
+    <label className={`block text-[12px] font-medium text-text-secondary mb-1.5 ${className}`}>
       {children}
       {required && <span className="ml-0.5 text-text-tertiary">*</span>}
     </label>
+  );
+}
+
+/** Larger sparkle with fill + stroke so it reads clearly on dark UI. */
+function SparkleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      fillOpacity={0.22}
+      stroke="currentColor"
+      strokeWidth={2.25}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 2.25l1.92 7.05L20.75 12l-6.83 2.7L12 21.75l-1.92-7.05L3.25 12l6.83-2.7L12 2.25z" />
+    </svg>
+  );
+}
+
+function AiFillLabelButton({
+  busy,
+  disabled,
+  onClick,
+}: {
+  busy: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || busy}
+      title="Fill with AI using company, domain, and description"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-brand-action/40 bg-brand-action/12 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-brand-action shadow-[0_0_14px_rgba(255,255,255,0.06)] transition-all hover:border-brand-action/65 hover:bg-brand-action/20 hover:shadow-[0_0_18px_rgba(255,255,255,0.1)] disabled:pointer-events-none disabled:opacity-40"
+    >
+      {busy ? (
+        <span className="h-[14px] w-[14px] animate-spin rounded-full border-2 border-brand-action/35 border-t-brand-action" />
+      ) : (
+        <SparkleIcon className="h-[14px] w-[14px] " />
+      )}
+      <span style={{ fontFamily: "CohereMono, monospace" }}>Ask AI</span>
+    </button>
   );
 }
 
@@ -46,12 +101,41 @@ function ModalContent({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [niche, setNiche] = useState("");
+  const [targetAudience, setTargetAudience] = useState("");
+  const [aiLoading, setAiLoading] = useState<null | "niche" | "target_audience">(null);
   const [competitors, setCompetitors] = useState(["", ""]);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const addCompetitor = () => setCompetitors(p => [...p, ""]);
   const updateCompetitor = (i: number, val: string) => setCompetitors(p => p.map((c, idx) => idx === i ? val : c));
   const removeCompetitor = (i: number) => setCompetitors(p => p.filter((_, idx) => idx !== i));
+
+  async function runTargetingAiFill(field: "niche" | "target_audience") {
+    setError("");
+    const form = formRef.current;
+    if (!form) return;
+    const fd = new FormData(form);
+    setAiLoading(field);
+    try {
+      const result = await suggestProjectTargetingField({
+        field,
+        company: String(fd.get("company") ?? ""),
+        domain: String(fd.get("domain") ?? ""),
+        description: String(fd.get("description") ?? ""),
+      });
+      console.log("[suggestProjectTargetingField]", result.trace);
+      if (result.success) {
+        if (field === "niche") setNiche(result.value);
+        else setTargetAudience(result.value);
+      } else {
+        setError(result.error);
+      }
+    } finally {
+      setAiLoading(null);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -112,7 +196,7 @@ function ModalContent({ onClose }: { onClose: () => void }) {
 
         {/* ── Scrollable body ──────────────────────────────────────────── */}
         <div ref={bodyRef} className="overflow-y-auto flex-1 px-6 py-5">
-          <form id="new-project-form" onSubmit={handleSubmit} className="space-y-7">
+          <form ref={formRef} id="new-project-form" onSubmit={handleSubmit} className="space-y-7">
 
             {/* ── Section 1: Basic Info ─────────────────────────────── */}
             <div>
@@ -144,13 +228,45 @@ function ModalContent({ onClose }: { onClose: () => void }) {
               <SectionLabel n={2}>Targeting</SectionLabel>
               <div className="space-y-3">
                 <div>
-                  <Label required>Niche / Industry</Label>
-                  <input name="niche" required placeholder="e.g. HR Software, Digital Marketing, Fitness Apps" className={FIELD} />
+                  <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+                    <Label required className="mb-0 min-w-0 flex-1">
+                      Niche / Industry
+                    </Label>
+                    <AiFillLabelButton
+                      busy={aiLoading === "niche"}
+                      disabled={loading}
+                      onClick={() => void runTargetingAiFill("niche")}
+                    />
+                  </div>
+                  <input
+                    name="niche"
+                    required
+                    value={niche}
+                    onChange={e => setNiche(e.target.value)}
+                    placeholder="e.g. HR Software, Digital Marketing, Fitness Apps"
+                    className={FIELD}
+                  />
                   <p className="mt-1 text-[11px] text-text-tertiary">This drives keyword discovery — be specific.</p>
                 </div>
                 <div>
-                  <Label required>Target Audience</Label>
-                  <input name="target_audience" required placeholder="e.g. HR managers at mid-size companies" className={FIELD} />
+                  <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+                    <Label required className="mb-0 min-w-0 flex-1">
+                      Target Audience
+                    </Label>
+                    <AiFillLabelButton
+                      busy={aiLoading === "target_audience"}
+                      disabled={loading}
+                      onClick={() => void runTargetingAiFill("target_audience")}
+                    />
+                  </div>
+                  <input
+                    name="target_audience"
+                    required
+                    value={targetAudience}
+                    onChange={e => setTargetAudience(e.target.value)}
+                    placeholder="e.g. HR managers at mid-size companies"
+                    className={FIELD}
+                  />
                 </div>
                 <div>
                   <Label required>Target Region</Label>

@@ -813,18 +813,29 @@ export async function getDomainKeywords(
 
     const norm = (s: string) => (s ?? '').trim().toLowerCase();
     const normalized = [...new Set(keywords.map(k => norm(k.keyword)))];
-    const { data: dbRows, error: dbErr } = await supabaseAdmin
-      .from('keywords')
-      .select('id, normalized_keyword, keyword_analysis_score, status')
-      .eq('project_id', projectId)
-      .in('normalized_keyword', normalized);
-
-    if (dbErr) {
-      console.warn('[getDomainKeywords] keyword join failed', dbErr.message);
+    const dbRows: {
+      id: unknown;
+      normalized_keyword: unknown;
+      keyword_analysis_score: unknown;
+      status: unknown;
+    }[] = [];
+    const chunkSize = 200;
+    for (let i = 0; i < normalized.length; i += chunkSize) {
+      const slice = normalized.slice(i, i + chunkSize);
+      const { data: part, error: dbErr } = await supabaseAdmin
+        .from('keywords')
+        .select('id, normalized_keyword, keyword_analysis_score, status')
+        .eq('project_id', projectId)
+        .in('normalized_keyword', slice);
+      if (dbErr) {
+        console.warn('[getDomainKeywords] keyword join failed', dbErr.message);
+        break;
+      }
+      dbRows.push(...(part ?? []));
     }
 
     const map = new Map(
-      (dbRows ?? []).map(r => [
+      dbRows.map(r => [
         norm(r.normalized_keyword as string),
         {
           id: r.id as string,
@@ -900,89 +911,81 @@ export async function upsertKeywordFromDomainSite(
   const kd = Math.max(0, Math.min(100, Math.round(Number(row.kd) || 0)));
   const cpc = Math.max(0, Number(row.cpc) || 0);
   const intentStr = row.intent || '';
-  const tp =
-    row.estimated_monthly_traffic != null &&
-    Number.isFinite(row.estimated_monthly_traffic) &&
-    row.estimated_monthly_traffic > 0
-      ? Math.round(row.estimated_monthly_traffic)
-      : 0;
 
   const { data: existing, error: exErr } = await supabaseAdmin
     .from('keywords')
-    .select('id, keyword_analysis_score')
+    .select('id')
     .eq('project_id', projectId)
     .eq('normalized_keyword', phrase)
     .maybeSingle();
 
   if (exErr) return { success: false, error: exErr.message };
 
-  const now = new Date().toISOString();
+  const ai = aiScore(volume, kd, intentStr);
 
-  if (existing?.id) {
-    const { data: updated, error: upErr } = await supabaseAdmin
-      .from('keywords')
-      .update({
+  let id: string | undefined = existing?.id as string | undefined;
+
+  if (!id) {
+    // Same column set as `discoverKeywords` — never reference columns missing from this Supabase project.
+    // `ignoreDuplicates: true` matches discovery: do not overwrite an existing approved/rejected row on conflict.
+    const { error: insErr } = await supabaseAdmin.from('keywords').upsert(
+      {
+        project_id: projectId,
+        keyword: phrase,
         volume,
         kd,
         cpc,
-        intent: intentStr,
-        traffic_potential: tp,
-        status,
-        source_type: 'google_ads_domain',
-        updated_at: now,
-      })
-      .eq('id', existing.id)
-      .select('id')
-      .single();
+        trend: '',
+        competition_level: '',
+        intent: intentStr || null,
+        monthly_searches: [],
+        secondary_keywords: [],
+        ai_score: ai,
+        keyword_analysis_score: ai,
+        relevance_score: null,
+        business_fit_score: null,
+        status: 'pending',
+      },
+      { onConflict: 'project_id,keyword', ignoreDuplicates: true }
+    );
 
-    if (upErr || !updated) return { success: false, error: upErr?.message ?? 'Update failed' };
-    const id = updated.id as string;
-    if (status === 'approved') {
-      const cal = await scheduleKeywordOnFirstVacantIfNeeded(projectId, id);
-      if (!cal.ok) return { success: true, id, calendarError: cal.error };
-      if (cal.skipped) return { success: true, id, calendarSkipped: true, scheduledDate: cal.scheduledDate };
-      return { success: true, id, scheduledDate: cal.scheduledDate };
+    if (insErr) return { success: false, error: insErr.message };
+
+    const { data: got, error: selErr } = await supabaseAdmin
+      .from('keywords')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('normalized_keyword', phrase)
+      .maybeSingle();
+
+    if (selErr || !got?.id) {
+      return { success: false, error: selErr?.message ?? 'Could not resolve keyword after save' };
     }
-    return { success: true, id };
+    id = got.id as string;
   }
 
-  const ai = aiScore(volume, kd, intentStr);
-
-  const { data: inserted, error: insErr } = await supabaseAdmin
+  // Same metrics industry discovery updates — omit `traffic_potential`, `updated_at`, etc. when missing from schema.
+  const { error: metErr } = await supabaseAdmin
     .from('keywords')
-    .insert({
-      project_id: projectId,
-      keyword: phrase,
+    .update({
       volume,
       kd,
       cpc,
       intent: intentStr,
-      traffic_potential: tp,
-      status,
-      source_type: 'google_ads_domain',
-      trend: '+0%',
-      monthly_searches: [],
-      secondary_keywords: [],
-      ai_score: ai,
-      keyword_analysis_score: 0,
-      relevance_score: 0,
-      business_fit_score: 0,
-      competition_level: '',
-      parent_topic: '',
-      source_competitors: [],
-      source_urls: [],
-      updated_at: now,
     })
-    .select('id')
-    .single();
+    .eq('id', id);
 
-  if (insErr || !inserted) return { success: false, error: insErr?.message ?? 'Insert failed' };
-  const id = inserted.id as string;
-  if (status === 'approved') {
-    const cal = await scheduleKeywordOnFirstVacantIfNeeded(projectId, id);
-    if (!cal.ok) return { success: true, id, calendarError: cal.error };
-    if (cal.skipped) return { success: true, id, calendarSkipped: true, scheduledDate: cal.scheduledDate };
-    return { success: true, id, scheduledDate: cal.scheduledDate };
-  }
-  return { success: true, id };
+  if (metErr) return { success: false, error: metErr.message };
+
+  // Industry tab Action column → `updateKeywordStatus` only. Domain tab uses the same path for calendar + enrich.
+  const stRes = await updateKeywordStatus(id, status, projectId);
+  if (!stRes.success) return { success: false, error: stRes.error ?? 'Could not update keyword status' };
+
+  return {
+    success: true,
+    id,
+    ...(stRes.scheduledDate ? { scheduledDate: stRes.scheduledDate } : {}),
+    ...(stRes.calendarSkipped ? { calendarSkipped: true as const } : {}),
+    ...(stRes.calendarError ? { calendarError: stRes.calendarError } : {}),
+  };
 }

@@ -76,6 +76,10 @@ function parseDomainSelectId(id: string): string | null {
   }
 }
 
+function normKeywordPhrase(s: string): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
 type TableSortColumn =
   | "keyword"
   | "volume"
@@ -159,7 +163,6 @@ export default function KeywordsPage() {
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
   const aiSuggestedKeywordIds = useAppSelector(state => selectAiSuggestedKeywordIds(state, projectId));
 
-  const PAGE_SIZE = 20;
   const KEYWORDS_KEY = qk.keywords(projectId);
 
   const [discovering, setDiscovering] = useState(false);
@@ -173,15 +176,14 @@ export default function KeywordsPage() {
   const dataSourceRef = useRef<HTMLDivElement>(null);
 
   const aiSuggestedIds = useMemo(() => new Set(aiSuggestedKeywordIds), [aiSuggestedKeywordIds]);
-
-
-  const [loadingMore, setLoadingMore] = useState(false);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Domain-tab optimistic status by normalized phrase (survives refetch/cache key mismatches). */
+  const [domainPhraseStatusOverlay, setDomainPhraseStatusOverlay] = useState<Record<string, KeywordStatus>>({});
 
   // Keyword drilldown modal. Stored as id (not a `Keyword` object) so the
   // modal always reflects the latest row state — including approve/reject
@@ -197,15 +199,12 @@ export default function KeywordsPage() {
   const keywords: Keyword[] = useMemo(
     () =>
       serverKeywords.map(keyword =>
-        keywordStatuses[keyword.id] ? { ...keyword, status: keywordStatuses[keyword.id] } : keyword
+        keywordStatuses[keyword.id] !== undefined
+          ? { ...keyword, status: keywordStatuses[keyword.id]! }
+          : keyword
       ),
     [serverKeywords, keywordStatuses]
   );
-  const pendingTotal =
-    keywordsData && "success" in keywordsData && keywordsData.success
-      ? keywordsData.total ?? keywordsData.data.length
-      : 0;
-
   useEffect(() => {
     if (serverKeywords.length === 0) return;
     dispatch(
@@ -244,25 +243,40 @@ export default function KeywordsPage() {
 
   const effectiveDomainStatus = useCallback(
     (row: CompetitorKeywordsForSiteRow): KeywordStatus => {
-      if (row.matched_keyword_id && keywordStatuses[row.matched_keyword_id]) {
-        return keywordStatuses[row.matched_keyword_id];
+      const nk = normKeywordPhrase(row.keyword);
+      const overlay = domainPhraseStatusOverlay[nk];
+      if (overlay !== undefined) return overlay;
+
+      if (row.matched_keyword_id) {
+        const st = keywordStatuses[row.matched_keyword_id];
+        if (st !== undefined) return st;
       }
+
+      const industry = keywords.find(k => normKeywordPhrase(k.keyword) === nk);
+      if (industry) return industry.status;
+
       return (row.matched_status ?? "pending") as KeywordStatus;
     },
-    [keywordStatuses]
+    [domainPhraseStatusOverlay, keywordStatuses, keywords]
   );
 
-  const industryPhraseSet = useMemo(
-    () => new Set(keywords.map(k => k.keyword.trim().toLowerCase())),
-    [keywords]
-  );
+  useEffect(() => {
+    if (domainFetching || domainKeywords.length === 0) return;
+    setDomainPhraseStatusOverlay(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const phrase of Object.keys(prev)) {
+        const row = domainKeywords.find(d => normKeywordPhrase(d.keyword) === phrase);
+        if (row?.matched_status === prev[phrase]) {
+          delete next[phrase];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [domainFetching, domainKeywords]);
 
-  const domainOnlyRows = useMemo(
-    () => domainKeywords.filter(d => !industryPhraseSet.has(d.keyword)),
-    [domainKeywords, industryPhraseSet]
-  );
-
-  const unifiedCounts = useMemo(() => {
+  const industryCounts = useMemo(() => {
     let all = 0;
     let ai = 0;
     let pending = 0;
@@ -275,16 +289,27 @@ export default function KeywordsPage() {
       if (k.status === "approved") approved += 1;
       if (k.status === "rejected") rejected += 1;
     }
-    for (const d of domainOnlyRows) {
+    return { all, ai, pending, approved, rejected };
+  }, [keywords, aiSuggestedIds]);
+
+  const domainCounts = useMemo(() => {
+    let all = 0;
+    let ai = 0;
+    let pending = 0;
+    let approved = 0;
+    let rejected = 0;
+    for (const d of domainKeywords) {
       all += 1;
-      const s = effectiveDomainStatus(d);
       if (d.matched_keyword_id && aiSuggestedIds.has(d.matched_keyword_id)) ai += 1;
+      const s = effectiveDomainStatus(d);
       if (s === "pending") pending += 1;
       if (s === "approved") approved += 1;
       if (s === "rejected") rejected += 1;
     }
     return { all, ai, pending, approved, rejected };
-  }, [keywords, domainOnlyRows, aiSuggestedIds, effectiveDomainStatus]);
+  }, [domainKeywords, aiSuggestedIds, effectiveDomainStatus]);
+
+  const displayCounts = sourceTab === "industry" ? industryCounts : domainCounts;
 
   const sortedDomainKeywords = useMemo(() => {
     const list = [...domainKeywords];
@@ -363,22 +388,6 @@ export default function KeywordsPage() {
     });
   };
 
-  const handleLoadMore = async () => {
-    setLoadingMore(true);
-    const currentPending = keywords.filter(k => k.status === "pending").length;
-    const res = await keywordsApi.loadMore(projectId, currentPending, PAGE_SIZE);
-    if (res.success) {
-      queryClient.setQueryData<KeywordsResponse>(KEYWORDS_KEY, prev => {
-        if (!prev || !("success" in prev) || !prev.success) return prev;
-        const seen = new Set(prev.data.map(k => k.id));
-        const fresh = res.data.filter(k => !seen.has(k.id));
-        const merged = [...prev.data, ...fresh];
-        return { ...prev, data: merged, total: res.total ?? prev.total };
-      });
-    }
-    setLoadingMore(false);
-  };
-
   const handleDiscover = async () => {
     setDiscovering(true);
     setError("");
@@ -439,7 +448,7 @@ export default function KeywordsPage() {
     setDiscovering(false);
   };
 
-  const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string) => {
+  const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string): Promise<boolean> => {
     const keyword = keywords.find(k => k.id === kwId);
     const previousStatus = keyword?.status;
     const label = phrase ?? keyword?.keyword ?? "Keyword";
@@ -479,7 +488,7 @@ export default function KeywordsPage() {
         );
       }
       setError(res.error ?? "Could not update keyword status");
-      return;
+      return false;
     }
 
     if (status === "approved") {
@@ -499,13 +508,29 @@ export default function KeywordsPage() {
       );
     }
     void queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
+    return true;
   };
 
   const handleDomainStatusUpdate = async (row: CompetitorKeywordsForSiteRow, next: KeywordStatus) => {
     const label = row.keyword;
+    const nk = normKeywordPhrase(label);
+    const previousStatus = effectiveDomainStatus(row);
     const busyKey = row.matched_keyword_id ?? `dom:${row.keyword}`;
+
+    const revertPhraseOverlay = () => {
+      setDomainPhraseStatusOverlay(p => {
+        if (!(nk in p)) return p;
+        const q = { ...p };
+        delete q[nk];
+        return q;
+      });
+    };
+
+    setDomainPhraseStatusOverlay(p => ({ ...p, [nk]: next }));
+
     if (row.matched_keyword_id) {
-      await handleStatusUpdate(row.matched_keyword_id, next, label);
+      const ok = await handleStatusUpdate(row.matched_keyword_id, next, label);
+      if (!ok) revertPhraseOverlay();
       await queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
       return;
     }
@@ -525,14 +550,19 @@ export default function KeywordsPage() {
     );
     setBusyRowId(null);
     if (!res.success) {
+      revertPhraseOverlay();
       setError(res.error ?? "Could not save keyword");
       return;
     }
     if ("id" in res && res.id) {
+      // `mergeKeywordStatuses` spreads server map first then overlay, so an existing
+      // `pending` entry would overwrite the payload — use a direct assignment instead.
       dispatch(
-        mergeKeywordStatuses({
+        keywordStatusChanged({
           projectId,
-          statuses: { [res.id]: next },
+          keywordId: res.id,
+          previousStatus,
+          nextStatus: next,
         })
       );
       queryClient.setQueryData(qk.domainKeywords(projectId), (prev: unknown) => {
@@ -542,7 +572,7 @@ export default function KeywordsPage() {
         return {
           ...p,
           data: p.data.map(d =>
-            d.keyword === row.keyword
+            normKeywordPhrase(d.keyword) === nk
               ? {
                   ...d,
                   matched_keyword_id: res.id,
@@ -594,17 +624,6 @@ export default function KeywordsPage() {
     });
     return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
   }, [keywords, filter, tableSort, aiSuggestedIds]);
-
-  /** Load-more only extends the server-side *pending* pool — hide on Approved/Rejected tabs. */
-  const pendingLoadedCount = useMemo(
-    () => keywords.filter(k => k.status === "pending").length,
-    [keywords]
-  );
-  const loadMoreFooterVisible = useMemo(() => {
-    if (pendingTotal <= pendingLoadedCount) return false;
-    if (filter === "approved" || filter === "rejected") return false;
-    return filter === "all" || filter === "pending" || filter === "ai";
-  }, [pendingTotal, pendingLoadedCount, filter]);
 
   const toggleSortColumn = (column: TableSortColumn) =>
     dispatch(
@@ -662,7 +681,14 @@ export default function KeywordsPage() {
           "approved"
         );
         if (res.success && "id" in res && res.id) {
-          dispatch(mergeKeywordStatuses({ projectId, statuses: { [res.id]: "approved" } }));
+          dispatch(
+            keywordStatusChanged({
+              projectId,
+              keywordId: res.id,
+              previousStatus: effectiveDomainStatus(row),
+              nextStatus: "approved",
+            })
+          );
         }
       }
 
@@ -732,11 +758,11 @@ export default function KeywordsPage() {
     );
 
   const FILTER_TAB_ITEMS: Array<{ id: FilterTab; label: string; count: number }> = [
-    { id: "all", label: "All", count: unifiedCounts.all },
-    { id: "ai", label: "AI picks", count: unifiedCounts.ai },
-    { id: "pending", label: "Pending", count: unifiedCounts.pending },
-    { id: "approved", label: "Approved", count: unifiedCounts.approved },
-    { id: "rejected", label: "Rejected", count: unifiedCounts.rejected },
+    { id: "all", label: "All", count: displayCounts.all },
+    { id: "ai", label: "AI picks", count: displayCounts.ai },
+    { id: "pending", label: "Pending", count: displayCounts.pending },
+    { id: "approved", label: "Approved", count: displayCounts.approved },
+    { id: "rejected", label: "Rejected", count: displayCounts.rejected },
   ];
 
   const thBtn =
@@ -945,6 +971,11 @@ export default function KeywordsPage() {
             {domainError && (
               <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
                 {domainError}
+              </div>
+            )}
+            {error && (
+              <div className="flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
+                {error}
               </div>
             )}
             <div className="flex items-center justify-between gap-3">
@@ -1421,46 +1452,11 @@ export default function KeywordsPage() {
                   </tbody>
                 </table>
               </div>
-              {loadMoreFooterVisible ? (
-                <div className="flex flex-col items-center gap-1 border-t border-border-subtle px-4 py-2.5 bg-surface-secondary/40">
-                  <button
-                    type="button"
-                    onClick={handleLoadMore}
-                    disabled={loadingMore}
-                    className="rounded-full border border-border-subtle bg-surface-elevated px-4 py-1.5 text-[12px] font-medium text-text-secondary transition-colors hover:text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {loadingMore
-                      ? "Loading…"
-                      : `Load more (${pendingTotal - pendingLoadedCount} pending)`}
-                  </button>
-                  <span className="text-[11px] text-text-tertiary tabular-nums">
-                    Pending pool: {pendingLoadedCount} / {pendingTotal} loaded
-                    {filter === "ai" ? " · more rows may include AI picks" : ""}
-                  </span>
-                </div>
-              ) : null}
             </div>
           ) : keywords.length > 0 ? (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
               <p className="text-[14px] font-medium text-text-secondary">No keywords match this filter.</p>
               <p className="mt-1 text-[12px] text-text-tertiary">Switch to another tab to see keywords.</p>
-              {loadMoreFooterVisible ? (
-                <div className="mt-4 flex flex-col items-center gap-1 border-t border-border-subtle/80 pt-4">
-                  <button
-                    type="button"
-                    onClick={handleLoadMore}
-                    disabled={loadingMore}
-                    className="rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-medium text-text-secondary transition-colors hover:text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {loadingMore
-                      ? "Loading…"
-                      : `Load more pending (${pendingTotal - pendingLoadedCount})`}
-                  </button>
-                  <span className="text-[11px] text-text-tertiary tabular-nums">
-                    Pending pool: {pendingLoadedCount} / {pendingTotal}
-                  </span>
-                </div>
-              ) : null}
             </div>
           ) : (
             !discovering && (
@@ -1504,9 +1500,9 @@ export default function KeywordsPage() {
         projectId={projectId}
         keyword={modalKeyword}
         onClose={() => setModalKeywordId(null)}
-        onStatusChange={(id, status) =>
-          handleStatusUpdate(id, status, modalKeyword?.keyword ?? undefined)
-        }
+        onStatusChange={async (id, status) => {
+          await handleStatusUpdate(id, status, modalKeyword?.keyword ?? undefined);
+        }}
       />
     </div>
   );

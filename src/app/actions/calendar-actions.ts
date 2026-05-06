@@ -273,8 +273,9 @@ export async function addKeywordToCalendarOnDate(
     return { success: true, data, rescheduled: true };
   }
 
-  // CREATE: no existing entry
-  const title = options?.title ?? '';
+  // CREATE: no existing entry — never leave title blank (domain / API callers often omit options.title).
+  const rawTitle = (options?.title ?? '').trim();
+  const title = rawTitle || (kw.keyword as string).trim() || 'Scheduled topic';
   const articleType = options?.article_type ?? 'Blog Post';
   const slug = options?.slug ?? slugify(kw.keyword);
 

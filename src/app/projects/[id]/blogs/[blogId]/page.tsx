@@ -12,7 +12,9 @@ import { ProjectNavLink } from "@/components/ProjectNavLink";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { blogsApi } from "@/frontend/api/blogs";
+import { projectsApi } from "@/frontend/api/projects";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
+import type { Project } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
@@ -56,6 +58,7 @@ function asBlogStatus(s: string | undefined): BlogStatus {
 function Divider() {
   return <div className="h-px mx-4 bg-border-subtle opacity-70" />;
 }
+
 
 // ─── Sidebar section label ─────────────────────────────────────────────────
 function SLabel({ children }: { children: React.ReactNode }) {
@@ -254,6 +257,7 @@ export default function BlogViewerPage() {
   const { id: projectId, blogId } = useParams<{ id: string; blogId: string }>();
 
   const [blog, setBlog]                   = useState<Blog | null>(null);
+  const [project, setProject]             = useState<Project | null>(null);
   const [loading, setLoading]             = useState(true);
   const [downloading, setDownloading]     = useState<ExportFormat | null>(null);
   const [regenerating, setRegenerating]   = useState(false);
@@ -288,19 +292,26 @@ export default function BlogViewerPage() {
   }, [editMode]);
 
   useEffect(() => {
-    blogsApi.getById(blogId).then(res => {
-      if (res.success && res.data) setBlog(res.data);
+    Promise.all([
+      blogsApi.getById(blogId),
+      projectsApi.get(projectId),
+    ]).then(([blogRes, projRes]) => {
+      if (blogRes.success && blogRes.data) setBlog(blogRes.data);
+      if (projRes.success && projRes.data) setProject(projRes.data);
       setLoading(false);
     });
-  }, [blogId]);
+  }, [blogId, projectId]);
 
   const handleDownload = async (format: ExportFormat) => {
     if (!blog) return;
     setDownloading(format);
+    const projectMeta = project
+      ? { domain: project.domain ?? undefined, company: project.company ?? undefined }
+      : undefined;
     try {
       let blob: Blob;
-      if (format === "markdown") blob = exportToMarkdown(blog);
-      else if (format === "html") blob = exportToHTML(blog);
+      if (format === "markdown") blob = exportToMarkdown(blog, projectMeta);
+      else if (format === "html") blob = exportToHTML(blog, projectMeta);
       else if (format === "txt") blob = exportToText(blog);
       else blob = await exportToDocx(blog);
       // `triggerBlogDownload` enforces the right extension + MIME type and

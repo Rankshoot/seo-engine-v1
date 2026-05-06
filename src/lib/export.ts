@@ -1,9 +1,10 @@
 import { Blog, ExportFormat } from './types';
 import { EXPORT_FILE_INFO, safeFilename } from './blog-content';
+import { buildBlogSchemas, type ProjectMeta } from './schema';
 
 // ─── Public API ────────────────────────────────────────────────────────────
 
-export function exportToMarkdown(blog: Blog): Blob {
+export function exportToMarkdown(blog: Blog, projectMeta?: ProjectMeta): Blob {
   const frontmatter = `---
 title: "${escapeYaml(blog.title)}"
 slug: "${blog.slug}"
@@ -16,13 +17,38 @@ date: "${blog.created_at.split('T')[0]}"
 
 `;
 
-  return new Blob([frontmatter + blog.content], {
+  const { article, faq } = buildBlogSchemas(blog, projectMeta);
+  const schemaBlock = [
+    `\n\n<!-- STRUCTURED DATA — paste into your CMS template's <head> -->`,
+    `<!-- Article Schema -->`,
+    `<!-- <script type="application/ld+json">`,
+    JSON.stringify(article, null, 2),
+    `</script> -->`,
+    faq
+      ? [
+          `<!-- FAQPage Schema -->`,
+          `<!-- <script type="application/ld+json">`,
+          JSON.stringify(faq, null, 2),
+          `</script> -->`,
+        ].join('\n')
+      : '',
+    `<!-- END STRUCTURED DATA -->`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return new Blob([frontmatter + blog.content + schemaBlock], {
     type: EXPORT_FILE_INFO.markdown.mime,
   });
 }
 
-export function exportToHTML(blog: Blog): Blob {
+export function exportToHTML(blog: Blog, projectMeta?: ProjectMeta): Blob {
   const body = renderMarkdownToHtml(blog.content);
+
+  const { article, faq } = buildBlogSchemas(blog, projectMeta);
+  const articleScript = `<script type="application/ld+json">\n${JSON.stringify(article, null, 2)}\n</script>`;
+  const faqScript = faq ? `<script type="application/ld+json">\n${JSON.stringify(faq, null, 2)}\n</script>` : '';
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -30,6 +56,8 @@ export function exportToHTML(blog: Blog): Blob {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${escapeHTML(blog.title)}</title>
   <meta name="description" content="${escapeHTML(blog.meta_description)}">
+  ${articleScript}
+  ${faqScript}
   <style>
     body{font-family:Georgia,'Times New Roman',serif;max-width:800px;margin:0 auto;padding:40px 20px;line-height:1.75;color:#1a1a1a;background:#fff}
     h1{font-size:2.2em;line-height:1.25;margin-bottom:.5em}

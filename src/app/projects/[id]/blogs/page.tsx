@@ -247,12 +247,7 @@ export default function BlogsPage() {
                       </td>
                       <td className="px-4 py-2.5 align-middle">
                         <div className="flex flex-col gap-1">
-                          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${statusCfg.color}`}>
-                            {statusCfg.dot ? (
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusCfg.dot}`} />
-                            ) : null}
-                            {statusCfg.label}
-                          </span>
+                      
                           {hasBlog && entry.blog && (
                             <select
                               value={blogStatus}

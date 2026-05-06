@@ -35,6 +35,7 @@ import {
   type AhrefsOrganicKeyword,
 } from '@/lib/ahrefs';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
+import { addKeywordToCalendarOnDate, collectEarliestVacantDates } from '@/app/actions/calendar-actions';
 import type {
   BenchmarkAverages,
   Competitor,
@@ -864,30 +865,46 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
 
   if (kwErr || !kwRow) return { success: false as const, error: kwErr?.message ?? 'Failed to save keyword.' };
 
-  const scheduledDate = new Date();
-  scheduledDate.setDate(scheduledDate.getDate() + 1);
-  const dateStr = scheduledDate.toISOString().split('T')[0];
-  const slugBase = slugify(normalized) || `opportunity-${Date.now().toString(36)}`;
+  const keywordId = kwRow.id as string;
 
-  const { data: entryRow, error: entryErr } = await supabaseAdmin
+  const { data: existingEntry } = await supabaseAdmin
     .from('calendar_entries')
-    .insert({
-      project_id: projectId,
-      keyword_id: kwRow.id,
-      scheduled_date: dateStr,
-      title: toTitleCase(normalized),
-      article_type: 'How-to Guide',
-      slug: `${slugBase}-${Date.now().toString(36)}`,
-      focus_keyword: normalized,
-      secondary_keywords: [],
-      status: 'scheduled',
-    })
-    .select('id')
-    .single();
+    .select('id, scheduled_date')
+    .eq('project_id', projectId)
+    .eq('keyword_id', keywordId)
+    .maybeSingle();
 
-  if (entryErr || !entryRow) {
-    return { success: false as const, error: entryErr?.message ?? 'Failed to create calendar entry.' };
+  if (existingEntry) {
+    return {
+      success: true as const,
+      entryId: existingEntry.id as string,
+      keywordId,
+      scheduledDate: String(existingEntry.scheduled_date).slice(0, 10),
+      alreadyOnCalendar: true as const,
+    };
   }
 
-  return { success: true as const, entryId: entryRow.id as string, keywordId: kwRow.id as string };
+  const vacant = await collectEarliestVacantDates(projectId, 1);
+  const dateStr = vacant[0];
+  if (!dateStr) {
+    return { success: false as const, error: 'No free calendar day found in the next 500 days.' };
+  }
+
+  const slugBase = slugify(normalized) || `opportunity-${Date.now().toString(36)}`;
+  const calRes = await addKeywordToCalendarOnDate(keywordId, projectId, dateStr, {
+    title: toTitleCase(normalized),
+    article_type: 'How-to Guide',
+    slug: `${slugBase}-${Date.now().toString(36)}`,
+  });
+
+  if (!calRes.success || !calRes.data) {
+    return { success: false as const, error: 'Failed to create calendar entry.' };
+  }
+
+  return {
+    success: true as const,
+    entryId: calRes.data.id as string,
+    keywordId,
+    scheduledDate: dateStr,
+  };
 }

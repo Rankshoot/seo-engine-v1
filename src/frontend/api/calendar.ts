@@ -29,6 +29,32 @@ export const calendarApi = {
     return apiPost(V1Routes.calendarAddKeyword(projectId), body);
   },
 
+  rescheduleEntry(
+    projectId: string,
+    body: { entryId: string; date: string }
+  ): Promise<
+    | { success: true; data: CalendarEntry; rescheduled: boolean }
+    | { success: false; error: string }
+  > {
+    return apiPost(V1Routes.calendarRescheduleEntry(projectId), body);
+  },
+
+  addCustomKeyword(
+    projectId: string,
+    body: {
+      keyword: string;
+      title?: string;
+      articleType?: string;
+      writerNotes?: string;
+      targetDate?: string;
+    }
+  ): Promise<
+    | { success: true; data: CalendarEntry; scheduled_date: string }
+    | { success: false; error: string }
+  > {
+    return apiPost(V1Routes.calendarAddCustom(projectId), body);
+  },
+
   addContentHealth(
     projectId: string,
     body: { focusKeyword: string; auditUrl?: string; contentHealthAudit?: unknown }

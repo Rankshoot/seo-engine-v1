@@ -36,6 +36,26 @@ function regionName(code: string): string {
   return TARGET_REGIONS.find(r => r.code === code.toLowerCase())?.name ?? code.toUpperCase();
 }
 
+function fmtIsoDateLocal(iso: string): string {
+  return new Date(iso + "T12:00:00").toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** Shown after approve when the server auto-schedules on the calendar. */
+function calendarApproveSuffix(cal: {
+  scheduledDate?: string;
+  calendarSkipped?: boolean;
+  calendarError?: string;
+}): string {
+  if (cal.calendarError) return ` — ${cal.calendarError}`;
+  if (cal.calendarSkipped && cal.scheduledDate) return ` — already on calendar (${fmtIsoDateLocal(cal.scheduledDate)})`;
+  if (cal.scheduledDate) return ` — scheduled ${fmtIsoDateLocal(cal.scheduledDate)}`;
+  return "";
+}
+
 const KD_COLOR = (kd: number) =>
   kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
 
@@ -438,9 +458,7 @@ export default function KeywordsPage() {
       );
     }
 
-    if (status === "approved") {
-      pushToast(`"${label}" approved — go to Calendar to schedule it`);
-    } else if (status === "pending") {
+    if (status === "pending") {
       pushToast(`"${label}" moved back to pending`);
     }
 
@@ -462,6 +480,12 @@ export default function KeywordsPage() {
       }
       setError(res.error ?? "Could not update keyword status");
       return;
+    }
+
+    if (status === "approved") {
+      pushToast(`"${label}" approved${calendarApproveSuffix(res)}`);
+      void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
     }
 
     if (!keyword) {
@@ -531,7 +555,9 @@ export default function KeywordsPage() {
       });
     }
     if (next === "approved") {
-      pushToast(`"${label}" approved — go to Calendar to schedule it`);
+      pushToast(`"${label}" approved${calendarApproveSuffix(res)}`);
+      void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
     } else if (next === "pending") {
       pushToast(`"${label}" moved back to pending`);
     }
@@ -617,6 +643,7 @@ export default function KeywordsPage() {
     const previousStatuses = Object.fromEntries(
       uuidIds.map(id => [id, keywords.find(keyword => keyword.id === id)?.status ?? "pending"])
     ) as Record<string, KeywordStatus>;
+    let bulkRes: Awaited<ReturnType<typeof keywordsApi.bulkStatus>> | undefined;
     setBulkApproving(true);
     try {
       for (const phrase of domPhrases) {
@@ -644,8 +671,8 @@ export default function KeywordsPage() {
           list.map(k => (uuidIds.includes(k.id) ? { ...k, status: "approved" as const } : k))
         );
         dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: uuidIds, nextStatus: "approved" }));
-        const res = await keywordsApi.bulkStatus(projectId, uuidIds, "approved");
-        if (!res.success) {
+        bulkRes = await keywordsApi.bulkStatus(projectId, uuidIds, "approved");
+        if (!bulkRes.success) {
           if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
           for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
             dispatch(
@@ -657,7 +684,7 @@ export default function KeywordsPage() {
               })
             );
           }
-          setError(res.error ?? "Could not approve keywords");
+          setError(bulkRes.error ?? "Could not approve keywords");
           return;
         }
       }
@@ -666,12 +693,26 @@ export default function KeywordsPage() {
         queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) }),
       ]);
 
       pushToast(
-        ids.length === 1
-          ? "1 keyword approved — go to Calendar to schedule it"
-          : `${ids.length} keywords approved — go to Calendar to schedule them`
+        domPhrases.length && !uuidIds.length
+          ? `${domPhrases.length} domain keyword(s) approved — placed on the next open calendar days`
+          : uuidIds.length
+            ? `${ids.length} keyword(s) approved${
+                bulkRes?.calendarError
+                  ? ` — ${bulkRes.calendarError}`
+                  : bulkRes?.calendarScheduled != null
+                    ? ` — ${bulkRes.calendarScheduled} scheduled${
+                        (bulkRes.calendarSkipped ?? 0) > 0
+                          ? `, ${bulkRes.calendarSkipped} already on calendar`
+                          : ""
+                      }${bulkRes.firstScheduledDate ? ` (first slot ${fmtIsoDateLocal(bulkRes.firstScheduledDate)})` : ""}`
+                    : ""
+              }`
+            : `${ids.length} keyword(s) approved`
       );
       exitMassSelect();
     } finally {

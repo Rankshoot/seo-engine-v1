@@ -13,6 +13,7 @@ import {
   type KeywordCandidate,
 } from '@/lib/keyword-discovery';
 import { enrichKeywordInBackground } from '@/lib/keyword-modal';
+import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates } from './calendar-actions';
 
 function aiScore(volume: number, kd: number, intent: string = ''): number {
   // Require both volume and KD to be known, otherwise the score misleads.
@@ -581,7 +582,11 @@ export async function loadMoreKeywords(
   return { success: true, data: (data ?? []) as Keyword[], total: count ?? 0 };
 }
 
-export async function updateKeywordStatus(keywordId: string, status: KeywordStatus) {
+export async function updateKeywordStatus(
+  keywordId: string,
+  status: KeywordStatus,
+  expectedProjectId?: string
+) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
@@ -593,6 +598,9 @@ export async function updateKeywordStatus(keywordId: string, status: KeywordStat
     .single();
 
   if (kwErr || !keyword) return { success: false, error: 'Keyword not found or unauthorized' };
+  if (expectedProjectId && String(keyword.project_id) !== String(expectedProjectId)) {
+    return { success: false, error: 'Keyword not found or unauthorized' };
+  }
 
   const { error } = await supabaseAdmin
     .from('keywords')
@@ -600,16 +608,34 @@ export async function updateKeywordStatus(keywordId: string, status: KeywordStat
     .eq('id', keywordId);
 
   if (error) return { success: false, error: error.message };
+
   if (status === 'approved') {
-    // Fire-and-forget: warm the modal cache so the blog pipeline + the
-    // keyword drilldown both have ideas/overview ready when the user clicks.
-    // Calendar entries are created manually on the Calendar page — not here.
     void enrichKeywordInBackground(keywordId);
+    const projectId = keyword.project_id as string;
+    const cal = await scheduleKeywordOnFirstVacantIfNeeded(projectId, keywordId);
+    if (!cal.ok) {
+      return {
+        success: true,
+        calendarError: cal.error,
+      };
+    }
+    if (cal.skipped) {
+      return {
+        success: true,
+        calendarSkipped: true,
+        scheduledDate: cal.scheduledDate,
+      };
+    }
+    return { success: true, scheduledDate: cal.scheduledDate };
   }
   return { success: true };
 }
 
-export async function bulkUpdateKeywordStatus(keywordIds: string[], status: KeywordStatus) {
+export async function bulkUpdateKeywordStatus(
+  keywordIds: string[],
+  status: KeywordStatus,
+  expectedProjectId?: string
+) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
@@ -623,6 +649,9 @@ export async function bulkUpdateKeywordStatus(keywordIds: string[], status: Keyw
   if ((keywords ?? []).length !== keywordIds.length) {
     return { success: false, error: 'Some keywords were not found or unauthorized' };
   }
+  if (expectedProjectId && (keywords ?? []).some(k => String(k.project_id) !== String(expectedProjectId))) {
+    return { success: false, error: 'Some keywords were not found or unauthorized' };
+  }
 
   const { error } = await supabaseAdmin
     .from('keywords')
@@ -631,11 +660,18 @@ export async function bulkUpdateKeywordStatus(keywordIds: string[], status: Keyw
 
   if (error) return { success: false, error: error.message };
   if (status === 'approved') {
-    // Fire-and-forget warming for every newly approved keyword.
-    // Calendar entries are created manually on the Calendar page — not here.
     for (const id of keywordIds) {
       void enrichKeywordInBackground(id);
     }
+    const projectId = (keywords![0] as { project_id: string }).project_id;
+    const batch = await scheduleKeywordsOnVacantDates(projectId, keywordIds);
+    return {
+      success: true,
+      calendarScheduled: batch.scheduled.length,
+      calendarSkipped: batch.skipped.length,
+      ...(batch.error ? { calendarError: batch.error } : {}),
+      ...(batch.scheduled[0] ? { firstScheduledDate: batch.scheduled[0].date } : {}),
+    };
   }
   return { success: true };
 }
@@ -686,7 +722,23 @@ export async function approveKeywordCluster(projectId: string, phrases: string[]
     .in('keyword', [...matched]);
 
   if (error) return { success: false, error: error.message, updated: 0 };
-  // Calendar entries are created manually on the Calendar page — not auto-assigned here.
+
+  const { data: idRows } = await supabaseAdmin
+    .from('keywords')
+    .select('id')
+    .eq('project_id', projectId)
+    .in('keyword', [...matched]);
+  const ids = (idRows ?? []).map(r => r.id as string);
+  if (ids.length) {
+    const batch = await scheduleKeywordsOnVacantDates(projectId, ids);
+    return {
+      success: true,
+      updated: matched.size,
+      calendarScheduled: batch.scheduled.length,
+      calendarSkipped: batch.skipped.length,
+      ...(batch.error ? { calendarError: batch.error } : {}),
+    };
+  }
   return { success: true, updated: matched.size };
 }
 
@@ -819,7 +871,16 @@ export async function upsertKeywordFromDomainSite(
   projectId: string,
   row: DomainSiteKeywordPayload,
   status: KeywordStatus
-): Promise<{ success: true; id: string } | { success: false; error: string }> {
+): Promise<
+  | {
+      success: true;
+      id: string;
+      scheduledDate?: string;
+      calendarSkipped?: boolean;
+      calendarError?: string;
+    }
+  | { success: false; error: string }
+> {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
@@ -875,7 +936,14 @@ export async function upsertKeywordFromDomainSite(
       .single();
 
     if (upErr || !updated) return { success: false, error: upErr?.message ?? 'Update failed' };
-    return { success: true, id: updated.id as string };
+    const id = updated.id as string;
+    if (status === 'approved') {
+      const cal = await scheduleKeywordOnFirstVacantIfNeeded(projectId, id);
+      if (!cal.ok) return { success: true, id, calendarError: cal.error };
+      if (cal.skipped) return { success: true, id, calendarSkipped: true, scheduledDate: cal.scheduledDate };
+      return { success: true, id, scheduledDate: cal.scheduledDate };
+    }
+    return { success: true, id };
   }
 
   const ai = aiScore(volume, kd, intentStr);
@@ -909,5 +977,12 @@ export async function upsertKeywordFromDomainSite(
     .single();
 
   if (insErr || !inserted) return { success: false, error: insErr?.message ?? 'Insert failed' };
-  return { success: true, id: inserted.id as string };
+  const id = inserted.id as string;
+  if (status === 'approved') {
+    const cal = await scheduleKeywordOnFirstVacantIfNeeded(projectId, id);
+    if (!cal.ok) return { success: true, id, calendarError: cal.error };
+    if (cal.skipped) return { success: true, id, calendarSkipped: true, scheduledDate: cal.scheduledDate };
+    return { success: true, id, scheduledDate: cal.scheduledDate };
+  }
+  return { success: true, id };
 }

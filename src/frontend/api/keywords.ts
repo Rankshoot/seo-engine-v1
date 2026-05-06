@@ -62,7 +62,16 @@ export const keywordsApi = {
       "keyword" | "volume" | "kd" | "cpc" | "intent" | "estimated_monthly_traffic"
     >,
     status: KeywordStatus
-  ): Promise<{ success: true; id: string } | { success: false; error?: string }> {
+  ): Promise<
+    | {
+        success: true;
+        id: string;
+        scheduledDate?: string;
+        calendarSkipped?: boolean;
+        calendarError?: string;
+      }
+    | { success: false; error?: string }
+  > {
     return apiPost(V1Routes.keywordsDomain(projectId), { row, status });
   },
 
@@ -70,7 +79,13 @@ export const keywordsApi = {
     keywordId: string,
     projectId: string,
     status: KeywordStatus
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    scheduledDate?: string;
+    calendarSkipped?: boolean;
+    calendarError?: string;
+  }> {
     return apiPatch(V1Routes.keywordStatus(projectId, keywordId), { status });
   },
 
@@ -78,7 +93,14 @@ export const keywordsApi = {
     projectId: string,
     keywordIds: string[],
     status: KeywordStatus
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    calendarScheduled?: number;
+    calendarSkipped?: number;
+    firstScheduledDate?: string;
+    calendarError?: string;
+  }> {
     return apiPost(V1Routes.keywordsBulkStatus(projectId), { keywordIds, status });
   },
 

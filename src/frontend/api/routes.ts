@@ -29,6 +29,8 @@ export const V1Routes = {
   calendarWithBlogs: (projectId: string) => `/projects/${projectId}/calendar/with-blogs`,
   calendarGenerate: (projectId: string) => `/projects/${projectId}/calendar/generate`,
   calendarAddKeyword: (projectId: string) => `/projects/${projectId}/calendar/add-keyword`,
+  calendarRescheduleEntry: (projectId: string) => `/projects/${projectId}/calendar/reschedule-entry`,
+  calendarAddCustom: (projectId: string) => `/projects/${projectId}/calendar/add-custom`,
   calendarContentHealth: (projectId: string) => `/projects/${projectId}/calendar/content-health`,
   calendarApproveAi: (projectId: string) => `/projects/${projectId}/calendar/approve-ai-suggestion`,
 

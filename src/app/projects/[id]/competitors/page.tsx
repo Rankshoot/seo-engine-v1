@@ -1,5 +1,6 @@
 "use client";
 
+import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -8,16 +9,9 @@ import { qk } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
 import { projectDomainHost } from "@/lib/project-domain-host";
-import type {
-  Competitor,
-  CompetitorKeyword,
-  GapType,
-  KeywordGap,
-  KeywordStatus,
-} from "@/lib/types";
+import type { Competitor, GapType, KeywordGap, KeywordStatus } from "@/lib/types";
 import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
-import { Tooltip, InfoIcon } from "@/components/Tooltip";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
 
 function logoUrlCandidates(host: string): string[] {
@@ -79,13 +73,6 @@ const GAP_STYLES: Record<GapType, string> = {
   weak: "border-[#f59e0b]/20 bg-[#f59e0b]/10 text-[#f59e0b]",
   untapped: "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]",
 };
-
-const GAP_FILTER_OPTIONS: Array<{ id: "all" | GapType; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "missing", label: "Missing" },
-  { id: "weak", label: "Weak" },
-  { id: "untapped", label: "Untapped" },
-];
 
 function formatMonthlyTraffic(volume: number): string {
   if (!volume || volume <= 0) return "—";
@@ -196,7 +183,6 @@ export default function CompetitorsPage() {
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const viewMenuRef = useRef<HTMLDivElement>(null);
   const [expandedCompetitor, setExpandedCompetitor] = useState<string | null>(null);
-  const [gapFilter, setGapFilter] = useState<"all" | GapType>("all");
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedGapIds, setSelectedGapIds] = useState<Set<string>>(new Set());
   const [bulkApprovingGaps, setBulkApprovingGaps] = useState(false);
@@ -350,7 +336,7 @@ export default function CompetitorsPage() {
   };
 
   const handleBulkApproveGaps = async () => {
-    const rows = filteredGaps.filter(g => selectedGapIds.has(g.id));
+    const rows = sortedGaps.filter(g => selectedGapIds.has(g.id));
     if (!rows.length) return;
     setBulkApprovingGaps(true);
     setError("");
@@ -384,21 +370,14 @@ export default function CompetitorsPage() {
   };
 
   const competitors = state?.competitors ?? [];
-  const competitorKeywords = state?.competitorKeywords ?? [];
   const gaps = state?.gaps ?? [];
   const averages = state?.averages;
   const lastBenchmarkedAt = state?.lastBenchmarkedAt;
 
-  const filteredGaps = useMemo(() => {
-    const list = gapFilter === "all" ? gaps : gaps.filter(g => g.gap_type === gapFilter);
-    return [...list].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score);
-  }, [gaps, gapFilter]);
-
-  const gapCounts = useMemo(() => {
-    const counts = { all: gaps.length, missing: 0, weak: 0, untapped: 0 };
-    for (const g of gaps) counts[g.gap_type] += 1;
-    return counts;
-  }, [gaps]);
+  const sortedGaps = useMemo(
+    () => [...gaps].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score),
+    [gaps]
+  );
 
   const hasBenchmark = competitors.length > 0;
 
@@ -491,160 +470,9 @@ export default function CompetitorsPage() {
         </div>
       ) : (
         <>
-          <BenchmarkOverview
-            averages={averages}
-            competitors={competitors}
-            competitorKeywords={competitorKeywords}
-            gaps={gaps}
-          />
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-            <div className="relative" ref={viewMenuRef}>
-              <button
-                type="button"
-                onClick={() => setViewMenuOpen(o => !o)}
-                className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
-                aria-expanded={viewMenuOpen}
-                aria-haspopup="listbox"
-              >
-                {insightsView === "opportunities" ? "Opportunity dashboard" : "Competitor list"}
-                <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                </svg>
-              </button>
-              {viewMenuOpen ? (
-                <div
-                  role="listbox"
-                  className="absolute left-0 top-full z-50 mt-1 min-w-[14rem] rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
-                >
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={insightsView === "opportunities"}
-                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-                    onClick={() => {
-                      setInsightsView("opportunities");
-                      setViewMenuOpen(false);
-                    }}
-                  >
-                    Opportunity dashboard ({gaps.length})
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={insightsView === "competitors"}
-                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-                    onClick={() => {
-                      setInsightsView("competitors");
-                      setViewMenuOpen(false);
-                    }}
-                  >
-                    Competitor list ({competitors.length})
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {insightsView === "opportunities" && gaps.length > 0 ? (
-              <PillTabFilterBar
-                items={GAP_FILTER_OPTIONS.map(f => ({
-                  id: f.id,
-                  label: f.label,
-                  count: gapCounts[f.id],
-                }))}
-                activeId={gapFilter}
-                onChange={setGapFilter}
-              />
-            ) : null}
-            </div>
-
-            {insightsView === "opportunities" && filteredGaps.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {!massSelectMode ? (
-                  <button
-                    type="button"
-                    aria-label="Mass select opportunities"
-                    onClick={() => {
-                      setMassSelectMode(true);
-                      setSelectedGapIds(new Set());
-                    }}
-                    className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-3 w-3 shrink-0 opacity-75"
-                      aria-hidden
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={1.85}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                      <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                      <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
-                      <path d="M14 17.5 16 19.5 21 13.5" />
-                    </svg>
-                    <span>Mass select</span>
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void handleBulkApproveGaps()}
-                      disabled={bulkApprovingGaps || selectedGapIds.size === 0}
-                      className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
-                        bulkApprovingGaps ? "animate-pulse cursor-wait" : ""
-                      }`}
-                    >
-                      <span className="block max-w-full overflow-hidden truncate text-center tabular-nums">
-                        {bulkApprovingGaps ? "…" : selectedGapIds.size > 0 ? `Approve (${selectedGapIds.size})` : "Approve"}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={exitGapMassSelect}
-                      disabled={bulkApprovingGaps}
-                      className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
-                      title="Leave mass-select mode"
-                    >
-                      Cancel
-                    </button>
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void handleRun()}
-                  disabled={running}
-                  className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-                >
-                  {running ? (
-                    <>
-                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
-                      Refreshing…
-                    </>
-                  ) : (
-                    <>
-                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
-                        />
-                      </svg>
-                      Refresh
-                    </>
-                  )}
-                </button>
-              </div>
-            ) : null}
-          </div>
-
           {insightsView === "opportunities" && (
             <OpportunityDashboard
-              gaps={filteredGaps}
-              gapFilter={gapFilter}
+              gaps={sortedGaps}
               hasGapsInProject={gaps.length > 0}
               averages={averages}
               generatingKeyword={generatingKeyword}
@@ -656,6 +484,18 @@ export default function CompetitorsPage() {
               selectedGapIds={selectedGapIds}
               onToggleGapSelected={toggleGapRowSelected}
               bulkApprovingGaps={bulkApprovingGaps}
+              viewMenuRef={viewMenuRef}
+              viewMenuOpen={viewMenuOpen}
+              setViewMenuOpen={setViewMenuOpen}
+              setInsightsView={setInsightsView}
+              projectGapsCount={gaps.length}
+              competitorsCount={competitors.length}
+              exitGapMassSelect={exitGapMassSelect}
+              onStartMassSelect={() => {
+                setMassSelectMode(true);
+                setSelectedGapIds(new Set());
+              }}
+              onBulkApproveGaps={() => void handleBulkApproveGaps()}
             />
           )}
 
@@ -666,6 +506,12 @@ export default function CompetitorsPage() {
               onToggle={id => setExpandedCompetitor(prev => (prev === id ? null : id))}
               statusById={competitorStatuses}
               onStatusChange={handleCompetitorStatus}
+              viewMenuRef={viewMenuRef}
+              viewMenuOpen={viewMenuOpen}
+              setViewMenuOpen={setViewMenuOpen}
+              setInsightsView={setInsightsView}
+              projectGapsCount={gaps.length}
+              competitorsCount={competitors.length}
             />
           )}
         </>
@@ -678,48 +524,6 @@ export default function CompetitorsPage() {
 // Subcomponents
 // ─────────────────────────────────────────────────────────────────────────────
 
-function BenchmarkOverview({
-  averages,
-  competitors,
-  competitorKeywords,
-  gaps,
-}: {
-  averages?: BenchmarkState["averages"];
-  competitors: Competitor[];
-  competitorKeywords: CompetitorKeyword[];
-  gaps: KeywordGap[];
-}) {
-  const topGap = [...gaps].sort((a, b) => b.opportunity_score - a.opportunity_score)[0];
-  return (
-    <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-      <StatCard
-        label="Competitors"
-        value={competitors.length.toString()}
-        hint="benchmarked domains"
-        tooltip="Unique competitor domains discovered from your niche's SERPs and scraped in this benchmark run."
-      />
-      <StatCard
-        label="Keywords mined"
-        value={new Intl.NumberFormat("en-US").format(competitorKeywords.length)}
-        hint="from competitor pages"
-        tooltip="Total keywords extracted from competitor pages via Jina scraping + DataForSEO enrichment."
-      />
-      <StatCard
-        label="Gaps found"
-        value={gaps.length.toString()}
-        hint={topGap ? `top score ${topGap.opportunity_score}` : "—"}
-        tooltip="Keywords your competitors rank for but your domain does not (missing), or ranks weakly (weak / untapped)."
-      />
-      <StatCard
-        label="Avg word count"
-        value={new Intl.NumberFormat("en-US").format(averages?.avg_word_count ?? 0)}
-        hint={averages?.pages_analyzed ? `across ${averages.pages_analyzed} pages` : "pages"}
-        tooltip="Average word count across all competitor pages scraped. Use this as a content-length benchmark when writing."
-      />
-    </div>
-  );
-}
-
 function gapKeywordWorkspaceStatus(
   keyword: string,
   approved: Set<string>,
@@ -731,26 +535,76 @@ function gapKeywordWorkspaceStatus(
   return "pending";
 }
 
-function StatCard({ label, value, hint, tooltip }: { label: string; value: string; hint?: string; tooltip?: string }) {
+type OpportunityWorkspaceTab = "all" | "ai" | KeywordStatus;
+
+function InsightsViewDropdown({
+  menuRef,
+  menuOpen,
+  setMenuOpen,
+  insightsView,
+  setInsightsView,
+  gapsCount,
+  competitorsCount,
+}: {
+  menuRef: RefObject<HTMLDivElement | null>;
+  menuOpen: boolean;
+  setMenuOpen: Dispatch<SetStateAction<boolean>>;
+  insightsView: InsightsView;
+  setInsightsView: Dispatch<SetStateAction<InsightsView>>;
+  gapsCount: number;
+  competitorsCount: number;
+}) {
   return (
-    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-5 flex flex-col">
-      <div className="flex items-center gap-1.5 mb-2">
-        <p className="text-[11px] font-bold uppercase tracking-widest text-text-tertiary">{label}</p>
-        {tooltip && (
-          <Tooltip content={tooltip}>
-            <InfoIcon />
-          </Tooltip>
-        )}
-      </div>
-      <p className="font-mono text-[32px] font-bold tracking-tight text-text-primary leading-none">{value}</p>
-      {hint ? <p className="text-[12px] text-text-tertiary mt-2">{hint}</p> : null}
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        onClick={() => setMenuOpen(o => !o)}
+        className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
+        aria-expanded={menuOpen}
+        aria-haspopup="listbox"
+      >
+        {insightsView === "opportunities" ? "Opportunity dashboard" : "Competitor list"}
+        <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+      </button>
+      {menuOpen ? (
+        <div
+          role="listbox"
+          className="absolute left-0 top-full z-50 mt-1 min-w-[14rem] rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="option"
+            aria-selected={insightsView === "opportunities"}
+            className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            onClick={() => {
+              setInsightsView("opportunities");
+              setMenuOpen(false);
+            }}
+          >
+            Opportunity dashboard ({gapsCount})
+          </button>
+          <button
+            type="button"
+            role="option"
+            aria-selected={insightsView === "competitors"}
+            className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            onClick={() => {
+              setInsightsView("competitors");
+              setMenuOpen(false);
+            }}
+          >
+            Competitor list ({competitorsCount})
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function OpportunityDashboard({
   gaps,
-  gapFilter,
   hasGapsInProject,
   averages,
   generatingKeyword,
@@ -762,9 +616,17 @@ function OpportunityDashboard({
   selectedGapIds,
   onToggleGapSelected,
   bulkApprovingGaps,
+  viewMenuRef,
+  viewMenuOpen,
+  setViewMenuOpen,
+  setInsightsView,
+  projectGapsCount,
+  competitorsCount,
+  exitGapMassSelect,
+  onStartMassSelect,
+  onBulkApproveGaps,
 }: {
   gaps: KeywordGap[];
-  gapFilter: "all" | GapType;
   hasGapsInProject: boolean;
   averages?: BenchmarkState["averages"];
   generatingKeyword: string | null;
@@ -776,9 +638,69 @@ function OpportunityDashboard({
   selectedGapIds: Set<string>;
   onToggleGapSelected: (gapId: string) => void;
   bulkApprovingGaps: boolean;
+  viewMenuRef: RefObject<HTMLDivElement | null>;
+  viewMenuOpen: boolean;
+  setViewMenuOpen: Dispatch<SetStateAction<boolean>>;
+  setInsightsView: Dispatch<SetStateAction<InsightsView>>;
+  projectGapsCount: number;
+  competitorsCount: number;
+  exitGapMassSelect: () => void;
+  onStartMassSelect: () => void;
+  onBulkApproveGaps: () => void;
 }) {
+  const [workspaceTab, setWorkspaceTab] = useState<OpportunityWorkspaceTab>("all");
+
+  const workspaceCounts = useMemo(() => {
+    let all = 0;
+    let ai = 0;
+    let pending = 0;
+    let approved = 0;
+    let rejected = 0;
+    for (const g of gaps) {
+      all += 1;
+      const k = g.keyword.toLowerCase();
+      if (aiGapKeywordSet.has(k)) ai += 1;
+      const st = gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords);
+      if (st === "pending") pending += 1;
+      if (st === "approved") approved += 1;
+      if (st === "rejected") rejected += 1;
+    }
+    return { all, ai, pending, approved, rejected };
+  }, [gaps, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords]);
+
+  const displayedGaps = useMemo(() => {
+    return gaps.filter(g => {
+      if (workspaceTab === "all") return true;
+      if (workspaceTab === "ai") return aiGapKeywordSet.has(g.keyword.toLowerCase());
+      const st = gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords);
+      return st === workspaceTab;
+    });
+  }, [gaps, workspaceTab, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords]);
+
+  const OPPORTUNITY_TAB_ITEMS: Array<{ id: OpportunityWorkspaceTab; label: string; count: number }> = [
+    { id: "all", label: "All", count: workspaceCounts.all },
+    { id: "ai", label: "AI picks", count: workspaceCounts.ai },
+    { id: "pending", label: "Pending", count: workspaceCounts.pending },
+    { id: "approved", label: "Approved", count: workspaceCounts.approved },
+    { id: "rejected", label: "Rejected", count: workspaceCounts.rejected },
+  ];
+
   return (
     <div className="space-y-6">
+      {!hasGapsInProject ? (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <InsightsViewDropdown
+            menuRef={viewMenuRef}
+            menuOpen={viewMenuOpen}
+            setMenuOpen={setViewMenuOpen}
+            insightsView="opportunities"
+            setInsightsView={setInsightsView}
+            gapsCount={projectGapsCount}
+            competitorsCount={competitorsCount}
+          />
+        </div>
+      ) : null}
+
       {averages?.recommendations?.length ? (
         <div className="rounded-[16px] border border-brand-action/20 bg-brand-action/5 p-6">
           <h3 className="text-[18px] font-medium text-text-primary mb-4">Content benchmark recommendations</h3>
@@ -793,21 +715,97 @@ function OpportunityDashboard({
         </div>
       ) : null}
 
-      <div className="space-y-3">
-        <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary">Keyword opportunities</p>
-      </div>
+      {hasGapsInProject ? (
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Keyword list</h2>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <PillTabFilterBar<OpportunityWorkspaceTab>
+              className="min-w-0 flex-1"
+              items={OPPORTUNITY_TAB_ITEMS}
+              activeId={workspaceTab}
+              onChange={setWorkspaceTab}
+            />
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {gaps.length > 0 ? (
+                <>
+                  {!massSelectMode ? (
+                    <button
+                      type="button"
+                      aria-label="Mass select opportunities"
+                      onClick={onStartMassSelect}
+                      className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        className="h-3 w-3 shrink-0 opacity-75"
+                        aria-hidden
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.85}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                        <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                        <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
+                        <path d="M14 17.5 16 19.5 21 13.5" />
+                      </svg>
+                      <span>Mass select</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={onBulkApproveGaps}
+                        disabled={bulkApprovingGaps || selectedGapIds.size === 0}
+                        className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
+                          bulkApprovingGaps ? "animate-pulse cursor-wait" : ""
+                        }`}
+                      >
+                        <span className="block max-w-full overflow-hidden truncate text-center tabular-nums">
+                          {bulkApprovingGaps ? "…" : selectedGapIds.size > 0 ? `Approve (${selectedGapIds.size})` : "Approve"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={exitGapMassSelect}
+                        disabled={bulkApprovingGaps}
+                        className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
+                        title="Leave mass-select mode"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  )}
+                </>
+              ) : null}
+              <InsightsViewDropdown
+                menuRef={viewMenuRef}
+                menuOpen={viewMenuOpen}
+                setMenuOpen={setViewMenuOpen}
+                insightsView="opportunities"
+                setInsightsView={setInsightsView}
+                gapsCount={projectGapsCount}
+                competitorsCount={competitorsCount}
+              />
+            </div>
+          </div>
+        </section>
+      ) : null}
 
-      {gaps.length === 0 ? (
+      {displayedGaps.length === 0 ? (
         <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
           {!hasGapsInProject
-            ? "No opportunities yet. Run a benchmark or click Refresh."
-            : gapFilter === "all"
-              ? "No opportunities match this view."
-              : "No keyword gaps match this filter."}
+            ? "No opportunities yet. Run or re-run a benchmark from the button above."
+            : workspaceTab !== "all"
+              ? "No opportunities match this tab."
+              : "No opportunities match this view."}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-          <div className="overflow-x-auto">
+        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
+          <div className="overflow-x-auto overflow-y-visible">
             <table className="w-full min-w-[980px] text-left">
               <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
@@ -833,7 +831,7 @@ function OpportunityDashboard({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle/60">
-                {gaps.map(g => (
+                {displayedGaps.map(g => (
                   <tr
                     key={g.id}
                     onClick={e => {
@@ -957,15 +955,38 @@ function CompetitorList({
   onToggle,
   statusById,
   onStatusChange,
+  viewMenuRef,
+  viewMenuOpen,
+  setViewMenuOpen,
+  setInsightsView,
+  projectGapsCount,
+  competitorsCount,
 }: {
   competitors: Competitor[];
   expandedId: string | null;
   onToggle: (id: string) => void;
   statusById: Record<string, KeywordStatus>;
   onStatusChange: (competitorId: string, next: KeywordStatus) => void;
+  viewMenuRef: RefObject<HTMLDivElement | null>;
+  viewMenuOpen: boolean;
+  setViewMenuOpen: Dispatch<SetStateAction<boolean>>;
+  setInsightsView: Dispatch<SetStateAction<InsightsView>>;
+  projectGapsCount: number;
+  competitorsCount: number;
 }) {
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap justify-end">
+        <InsightsViewDropdown
+          menuRef={viewMenuRef}
+          menuOpen={viewMenuOpen}
+          setMenuOpen={setViewMenuOpen}
+          insightsView="competitors"
+          setInsightsView={setInsightsView}
+          gapsCount={projectGapsCount}
+          competitorsCount={competitorsCount}
+        />
+      </div>
       {competitors.map(c => {
         const expanded = expandedId === c.id;
         const rowStatus = statusById[c.id] ?? "pending";

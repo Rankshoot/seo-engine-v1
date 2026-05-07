@@ -7,9 +7,11 @@
  *     keyword gaps come from **DataForSEO
  *     `keywords_data/google_ads/keywords_for_site/live`** (per competitor
  *     domain, `location_code` + `language_code` from project, `search_partners:
- *     true`, `sort_by: search_volume`, limit 10). Ahrefs is used only when
- *     **no** manual competitors exist. DataForSEO is also the fallback when
- *     Ahrefs returns no opportunities (for manual competitors only).
+ *     true`, `sort_by: search_volume`, limit 10). That API does not return
+ *     landing URLs, so we match each keyword to the closest **blog URL from the
+ *     competitor’s public sitemap** (see `competitor-sitemap-match.ts`). Ahrefs
+ *     is used only when **no** manual competitors exist. DataForSEO is also the
+ *     fallback when Ahrefs returns no opportunities (for manual competitors only).
  *
  *   • `getCompetitorBenchmark` — hydrate all three tables for the project.
  *
@@ -36,6 +38,8 @@ import {
 } from '@/lib/ahrefs';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
 import { addKeywordToCalendarOnDate, collectEarliestVacantDates } from '@/app/actions/calendar-actions';
+import { bestMatchingBlogUrl } from '@/lib/competitor-sitemap-match';
+import { fetchBlogUrls } from '@/lib/jina';
 import type {
   BenchmarkAverages,
   Competitor,
@@ -91,6 +95,12 @@ function normalizeDomainInput(raw: string): string {
 
 /** Rows per competitor from Google Ads Keywords For Site (DataForSEO). */
 const KEYWORDS_FOR_SITE_LIMIT = 100;
+
+/** Max rows written to `competitor_keywords` and `keyword_gaps`; must match `getCompetitorBenchmark` read limit. */
+const BENCHMARK_KEYWORD_CAP = 200;
+
+/** Max blog-style URLs to load per competitor sitemap for keyword ↔ URL matching. */
+const COMPETITOR_SITEMAP_BLOG_CAP = 3000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Run the full benchmark pipeline
@@ -414,6 +424,8 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     };
   }
 
+  await enrichRankingUrlsFromCompetitorSitemaps(dedupedOpportunities, competitorList, trace);
+
   // ───────────────────────────────────────────────────────────────────────
   // 1d. Selectively scrape ranking pages for structural signals.
   // ───────────────────────────────────────────────────────────────────────
@@ -541,7 +553,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   await supabaseAdmin.from('competitor_keywords').delete().eq('project_id', projectId);
   const ckRows: Array<Record<string, unknown>> = [];
   const competitorIdByDomain = new Map(persistedCompetitors.map(c => [c.domain, c.id]));
-  for (const opportunity of dedupedOpportunities.slice(0, 200)) {
+  for (const opportunity of dedupedOpportunities.slice(0, BENCHMARK_KEYWORD_CAP)) {
     const competitorId = competitorIdByDomain.get(opportunity.top_competitor_domain);
     if (!competitorId) continue;
     ckRows.push({
@@ -612,7 +624,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   });
 
   gapRows.sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score);
-  const topGapRows = gapRows.slice(0, 120);
+  const topGapRows = gapRows.slice(0, BENCHMARK_KEYWORD_CAP);
 
   if (topGapRows.length) {
     const { error: gapErr } = await supabaseAdmin
@@ -641,6 +653,86 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** True when URL is the competitor site root (or subdomain root) with no path — not a specific page. */
+function isLikelyHomepageOnlyUrl(url: string, competitorDomain: string): boolean {
+  const comp = normalizeDomainInput(competitorDomain);
+  if (!comp || !url.trim()) return false;
+  let u: URL;
+  try {
+    u = new URL(url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`);
+  } catch {
+    return false;
+  }
+  const host = safeHostFromUrl(u.href);
+  if (!host) return false;
+  if (host !== comp && !host.endsWith(`.${comp}`)) return false;
+  const path = u.pathname.replace(/\/+$/, '') || '';
+  return path === '';
+}
+
+/**
+ * For rows that only have the site homepage (typical for DataForSEO keywords
+ * for site), pick the best-matching blog URL from each competitor’s sitemap.
+ */
+async function enrichRankingUrlsFromCompetitorSitemaps(
+  opportunities: RankingOpportunity[],
+  competitors: Array<{ domain: string }>,
+  trace: BenchmarkTraceEntry[]
+): Promise<void> {
+  const domains = [
+    ...new Set(
+      [
+        ...competitors.map(c => normalizeDomainInput(c.domain)),
+        ...opportunities.map(o => normalizeDomainInput(o.top_competitor_domain)),
+      ].filter(Boolean)
+    ),
+  ];
+  if (!domains.length) return;
+
+  const blogUrlsByDomain = new Map<string, string[]>();
+  await Promise.all(
+    domains.map(async d => {
+      try {
+        const urls = await fetchBlogUrls(d, COMPETITOR_SITEMAP_BLOG_CAP);
+        blogUrlsByDomain.set(d, urls);
+        trace.push({
+          label: `competitor_sitemap_blogs:${d}`,
+          ok: true,
+          info: { blog_urls: urls.length, cap: COMPETITOR_SITEMAP_BLOG_CAP },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        trace.push({ label: `competitor_sitemap_blogs:${d}`, ok: false, error: msg });
+        blogUrlsByDomain.set(d, []);
+      }
+    })
+  );
+
+  let candidates = 0;
+  let matched = 0;
+  for (const opp of opportunities) {
+    if (!isLikelyHomepageOnlyUrl(opp.top_competitor_url, opp.top_competitor_domain)) continue;
+    candidates += 1;
+    const blogs = blogUrlsByDomain.get(opp.top_competitor_domain) ?? [];
+    const hit = bestMatchingBlogUrl(opp.keyword, blogs);
+    if (hit) {
+      opp.top_competitor_url = hit.url;
+      opp.source_title = hit.titleHint;
+      matched += 1;
+    }
+  }
+
+  trace.push({
+    label: 'competitor_sitemap_keyword_match',
+    ok: true,
+    info: {
+      competitors_with_sitemap: domains.length,
+      homepage_placeholder_rows: candidates,
+      matched_to_blog_url: matched,
+    },
+  });
+}
 
 function pageBoost(
   row: AhrefsOrganicKeyword,
@@ -723,9 +815,6 @@ function buildGapReasoning(
   return bits.join(' ');
 }
 
-// keep linter happy when only the Ahrefs path is hit
-void safeHostFromUrl;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Hydrate benchmark state for the UI
 // ─────────────────────────────────────────────────────────────────────────────
@@ -791,7 +880,7 @@ export async function getCompetitorBenchmark(projectId: string): Promise<Benchma
       .select('*')
       .eq('project_id', projectId)
       .order('opportunity_score', { ascending: false })
-      .limit(200),
+      .limit(BENCHMARK_KEYWORD_CAP),
   ]);
 
   const competitors = (competitorsRows ?? []) as Competitor[];

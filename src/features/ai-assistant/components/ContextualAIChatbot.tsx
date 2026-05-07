@@ -669,13 +669,12 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
     enabled: !!page,
   });
 
-  // Domain-tab keywords (live Google Ads For Site).
-  // Loaded whenever the chatbot is open so cross-page queries can use both
-  // industry-cached + live-domain keyword pools.
+  // Domain-tab keywords — Supabase snapshot merged with `keywords`; refresh only via Re-discover.
   const { data: domainKeywordsData } = useQuery({
     queryKey: qk.domainKeywords(project.id),
     queryFn: () => keywordsApi.domainKeywords(project.id),
     enabled: aiMode !== "closed",
+    staleTime: Infinity,
   });
 
   const { data: competitorData } = useQuery({

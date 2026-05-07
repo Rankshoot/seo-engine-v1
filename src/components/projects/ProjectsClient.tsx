@@ -5,10 +5,31 @@ import ProjectCard, { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashbo
 import { NewProjectModal } from "@/components/NewProjectModal";
 import type { Project } from "@/lib/types";
 
-export default function ProjectsClient({ projects }: { projects: Project[] }) {
-  const [modalOpen, setModalOpen] = useState(false);
-  const openModal = useCallback(() => setModalOpen(true), []);
-  const closeModal = useCallback(() => setModalOpen(false), []);
+export default function ProjectsClient({
+  projects,
+  initialNewModalOpen = false,
+  newProjectModalOpen: controlledOpen,
+  onNewProjectModalOpenChange,
+}: {
+  projects: Project[];
+  /** Used only when the modal is uncontrolled (no parent passes open/setter). */
+  initialNewModalOpen?: boolean;
+  newProjectModalOpen?: boolean;
+  onNewProjectModalOpenChange?: (open: boolean) => void;
+}) {
+  const isControlled =
+    typeof controlledOpen === "boolean" && typeof onNewProjectModalOpenChange === "function";
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(initialNewModalOpen);
+  const modalOpen = isControlled ? controlledOpen : uncontrolledOpen;
+  const setModalOpen = useCallback(
+    (v: boolean) => {
+      if (isControlled) onNewProjectModalOpenChange!(v);
+      else setUncontrolledOpen(v);
+    },
+    [isControlled, onNewProjectModalOpenChange]
+  );
+  const openModal = useCallback(() => setModalOpen(true), [setModalOpen]);
+  const closeModal = useCallback(() => setModalOpen(false), [setModalOpen]);
 
   return (
     <>

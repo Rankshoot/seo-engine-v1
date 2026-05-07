@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,6 +28,7 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordModal";
+import { toast } from "react-hot-toast";
 
 type CalendarResponse = Awaited<ReturnType<typeof calendarApi.entries>>;
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
@@ -113,18 +114,9 @@ export default function CalendarPage() {
     const stored = localStorage.getItem("calendar-view");
     return stored === "grid" ? "grid" : "list";
   });
-  const [toast, setToast] = useState<string | null>(null);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
   const handleCalendarViewChange = useCallback((view: "list" | "grid") => {
     setCalendarView(view);
     localStorage.setItem("calendar-view", view);
-  }, []);
-
-  const pushToast = useCallback((msg: string) => {
-    setToast(msg);
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
   }, []);
 
   // ── data queries ─────────────────────────────────────────────────────────
@@ -226,7 +218,7 @@ export default function CalendarPage() {
             calendarKeywordScheduled({ projectId, keywordId, date, status: "scheduled" })
           );
           const wasRescheduled = "rescheduled" in res && res.rescheduled;
-          pushToast(
+          toast.success(
             `"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${fmtDate(date)}`
           );
           setPickingDateForEntryId(null);
@@ -236,13 +228,13 @@ export default function CalendarPage() {
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
           return true;
         }
-        pushToast(res.error ?? "Could not schedule keyword");
+        toast.error(res.error ?? "Could not schedule keyword");
         return false;
       } finally {
         setSavingDate(false);
       }
     },
-    [approvedKeywords, projectId, dispatch, pushToast, refetchCalendar, queryClient]
+    [approvedKeywords, projectId, dispatch, refetchCalendar, queryClient]
   );
 
   const handleMoveEntryToDate = useCallback(
@@ -264,7 +256,7 @@ export default function CalendarPage() {
             );
           }
           if (res.rescheduled) {
-            pushToast(`"${entry?.focus_keyword ?? "Entry"}" moved to ${fmtDate(dateNorm)}`);
+            toast.success(`"${entry?.focus_keyword ?? "Entry"}" moved to ${fmtDate(dateNorm)}`);
           }
           setPickingDateForEntryId(null);
           queryClient.setQueryData<CalendarResponse>(CALENDAR_KEY, (old) => {
@@ -282,13 +274,13 @@ export default function CalendarPage() {
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
           return true;
         }
-        pushToast(res.error ?? "Could not move entry");
+        toast.error(res.error ?? "Could not move entry");
         return false;
       } finally {
         setSavingDate(false);
       }
     },
-    [entries, projectId, dispatch, pushToast, refetchCalendar, queryClient, CALENDAR_KEY]
+    [entries, projectId, dispatch, refetchCalendar, queryClient, CALENDAR_KEY]
   );
 
   const handleAddCustomKeyword = useCallback(
@@ -309,7 +301,7 @@ export default function CalendarPage() {
           targetDate: data.targetDate,
         });
         if (res.success) {
-          pushToast(`"${data.keyword}" scheduled for ${fmtDate(res.scheduled_date)}`);
+          toast.success(`"${data.keyword}" scheduled for ${fmtDate(res.scheduled_date)}`);
           setAddKeywordModalDate(null);
           await refetchCalendar();
           void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
@@ -322,7 +314,7 @@ export default function CalendarPage() {
         setAddKeywordBusy(false);
       }
     },
-    [projectId, pushToast, refetchCalendar, queryClient]
+    [projectId, refetchCalendar, queryClient]
   );
 
   // ── derived stats ─────────────────────────────────────────────────────────
@@ -656,15 +648,6 @@ export default function CalendarPage() {
         busy={addKeywordBusy}
       />
 
-      {/* ── TOAST ───────────────────────────────────────────────────────── */}
-      {toast && (
-        <div
-          role="status"
-          className="fixed bottom-8 right-6 z-50 max-w-sm rounded-[12px] border border-brand-action/30 bg-surface-elevated px-4 py-3 text-[14px] text-text-primary shadow-lg ring-1 ring-brand-action/20"
-        >
-          {toast}
-        </div>
-      )}
     </div>
   );
 }

@@ -359,7 +359,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     );
     const intersectionResults = await Promise.all(
       competitorList.map(async competitor => {
-        const items = await fetchGoogleAdsKeywordsForSite(
+        const { rows: items } = await fetchGoogleAdsKeywordsForSite(
           competitor.domain,
           project.target_region,
           languageCode,

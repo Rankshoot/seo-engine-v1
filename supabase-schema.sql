@@ -271,3 +271,16 @@ CREATE INDEX IF NOT EXISTS idx_keyword_gaps_project_id ON keyword_gaps(project_i
 CREATE INDEX IF NOT EXISTS idx_keyword_gaps_score ON keyword_gaps(opportunity_score DESC);
 CREATE INDEX IF NOT EXISTS idx_project_site_explorer_project_id
   ON project_site_explorer(project_id);
+
+-- Cached DataForSEO Google Ads keywords-for-site payload per project (domain tab).
+-- Refreshed only via explicit user action — never on a normal GET.
+CREATE TABLE IF NOT EXISTS project_domain_ads_keywords (
+  project_id UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  target_domain TEXT NOT NULL DEFAULT '',
+  region TEXT NOT NULL DEFAULT 'us',
+  language TEXT NOT NULL DEFAULT 'en',
+  rows JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_fetched_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);

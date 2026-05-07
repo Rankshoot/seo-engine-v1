@@ -3,7 +3,7 @@
  *
  * INPUTS
  *   - context.keywords        → DB-cached "Industry" tab keywords
- *   - context.domainKeywords  → live "Domain" tab keywords (Google Ads For Site)
+ *   - context.domainKeywords  → cached "Domain" tab snapshot (Google Ads For Site, Re-discover refresh)
  *   - context.businessContext → niche, audience, brief, projectDomain, competitorDomains
  *
  * SCORING

@@ -32,6 +32,7 @@ const Icon = {
   chevronRight: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
   chevronLeft: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
   check: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>,
+  plus: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8m-4-4h8"/></svg>,
   ai: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9.8 15.9 9 18.8l-.8-2.9a4.5 4.5 0 0 0-3.1-3.1L2.3 12l2.8-.8a4.5 4.5 0 0 0 3.1-3.1L9 5.3l.8 2.8a4.5 4.5 0 0 0 3.1 3.1l2.8.8-2.8.8a4.5 4.5 0 0 0-3.1 3.1Z"/><path d="M19 2v4"/><path d="M21 4h-4"/><path d="M19 18v4"/><path d="M21 20h-4"/></svg>,
 };
 
@@ -42,6 +43,7 @@ interface ProjectSidebarProps {
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
   onOpenAI?: () => void;
+  onNewProject?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -51,6 +53,7 @@ export default function ProjectSidebar({
   isCollapsed,
   setIsCollapsed,
   onOpenAI,
+  onNewProject,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -282,13 +285,36 @@ export default function ProjectSidebar({
                   </button>
                 ))}
               </div>
-              <div className="px-3 pt-2 mt-2 border-t border-border-subtle">
+              <div className="px-3 pt-2 pb-1 mt-2 border-t border-border-subtle space-y-1.5">
+                {onNewProject ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDropdownOpen(false);
+                      onNewProject();
+                    }}
+                    className="flex w-full cursor-pointer items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                  >
+                    {Icon.plus}
+                    New project
+                  </button>
+                ) : (
+                  <ProjectNavLink
+                    href="/projects?new=1"
+                    onClick={() => setIsDropdownOpen(false)}
+                  className="flex items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px]  font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                  >
+                    {Icon.plus}
+                    New project
+                  </ProjectNavLink>
+                )}
                 <ProjectNavLink
                   href="/projects"
                   onClick={() => setIsDropdownOpen(false)}
-                  className="flex items-center gap-2 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors py-1"
+                  className="flex items-center gap-2 rounded-[8px] px-2 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
                 >
-                  {Icon.grid} View all projects
+                  {Icon.grid}
+                  View all projects
                 </ProjectNavLink>
               </div>
             </div>

@@ -17,6 +17,7 @@ import {
   bulkKeywordStatusChanged,
   keywordStatusChanged,
   mergeKeywordStatuses,
+  rememberKeywordDiscoverySourceTab,
   rememberKeywordFilter,
   rememberKeywordSort,
   removeKeywordStatus,
@@ -24,11 +25,12 @@ import {
 import { keywordsApi } from "@/frontend/api/keywords";
 import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
 import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
-import { TableSkeleton } from "@/components/Skeleton";
+import { DataTable, ColumnDef } from "@/components/DataTable";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
+import { toast } from "react-hot-toast";
 
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
@@ -166,12 +168,14 @@ export default function KeywordsPage() {
   const KEYWORDS_KEY = qk.keywords(projectId);
 
   const [discovering, setDiscovering] = useState(false);
+  /** True while POST refresh hits DataForSEO (not the same as React Query `isFetching` for GET). */
+  const [domainRefreshing, setDomainRefreshing] = useState(false);
   const filter = keywordPrefs.filter as FilterTab;
   const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
 
-  // Source tab — default industry (DataForSEO discovery list). "domain" = Google Ads for-site.
-  const [sourceTab, setSourceTab] = useState<SourceTab>("industry");
+  // Industry vs domain DataForSEO paths — persisted so Re-discover matches the visible table.
+  const sourceTab: SourceTab = keywordPrefs.discoverySourceTab === "domain" ? "domain" : "industry";
   const [dataSourceMenuOpen, setDataSourceMenuOpen] = useState(false);
   const dataSourceRef = useRef<HTMLDivElement>(null);
 
@@ -180,14 +184,17 @@ export default function KeywordsPage() {
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** Domain-tab optimistic status by normalized phrase (survives refetch/cache key mismatches). */
   const [domainPhraseStatusOverlay, setDomainPhraseStatusOverlay] = useState<Record<string, KeywordStatus>>({});
 
   // Keyword drilldown modal. Stored as id (not a `Keyword` object) so the
   // modal always reflects the latest row state — including approve/reject
   // updates that happen via `handleStatusUpdate`.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const [modalKeywordId, setModalKeywordId] = useState<string | null>(null);
 
   const { data: keywordsData, isLoading: loading } = useQuery<KeywordsResponse>({
@@ -225,12 +232,12 @@ export default function KeywordsPage() {
   const {
     data: domainRes,
     isFetching: domainFetching,
-    refetch: refetchDomain,
     isError: domainIsError,
   } = useQuery({
     queryKey: qk.domainKeywords(projectId),
     queryFn: () => keywordsApi.domainKeywords(projectId),
     enabled: !!projectId,
+    staleTime: Infinity,
   });
   const domainKeywords: CompetitorKeywordsForSiteRow[] =
     domainRes && "success" in domainRes && domainRes.success ? domainRes.data : [];
@@ -261,7 +268,7 @@ export default function KeywordsPage() {
   );
 
   useEffect(() => {
-    if (domainFetching || domainKeywords.length === 0) return;
+    if (domainFetching || domainRefreshing || domainKeywords.length === 0) return;
     setDomainPhraseStatusOverlay(prev => {
       const next = { ...prev };
       let changed = false;
@@ -274,7 +281,7 @@ export default function KeywordsPage() {
       }
       return changed ? next : prev;
     });
-  }, [domainFetching, domainKeywords]);
+  }, [domainFetching, domainRefreshing, domainKeywords]);
 
   const industryCounts = useMemo(() => {
     let all = 0;
@@ -362,19 +369,6 @@ export default function KeywordsPage() {
     return () => document.removeEventListener("mousedown", close);
   }, [dataSourceMenuOpen]);
 
-  const pushToast = (message: string) => {
-    setToast(message);
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
-  };
-
-  useEffect(
-    () => () => {
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    },
-    []
-  );
-
   const modalKeyword = useMemo(
     () => keywords.find(k => k.id === modalKeywordId) ?? null,
     [keywords, modalKeywordId]
@@ -438,14 +432,52 @@ export default function KeywordsPage() {
       console.groupEnd();
     }
     if (res.success) {
-      // Refresh both the keyword list and the brief that drove the run.
+      // Reload industry list, brief context, stats, and project row (niche/region seeds come from DB).
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.brief(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+        queryClient.invalidateQueries({ queryKey: qk.project(projectId) }),
       ]);
     } else setError(res.error ?? "Discovery failed");
     setDiscovering(false);
+  };
+
+  const handleDomainRediscover = async () => {
+    setDomainRefreshing(true);
+    setError("");
+    try {
+      const res = await keywordsApi.domainKeywordsRefresh(projectId);
+      if (res.discoveryTrace?.length) {
+        console.groupCollapsed(
+          `[Keywords] DataForSEO — domain keywords refresh (${res.discoveryTrace.length} calls)`
+        );
+        for (const t of res.discoveryTrace) {
+          console.groupCollapsed(`${t.label}  HTTP ${t.httpStatus}${t.ok ? "" : " ✗"}`);
+          console.log("url", t.url);
+          console.log("request body", t.requestBody);
+          if (typeof t.cost === "number") console.log("cost (credits)", t.cost);
+          if (t.fetchError) console.warn("fetchError", t.fetchError);
+          if (t.parseError) console.warn("parseError", t.parseError);
+          console.log("rawText", t.rawText);
+          console.log("parsed JSON", t.parsed);
+          console.groupEnd();
+        }
+        console.groupEnd();
+      }
+      if (res.success) {
+        queryClient.setQueryData(qk.domainKeywords(projectId), res);
+        void queryClient.invalidateQueries({ queryKey: qk.project(projectId) });
+      } else setError(res.error ?? "Domain keyword refresh failed");
+    } finally {
+      setDomainRefreshing(false);
+    }
+  };
+
+  /** Re-discover: industry tab → keyword_ideas pipeline + DB; domain tab → keywords_for_site + cache. */
+  const handleRediscover = () => {
+    if (sourceTab === "domain") void handleDomainRediscover();
+    else void handleDiscover();
   };
 
   const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string): Promise<boolean> => {
@@ -465,10 +497,6 @@ export default function KeywordsPage() {
           nextStatus: status,
         })
       );
-    }
-
-    if (status === "pending") {
-      pushToast(`"${label}" moved back to pending`);
     }
 
     setBusyRowId(kwId);
@@ -491,10 +519,14 @@ export default function KeywordsPage() {
       return false;
     }
 
-    if (status === "approved") {
-      pushToast(`"${label}" approved${calendarApproveSuffix(res)}`);
+    if (status === "pending") {
+      toast(`"${label}" moved back to pending`, { icon: 'ℹ️' });
+    } else if (status === "approved") {
+      toast.success(`"${label}" approved${calendarApproveSuffix(res)}`);
       void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+    } else if (status === "rejected") {
+      toast(`"${label}" rejected`, { icon: 'ℹ️' });
     }
 
     if (!keyword) {
@@ -507,7 +539,6 @@ export default function KeywordsPage() {
         })
       );
     }
-    void queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
     return true;
   };
 
@@ -531,7 +562,6 @@ export default function KeywordsPage() {
     if (row.matched_keyword_id) {
       const ok = await handleStatusUpdate(row.matched_keyword_id, next, label);
       if (!ok) revertPhraseOverlay();
-      await queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
       return;
     }
     setError("");
@@ -585,14 +615,15 @@ export default function KeywordsPage() {
       });
     }
     if (next === "approved") {
-      pushToast(`"${label}" approved${calendarApproveSuffix(res)}`);
+      toast.success(`"${label}" approved${calendarApproveSuffix(res)}`);
       void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
     } else if (next === "pending") {
-      pushToast(`"${label}" moved back to pending`);
+      toast(`"${label}" moved back to pending`, { icon: 'ℹ️' });
+    } else if (next === "rejected") {
+      toast(`"${label}" rejected`, { icon: 'ℹ️' });
     }
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) }),
       queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
       queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
     ]);
@@ -625,21 +656,28 @@ export default function KeywordsPage() {
     return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
   }, [keywords, filter, tableSort, aiSuggestedIds]);
 
-  const toggleSortColumn = (column: TableSortColumn) =>
+  const toggleSortColumn = (columnId: string) => {
+    const col = columnId as TableSortColumn;
     dispatch(
       rememberKeywordSort({
         projectId,
         tableSort:
-          tableSort.column === column
-            ? { column, dir: tableSort.dir === "asc" ? "desc" : "asc" }
-            : { column, dir: defaultDirForSortColumn(column) },
+          tableSort.column === col
+            ? { column: col, dir: tableSort.dir === "asc" ? "desc" : "asc" }
+            : { column: col, dir: defaultDirForSortColumn(col) },
       })
     );
+  };
 
   const exitMassSelect = () => {
     setMassSelectMode(false);
     setSelectedIds(new Set());
   };
+
+  useEffect(() => {
+    setMassSelectMode(false);
+    setSelectedIds(new Set());
+  }, [projectId]);
 
   const toggleRowSelected = (id: string) => {
     setSelectedIds(prev => {
@@ -723,7 +761,7 @@ export default function KeywordsPage() {
         queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) }),
       ]);
 
-      pushToast(
+      toast.success(
         domPhrases.length && !uuidIds.length
           ? `${domPhrases.length} domain keyword(s) approved — placed on the next open calendar days`
           : uuidIds.length
@@ -765,6 +803,263 @@ export default function KeywordsPage() {
     { id: "rejected", label: "Rejected", count: displayCounts.rejected },
   ];
 
+  
+
+  const domainColumns = useMemo<ColumnDef<CompetitorKeywordsForSiteRow>[]>(() => [
+    {
+      id: "keyword",
+      header: "Keyword",
+      sortable: true,
+      tooltip: "Search query from Google Ads keywords for your domain.",
+      cell: (kw: any) => (
+        <div className="flex items-center gap-2 max-w-[260px]">
+          <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+          {kw.matched_keyword_id && aiSuggestedIds.has(kw.matched_keyword_id) ? (
+            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+              AI pick
+            </span>
+          ) : null}
+        </div>
+      )
+    },
+    {
+      id: "volume",
+      header: "Volume",
+      align: "right",
+      sortable: true,
+      tooltip: "Average monthly searches over the last 12 months.",
+      cell: (kw: any) => (
+        <span className="text-[14px] font-mono text-text-secondary tabular-nums">
+          {kw.volume ? kw.volume.toLocaleString() : "—"}
+        </span>
+      )
+    },
+    {
+      id: "kd",
+      header: "KD",
+      align: "center",
+      sortable: true,
+      tooltip: "Difficulty hint from Google Ads competition (0–100).",
+      cell: (kw: any) => kw.kd > 0 ? (
+        <div className="flex items-center justify-center gap-2">
+          <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${
+                kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
+              }`}
+              style={{ width: `${kw.kd}%` }}
+            />
+          </div>
+          <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
+        </div>
+      ) : (
+        <span className="text-[13px] text-text-tertiary">—</span>
+      )
+    },
+    {
+      id: "cpc",
+      header: "CPC",
+      align: "right",
+      sortable: true,
+      tooltip: "Cost Per Click (USD) from Google Ads.",
+      cell: (kw: any) => (
+        <span className="text-[13px] font-mono text-text-tertiary tabular-nums">
+          {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
+        </span>
+      )
+    },
+    {
+      id: "analysis_score",
+      header: "Analysis",
+      align: "center",
+      sortable: true,
+      tooltip: "When this phrase matches a saved industry keyword, you see that row’s analysis score. Otherwise we show an estimate from volume, difficulty, and intent so you can still sort and compare.",
+      cell: (kw: any) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+        <span
+          className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums"
+          title={
+            kw.analysis_score_is_industry
+              ? "Analysis score from your matched industry keyword row"
+              : "Estimated score from volume, difficulty, and intent"
+          }
+        >
+          {Math.round(kw.keyword_analysis_score)}
+        </span>
+      ) : (
+        <span className="text-[13px] text-text-tertiary">—</span>
+      )
+    },
+    {
+      id: "status",
+      header: "Action",
+      align: "center",
+      sortable: true,
+      cell: (kw: any) => {
+        const effectiveStatus = effectiveDomainStatus(kw);
+        const busyKey = kw.matched_keyword_id ?? `dom:${kw.keyword}`;
+        return (
+          <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+            <KeywordActionDropdown
+              status={effectiveStatus}
+              busy={busyRowId === busyKey}
+              onChange={next => void handleDomainStatusUpdate(kw, next)}
+            />
+          </div>
+        );
+      }
+    }
+  ], [aiSuggestedIds, busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
+
+  const industryColumns = useMemo<ColumnDef<Keyword>[]>(() => [
+    {
+      id: "keyword",
+      header: "Keyword",
+      sortable: true,
+      tooltip: `The search query. Live data from DataForSEO in ${projectData?.success && projectData.data ? regionName(projectData.data.target_region) : "your region"}.`,
+      cell: (kw: any) => {
+        const isAiPick = aiSuggestedIds.has(kw.id);
+        return (
+          <div className="max-w-[260px]">
+            <div className="flex items-center gap-2">
+              <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+              {isAiPick ? (
+                <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+                  AI pick
+                </span>
+              ) : null}
+            </div>
+            {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
+            (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
+              <p
+                className="mt-1 text-[11px] text-text-tertiary"
+                title="Relevance = syntactic match to niche/phrase anchors. Fit = tiered business-fit (100 = niche × buying-intent match)."
+              >
+                Rel {typeof kw.relevance_score === "number" ? kw.relevance_score : "—"} ·
+                Fit {typeof kw.business_fit_score === "number" ? kw.business_fit_score : "—"}
+              </p>
+            ) : null}
+            {kw.secondary_keywords?.length ? (
+              <p className="mt-1 max-w-xs truncate text-[11px] text-text-tertiary">
+                {kw.secondary_keywords.slice(0, 3).join(" · ")}
+              </p>
+            ) : null}
+          </div>
+        );
+      }
+    },
+    {
+      id: "volume",
+      header: "Volume",
+      align: "right",
+      sortable: true,
+      tooltip: "Average monthly searches over the last 12 months.",
+      cell: (kw: any) => (
+        <span className="text-[14px] font-mono text-text-secondary tabular-nums">
+          {kw.volume ? kw.volume.toLocaleString() : "—"}
+        </span>
+      )
+    },
+    {
+      id: "est_traffic",
+      header: "Est. traffic",
+      align: "right",
+      sortable: true,
+      tooltip: "Estimated monthly visits the top result could earn for this term.",
+      cell: (kw: any) => (
+        <span className="text-[14px] font-mono text-text-secondary tabular-nums">
+          {kw.traffic_potential != null && kw.traffic_potential > 0
+            ? kw.traffic_potential.toLocaleString()
+            : "—"}
+        </span>
+      )
+    },
+    {
+      id: "kd",
+      header: "KD",
+      align: "center",
+      sortable: true,
+      tooltip: "Keyword Difficulty (0-100). Higher means harder to rank in top 10.",
+      cell: (kw: any) => kw.kd > 0 ? (
+        <div className="flex items-center justify-center gap-2">
+          <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${
+                kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
+              }`}
+              style={{ width: `${kw.kd}%` }}
+            />
+          </div>
+          <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
+        </div>
+      ) : (
+        <span className="text-[13px] text-text-tertiary">—</span>
+      )
+    },
+    {
+      id: "cpc",
+      header: "CPC",
+      align: "right",
+      sortable: true,
+      tooltip: "Cost Per Click (USD). Indicates commercial value of the keyword.",
+      cell: (kw: any) => (
+        <span className="text-[13px] font-mono text-text-tertiary tabular-nums">
+          {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
+        </span>
+      )
+    },
+    {
+      id: "intent",
+      header: "Intent",
+      align: "center",
+      sortable: true,
+      tooltip: "Search intent (informational, commercial, transactional, navigational).",
+      cell: (kw: any) => kw.intent ? (
+        <span
+          className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
+            kw.intent === "commercial" || kw.intent === "transactional"
+              ? "border-brand-action/20 bg-brand-action/10 text-brand-action"
+              : kw.intent === "informational"
+                ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
+                : "border-border-subtle bg-surface-secondary text-text-tertiary"
+          }`}
+        >
+          {kw.intent}
+        </span>
+      ) : (
+        <span className="text-[13px] text-text-tertiary">—</span>
+      )
+    },
+    {
+      id: "analysis_score",
+      header: "Analysis",
+      align: "center",
+      sortable: true,
+      tooltip: "Composite opportunity score from volume, KD, CPC, and relevance signals.",
+      cell: (kw: any) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+        <span className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums">
+          {Math.round(kw.keyword_analysis_score)}
+        </span>
+      ) : (
+        <span className="text-[13px] text-text-tertiary">—</span>
+      )
+    },
+    {
+      id: "status",
+      header: "Action",
+      align: "center",
+      sortable: true,
+      cell: (kw: any) => (
+        <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+          <KeywordActionDropdown
+            status={kw.status}
+            busy={busyRowId === kw.id}
+            onChange={next => void handleStatusUpdate(kw.id, next)}
+          />
+        </div>
+      )
+    }
+  ], [aiSuggestedIds, busyRowId, handleStatusUpdate, projectData]);
+
   const thBtn =
     "group inline-flex items-center gap-0.5 rounded-[6px] px-1 py-0.5 -mx-1 text-left uppercase tracking-widest hover:bg-surface-hover/80 hover:text-text-secondary transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40";
 
@@ -805,24 +1100,38 @@ export default function KeywordsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <ProjectNavLink
-              href={`/projects/${projectId}/calendar`}
-              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-            >
-              Calendar
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-              </svg>
-            </ProjectNavLink>
-            <button
+          <button
               type="button"
-              onClick={handleDiscover}
-              disabled={discovering}
-              className="inline-flex items-center gap-2 rounded-[32px] bg-brand-primary px-5 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
+              onClick={() => void handleRediscover()}
+              disabled={discovering || domainRefreshing}
+              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
             >
-              {discovering ? (
+              {!mounted ? (
                 <>
-                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                  </svg>
+                  Discover keywords
+                </>
+              ) : sourceTab === "domain" ? (
+                domainRefreshing ? (
+                  <>
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
+                    Fetching…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="m21 21-4.3-4.3" />
+                    </svg>
+                    {domainKeywords.length > 0 ? "Re-discover" : "Fetch domain keywords"}
+                  </>
+                )
+              ) : discovering ? (
+                <>
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
                   Discovering…
                 </>
               ) : (
@@ -835,15 +1144,23 @@ export default function KeywordsPage() {
                 </>
               )}
             </button>
+            <ProjectNavLink
+              href={`/projects/${projectId}/calendar`}
+              className="inline-flex items-center gap-2 rounded-[32px] bg-brand-primary px-4 py-2 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+            >
+              Calendar
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+              </svg>
+            </ProjectNavLink>
+           
           </div>
         </div>
       </div>
 
       {/* ── KEYWORD LIST ───────────────────────────────────────────────────── */}
       <section className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Keyword list</h2>
-        </div>
+    
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
@@ -941,7 +1258,7 @@ export default function KeywordsPage() {
                     aria-selected={sourceTab === "industry"}
                     className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
                     onClick={() => {
-                      setSourceTab("industry");
+                      dispatch(rememberKeywordDiscoverySourceTab({ projectId, tab: "industry" }));
                       setDataSourceMenuOpen(false);
                     }}
                   >
@@ -953,7 +1270,7 @@ export default function KeywordsPage() {
                     aria-selected={sourceTab === "domain"}
                     className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
                     onClick={() => {
-                      setSourceTab("domain");
+                      dispatch(rememberKeywordDiscoverySourceTab({ projectId, tab: "domain" }));
                       setDataSourceMenuOpen(false);
                     }}
                   >
@@ -978,36 +1295,18 @@ export default function KeywordsPage() {
                 {error}
               </div>
             )}
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[14px] text-text-tertiary">
-                Live Google Ads keyword data for your domain — sorted by search volume.
-              </p>
-              <button
-                type="button"
-                onClick={() => void refetchDomain()}
-                disabled={domainFetching}
-                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 shrink-0"
-              >
-                {domainFetching ? (
-                  <>
-                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary border-t-text-primary" />
-                    Fetching…
-                  </>
-                ) : (
-                  <>
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                    </svg>
-                    Refresh
-                  </>
-                )}
-              </button>
-            </div>
+        
 
-            {domainFetching ? (
-              <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-                <TableSkeleton rows={8} columns={6} />
-              </div>
+            {domainFetching || domainRefreshing ? (
+              <DataTable<CompetitorKeywordsForSiteRow>
+                data={[]}
+                columns={domainColumns}
+                keyExtractor={kw => domainSelectId(kw.keyword)}
+                isLoading={true}
+                loadingRows={10}
+                loadingColumns={6}
+                minWidth="920px"
+              />
             ) : domainKeywords.length > 0 ? (
               filteredDomainKeywords.length === 0 ? (
                 <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
@@ -1015,157 +1314,40 @@ export default function KeywordsPage() {
                   <p className="mt-1 text-[12px] text-text-tertiary">Switch to another tab to see domain rows.</p>
                 </div>
               ) : (
-              <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-                <div className="max-h-[min(70vh,56rem)] overflow-auto">
-                  <table className="w-full min-w-[860px] text-left border-collapse">
-                    <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
-                      <tr>
-                        <th scope="col" className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("keyword")}>
-                              Keyword{sortMark("keyword")}
-                            </button>
-                            <Tooltip placement="below" content="Search query from Google Ads keywords for your domain.">
-                              <InfoIcon />
-                            </Tooltip>
-                          </div>
-                        </th>
-                        <th scope="col" className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("volume")}>
-                              Volume{sortMark("volume")}
-                            </button>
-                            <Tooltip placement="below" content="Average monthly searches over the last 12 months.">
-                              <InfoIcon />
-                            </Tooltip>
-                          </div>
-                        </th>
-                        <th scope="col" className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("kd")}>
-                              KD{sortMark("kd")}
-                            </button>
-                            <Tooltip placement="below" content="Difficulty hint from Google Ads competition (0–100).">
-                              <InfoIcon />
-                            </Tooltip>
-                          </div>
-                        </th>
-                        <th scope="col" className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("cpc")}>
-                              CPC{sortMark("cpc")}
-                            </button>
-                            <Tooltip placement="below" content="Cost Per Click (USD) from Google Ads.">
-                              <InfoIcon />
-                            </Tooltip>
-                          </div>
-                        </th>
-                        <th scope="col" className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("analysis_score")}>
-                              Analysis{sortMark("analysis_score")}
-                            </button>
-                            <Tooltip placement="below" content="When this phrase matches a saved industry keyword, you see that row’s analysis score. Otherwise we show an estimate from volume, difficulty, and intent so you can still sort and compare.">
-                              <InfoIcon />
-                            </Tooltip>
-                          </div>
-                        </th>
-                        <th scope="col" className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button type="button" className={thBtn} onClick={() => toggleSortColumn("status")}>
-                              Action{sortMark("status")}
-                            </button>
-                          </div>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border-subtle/60">
-                      {filteredDomainKeywords.map((kw, i) => {
-                        const effectiveStatus = effectiveDomainStatus(kw);
-                        const busyKey = kw.matched_keyword_id ?? `dom:${kw.keyword}`;
-                        return (
-                        <tr
-                          key={`${kw.keyword}-${i}`}
-                          className={`transition-colors duration-150 hover:bg-surface-hover/90 ${
-                            effectiveStatus === "approved" ? "bg-brand-action/[0.07]" : ""
-                          }`}
-                        >
-                          <td className="px-4 py-3 align-middle max-w-[260px]">
-                            <div className="flex items-center gap-2">
-                              <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
-                              {kw.matched_keyword_id && aiSuggestedIds.has(kw.matched_keyword_id) ? (
-                                <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-                                  AI pick
-                                </span>
-                              ) : null}
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
-                            {kw.volume ? kw.volume.toLocaleString() : "—"}
-                          </td>
-                          <td className="px-4 py-3 text-center align-middle">
-                            {kw.kd > 0 ? (
-                              <div className="flex items-center justify-center gap-2">
-                                <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
-                                  <div
-                                    className={`h-full rounded-full transition-all duration-300 ${
-                                      kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
-                                    }`}
-                                    style={{ width: `${kw.kd}%` }}
-                                  />
-                                </div>
-                                <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
-                              </div>
-                            ) : (
-                              <span className="text-[13px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-right align-middle text-[13px] font-mono text-text-tertiary tabular-nums">
-                            {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
-                          </td>
-                          <td className="px-4 py-3 text-center align-middle">
-                            {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
-                              <span
-                                className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums"
-                                title={
-                                  kw.analysis_score_is_industry
-                                    ? "Analysis score from your matched industry keyword row"
-                                    : "Estimated score from volume, difficulty, and intent"
-                                }
-                              >
-                                {Math.round(kw.keyword_analysis_score)}
-                              </span>
-                            ) : (
-                              <span className="text-[13px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                          <td
-                            className="px-4 py-3 text-center align-middle"
-                            onClick={e => e.stopPropagation()}
-                            onPointerDown={e => e.stopPropagation()}
-                          >
-                            <KeywordActionDropdown
-                              status={effectiveStatus}
-                              busy={busyRowId === busyKey}
-                              onChange={next => void handleDomainStatusUpdate(kw, next)}
-                            />
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="border-t border-border-subtle px-6 py-4 bg-surface-secondary/50">
-                  <span className="text-[12px] text-text-tertiary">
-                    Showing {filteredDomainKeywords.length} of {sortedDomainKeywords.length} for {project?.domain ?? "your domain"}
-                    {filteredDomainKeywords.length < sortedDomainKeywords.length ? " (filter active)" : ""} · use column headers to sort
-                  </span>
-                </div>
-              </div>
+                <DataTable<CompetitorKeywordsForSiteRow>
+                  data={filteredDomainKeywords}
+                  columns={domainColumns}
+                  keyExtractor={kw => domainSelectId(kw.keyword)}
+                  sortColumn={tableSort.column}
+                  sortDirection={tableSort.dir}
+                  onSortToggle={toggleSortColumn}
+                  massSelectMode={massSelectMode}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleRowSelected}
+                  selectionDisabled={bulkApproving}
+                  isSelectable={kw => true}
+                  rowClassName={(kw) => {
+                    const effectiveStatus = effectiveDomainStatus(kw);
+                    const domainRowSelectId = domainSelectId(kw.keyword);
+                    return `${effectiveStatus === "approved" ? "bg-brand-action/[0.07]" : ""} ${
+                      selectedIds.has(domainRowSelectId)
+                        ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25"
+                        : ""
+                    }`;
+                  }}
+                  minWidth="920px"
+                  footer={
+                    <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3">
+                      <span className="text-[12px] text-text-tertiary">
+                        Showing {filteredDomainKeywords.length} of {sortedDomainKeywords.length} for {project?.domain ?? "your domain"}
+                        {filteredDomainKeywords.length < sortedDomainKeywords.length ? " (filter active)" : ""} · use column headers to sort
+                      </span>
+                    </div>
+                  }
+                />
               )
             ) : (
-              !domainFetching && (
+              !(domainFetching || domainRefreshing) && (
                 <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
                   <div className="mb-6 flex justify-center">
                     <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
@@ -1180,7 +1362,7 @@ export default function KeywordsPage() {
                   </p>
                   <button
                     type="button"
-                    onClick={() => void refetchDomain()}
+                    onClick={() => void handleDomainRediscover()}
                     className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
                   >
                     Fetch domain keywords
@@ -1205,254 +1387,41 @@ export default function KeywordsPage() {
           )}
 
           {loading || discovering ? (
-            // Skeleton stays visible for the whole discovery run — including
-            // the DataForSEO fallback path when the primary provider is exhausted —
-            // so the table never freezes between "Discover clicked" and
-            // "fresh keywords arrived".
-            <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <TableSkeleton rows={8} columns={8} />
-            </div>
+            <DataTable<Keyword>
+              data={[]}
+              columns={industryColumns}
+              keyExtractor={kw => kw.id}
+              isLoading={true}
+              loadingRows={8}
+              loadingColumns={8}
+              minWidth="1060px"
+            />
           ) : filtered.length > 0 ? (
-            <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <div className="max-h-[min(70vh,56rem)] overflow-auto">
-                <table className="w-full min-w-[1060px] text-left border-collapse">
-                  <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
-                    <tr>
-                      <th
-                        scope="col"
-                        className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
-                          massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
-                        } overflow-hidden`}
-                      >
-                        <span
-                          className={`block min-h-5 transition-all duration-300 ease-out ${massSelectMode ? "opacity-100" : "opacity-0"}`}
-                          aria-hidden
-                        />
-                      </th>
-                      <th scope="col" className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("keyword")}>
-                            Keyword{sortMark("keyword")}
-                          </button>
-                          <Tooltip placement="below" content={`The search query. Live data from DataForSEO in ${projectData?.success && projectData.data ? regionName(projectData.data.target_region) : "your region"}.`}>
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("volume")}>
-                            Volume{sortMark("volume")}
-                          </button>
-                          <Tooltip placement="below" content="Average monthly searches over the last 12 months.">
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("est_traffic")}>
-                            Est. traffic{sortMark("est_traffic")}
-                          </button>
-                          <Tooltip placement="below" content="Estimated monthly visits the top result could earn for this term.">
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("kd")}>
-                            KD{sortMark("kd")}
-                          </button>
-                          <Tooltip placement="below" content="Keyword Difficulty (0-100). Higher means harder to rank in top 10.">
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("cpc")}>
-                            CPC{sortMark("cpc")}
-                          </button>
-                          <Tooltip placement="below" content="Cost Per Click (USD). Indicates commercial value of the keyword.">
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("intent")}>
-                            Intent{sortMark("intent")}
-                          </button>
-                          <Tooltip placement="below" content="Search intent (informational, commercial, transactional, navigational).">
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("analysis_score")}>
-                            Analysis{sortMark("analysis_score")}
-                          </button>
-                          <Tooltip placement="below" content="Composite opportunity score from volume, KD, CPC, and relevance signals.">
-                            <InfoIcon />
-                          </Tooltip>
-                        </div>
-                      </th>
-                      <th scope="col" className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button type="button" className={thBtn} onClick={() => toggleSortColumn("status")}>
-                            Action{sortMark("status")}
-                          </button>
-                        </div>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-subtle/60">
-                    {filtered.map(kw => {
-                      const isAiPick = aiSuggestedIds.has(kw.id);
-                      return (
-                      <tr
-                        key={kw.id}
-                        onClick={e => {
-                          const t = e.target as HTMLElement;
-                          if (
-                            t.closest(
-                              "button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a"
-                            ) || t.closest("[data-row-no-mass]")
-                          )
-                            return;
-                          if (massSelectMode && !bulkApproving) {
-                            toggleRowSelected(kw.id);
-                            return;
-                          }
-                          if (!massSelectMode && !busyRowId) setModalKeywordId(kw.id);
-                        }}
-                        className={`group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
-                          kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
-                        } ${isAiPick ? "bg-[#8b5cf6]/[0.07] ring-1 ring-inset ring-[#8b5cf6]/20" : ""} ${
-                          selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
-                        } ${
-                          massSelectMode && !bulkApproving ? "cursor-pointer" : ""
-                        } ${!massSelectMode && !busyRowId ? "cursor-pointer" : ""}`}
-                      >
-                        <td
-                          data-row-no-mass
-                          className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
-                            massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
-                          } overflow-hidden`}
-                        >
-                          <span
-                            className={`flex justify-center transition-all duration-300 ease-out ${massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0"}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(kw.id)}
-                              onChange={() => toggleRowSelected(kw.id)}
-                              onClick={e => e.stopPropagation()}
-                              disabled={bulkApproving || !massSelectMode}
-                              aria-label={`Select keyword ${kw.keyword}`}
-                              className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
-                            />
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 align-middle max-w-[260px]">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
-                            {isAiPick ? (
-                              <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-                                AI pick
-                              </span>
-                            ) : null}
-                          </div>
-                          {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
-                          (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
-                            <p
-                              className="mt-1 text-[11px] text-text-tertiary"
-                              title="Relevance = syntactic match to niche/phrase anchors. Fit = tiered business-fit (100 = niche × buying-intent match)."
-                            >
-                              Rel {typeof kw.relevance_score === "number" ? kw.relevance_score : "—"} ·
-                              Fit {typeof kw.business_fit_score === "number" ? kw.business_fit_score : "—"}
-                            </p>
-                          ) : null}
-                          {kw.secondary_keywords?.length ? (
-                            <p className="mt-1 max-w-xs truncate text-[11px] text-text-tertiary">
-                              {kw.secondary_keywords.slice(0, 3).join(" · ")}
-                            </p>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
-                          {kw.volume ? kw.volume.toLocaleString() : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-right align-middle text-[14px] font-mono text-text-secondary tabular-nums">
-                          {kw.traffic_potential != null && kw.traffic_potential > 0
-                            ? kw.traffic_potential.toLocaleString()
-                            : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-center align-middle">
-                          {kw.kd > 0 ? (
-                            <div className="flex items-center justify-center gap-2">
-                              <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-300 ${
-                                    kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
-                                  }`}
-                                  style={{ width: `${kw.kd}%` }}
-                                />
-                              </div>
-                              <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
-                            </div>
-                          ) : (
-                            <span className="text-[13px] text-text-tertiary">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right align-middle text-[13px] font-mono text-text-tertiary tabular-nums">
-                          {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-center align-middle">
-                          {kw.intent ? (
-                            <span
-                              className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
-                                kw.intent === "commercial" || kw.intent === "transactional"
-                                  ? "border-brand-action/20 bg-brand-action/10 text-brand-action"
-                                  : kw.intent === "informational"
-                                    ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
-                                    : "border-border-subtle bg-surface-secondary text-text-tertiary"
-                              }`}
-                            >
-                              {kw.intent}
-                            </span>
-                          ) : (
-                            <span className="text-[13px] text-text-tertiary">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center align-middle">
-                          {typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
-                            <span className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums">
-                              {Math.round(kw.keyword_analysis_score)}
-                            </span>
-                          ) : (
-                            <span className="text-[13px] text-text-tertiary">—</span>
-                          )}
-                        </td>
-                        <td
-                          className="px-4 py-3 text-center align-middle"
-                          onClick={e => e.stopPropagation()}
-                          onPointerDown={e => e.stopPropagation()}
-                        >
-                          <KeywordActionDropdown
-                            status={kw.status}
-                            busy={busyRowId === kw.id}
-                            onChange={next => void handleStatusUpdate(kw.id, next)}
-                          />
-                        </td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <DataTable<Keyword>
+              data={filtered}
+              columns={industryColumns}
+              keyExtractor={kw => kw.id}
+              sortColumn={tableSort.column}
+              sortDirection={tableSort.dir}
+              onSortToggle={toggleSortColumn}
+              massSelectMode={massSelectMode}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleRowSelected}
+              selectionDisabled={bulkApproving}
+              isSelectable={kw => true}
+              onRowClick={kw => {
+                if (!massSelectMode && !busyRowId) setModalKeywordId(kw.id);
+              }}
+              rowClassName={(kw) => {
+                const isAiPick = aiSuggestedIds.has(kw.id);
+                return `group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
+                  kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
+                } ${isAiPick ? "bg-[#8b5cf6]/[0.07] ring-1 ring-inset ring-[#8b5cf6]/20" : ""} ${
+                  selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
+                }`;
+              }}
+              minWidth="1060px"
+            />
           ) : keywords.length > 0 ? (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
               <p className="text-[14px] font-medium text-text-secondary">No keywords match this filter.</p>
@@ -1484,16 +1453,8 @@ export default function KeywordsPage() {
           )}
           </div>
         )}
+      
       </section>
-
-      {toast ? (
-        <div
-          role="status"
-          className="fixed bottom-24 right-6 z-80 max-w-sm rounded-[12px] border border-brand-action/30 bg-surface-elevated px-4 py-3 text-[14px] text-text-primary shadow-lg ring-1 ring-brand-action/20 transition-opacity duration-150"
-        >
-          {toast}
-        </div>
-      ) : null}
 
       <KeywordDetailModal
         open={!!modalKeyword}

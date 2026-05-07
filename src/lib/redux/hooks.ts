@@ -6,7 +6,14 @@ export const useAppDispatch = () => useDispatch<AppDispatch>();
 export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
 
 export function selectKeywordPrefs(state: RootState, projectId: string) {
-  return state.keywordWorkspace.projects[projectId]?.prefs ?? defaultPrefs;
+  const p = state.keywordWorkspace.projects[projectId]?.prefs;
+  if (!p) return defaultPrefs;
+  return {
+    ...defaultPrefs,
+    ...p,
+    tableSort: { ...defaultPrefs.tableSort, ...p.tableSort },
+    discoverySourceTab: p.discoverySourceTab ?? defaultPrefs.discoverySourceTab,
+  };
 }
 
 export function selectKeywordStatuses(state: RootState, projectId: string) {

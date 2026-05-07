@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { projectsApi } from "@/frontend/api/projects";
 import { suggestProjectTargetingField } from "@/app/actions/project-actions";
-import { TARGET_REGIONS } from "@/lib/types";
+import { TARGET_REGIONS, Project } from "@/lib/types";
 
 interface NewProjectModalProps {
   open: boolean;
   onClose: () => void;
+  editProject?: Project;
+  onSaved?: () => void;
 }
 
 const FIELD =
@@ -97,14 +99,14 @@ function AiFillLabelButton({
   );
 }
 
-function ModalContent({ onClose }: { onClose: () => void }) {
+function ModalContent({ onClose, editProject, onSaved }: { onClose: () => void; editProject?: Project; onSaved?: () => void; }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [niche, setNiche] = useState("");
-  const [targetAudience, setTargetAudience] = useState("");
+  const [niche, setNiche] = useState(editProject?.niche ?? "");
+  const [targetAudience, setTargetAudience] = useState(editProject?.target_audience ?? "");
   const [aiLoading, setAiLoading] = useState<null | "niche" | "target_audience">(null);
-  const [competitors, setCompetitors] = useState(["", ""]);
+  const [competitors, setCompetitors] = useState(editProject?.project_competitors?.length ? editProject.project_competitors.map(c => c.domain) : ["", ""]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -205,20 +207,20 @@ function ModalContent({ onClose }: { onClose: () => void }) {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label required>Project Name</Label>
-                    <input name="name" required placeholder="e.g. Main SEO Campaign" className={FIELD} />
+                    <input name="name" required defaultValue={editProject?.name} placeholder="e.g. Main SEO Campaign" className={FIELD} />
                   </div>
                   <div>
                     <Label required>Company Name</Label>
-                    <input name="company" required placeholder="e.g. Acme Corp" className={FIELD} />
+                    <input name="company" required defaultValue={editProject?.company} placeholder="e.g. Acme Corp" className={FIELD} />
                   </div>
                 </div>
                 <div>
                   <Label required>Website Domain</Label>
-                  <input name="domain" required placeholder="e.g. yourwebsite.com" className={FIELD} />
+                  <input name="domain" required defaultValue={editProject?.domain} placeholder="e.g. yourwebsite.com" className={FIELD} />
                 </div>
                 <div>
                   <Label>Description</Label>
-                  <textarea name="description" rows={2} placeholder="Brief project notes…" className={`${FIELD} resize-none`} />
+                  <textarea name="description" rows={2} defaultValue={editProject?.description ?? ""} placeholder="Brief project notes…" className={`${FIELD} resize-none`} />
                 </div>
               </div>
             </div>
@@ -271,7 +273,7 @@ function ModalContent({ onClose }: { onClose: () => void }) {
                 <div>
                   <Label required>Target Region</Label>
                   <div className="relative">
-                    <select name="target_region" className={FIELD} defaultValue="us">
+                    <select name="target_region" className={FIELD} defaultValue={editProject?.target_region ?? "us"}>
                       {TARGET_REGIONS.map(r => (
                         <option key={r.code} value={r.code}>{r.name}</option>
                       ))}
@@ -355,7 +357,7 @@ function ModalContent({ onClose }: { onClose: () => void }) {
               {loading ? (
                 <>
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
-                  Creating project…
+                  {editProject ? "Saving..." : "Creating project…"}
                 </>
               ) : (
                 <>
@@ -374,7 +376,7 @@ function ModalContent({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function NewProjectModal({ open, onClose }: NewProjectModalProps) {
+export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProjectModalProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
@@ -395,5 +397,5 @@ export function NewProjectModal({ open, onClose }: NewProjectModalProps) {
   }, [open]);
 
   if (!mounted || !open) return null;
-  return createPortal(<ModalContent onClose={onClose} />, document.body);
+  return createPortal(<ModalContent onClose={onClose} editProject={editProject} onSaved={onSaved} />, document.body);
 }

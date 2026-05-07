@@ -1564,20 +1564,25 @@ function competitionLevelToKdHint(level: string | null | undefined): number {
  *
  * @see https://docs.dataforseo.com/v3/keywords_data-google_ads-keywords_for_site-live/
  */
+export type GoogleAdsKeywordsForSiteFetchResult = {
+  rows: CompetitorKeywordsForSiteRow[];
+  trace: DataForSEOTraceEntry[];
+};
+
 export async function fetchGoogleAdsKeywordsForSite(
   competitorTarget: string,
   regionCode: string,
   languageCode: string = 'en',
   limit: number = 100
-): Promise<CompetitorKeywordsForSiteRow[]> {
+): Promise<GoogleAdsKeywordsForSiteFetchResult> {
   const auth = getAuthHeader();
   if (!auth) {
     console.warn('[dataforseo] fetchGoogleAdsKeywordsForSite: credentials missing');
-    return [];
+    return { rows: [], trace: [] };
   }
 
   const target = extractDomainFromUrl(competitorTarget) || competitorTarget.trim().toLowerCase();
-  if (!target) return [];
+  if (!target) return { rows: [], trace: [] };
 
   const locationCode = getLocationCode(regionCode);
   const trace: DataForSEOTraceEntry[] = [];
@@ -1649,7 +1654,7 @@ export async function fetchGoogleAdsKeywordsForSite(
     keywords.slice(0, 10)
   );
 
-  return keywords;
+  return { rows: keywords, trace };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,9 @@
 import { currentUser } from "@clerk/nextjs/server";
-import { getDomainKeywords, upsertKeywordFromDomainSite } from "@/app/actions/keyword-actions";
+import {
+  getDomainKeywords,
+  refreshDomainKeywordsFromDataForSEO,
+  upsertKeywordFromDomainSite,
+} from "@/app/actions/keyword-actions";
 import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
 import type { KeywordStatus } from "@/lib/types";
 import { apiJson } from "@/server/http/json";
@@ -22,7 +26,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   if (!user) return apiJson({ success: false, error: "Not authenticated" }, { status: 401 });
   const { projectId } = await params;
   try {
-    const body = (await req.json()) as { status?: unknown; row?: unknown };
+    const body = (await req.json()) as { action?: unknown; status?: unknown; row?: unknown };
+    if (body.action === "refresh") {
+      const result = await refreshDomainKeywordsFromDataForSEO(projectId);
+      return apiJson(result, { status: result.success ? 200 : 400 });
+    }
     const status = body.status;
     const row = body.row as
       | Pick<

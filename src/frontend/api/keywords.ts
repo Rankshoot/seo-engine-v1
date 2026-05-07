@@ -1,5 +1,5 @@
 import type { Keyword, KeywordStatus } from "@/lib/types";
-import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
+import type { CompetitorKeywordsForSiteRow, DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { apiDelete, apiGet, apiPatch, apiPost } from "./http";
 import { V1Routes } from "./routes";
 
@@ -50,9 +50,42 @@ export const keywordsApi = {
   },
 
   domainKeywords(projectId: string): Promise<
-    { success: true; data: CompetitorKeywordsForSiteRow[] } | { success: false; error: string; data: CompetitorKeywordsForSiteRow[] }
+    | {
+        success: true;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache?: boolean;
+        lastFetchedAt?: string | null;
+      }
+    | {
+        success: false;
+        error: string;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache?: boolean;
+        lastFetchedAt?: string | null;
+      }
   > {
     return apiGet(V1Routes.keywordsDomain(projectId));
+  },
+
+  /** Calls DataForSEO and overwrites the domain-keyword snapshot (Re-discover). */
+  domainKeywordsRefresh(projectId: string): Promise<
+    | {
+        success: true;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache: boolean;
+        lastFetchedAt: string | null;
+        discoveryTrace?: DataForSEOTraceEntry[];
+      }
+    | {
+        success: false;
+        error: string;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache: boolean;
+        lastFetchedAt: string | null;
+        discoveryTrace?: DataForSEOTraceEntry[];
+      }
+  > {
+    return apiPost(V1Routes.keywordsDomain(projectId), { action: "refresh" });
   },
 
   upsertDomainKeyword(

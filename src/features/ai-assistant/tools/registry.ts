@@ -14,7 +14,7 @@ import {
   updateKeywordStatus,
   bulkUpdateKeywordStatus,
   deleteKeyword,
-  getDomainKeywords,
+  refreshDomainKeywordsFromDataForSEO,
 } from "@/app/actions/keyword-actions";
 import {
   addKeywordToCalendarOnDate,
@@ -167,13 +167,14 @@ const deleteKeywordTool: Tool<{ keyword: string }> = {
 
 const refreshDomainKeywords: Tool = {
   id: "keywords.refreshDomain",
-  description: "Re-fetch live domain-tab keywords from Google Ads (DataForSEO) for this project's domain.",
+  description:
+    "Force-refresh the domain-tab keyword snapshot from Google Ads (DataForSEO). Same as the user clicking Re-discover on the Domain data view.",
   pages: ["keywords"],
   category: "research",
   render: "summary",
   params: [],
   async execute(_p, ctx): Promise<ToolResult> {
-    const res = await getDomainKeywords(ctx.projectId);
+    const res = await refreshDomainKeywordsFromDataForSEO(ctx.projectId);
     if (!res.success) return { success: false, message: `Could not refresh domain keywords: ${res.error}`, error: res.error };
     return { success: true, message: `Loaded ${res.data.length} live domain keywords.`, data: { count: res.data.length } };
   },

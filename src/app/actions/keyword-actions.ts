@@ -2,7 +2,12 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { discoverKeywordsForProject, fetchGoogleAdsKeywordsForSite, type CompetitorKeywordsForSiteRow } from '@/lib/dataforseo';
+import {
+  discoverKeywordsForProject,
+  fetchGoogleAdsKeywordsForSite,
+  type CompetitorKeywordsForSiteRow,
+  type DataForSEOTraceEntry,
+} from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
@@ -775,9 +780,11 @@ export async function deleteAllKeywords(projectId: string) {
 }
 
 /**
- * Fetches keywords for the project's own domain using the Google Ads
- * `keywords_for_site/live` endpoint. Returns live data — not persisted to the
- * `keywords` table.
+ * Google Ads "keywords for site" list for the project's domain.
+ *
+ * Caching: raw DataForSEO rows live in `project_domain_ads_keywords`. Reads merge
+ * against `keywords` for saved status / analysis scores. DataForSEO is only
+ * called when `force: true` (Re-discover / Refresh) or via `refreshDomainKeywordsFromDataForSEO`.
  */
 const KEYWORD_STATUS_SET = new Set<KeywordStatus>(['pending', 'approved', 'rejected']);
 
@@ -786,11 +793,125 @@ function parseKeywordStatus(v: unknown): KeywordStatus | null {
   return KEYWORD_STATUS_SET.has(v as KeywordStatus) ? (v as KeywordStatus) : null;
 }
 
+function parseCachedDomainAdsRows(raw: unknown): CompetitorKeywordsForSiteRow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CompetitorKeywordsForSiteRow[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const keyword = typeof o.keyword === 'string' ? o.keyword.trim().toLowerCase() : '';
+    if (!keyword) continue;
+    const volume = Math.max(0, Math.round(Number(o.volume) || 0));
+    const kd = Math.max(0, Math.min(100, Math.round(Number(o.kd) || 0)));
+    const cpc = Math.max(0, Number(o.cpc) || 0);
+    const intent = typeof o.intent === 'string' ? o.intent : '';
+    let estimated_monthly_traffic: number | null = null;
+    if (o.estimated_monthly_traffic != null) {
+      const etv = Math.round(Number(o.estimated_monthly_traffic) || 0);
+      estimated_monthly_traffic = etv > 0 ? etv : null;
+    }
+    out.push({
+      keyword,
+      volume,
+      kd,
+      cpc,
+      intent: intent as CompetitorKeywordsForSiteRow['intent'],
+      estimated_monthly_traffic,
+      competitor_position: Math.round(Number(o.competitor_position) || 0),
+      competitor_url: typeof o.competitor_url === 'string' ? o.competitor_url : '',
+    });
+  }
+  return out;
+}
+
+async function mergeDomainSiteRowsWithProjectKeywords(
+  projectId: string,
+  keywords: CompetitorKeywordsForSiteRow[]
+): Promise<CompetitorKeywordsForSiteRow[]> {
+  if (keywords.length === 0) return [];
+
+  const norm = (s: string) => (s ?? '').trim().toLowerCase();
+  const normalized = [...new Set(keywords.map(k => norm(k.keyword)))];
+  const dbRows: {
+    id: unknown;
+    normalized_keyword: unknown;
+    keyword_analysis_score: unknown;
+    status: unknown;
+  }[] = [];
+  const chunkSize = 200;
+  for (let i = 0; i < normalized.length; i += chunkSize) {
+    const slice = normalized.slice(i, i + chunkSize);
+    const { data: part, error: dbErr } = await supabaseAdmin
+      .from('keywords')
+      .select('id, normalized_keyword, keyword_analysis_score, status')
+      .eq('project_id', projectId)
+      .in('normalized_keyword', slice);
+    if (dbErr) {
+      console.warn('[mergeDomainSiteRowsWithProjectKeywords] keyword join failed', dbErr.message);
+      break;
+    }
+    dbRows.push(...(part ?? []));
+  }
+
+  const map = new Map(
+    dbRows.map(r => [
+      norm(r.normalized_keyword as string),
+      {
+        id: r.id as string,
+        keyword_analysis_score: r.keyword_analysis_score as number | null,
+        status: parseKeywordStatus(r.status),
+      },
+    ])
+  );
+
+  return keywords.map(k => {
+    const key = norm(k.keyword);
+    const hit = map.get(key);
+    const dbScore = typeof hit?.keyword_analysis_score === 'number' ? hit.keyword_analysis_score : null;
+    const fallback = aiScore(k.volume, k.kd, k.intent || '');
+    const fromIndustry = dbScore != null && dbScore > 0;
+    const keyword_analysis_score =
+      fromIndustry ? dbScore : fallback > 0 ? fallback : dbScore;
+    return {
+      ...k,
+      matched_keyword_id: hit?.id ?? null,
+      keyword_analysis_score,
+      matched_status: hit?.status ?? null,
+      analysis_score_is_industry: fromIndustry,
+    };
+  });
+}
+
+export type GetDomainKeywordsResult =
+  | {
+      success: true;
+      data: CompetitorKeywordsForSiteRow[];
+      fromCache: boolean;
+      lastFetchedAt: string | null;
+      discoveryTrace?: DataForSEOTraceEntry[];
+    }
+  | {
+      success: false;
+      error: string;
+      data: CompetitorKeywordsForSiteRow[];
+      fromCache: boolean;
+      lastFetchedAt: string | null;
+      discoveryTrace?: DataForSEOTraceEntry[];
+    };
+
 export async function getDomainKeywords(
-  projectId: string
-): Promise<{ success: true; data: CompetitorKeywordsForSiteRow[] } | { success: false; error: string; data: CompetitorKeywordsForSiteRow[] }> {
+  projectId: string,
+  opts: { force?: boolean } = {}
+): Promise<GetDomainKeywordsResult> {
   const user = await currentUser();
-  if (!user) return { success: false, error: 'Not authenticated', data: [] };
+  if (!user)
+    return {
+      success: false,
+      error: 'Not authenticated',
+      data: [],
+      fromCache: false,
+      lastFetchedAt: null,
+    };
 
   const { data: project, error: pErr } = await supabaseAdmin
     .from('projects')
@@ -799,74 +920,90 @@ export async function getDomainKeywords(
     .eq('user_id', user.id)
     .single();
 
-  if (pErr || !project) return { success: false, error: 'Project not found', data: [] };
+  if (pErr || !project)
+    return { success: false, error: 'Project not found', data: [], fromCache: false, lastFetchedAt: null };
 
   const domain: string = (project as { domain?: string | null }).domain ?? '';
   const region: string = (project as { target_region?: string | null }).target_region ?? 'us';
   const language: string = (project as { target_language?: string | null }).target_language ?? 'en';
 
-  if (!domain) return { success: false, error: 'No domain configured for this project', data: [] };
+  if (!domain)
+    return { success: false, error: 'No domain configured for this project', data: [], fromCache: false, lastFetchedAt: null };
 
-  try {
-    const keywords = await fetchGoogleAdsKeywordsForSite(domain, region, language, 1000);
-    if (keywords.length === 0) return { success: true, data: [] };
+  if (!opts.force) {
+    const { data: cached, error: cErr } = await supabaseAdmin
+      .from('project_domain_ads_keywords')
+      .select('rows, last_fetched_at')
+      .eq('project_id', projectId)
+      .maybeSingle();
 
-    const norm = (s: string) => (s ?? '').trim().toLowerCase();
-    const normalized = [...new Set(keywords.map(k => norm(k.keyword)))];
-    const dbRows: {
-      id: unknown;
-      normalized_keyword: unknown;
-      keyword_analysis_score: unknown;
-      status: unknown;
-    }[] = [];
-    const chunkSize = 200;
-    for (let i = 0; i < normalized.length; i += chunkSize) {
-      const slice = normalized.slice(i, i + chunkSize);
-      const { data: part, error: dbErr } = await supabaseAdmin
-        .from('keywords')
-        .select('id, normalized_keyword, keyword_analysis_score, status')
-        .eq('project_id', projectId)
-        .in('normalized_keyword', slice);
-      if (dbErr) {
-        console.warn('[getDomainKeywords] keyword join failed', dbErr.message);
-        break;
-      }
-      dbRows.push(...(part ?? []));
+    if (cErr) {
+      console.warn('[getDomainKeywords] cache read failed', cErr.message);
     }
 
-    const map = new Map(
-      dbRows.map(r => [
-        norm(r.normalized_keyword as string),
-        {
-          id: r.id as string,
-          keyword_analysis_score: r.keyword_analysis_score as number | null,
-          status: parseKeywordStatus(r.status),
-        },
-      ])
+    if (cached?.rows != null) {
+      const rawRows = parseCachedDomainAdsRows(cached.rows);
+      const merged = await mergeDomainSiteRowsWithProjectKeywords(projectId, rawRows);
+      return {
+        success: true,
+        data: merged,
+        fromCache: true,
+        lastFetchedAt: (cached.last_fetched_at as string) ?? null,
+      };
+    }
+
+    return {
+      success: true,
+      data: [],
+      fromCache: false,
+      lastFetchedAt: null,
+    };
+  }
+
+  try {
+    const { rows: keywords, trace } = await fetchGoogleAdsKeywordsForSite(domain, region, language, 1000);
+    const nowIso = new Date().toISOString();
+
+    const { error: upsertErr } = await supabaseAdmin.from('project_domain_ads_keywords').upsert(
+      {
+        project_id: projectId,
+        target_domain: domain.trim().toLowerCase(),
+        region,
+        language,
+        rows: keywords,
+        last_fetched_at: nowIso,
+        updated_at: nowIso,
+      },
+      { onConflict: 'project_id' }
     );
 
-    const merged: CompetitorKeywordsForSiteRow[] = keywords.map(k => {
-      const key = norm(k.keyword);
-      const hit = map.get(key);
-      const dbScore = typeof hit?.keyword_analysis_score === 'number' ? hit.keyword_analysis_score : null;
-      const fallback = aiScore(k.volume, k.kd, k.intent || '');
-      const fromIndustry = dbScore != null && dbScore > 0;
-      const keyword_analysis_score =
-        fromIndustry ? dbScore : fallback > 0 ? fallback : dbScore;
-      return {
-        ...k,
-        matched_keyword_id: hit?.id ?? null,
-        keyword_analysis_score,
-        matched_status: hit?.status ?? null,
-        analysis_score_is_industry: fromIndustry,
-      };
-    });
+    if (upsertErr) {
+      console.warn('[getDomainKeywords] cache upsert failed', upsertErr.message);
+    }
 
-    return { success: true, data: merged };
+    const merged = await mergeDomainSiteRowsWithProjectKeywords(projectId, keywords);
+    return {
+      success: true,
+      data: merged,
+      fromCache: false,
+      lastFetchedAt: nowIso,
+      discoveryTrace: trace,
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { success: false, error: `API error: ${msg}`, data: [] };
+    return {
+      success: false,
+      error: `API error: ${msg}`,
+      data: [],
+      fromCache: false,
+      lastFetchedAt: null,
+    };
   }
+}
+
+/** Explicit DataForSEO refresh for the domain tab — same as `getDomainKeywords(..., { force: true })`. */
+export async function refreshDomainKeywordsFromDataForSEO(projectId: string): Promise<GetDomainKeywordsResult> {
+  return getDomainKeywords(projectId, { force: true });
 }
 
 type DomainSiteKeywordPayload = Pick<

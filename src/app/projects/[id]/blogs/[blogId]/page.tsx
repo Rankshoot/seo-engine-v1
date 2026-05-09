@@ -960,10 +960,11 @@ function markdownUrlTransform(url: string): string {
 function buildMarkdownComponents(internalSet: Set<string>): Components {
   const MarkdownLink: ComponentType<AnchorHTMLAttributes<HTMLAnchorElement>> = ({ href = "", children, ...rest }) => {
     const isExternal = /^https?:\/\//i.test(href);
-    const isInternal = (!isExternal && (internalSet.has(href) || href.startsWith("/"))) || internalSet.has(href);
+    // It's internal if it's not external and it's in the internalSet, OR if it's a relative path, OR if it's an absolute URL pointing to our domain (which is handled by internalSet)
+    const isInternal = (!isExternal && href.startsWith("/")) || internalSet.has(href);
     const label = typeof children === "string" ? children : flattenChildren(children);
     return (
-      <a href={href} target={isExternal ? "_blank" : undefined} rel={isExternal ? "noopener noreferrer" : undefined}
+      <a href={href} target="_blank" rel={isExternal ? "noopener noreferrer" : undefined}
         className="underline underline-offset-[3px] transition-colors rounded-sm px-0.5 inline-flex items-baseline gap-0.5"
         style={{ color: isInternal ? V.action : V.coral, textDecorationStyle: "dotted", textDecorationColor: "currentColor" }} {...rest}>
         {label}

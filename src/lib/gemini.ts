@@ -212,8 +212,8 @@ export async function generateBlogPost(
           .join('\n')}`
       : '';
     const generatedBlock = generatedLinks.length
-      ? `Blog posts we've generated in this project (use /slug relative URLs):\n${generatedLinks
-          .map(b => `- "${b.title}" → /${b.slug} (keyword: ${b.target_keyword})`)
+      ? `Blog posts we've generated in this project (use absolute URLs like https://${project.domain}/blog/slug or https://${project.domain}/slug):\n${generatedLinks
+          .map(b => `- "${b.title}" → https://${project.domain}/${b.slug} (keyword: ${b.target_keyword})`)
           .join('\n')}`
       : '';
     internalLinksBlock = `\nINTERNAL LINKING (pick 2–4 total, split across the two pools, placed where they genuinely help the reader):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
@@ -522,10 +522,16 @@ After the article, output EXACTLY this block (no extra text, no trailing comma, 
   }
 
   // Relative /slug links (our own generated blogs) — still internal.
+  // We will convert them to absolute URLs based on project.domain
   const internalLinkRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
   while ((match = internalLinkRegex.exec(content)) !== null) {
     const path = match[2];
-    if (!internal_links.includes(path)) internal_links.push(path);
+    const absoluteUrl = project.domain ? `https://${project.domain}${path}` : path;
+    
+    // Replace the relative link in the content with the absolute URL
+    content = content.replace(`](${path})`, `](${absoluteUrl})`);
+    
+    if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
   }
 
   const word_count = content.split(/\s+/).filter(Boolean).length;
@@ -814,7 +820,10 @@ Write the repaired blog now. End the blog content, then on the next line output 
   const relInternalRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
   while ((m = relInternalRegex.exec(content))) {
     const path = m[2];
-    if (!internal_links.includes(path)) internal_links.push(path);
+    const absoluteUrl = project.domain ? `https://${project.domain}${path}` : path;
+    // Replace the relative link in the content with the absolute URL
+    content = content.replace(`](${path})`, `](${absoluteUrl})`);
+    if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
   }
 
   const word_count = content.split(/\s+/).filter(Boolean).length;

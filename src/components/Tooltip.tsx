@@ -26,11 +26,11 @@ export function Tooltip({
   const isBelow = placement === "below";
 
   const wrapperCls = isBelow
-    ? "pointer-events-none absolute top-full left-1/2 z-[9999] mt-2 -translate-x-1/2 -translate-y-1 scale-95 opacity-0 transition-all duration-200 ease-out group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100"
-    : "pointer-events-none absolute bottom-full left-1/2 z-[9999] mb-2 -translate-x-1/2 translate-y-1 scale-95 opacity-0 transition-all duration-200 ease-out group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100";
+    ? "pointer-events-none group-hover/tooltip:pointer-events-auto absolute top-full left-1/2 z-[9999] pt-2 -translate-x-1/2 -translate-y-1 scale-95 opacity-0 transition-all duration-200 ease-out group-hover/tooltip:translate-y-0 group-hover/tooltip:scale-100 group-hover/tooltip:opacity-100"
+    : "pointer-events-none group-hover/tooltip:pointer-events-auto absolute bottom-full left-1/2 z-[9999] pb-2 -translate-x-1/2 translate-y-1 scale-95 opacity-0 transition-all duration-200 ease-out group-hover/tooltip:translate-y-0 group-hover/tooltip:scale-100 group-hover/tooltip:opacity-100";
 
   return (
-    <div className={`group relative inline-flex items-center justify-center ${className}`}>
+    <div className={`group/tooltip relative inline-flex items-center justify-center ${className}`}>
       {children}
       <div className={wrapperCls}>
         <div className="relative w-max max-w-[240px] rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 text-xs font-medium text-text-secondary shadow-2xl text-center text-balance leading-relaxed">

@@ -58,6 +58,39 @@ function calendarApproveSuffix(cal: {
   return "";
 }
 
+function MonthlySearchesChart({ data }: { data: { month: string; volume: number }[] }) {
+  if (!data || data.length === 0) return <span className="text-text-tertiary">No monthly data</span>;
+  
+  const sorted = [...data].sort((a, b) => a.month.localeCompare(b.month));
+  const max = Math.max(...sorted.map(d => d.volume));
+
+  return (
+    <div className="flex flex-col gap-2 p-1">
+      <div className="text-[11px] font-semibold text-text-primary text-left">Monthly Search Trend</div>
+      <div className="flex items-end gap-[2px] h-12 w-40">
+        {sorted.map((d, i) => {
+          const heightPct = max > 0 ? (d.volume / max) * 100 : 0;
+          const [year, month] = d.month.split('-');
+          const date = new Date(parseInt(year), parseInt(month) - 1);
+          const formattedMonth = date.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+          
+          return (
+            <div
+              key={i}
+              className="flex-1 bg-brand-action/60 hover:bg-brand-action rounded-t-[2px] transition-colors relative group/bar"
+              style={{ height: `${Math.max(4, heightPct)}%` }}
+            >
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover/bar:block z-50 bg-surface-elevated border border-border-subtle text-[10px] px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap text-text-primary">
+                {formattedMonth}: {d.volume.toLocaleString()}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const KD_COLOR = (kd: number) =>
   kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
 
@@ -965,13 +998,22 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Estimated monthly visits the top result could earn for this term.",
-      cell: (kw: any) => (
-        <span className="text-[14px] font-mono text-text-secondary tabular-nums">
-          {kw.traffic_potential != null && kw.traffic_potential > 0
-            ? kw.traffic_potential.toLocaleString()
-            : "—"}
-        </span>
-      )
+      cell: (kw: any) => {
+        const hasTrafficPotential = kw.traffic_potential != null && kw.traffic_potential > 0;
+        const displayValue = hasTrafficPotential 
+          ? kw.traffic_potential.toLocaleString() 
+          : kw.volume > 0 
+            ? `~${Math.round(kw.volume * 0.3).toLocaleString()}`
+            : "—";
+
+        return (
+          <Tooltip placement="above" content={<MonthlySearchesChart data={kw.monthly_searches} />}>
+            <span className="text-[14px] font-mono text-text-secondary tabular-nums border-b border-dashed border-text-tertiary/40 cursor-help pb-0.5">
+              {displayValue}
+            </span>
+          </Tooltip>
+        );
+      }
     },
     {
       id: "kd",

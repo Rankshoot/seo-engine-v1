@@ -4,7 +4,7 @@ import type { BusinessBrief } from './business-brief';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent';
 const POLLINATIONS_CHAT_URL = 'https://gen.pollinations.ai/v1/chat/completions';
 
 function normalizeHost(domain: string): string {
@@ -55,19 +55,24 @@ function formatAhrefsContextForPrompt(ctx: {
   return lines.join('\n');
 }
 
-export async function geminiGenerate(prompt: string, retries = 3): Promise<string> {
+export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearch = false): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      const body: any = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
+      };
+      if (useGoogleSearch) {
+        body.tools = [{ googleSearch: {} }];
+      }
+
       const res = await fetch(GEMINI_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-goog-api-key': GEMINI_API_KEY,
         },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
-        }),
+        body: JSON.stringify(body),
       });
 
       if (res.status === 429) {
@@ -379,10 +384,10 @@ IMAGES:
 • Never reference an image by URL.
 
 LINKS (machine-checked — these directly affect your SEO score):
-• External links: include AT LEAST 5 credible institutional citations (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Spread them across different sections. Do NOT link to competitor blogs, random marketing blogs, Medium posts, Quora, Reddit, or thin affiliate pages — prefer primary reports and official publications.
-• Every external URL must be a real, currently-live page. Prefer the publication's main domain (e.g. https://www.mckinsey.com) over deep-linked article slugs that decay. If you are not confident a URL resolves, use the root domain only.
-• Internal links: include AT LEAST 2 from the INTERNAL LINKING pools above, woven naturally into body sections. Do NOT invent internal URLs.
-• If you genuinely cannot place 2 natural in-body internal links, add a section ## Also read immediately BEFORE "## Frequently Asked Questions" with 2–3 bullets. Each bullet must be a single markdown link from the INTERNAL LINKING pool plus one short sentence on why it matters. Do not duplicate URLs already linked in the body.
+• External links: include AT LEAST 5 credible institutional citations (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Spread them across different sections. Do NOT link to competitor blogs, random marketing blogs, Medium posts, Quora, Reddit, or thin affiliate pages.
+• You have access to Google Search. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com" or "https://www.mckinsey.com". Link to the exact report, article, or statistic page that supports your claim.
+• Internal links: include AT LEAST 3 from the INTERNAL LINKING pools above, woven naturally into body sections. Do NOT invent internal URLs. You MUST use the exact URLs provided in the pool.
+• If you genuinely cannot place 3 natural in-body internal links, add a section ## Also read immediately BEFORE "## Frequently Asked Questions" with 2–3 bullets. Each bullet must be a single markdown link from the INTERNAL LINKING pool plus one short sentence on why it matters. Do not duplicate URLs already linked in the body.
 • Format all links as [anchor text](url).
 
 KEYWORD DENSITY:
@@ -453,7 +458,7 @@ OUTPUT FORMAT — begin your response here, nothing before it
 [Answer ≤50 words]
 
 ## Conclusion
-[Strong, actionable closing — 3–5 sentences. Include primary keyword once. End with a subtle pointer to ${project.company} if relevant.]
+[Strong, actionable closing — 3–5 sentences. Include primary keyword once. The final paragraph MUST include a strong Call to Action (CTA) linking to ${project.domain} or a relevant product page from the internal linking pool.]
 
 FORMAT: Valid Markdown only. Use [text](url) for all links. Never output raw HTML.
 
@@ -461,7 +466,7 @@ After the article, output EXACTLY this block (no extra text, no trailing comma, 
 ---META---
 {"meta_description":"[140–165 chars, must include '${entry.focus_keyword}', written as a clear sentence]","slug":"url-slug-from-h1","external_links":["https://url1","https://url2","https://url3","https://url4","https://url5"],"internal_links":["/slug-or-absolute-url-1","/slug-or-absolute-url-2"]}`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
 
   // Safety strip: remove any leaked planning-step headers the LLM may have output
   // despite the INTERNAL PLANNING instruction. These lines begin with "STEP N —"
@@ -587,7 +592,7 @@ RULES:
 Return ONLY a JSON array. No markdown. No explanation. No code fences:
 [{"day":1,"date":"YYYY-MM-DD","keyword":"exact keyword","title":"Title Here","article_type":"How-to Guide","slug":"title-here"}]`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
 
   const cleaned = text
     .replace(/```json\s*/gi, '')
@@ -737,7 +742,7 @@ IMPORTANT RULES:
 - Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
 - Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
-- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. No Wikipedia.
+- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com". Link to the exact report or article. No Wikipedia.
 - Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
 
 SOURCE URL (the live page being repaired): ${sourceUrl}
@@ -769,7 +774,7 @@ Write the repaired blog now. End the blog content, then on the next line output 
 ---META---
 {"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
 
   const sepIdx = text.indexOf('---META---');
   let content = text.trim();
@@ -894,7 +899,7 @@ JSON rules:
 - Each string must match (verbatim or trivial spacing case) a keyword from the INDUSTRY or COMPETITOR lists above.
 - Order = recommended publishing order for one cohesive monthly cluster.`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
   const marker = '---CLUSTER---';
   const idx = text.indexOf(marker);
   let analysisMarkdown = text.trim();

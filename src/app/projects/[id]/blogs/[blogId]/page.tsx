@@ -691,13 +691,13 @@ export default function BlogViewerPage() {
                       <SLabel>External links ({externalLinks.length})</SLabel>
                       <div className="space-y-1">
                         {externalLinks.slice(0, 4).map((url, i) => {
-                          let host = url;
-                          try { host = new URL(url).hostname; } catch { /* */ }
                           return (
                             <a key={i} href={url} target="_blank" rel="noopener noreferrer"
                               className="flex items-center gap-1.5 text-[11px] hover:underline truncate"
-                              style={{ color: V.action }}>
-                              <ExternalLinkIcon className="w-3 h-3 shrink-0" />{host}
+                              style={{ color: V.action }}
+                              title={url}>
+                              <ExternalLinkIcon className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{url}</span>
                             </a>
                           );
                         })}
@@ -708,9 +708,17 @@ export default function BlogViewerPage() {
                     <div>
                       <SLabel>Internal links ({internalLinks.length})</SLabel>
                       <div className="space-y-0.5">
-                        {internalLinks.slice(0, 3).map((path, i) => (
-                          <p key={i} className="text-[11px] truncate" style={{ fontFamily: "CohereMono, monospace", color: V.coral }}>{path}</p>
-                        ))}
+                        {internalLinks.slice(0, 3).map((path, i) => {
+                          const fullUrl = path.startsWith('/') && project?.domain ? `https://${project.domain}${path}` : path;
+                          return (
+                            <a key={i} href={fullUrl} target="_blank" rel="noopener noreferrer" 
+                              className="text-[11px] truncate block hover:underline" 
+                              style={{ fontFamily: "CohereMono, monospace", color: V.coral }}
+                              title={fullUrl}>
+                              {fullUrl}
+                            </a>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

@@ -1,10 +1,15 @@
 import { CalendarEntry, Project } from './types';
 import { ResearchContext, formatResearchForPrompt } from './research';
 import type { BusinessBrief } from './business-brief';
+import {
+  deterministicFunnelStage,
+  parseFunnelStageLabel,
+  type FunnelStage,
+} from '@/lib/keyword-funnel';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
 const POLLINATIONS_CHAT_URL = 'https://gen.pollinations.ai/v1/chat/completions';
 
 function normalizeHost(domain: string): string {
@@ -76,7 +81,7 @@ export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearc
       });
 
       if (res.status === 429) {
-        const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached');
+        const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached', 0.75);
         if (fallback) return fallback;
         throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
       }
@@ -98,7 +103,11 @@ export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearc
   throw new Error('Gemini failed after all retries');
 }
 
-async function pollinationsGeminiFallback(prompt: string, reason: string): Promise<string | null> {
+async function pollinationsGeminiFallback(
+  prompt: string,
+  reason: string,
+  temperature = 0.75
+): Promise<string | null> {
   const apiKey = process.env.POLLINATIONS_API_KEY;
   if (!apiKey) return null;
 
@@ -113,7 +122,7 @@ async function pollinationsGeminiFallback(prompt: string, reason: string): Promi
       body: JSON.stringify({
         model: process.env.POLLINATIONS_TEXT_MODEL || 'gemini-fast',
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.75,
+        temperature,
       }),
     });
 
@@ -130,6 +139,308 @@ async function pollinationsGeminiFallback(prompt: string, reason: string): Promi
     console.warn('Pollinations fallback failed:', error instanceof Error ? error.message : error);
     return null;
   }
+}
+
+/** Schema for structured JSON array output (consumer Gemini API). */
+const KEYWORD_INTENT_RESPONSE_SCHEMA = {
+  type: 'ARRAY',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      id: { type: 'STRING' },
+      intent: {
+        type: 'STRING',
+        enum: ['informational', 'commercial', 'navigational', 'transactional'],
+      },
+    },
+    required: ['id', 'intent'],
+  },
+} as const;
+
+/** Low-temperature JSON-style output for deterministic intent labels. */
+async function geminiGenerateClassificationJson(prompt: string, retries = 3): Promise<string> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const tryOnce = async (withResponseSchema: boolean): Promise<string> => {
+        const generationConfig: Record<string, unknown> = {
+          temperature: 0.2,
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json',
+        };
+        if (withResponseSchema) {
+          generationConfig.responseSchema = KEYWORD_INTENT_RESPONSE_SCHEMA;
+        }
+
+        const res = await fetch(GEMINI_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': GEMINI_API_KEY,
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig,
+          }),
+        });
+
+        if (res.status === 400 && withResponseSchema) {
+          const errText = await res.text();
+          console.warn(
+            '[intent-classify] responseSchema rejected; retrying without schema:',
+            errText.slice(0, 200)
+          );
+          return tryOnce(false);
+        }
+
+        if (res.status === 429) {
+          const fallback = await pollinationsGeminiFallback(
+            prompt,
+            'Gemini API rate limit reached',
+            0.2
+          );
+          if (fallback) return fallback;
+          throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
+        }
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(`Gemini ${res.status}: ${err}`);
+        }
+
+        const json = await res.json();
+        const cand = json?.candidates?.[0];
+        const text = cand?.content?.parts?.[0]?.text;
+        if (!text) {
+          const reason = String(cand?.finishReason ?? '');
+          if (reason.includes('SAFETY')) {
+            throw new Error('Gemini blocked the response (safety filter).');
+          }
+          throw new Error('Empty response from Gemini');
+        }
+        return text;
+      };
+
+      return await tryOnce(true);
+    } catch (e: unknown) {
+      if (attempt === retries - 1) throw e;
+      await new Promise(r => setTimeout(r, 4000));
+    }
+  }
+  throw new Error('Gemini classification failed after all retries');
+}
+
+export interface KeywordIntentClassifyRow {
+  id: string;
+  keyword: string;
+}
+
+export interface BusinessContextForIntent {
+  company: string;
+  domain: string;
+  niche: string;
+  targetAudience: string;
+  targetRegion: string;
+  /** Pre-truncated brief-derived block (may be empty). */
+  briefContext: string;
+}
+
+const SERP_INTENT_LABELS = ['informational', 'commercial', 'navigational', 'transactional'] as const;
+export type SerpIntentValue = (typeof SERP_INTENT_LABELS)[number];
+
+export function normalizeSerpIntentLabel(raw: unknown): SerpIntentValue {
+  const s = typeof raw === 'string' ? raw.toLowerCase().trim() : '';
+  return (SERP_INTENT_LABELS as readonly string[]).includes(s) ? (s as SerpIntentValue) : 'informational';
+}
+
+function stripJsonTrailingCommas(s: string): string {
+  return s.replace(/,\s*([}\]])/g, '$1');
+}
+
+/** Extract a top-level JSON array from `start` using bracket depth (strings respected). */
+function extractBalancedJsonArray(s: string): string | null {
+  const start = s.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === '[') depth++;
+    else if (c === ']') {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function tryParseIntentArrayPayload(raw: string): unknown[] | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    try {
+      parsed = JSON.parse(stripJsonTrailingCommas(trimmed));
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === 'object') {
+    const o = parsed as Record<string, unknown>;
+    for (const key of [
+      'results',
+      'keywords',
+      'items',
+      'data',
+      'classifications',
+      'intents',
+      'rows',
+      'output',
+    ]) {
+      const v = o[key];
+      if (Array.isArray(v)) return v;
+    }
+  }
+  return null;
+}
+
+/**
+ * Last-resort: pull `{"id":"…","intent":"…"}` objects from noisy text (e.g. Pollinations).
+ */
+function extractIntentObjectsLoose(s: string): unknown[] {
+  const out: unknown[] = [];
+  const idFirst = /\{\s*"id"\s*:\s*"([^"]*)"\s*,\s*"intent"\s*:\s*"([^"]*)"\s*\}/gi;
+  let m: RegExpExecArray | null;
+  while ((m = idFirst.exec(s)) !== null) {
+    out.push({ id: m[1], intent: m[2] });
+  }
+  if (out.length) return out;
+
+  const intentFirst = /\{\s*"intent"\s*:\s*"([^"]*)"\s*,\s*"id"\s*:\s*"([^"]*)"\s*\}/gi;
+  while ((m = intentFirst.exec(s)) !== null) {
+    out.push({ id: m[2], intent: m[1] });
+  }
+  return out;
+}
+
+function parseIntentClassificationArray(text: string): unknown[] {
+  let s = text.trim();
+  if (!s) {
+    throw new Error('Could not parse intent JSON array from model output');
+  }
+
+  // Single fenced block
+  const fence = /^```(?:json)?\s*([\s\S]*?)```\s*$/im.exec(s);
+  if (fence) s = fence[1].trim();
+
+  const candidates = [
+    s,
+    s.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim(),
+  ];
+
+  for (const chunk of candidates) {
+    const direct = tryParseIntentArrayPayload(chunk);
+    if (direct) return direct;
+
+    const balanced = extractBalancedJsonArray(chunk);
+    if (balanced) {
+      const fromBalanced = tryParseIntentArrayPayload(stripJsonTrailingCommas(balanced));
+      if (fromBalanced) return fromBalanced;
+    }
+  }
+
+  const loose = extractIntentObjectsLoose(s);
+  if (loose.length) return loose;
+
+  throw new Error('Could not parse intent JSON array from model output');
+}
+
+/**
+ * Classify a batch of keywords into a single SERP intent label each, grounded in
+ * the customer's business (brief + project fields).
+ */
+export async function classifyKeywordIntentsForBusinessChunk(
+  ctx: BusinessContextForIntent,
+  rows: KeywordIntentClassifyRow[]
+): Promise<{ id: string; intent: SerpIntentValue; funnel_stage: FunnelStage }[]> {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured');
+  }
+  if (!rows.length) return [];
+
+  const expectedIds = new Set(rows.map(r => r.id));
+  const lines = rows.map(
+    (r, i) => `${i + 1}. id=${r.id} | keyword="${String(r.keyword).replace(/"/g, '\\"')}"`
+  );
+
+  const prompt = `You are an SEO analyst. For each keyword below, assign EXACTLY ONE primary search intent for how ${ctx.company || 'this business'} (${ctx.domain}) should think about the query in their industry — not a generic dictionary guess.
+
+BUSINESS CONTEXT
+- Company: ${ctx.company || 'Unknown'}
+- Domain: ${ctx.domain || 'Unknown'}
+- Industry / niche: ${ctx.niche || 'Unknown'}
+- Target audience: ${ctx.targetAudience || 'Unknown'}
+- Region: ${ctx.targetRegion || 'Unknown'}
+${ctx.briefContext ? `\nSITE / OFFERING CONTEXT (from scraped brief — use to interpret services and jargon):\n${ctx.briefContext}\n` : ''}
+
+INTENT LABELS (pick one per keyword)
+- informational: learning, definitions, how/what/why, early research; not actively choosing a vendor.
+- commercial: comparing providers/services/solutions, "best", "top", "vs", reviews, or category shopping where the user is evaluating options before buying or hiring.
+- transactional: ready to act now — purchase, sign up, pricing, demo, quote, apply, download a gated asset tied to conversion, or hire immediately.
+- navigational: trying to reach a specific brand, product name, or web destination (including obvious brand + "login" / "portal").
+
+Rules:
+- Interpret each keyword in light of THIS company's niche. A broad term may be commercial for a B2B service provider even if it looks informational in isolation.
+- If a query is ambiguous, prefer informational over commercial.
+
+FUNNEL STAGE (one per keyword, must align with intent + phrasing)
+- TOFU: early research — how/what/why, broad education, awareness, definitions, ideas, tips; user is not comparing vendors yet.
+- MOFU: evaluation — best/top/vs/reviews/alternatives/compare, shortlists, "which X", category shopping before a final decision.
+- BOFU: ready to convert or navigate — buy/pricing/demo/signup/download/hire/apply, transactional or clear brand/site navigation.
+
+- Return JSON ONLY: one array. Each element: {"id":"<exact uuid from input>","intent":"informational"|"commercial"|"navigational"|"transactional","funnel_stage":"TOFU"|"MOFU"|"BOFU"}.
+- Same number of elements as input, same order as listed.
+
+KEYWORDS:
+${lines.join('\n')}
+`;
+
+  const rawText = await geminiGenerateClassificationJson(prompt);
+  const arr = parseIntentClassificationArray(rawText);
+  const byId = new Map<string, SerpIntentValue>();
+  const byFunnel = new Map<string, FunnelStage>();
+
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as { id?: unknown; intent?: unknown; funnel_stage?: unknown };
+    const id = typeof rec.id === 'string' ? rec.id : '';
+    if (!expectedIds.has(id)) continue;
+    byId.set(id, normalizeSerpIntentLabel(rec.intent));
+    const fs = parseFunnelStageLabel(rec.funnel_stage);
+    if (fs) byFunnel.set(id, fs);
+  }
+
+  return rows.map(r => {
+    const intent = byId.get(r.id) ?? 'informational';
+    const funnel_stage = byFunnel.get(r.id) ?? deterministicFunnelStage(intent, r.keyword);
+    return { id: r.id, intent, funnel_stage };
+  });
 }
 
 export interface GeneratedBlog {

@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS keywords (
   gap_competitor TEXT DEFAULT '',
   competition_level TEXT DEFAULT '',
   intent TEXT DEFAULT '',
+  funnel_stage TEXT DEFAULT '',
   -- Keyword-discovery pipeline columns. See supabase-migration-keyword-discovery-pipeline.sql.
   source_type TEXT DEFAULT 'industry',
   ai_source TEXT DEFAULT '',

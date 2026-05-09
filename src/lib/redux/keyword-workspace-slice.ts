@@ -16,6 +16,7 @@ export type KeywordTableSortColumn =
   | "kd"
   | "cpc"
   | "intent"
+  | "funnel_stage"
   | "analysis_score"
   | "status";
 export type KeywordSortDir = "asc" | "desc";

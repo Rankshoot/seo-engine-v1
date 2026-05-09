@@ -12,6 +12,7 @@ import {
 } from '@/lib/ahrefs';
 import type { BenchmarkTraceEntry } from '@/lib/competitor-benchmark';
 import type { Project, ProjectCompetitor } from '@/lib/types';
+import { deterministicFunnelStage } from '@/lib/keyword-funnel';
 
 export interface FindCompetitorGapsResult {
   success: boolean;
@@ -236,6 +237,7 @@ export async function importGapKeywords(projectId: string, gaps: CompetitorGapKe
     status: 'pending',
     source_url: g.sourceUrl || '',
     gap_competitor: g.competitorDomain || '',
+    funnel_stage: deterministicFunnelStage('', g.keyword),
   }));
 
   const { data, error } = await supabaseAdmin

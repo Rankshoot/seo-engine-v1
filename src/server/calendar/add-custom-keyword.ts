@@ -1,5 +1,6 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { deterministicFunnelStage } from "@/lib/keyword-funnel";
 import type { CalendarEntry } from "@/lib/types";
 
 function localDayISOFromOffset(daysFromToday: number): string {
@@ -120,6 +121,7 @@ export async function addCustomKeywordToCalendar(
         status: "approved",
         secondary_keywords: [],
         source_type: "manual",
+        funnel_stage: deterministicFunnelStage("", kw),
       })
       .select("id")
       .single();

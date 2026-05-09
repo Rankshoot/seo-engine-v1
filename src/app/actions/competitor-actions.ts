@@ -19,6 +19,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase';
+import { deterministicFunnelStage } from '@/lib/keyword-funnel';
 import { currentUser } from '@clerk/nextjs/server';
 import {
   benchmarkContentQuality,
@@ -946,6 +947,7 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
         gap_competitor: gap?.top_competitor_domain ?? '',
         ai_score: gap?.opportunity_score ?? 0,
         keyword_analysis_score: gap?.opportunity_score ?? 0,
+        funnel_stage: deterministicFunnelStage('', normalized),
       },
       { onConflict: 'project_id,keyword', ignoreDuplicates: false }
     )

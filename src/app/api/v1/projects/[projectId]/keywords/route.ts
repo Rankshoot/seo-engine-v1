@@ -3,6 +3,7 @@ import {
   deleteAllKeywords,
   discoverKeywords,
   getKeywords,
+  refreshKeywordIntentsWithGemini,
   runKeywordDiscoveryPipeline,
 } from "@/app/actions/keyword-actions";
 import { apiJson } from "@/server/http/json";
@@ -37,9 +38,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
     const action = body.action;
     if (!action || typeof action !== "string") {
       return apiJson(
-        { success: false, error: "Missing action. Use discover | discover-pipeline | delete-all." },
+        {
+          success: false,
+          error: "Missing action. Use discover | discover-pipeline | delete-all | refresh-ai-intent.",
+        },
         { status: 400 }
       );
+    }
+    if (action === "refresh-ai-intent") {
+      const result = await refreshKeywordIntentsWithGemini(projectId);
+      return apiJson(result, { status: result.success ? 200 : 400 });
     }
     if (action === "discover-pipeline") {
       const result = await runKeywordDiscoveryPipeline(projectId, { topN: body.topN });
@@ -54,7 +62,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
       return apiJson(result, { status: result.success ? 200 : 400 });
     }
     return apiJson(
-      { success: false, error: "Unknown action. Use discover | discover-pipeline | delete-all." },
+      {
+        success: false,
+        error: "Unknown action. Use discover | discover-pipeline | delete-all | refresh-ai-intent.",
+      },
       { status: 400 }
     );
   } catch {

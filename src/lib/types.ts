@@ -94,6 +94,8 @@ export interface Keyword {
   competition_level?: string | null;
   /** Dominant SERP intent: informational / commercial / navigational / transactional */
   intent?: string | null;
+  /** Marketing funnel: TOFU / MOFU / BOFU (Gemini on AI intent refresh, else heuristic). */
+  funnel_stage?: string | null;
   /** Discovery-pipeline provenance. */
   source_type?: KeywordSourceType | string | null;
   /** Set when the keyword was stamped from the AI assistant (e.g. "AI · keywords"). */

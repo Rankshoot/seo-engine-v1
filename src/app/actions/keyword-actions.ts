@@ -9,8 +9,13 @@ import {
   type DataForSEOTraceEntry,
 } from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
-import { generateBusinessBrief } from './brief-actions';
+import { generateBusinessBrief, getBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
+import {
+  classifyKeywordIntentsForBusinessChunk,
+  type BusinessContextForIntent,
+} from '@/lib/gemini';
+import { deterministicFunnelStage } from '@/lib/keyword-funnel';
 import { crawlWebsite, type WebsiteCrawlResult } from '@/lib/websiteCrawler';
 import {
   runKeywordDiscovery,
@@ -19,6 +24,168 @@ import {
 } from '@/lib/keyword-discovery';
 import { enrichKeywordInBackground } from '@/lib/keyword-modal';
 import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates } from './calendar-actions';
+
+const INTENT_REFRESH_CHUNK_SIZE = 28;
+
+function buildBriefContextForIntent(brief: BusinessBrief | null): string {
+  if (!brief) return '';
+  const chunks: string[] = [];
+  if (brief.summary) chunks.push(brief.summary.slice(0, 1200));
+  if (brief.products?.length) {
+    chunks.push(`Products/services: ${brief.products.slice(0, 14).join('; ')}`);
+  }
+  if (brief.entities?.length) {
+    chunks.push(`Key entities: ${brief.entities.slice(0, 18).join('; ')}`);
+  }
+  if (brief.audiences?.length) {
+    chunks.push(`Audiences: ${brief.audiences.slice(0, 8).join('; ')}`);
+  }
+  return chunks.join('\n').slice(0, 4000);
+}
+
+export interface KeywordIntentRefreshTraceEntry {
+  ts: string;
+  batch_index: number;
+  batch_size: number;
+  ok: boolean;
+  ms: number;
+  updated_in_batch: number;
+  error?: string;
+}
+
+/**
+ * Re-label every saved industry keyword's `intent` and `funnel_stage` with Gemini
+ * using project fields + cached business brief. Updates `ai_score` to match the new intent.
+ * Client should `console.log` `intentTrace` for production debugging.
+ */
+export async function refreshKeywordIntentsWithGemini(projectId: string): Promise<{
+  success: boolean;
+  error?: string;
+  updated: number;
+  total: number;
+  intentTrace: KeywordIntentRefreshTraceEntry[];
+}> {
+  const user = await currentUser();
+  if (!user) {
+    return { success: false, error: 'Not authenticated', updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select(
+      'id, domain, company, niche, target_audience, target_region'
+    )
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) {
+    return { success: false, error: 'Project not found', updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const briefRes = await getBusinessBrief(projectId);
+  if (!briefRes.success) {
+    return {
+      success: false,
+      error: briefRes.error ?? 'Could not load business brief',
+      updated: 0,
+      total: 0,
+      intentTrace: [],
+    };
+  }
+
+  const { data: kwRows, error: kwErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, keyword, volume, kd')
+    .eq('project_id', projectId);
+
+  if (kwErr) {
+    return { success: false, error: kwErr.message, updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const list = (kwRows ?? []).filter(
+    (r): r is { id: string; keyword: string; volume: number | null; kd: number | null } =>
+      Boolean(r?.id && r.keyword)
+  );
+
+  if (!list.length) {
+    return { success: true, updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const ctx: BusinessContextForIntent = {
+    company: project.company ?? '',
+    domain: project.domain ?? '',
+    niche: project.niche ?? '',
+    targetAudience: project.target_audience ?? '',
+    targetRegion: project.target_region ?? '',
+    briefContext: buildBriefContextForIntent(briefRes.brief),
+  };
+
+  const intentTrace: KeywordIntentRefreshTraceEntry[] = [];
+  const intentById = new Map<string, string>();
+  const funnelById = new Map<string, string>();
+
+  for (let i = 0; i < list.length; i += INTENT_REFRESH_CHUNK_SIZE) {
+    const batch = list.slice(i, i + INTENT_REFRESH_CHUNK_SIZE);
+    const batchIndex = Math.floor(i / INTENT_REFRESH_CHUNK_SIZE) + 1;
+    const t0 = Date.now();
+    try {
+      const classified = await classifyKeywordIntentsForBusinessChunk(
+        ctx,
+        batch.map(r => ({ id: r.id, keyword: r.keyword }))
+      );
+      for (const c of classified) {
+        intentById.set(c.id, c.intent);
+        funnelById.set(c.id, c.funnel_stage);
+      }
+      intentTrace.push({
+        ts: new Date().toISOString(),
+        batch_index: batchIndex,
+        batch_size: batch.length,
+        ok: true,
+        ms: Date.now() - t0,
+        updated_in_batch: classified.length,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      intentTrace.push({
+        ts: new Date().toISOString(),
+        batch_index: batchIndex,
+        batch_size: batch.length,
+        ok: false,
+        ms: Date.now() - t0,
+        updated_in_batch: 0,
+        error: msg,
+      });
+      return {
+        success: false,
+        error: msg,
+        updated: 0,
+        total: list.length,
+        intentTrace,
+      };
+    }
+  }
+
+  let updated = 0;
+  for (const row of list) {
+    const intent = intentById.get(row.id);
+    const funnel_stage = funnelById.get(row.id);
+    if (!intent || !funnel_stage) continue;
+    const volume = Math.max(0, Math.round(Number(row.volume) || 0));
+    const kd = Math.max(0, Math.round(Number(row.kd) || 0));
+    const ai = aiScore(volume, kd, intent);
+    const { error: upErr } = await supabaseAdmin
+      .from('keywords')
+      .update({ intent, ai_score: ai, funnel_stage })
+      .eq('id', row.id)
+      .eq('project_id', projectId);
+    if (!upErr) updated += 1;
+    else console.error('[intent-refresh] update failed', row.id, upErr.message);
+  }
+
+  return { success: true, updated, total: list.length, intentTrace };
+}
 
 function aiScore(volume: number, kd: number, intent: string = ''): number {
   // Require both volume and KD to be known, otherwise the score misleads.
@@ -240,6 +407,7 @@ function candidateToRow(projectId: string, c: KeywordCandidate) {
     kd: c.difficulty != null ? Math.round(c.difficulty) : 0,
     cpc: cpcDollars,
     intent: c.intent || null,
+    funnel_stage: deterministicFunnelStage(c.intent || '', c.keyword),
     parent_topic: c.parent_topic ?? '',
     traffic_potential: c.traffic_potential != null ? Math.round(c.traffic_potential) : 0,
     source_type: c.source_type,
@@ -394,6 +562,7 @@ export async function discoverKeywords(projectId: string) {
     trend: '',
     competition_level: '',
     intent: kw.intent || null,
+    funnel_stage: deterministicFunnelStage(kw.intent || '', kw.keyword),
     monthly_searches: kw.monthly_searches,
     secondary_keywords: kw.secondary_keywords,
     // Legacy simple scalar — kept for backwards compatibility with the
@@ -1075,6 +1244,7 @@ export async function upsertKeywordFromDomainSite(
         trend: '',
         competition_level: '',
         intent: intentStr || null,
+        funnel_stage: deterministicFunnelStage(intentStr, phrase),
         monthly_searches: [],
         secondary_keywords: [],
         ai_score: ai,
@@ -1109,6 +1279,7 @@ export async function upsertKeywordFromDomainSite(
       kd,
       cpc,
       intent: intentStr,
+      funnel_stage: deterministicFunnelStage(intentStr, phrase),
     })
     .eq('id', id);
 

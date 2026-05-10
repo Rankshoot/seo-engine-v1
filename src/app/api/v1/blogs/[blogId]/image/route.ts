@@ -4,9 +4,11 @@ import { generateContextualBlogImage } from "@/services/stabilityImages";
 
 export const maxDuration = 120;
 
-export async function POST(req: Request, { params }: { params: { blogId: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ blogId: string }> }) {
   const user = await currentUser();
   if (!user) return new Response("Not authenticated", { status: 401 });
+
+  const { blogId } = await params;
 
   let body: { imageAlt: string; contextBefore: string; contextAfter: string };
   try {
@@ -18,7 +20,7 @@ export async function POST(req: Request, { params }: { params: { blogId: string 
   const { data: blog, error: blogErr } = await supabaseAdmin
     .from("blogs")
     .select("*, projects(niche, target_audience, company)")
-    .eq("id", params.blogId)
+    .eq("id", blogId)
     .single();
 
   if (blogErr || !blog) {

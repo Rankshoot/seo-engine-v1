@@ -104,6 +104,11 @@ ALTER TABLE keywords
   ADD COLUMN IF NOT EXISTS normalized_keyword TEXT
   GENERATED ALWAYS AS (LOWER(TRIM(keyword))) STORED;
 
+-- Older databases may already have `keywords` without funnel_stage; `CREATE TABLE IF NOT EXISTS`
+-- does not add new columns. See supabase-migration-keyword-funnel-stage.sql.
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS funnel_stage TEXT DEFAULT '';
+
 -- One-row-per-keyword modal payload (overview / history / by-country / SERP).
 CREATE TABLE IF NOT EXISTS keyword_details (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

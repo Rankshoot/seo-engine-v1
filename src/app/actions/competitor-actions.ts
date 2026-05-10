@@ -910,6 +910,17 @@ export async function getCompetitorBenchmark(projectId: string): Promise<Benchma
 // 3. One-click "Generate blog" from an opportunity row
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** PostgREST when `keywords.funnel_stage` exists in app code but not yet in DB / schema cache. */
+function isMissingKeywordsFunnelStageError(message: string | undefined): boolean {
+  if (!message) return false;
+  return message.includes('funnel_stage') && message.includes('schema cache');
+}
+
+function stripFunnelStageFromPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  const { funnel_stage: _fs, ...rest } = patch;
+  return rest;
+}
+
 export async function generateBlogFromOpportunity(projectId: string, keyword: string) {
   const user = await currentUser();
   if (!user) return { success: false as const, error: 'Not authenticated' };
@@ -925,38 +936,93 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     .single();
   if (pErr || !project) return { success: false as const, error: 'Project not found' };
 
-  const { data: gap } = await supabaseAdmin
+  // `keyword_gaps.keyword` keeps provider casing; never match with a lowercased string.
+  const { data: gapRows, error: gapErr } = await supabaseAdmin
     .from('keyword_gaps')
     .select('*')
-    .eq('project_id', projectId)
-    .eq('keyword', normalized)
-    .maybeSingle();
+    .eq('project_id', projectId);
+  if (gapErr) return { success: false as const, error: gapErr.message };
 
-  const { data: kwRow, error: kwErr } = await supabaseAdmin
+  const gap =
+    (gapRows ?? []).find(r => (r.keyword as string).trim().toLowerCase() === normalized) ?? null;
+
+  // Reuse an existing `keywords` row when the normalized phrase already exists (e.g. discovery
+  // saved "HR Software" and the gap row says "hr software"). Upsert on `(project_id, keyword)`
+  // alone would try to INSERT a second row and hit `idx_keywords_project_normalized`.
+  const { data: existingKw, error: kwLookupErr } = await supabaseAdmin
     .from('keywords')
-    .upsert(
-      {
-        project_id: projectId,
-        keyword: normalized,
-        volume: gap?.volume ?? 0,
-        kd: gap?.kd ?? 0,
-        trend: gap?.trend ?? '+0%',
-        status: 'approved',
-        source_type: 'competitor_benchmark',
-        source_url: gap?.top_competitor_url ?? '',
-        gap_competitor: gap?.top_competitor_domain ?? '',
-        ai_score: gap?.opportunity_score ?? 0,
-        keyword_analysis_score: gap?.opportunity_score ?? 0,
-        funnel_stage: deterministicFunnelStage('', normalized),
-      },
-      { onConflict: 'project_id,keyword', ignoreDuplicates: false }
-    )
-    .select('id')
-    .single();
+    .select('id, keyword')
+    .eq('project_id', projectId)
+    .eq('normalized_keyword', normalized)
+    .maybeSingle();
+  if (kwLookupErr) return { success: false as const, error: kwLookupErr.message };
 
-  if (kwErr || !kwRow) return { success: false as const, error: kwErr?.message ?? 'Failed to save keyword.' };
+  const statusPatch: Record<string, unknown> = {
+    status: 'approved',
+    source_type: 'competitor_benchmark',
+    funnel_stage: deterministicFunnelStage('', normalized),
+  };
+  if (gap) {
+    statusPatch.volume = gap.volume;
+    statusPatch.kd = gap.kd;
+    statusPatch.trend = gap.trend;
+    statusPatch.source_url = gap.top_competitor_url ?? '';
+    statusPatch.gap_competitor = gap.top_competitor_domain ?? '';
+    statusPatch.ai_score = gap.opportunity_score ?? 0;
+    statusPatch.keyword_analysis_score = gap.opportunity_score ?? 0;
+  }
 
-  const keywordId = kwRow.id as string;
+  let keywordId: string;
+  let canonicalKeyword: string;
+
+  if (existingKw) {
+    let upErr = (
+      await supabaseAdmin.from('keywords').update(statusPatch).eq('id', existingKw.id as string)
+    ).error;
+    if (upErr && isMissingKeywordsFunnelStageError(upErr.message)) {
+      upErr = (
+        await supabaseAdmin
+          .from('keywords')
+          .update(stripFunnelStageFromPatch(statusPatch))
+          .eq('id', existingKw.id as string)
+      ).error;
+    }
+    if (upErr) return { success: false as const, error: upErr.message };
+    keywordId = existingKw.id as string;
+    canonicalKeyword = String(existingKw.keyword);
+  } else {
+    const displayKeyword = (gap?.keyword as string | undefined)?.trim() || keyword.trim();
+    const insertPayload = {
+      project_id: projectId,
+      keyword: displayKeyword,
+      volume: gap?.volume ?? 0,
+      kd: gap?.kd ?? 0,
+      trend: gap?.trend ?? '+0%',
+      source_url: gap?.top_competitor_url ?? '',
+      gap_competitor: gap?.top_competitor_domain ?? '',
+      ai_score: gap?.opportunity_score ?? 0,
+      keyword_analysis_score: gap?.opportunity_score ?? 0,
+      ...statusPatch,
+    };
+    let { data: insRow, error: insErr } = await supabaseAdmin
+      .from('keywords')
+      .insert(insertPayload)
+      .select('id')
+      .single();
+    if (insErr && isMissingKeywordsFunnelStageError(insErr.message)) {
+      const { funnel_stage: _ignored, ...payloadNoFunnel } = insertPayload as Record<string, unknown>;
+      ({ data: insRow, error: insErr } = await supabaseAdmin
+        .from('keywords')
+        .insert(payloadNoFunnel)
+        .select('id')
+        .single());
+    }
+    if (insErr || !insRow) {
+      return { success: false as const, error: insErr?.message ?? 'Failed to save keyword.' };
+    }
+    keywordId = insRow.id as string;
+    canonicalKeyword = displayKeyword;
+  }
 
   const { data: existingEntry } = await supabaseAdmin
     .from('calendar_entries')
@@ -983,7 +1049,7 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
 
   const slugBase = slugify(normalized) || `opportunity-${Date.now().toString(36)}`;
   const calRes = await addKeywordToCalendarOnDate(keywordId, projectId, dateStr, {
-    title: toTitleCase(normalized),
+    title: toTitleCase(canonicalKeyword),
     article_type: 'How-to Guide',
     slug: `${slugBase}-${Date.now().toString(36)}`,
   });

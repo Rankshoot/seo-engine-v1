@@ -491,8 +491,10 @@ export default function BlogViewerPage() {
       const res = await blogsApi.generate({ entryId: blog.entry_id, wordCount: blog.word_count || 2500 });
       if (res.success && res.data) {
         setBlog(res.data);
-      } else {
+      } else if (!res.success) {
         setEditError(res.error || "Failed to generate blog.");
+      } else {
+        setEditError("Failed to generate blog.");
       }
     } catch (e: unknown) {
       setEditError(e instanceof Error ? e.message : "Failed to generate blog.");

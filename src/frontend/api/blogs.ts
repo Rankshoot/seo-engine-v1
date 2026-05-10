@@ -47,4 +47,11 @@ export const blogsApi = {
   }> {
     return apiPost(V1Routes.blogRewriteSelection(blogId), body);
   },
+
+  regenerateImage(
+    blogId: string,
+    body: { imageAlt: string; contextBefore: string; contextAfter: string }
+  ): Promise<{ success: boolean; error?: string; data?: { url: string; alt: string } }> {
+    return apiPost(V1Routes.blog(blogId) + "/image", body);
+  },
 };

@@ -1003,7 +1003,6 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
     secondaryKeywords,
     brief,
     project,
-    wordCount = 2200,
   } = input;
 
   const originalTitle =

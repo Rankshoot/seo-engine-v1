@@ -151,6 +151,101 @@ const MemoizedVisualBlogEditors = memo(
   editArticleSeedPropsEqual
 );
 
+function BlogImageEditOverlay({
+  active,
+  bodyRef,
+  onUpload,
+  onRegenerate,
+  onRemove,
+  isRegenerating,
+}: {
+  active: boolean;
+  bodyRef: RefObject<HTMLDivElement | null>;
+  onUpload: (img: HTMLImageElement) => void;
+  onRegenerate: (img: HTMLImageElement) => void;
+  onRemove: (img: HTMLImageElement) => void;
+  isRegenerating: boolean;
+}) {
+  const [targetImg, setTargetImg] = useState<HTMLImageElement | null>(null);
+  const btnRef = useRef<HTMLDivElement | null>(null);
+
+  const updatePosition = useCallback(() => {
+    if (!active || !targetImg || !btnRef.current) return;
+    const rect = targetImg.getBoundingClientRect();
+    btnRef.current.style.top = `${rect.top + 8}px`;
+    btnRef.current.style.left = `${rect.right - 8}px`;
+  }, [active, targetImg]);
+
+  useEffect(() => {
+    if (!active) {
+      if (targetImg) setTargetImg(null);
+      return;
+    }
+    const handleBodyClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "IMG" && bodyRef.current?.contains(target)) {
+        setTargetImg(target as HTMLImageElement);
+      } else if (!btnRef.current?.contains(target)) {
+        setTargetImg(null);
+      }
+    };
+    document.addEventListener("click", handleBodyClick);
+    return () => document.removeEventListener("click", handleBodyClick);
+  }, [active, bodyRef]);
+
+  useEffect(() => {
+    if (!targetImg) return;
+    const schedule = () => requestAnimationFrame(updatePosition);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    schedule();
+    return () => {
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+    };
+  }, [targetImg, updatePosition]);
+
+  if (!active || !targetImg) return null;
+
+  return (
+    <div
+      ref={btnRef}
+      className="fixed z-50 flex gap-1.5 -translate-x-full bg-surface-elevated border border-border-subtle rounded-md shadow-md p-1.5"
+    >
+      <button
+        onClick={() => {
+          onUpload(targetImg);
+          setTargetImg(null);
+        }}
+        disabled={isRegenerating}
+        className="px-2 py-1 text-[11px] font-medium rounded hover:bg-surface-hover text-text-secondary transition-colors disabled:opacity-50"
+      >
+        Upload
+      </button>
+      <button
+        onClick={() => {
+          onRegenerate(targetImg);
+          // Don't close immediately so they can see the loading state if we had one, but we disabled it
+        }}
+        disabled={isRegenerating}
+        className="px-2 py-1 text-[11px] font-medium rounded hover:bg-surface-hover text-text-secondary transition-colors disabled:opacity-50"
+      >
+        {isRegenerating ? "Regenerating..." : "Regenerate"}
+      </button>
+      <button
+        onClick={() => {
+          onRemove(targetImg);
+          setTargetImg(null);
+        }}
+        disabled={isRegenerating}
+        className="px-2 py-1 text-[11px] font-medium rounded hover:bg-surface-hover text-rose-500 transition-colors disabled:opacity-50"
+      >
+        Remove
+      </button>
+    </div>
+  );
+}
+
 function BlogEditAiFixOverlay({
   active,
   getRoots,
@@ -261,7 +356,6 @@ export default function BlogViewerPage() {
   const [loading, setLoading]             = useState(true);
   const [downloading, setDownloading]     = useState<ExportFormat | null>(null);
   const [regenerating, setRegenerating]   = useState(false);
-  const [wordCount, setWordCount]         = useState(2500);
   const [copied, setCopied]               = useState(false);
   const [savingStatus, setSavingStatus]   = useState(false);
   const [statusError, setStatusError]     = useState("");
@@ -281,6 +375,70 @@ export default function BlogViewerPage() {
 
   const [editSessionKey, setEditSessionKey] = useState(0);
   const [aiRewriter, setAiRewriter] = useState<{ open: boolean; text: string }>({ open: false, text: "" });
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [editingImage, setEditingImage] = useState<HTMLImageElement | null>(null);
+  const [regeneratingImage, setRegeneratingImage] = useState(false);
+
+  const handleImageUpload = (img: HTMLImageElement) => {
+    setEditingImage(img);
+    fileInputRef.current?.click();
+  };
+
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editingImage) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      if (base64) {
+        editingImage.src = base64;
+      }
+    };
+    reader.readAsDataURL(file);
+    
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    setEditingImage(null);
+  };
+
+  const handleImageRegenerate = async (img: HTMLImageElement) => {
+    if (!blog) return;
+    setRegeneratingImage(true);
+    try {
+      const res = await blogsApi.regenerateImage(blog.id, {
+        imageAlt: img.alt,
+        contextBefore: "", // We could extract context from DOM if needed
+        contextAfter: "",
+      });
+      if (res.success && res.data) {
+        img.src = res.data.url;
+        img.alt = res.data.alt;
+        const nextSibling = img.nextElementSibling;
+        if (nextSibling && nextSibling.tagName === "SPAN") {
+          nextSibling.textContent = res.data.alt;
+        }
+      } else {
+        setEditError(res.error ?? "Failed to regenerate image");
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to regenerate image";
+      setEditError(message);
+    } finally {
+      setRegeneratingImage(false);
+    }
+  };
+
+  const handleImageRemove = (img: HTMLImageElement) => {
+    const parent = img.parentElement;
+    if (parent && parent.tagName === "SPAN" && parent.classList.contains("overflow-hidden")) {
+      parent.remove();
+    } else {
+      img.remove();
+    }
+  };
 
   const getEditRoots = useCallback(() => [titleEditorRef.current, descEditorRef.current, editorRef.current], []);
 
@@ -328,9 +486,19 @@ export default function BlogViewerPage() {
   const handleRegenerate = async () => {
     if (!blog) return;
     setRegenerating(true);
-    const res = await blogsApi.generate({ entryId: blog.entry_id, wordCount });
-    if (res.success && res.data) setBlog(res.data);
-    setRegenerating(false);
+    setEditError("");
+    try {
+      const res = await blogsApi.generate({ entryId: blog.entry_id, wordCount: blog.word_count || 2500 });
+      if (res.success && res.data) {
+        setBlog(res.data);
+      } else {
+        setEditError(res.error || "Failed to generate blog.");
+      }
+    } catch (e: unknown) {
+      setEditError(e instanceof Error ? e.message : "Failed to generate blog.");
+    } finally {
+      setRegenerating(false);
+    }
   };
 
   const handleCopy = async () => {
@@ -394,6 +562,19 @@ export default function BlogViewerPage() {
     const html = editorRef.current?.innerHTML ?? "";
     const TurndownService = (await import("turndown")).default;
     const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
+    
+    // Custom rule to handle our image wrappers so we don't get duplicate alt text
+    td.addRule('img-wrapper', {
+      filter: function (node) {
+        return node.nodeName === 'SPAN' && node.classList.contains('overflow-hidden') && node.querySelector('img') !== null;
+      },
+      replacement: function (content, node) {
+        const img = node.querySelector('img');
+        if (!img) return '';
+        return `\n\n![${img.getAttribute('alt') || ''}](${img.getAttribute('src') || ''})\n\n`;
+      }
+    });
+
     const bodyMd = td.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
     const title = titleEditorRef.current?.textContent?.trim() || blog.title;
     const metaDescription = descEditorRef.current?.textContent?.replace(/\s+/g, " ").trim() || "";
@@ -748,31 +929,19 @@ export default function BlogViewerPage() {
               </div>
             </div>
 
-            {/* ── Regenerate ───────────────────────────────────────────── */}
+            {/* ── Generate ───────────────────────────────────────────── */}
             <Divider />
             <div className="px-4 py-4">
-              <SLabel>Regenerate</SLabel>
-              <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">Re-runs full research + rewrite with Gemini AI</p>
-              <div className="relative mb-3">
-                <select
-                  value={wordCount}
-                  onChange={e => setWordCount(+e.target.value)}
-                  className="w-full rounded-[6px] px-3 py-2 text-[12px] font-medium outline-none appearance-none pr-7 transition-all"
-                  style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
-                >
-                  {WORD_COUNT_OPTIONS.map(opt => <option key={opt} value={opt}>{opt.toLocaleString()} words</option>)}
-                </select>
-                <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                </svg>
-              </div>
+              <SLabel>Generate</SLabel>
+              <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">Runs full research + generation with Gemini AI</p>
               <button
                 onClick={handleRegenerate} disabled={regenerating}
                 className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
                 style={{ background: V.txt, color: V.bg }}
               >
-                {regenerating ? <><SpinIcon />&nbsp;Researching…</> : "Regenerate with Research"}
+                {regenerating ? <><SpinIcon />&nbsp;Generating…</> : "Generate blog"}
               </button>
+              {editError && <p className="mt-2 text-[11px] text-brand-coral">{editError}</p>}
             </div>
 
           </div>
@@ -788,6 +957,23 @@ export default function BlogViewerPage() {
           selectionSnapshotRef.current = { range };
           setAiRewriter({ open: true, text });
         }}
+      />
+
+      <BlogImageEditOverlay
+        active={editMode}
+        bodyRef={editorRef}
+        onUpload={handleImageUpload}
+        onRegenerate={handleImageRegenerate}
+        onRemove={handleImageRemove}
+        isRegenerating={regeneratingImage}
+      />
+
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept="image/*"
+        onChange={handleImageFileChange}
       />
 
       <BlogAiRewriterModal

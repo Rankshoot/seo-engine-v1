@@ -3,7 +3,12 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { criticalityFromScore } from '@/lib/audit-criticality';
-import { auditBlogUrl, type BlogAuditAnalysis, type BlogAuditRecord } from '@/lib/content-audit';
+import {
+  auditBlogUrl,
+  type BlogAuditAnalysis,
+  type BlogAuditRecord,
+  type ContentAuditVendorTrace,
+} from '@/lib/content-audit';
 import { fetchBlogUrls, fetchSitemapUrls, isContentUrl, BLOG_URL_INVENTORY_MAX } from '@/lib/jina';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
@@ -20,6 +25,15 @@ export interface AuditCoverage {
   avg_health: number;
   /** Count of audits currently flagged high severity. */
   high_severity: number;
+  /** Row counts by Content Health criticality (full project, not just the current page). */
+  severity_counts: { high: number; medium: number; low: number };
+}
+
+/** `page_status` for stats — read from JSON so we never require the denormalized DB column. */
+function pageStatusFromStoredAnalysis(analysis: unknown): BlogAuditAnalysis['page_status'] {
+  const a = analysis as { page_status?: unknown } | null | undefined;
+  const ps = a?.page_status;
+  return ps === 'broken' || ps === 'redirected' || ps === 'empty' || ps === 'ok' ? ps : 'ok';
 }
 
 async function ensureOwner(projectId: string) {
@@ -45,11 +59,25 @@ async function fetchCachedBrief(projectId: string): Promise<BusinessBrief | null
   return (data?.brief as BusinessBrief | undefined) ?? null;
 }
 
-export async function getBlogAudits(projectId: string): Promise<{
+export type GetBlogAuditsOpts = {
+  /** When true, only coverage stats — no row payloads (fast for sidebar stats). */
+  summaryOnly?: boolean;
+  limit?: number;
+  offset?: number;
+};
+
+export async function getBlogAudits(
+  projectId: string,
+  opts?: GetBlogAuditsOpts
+): Promise<{
   success: boolean;
   error?: string;
   data: PersistedBlogAudit[];
   coverage: AuditCoverage;
+  total: number;
+  hasMore: boolean;
+  limit: number;
+  offset: number;
 }> {
   const { project, error } = await ensureOwner(projectId);
   if (error || !project) {
@@ -58,6 +86,10 @@ export async function getBlogAudits(projectId: string): Promise<{
       error: error ?? 'Project not found',
       data: [],
       coverage: emptyCoverage(),
+      total: 0,
+      hasMore: false,
+      limit: 0,
+      offset: 0,
     };
   }
 
@@ -71,33 +103,146 @@ export async function getBlogAudits(projectId: string): Promise<{
     // keep brief-derived count
   }
 
+  const { count: totalCount, error: countErr } = await supabaseAdmin
+    .from('blog_audits')
+    .select('*', { count: 'exact', head: true })
+    .eq('project_id', projectId);
+
+  if (countErr) {
+    return {
+      success: false,
+      error: countErr.message,
+      data: [],
+      coverage: { ...emptyCoverage(), blogs_found },
+      total: 0,
+      hasMore: false,
+      limit: 0,
+      offset: 0,
+    };
+  }
+
+  const total = totalCount ?? 0;
+
+  const { data: statRows, error: statErr } = await supabaseAdmin
+    .from('blog_audits')
+    .select('health_score, updated_at, analysis')
+    .eq('project_id', projectId);
+
+  if (statErr) {
+    return {
+      success: false,
+      error: statErr.message,
+      data: [],
+      coverage: { ...emptyCoverage(), blogs_found },
+      total,
+      hasMore: false,
+      limit: 0,
+      offset: 0,
+    };
+  }
+
+  const stats = statRows ?? [];
+
+  let last_updated_at: string | null = null;
+  for (const r of stats) {
+    const u = r.updated_at as string | null;
+    if (u && (!last_updated_at || u > last_updated_at)) last_updated_at = u;
+  }
+
+  const severity_counts = { high: 0, medium: 0, low: 0 };
+  for (const r of stats) {
+    const c = criticalityFromScore(r.health_score as number, pageStatusFromStoredAnalysis(r.analysis));
+    severity_counts[c]++;
+  }
+
+  const coverage: AuditCoverage = {
+    blogs_found,
+    blogs_audited: stats.length,
+    last_updated_at,
+    avg_health: stats.length
+      ? Math.round(stats.reduce((s, r) => s + (r.health_score as number), 0) / stats.length)
+      : 0,
+    high_severity: severity_counts.high,
+    severity_counts,
+  };
+
+  if (opts?.summaryOnly) {
+    return {
+      success: true,
+      data: [],
+      coverage,
+      total,
+      hasMore: false,
+      limit: 0,
+      offset: 0,
+    };
+  }
+
+  const limit = opts?.limit;
+  const offset = opts?.offset ?? 0;
+
+  if (limit == null) {
+    const { data, error: dbErr } = await supabaseAdmin
+      .from('blog_audits')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('health_score', { ascending: true });
+
+    if (dbErr) {
+      return {
+        success: false,
+        error: dbErr.message,
+        data: [],
+        coverage,
+        total,
+        hasMore: false,
+        limit: 0,
+        offset: 0,
+      };
+    }
+
+    const rows = (data ?? []).map(rowToRecord);
+    return {
+      success: true,
+      data: rows,
+      coverage,
+      total,
+      hasMore: false,
+      limit: rows.length,
+      offset: 0,
+    };
+  }
+
   const { data, error: dbErr } = await supabaseAdmin
     .from('blog_audits')
     .select('*')
     .eq('project_id', projectId)
-    .order('health_score', { ascending: true });
+    .order('health_score', { ascending: true })
+    .range(offset, offset + limit - 1);
 
   if (dbErr) {
     return {
       success: false,
       error: dbErr.message,
       data: [],
-      coverage: { ...emptyCoverage(), blogs_found },
+      coverage,
+      total,
+      hasMore: false,
+      limit,
+      offset,
     };
   }
 
   const rows = (data ?? []).map(rowToRecord);
-  const coverage: AuditCoverage = {
-    blogs_found,
-    blogs_audited: rows.length,
-    last_updated_at: rows[0]?.updated_at ?? null,
-    avg_health: rows.length
-      ? Math.round(rows.reduce((s, r) => s + r.health_score, 0) / rows.length)
-      : 0,
-    high_severity: rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === 'high').length,
+  return {
+    success: true,
+    data: rows,
+    coverage,
+    total,
+    hasMore: offset + rows.length < total,
+    limit,
+    offset,
   };
-
-  return { success: true, data: rows, coverage };
 }
 
 export interface AuditRunOpts {
@@ -117,6 +262,8 @@ export async function auditExistingBlogs(
   skipped: number;
   failed: number;
   coverage: AuditCoverage;
+  /** Paid-vendor steps for this run — log in the browser console when debugging. */
+  vendorTrace?: Array<ContentAuditVendorTrace & { url: string }>;
 }> {
   const { project, error } = await ensureOwner(projectId);
   if (error || !project) {
@@ -198,6 +345,7 @@ export async function auditExistingBlogs(
 
   let audited = 0;
   let failed = 0;
+  const vendorTrace: Array<ContentAuditVendorTrace & { url: string }> = [];
 
   // Audit with small concurrency so we don't hammer Jina/Gemini all at once.
   const CONCURRENCY = 3;
@@ -209,32 +357,46 @@ export async function auditExistingBlogs(
     const results = await Promise.all(
       batch.map(url =>
         auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language }).catch(e => ({
-          url,
-          title: url,
-          word_count: 0,
-          scraped_chars: 0,
-          health_score: 0,
-          severity: 'high' as const,
-          primary_keyword: '',
-          analysis: {
-            summary: `Audit crashed: ${e instanceof Error ? e.message : String(e)}`,
+          record: {
+            url,
+            title: url,
+            word_count: 0,
+            scraped_chars: 0,
+            health_score: 0,
+            severity: 'high' as const,
             primary_keyword: '',
-            secondary_keywords: [],
-            issues: [],
-            content_gaps: [],
-            internal_link_opportunities: [],
-            suggested_funnel_stage: '' as const,
-            llm_quality_score: undefined,
-            keyword_demand: null,
-            plain_language_verdict: '',
-            page_status: 'empty' as const,
-            quality_rubric: [],
+            analysis: {
+              summary: `Audit crashed: ${e instanceof Error ? e.message : String(e)}`,
+              primary_keyword: '',
+              secondary_keywords: [],
+              issues: [],
+              content_gaps: [],
+              internal_link_opportunities: [],
+              suggested_funnel_stage: '' as const,
+              llm_quality_score: undefined,
+              keyword_demand: null,
+              plain_language_verdict: '',
+              page_status: 'empty' as const,
+              quality_rubric: [],
+            },
+            error: e instanceof Error ? e.message : String(e),
           },
-          error: e instanceof Error ? e.message : String(e),
+          trace: [
+            {
+              provider: 'gemini' as const,
+              step: 'auditBlogUrl',
+              ok: false,
+              detail: e instanceof Error ? e.message : String(e),
+            },
+          ],
         }))
       )
     );
-    for (const r of results) {
+    for (const outcome of results) {
+      const r = outcome.record;
+      for (const t of outcome.trace) {
+        vendorTrace.push({ ...t, url: r.url });
+      }
       const row = {
         project_id: projectId,
         url: r.url,
@@ -256,13 +418,14 @@ export async function auditExistingBlogs(
     }
   }
 
-  const after = await getBlogAudits(projectId);
+  const after = await getBlogAudits(projectId, { summaryOnly: true });
   return {
     success: true,
     audited,
     skipped,
     failed,
     coverage: after.coverage,
+    vendorTrace,
   };
 }
 
@@ -439,7 +602,7 @@ export async function auditSelectedUrls(
   // Run sequentially to limit external API pressure.
   for (const url of urls) {
     try {
-      const r = await auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language });
+      const { record: r } = await auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language });
       const row = {
         project_id: projectId,
         url: r.url,
@@ -477,6 +640,7 @@ function emptyCoverage(): AuditCoverage {
     last_updated_at: null,
     avg_health: 0,
     high_severity: 0,
+    severity_counts: { high: 0, medium: 0, low: 0 },
   };
 }
 
@@ -488,12 +652,37 @@ interface AuditRow {
   severity: string | null;
   primary_keyword: string | null;
   analysis: Record<string, unknown> | null;
+  page_status?: string | null;
   scraped_chars: number | null;
   error: string | null;
   updated_at: string | null;
 }
 
 function rowToRecord(row: AuditRow): PersistedBlogAudit {
+  const rawAnalysis = (row.analysis as unknown as BlogAuditAnalysis) ?? {
+    summary: '',
+    primary_keyword: '',
+    secondary_keywords: [],
+    issues: [],
+    content_gaps: [],
+    internal_link_opportunities: [],
+    suggested_funnel_stage: '',
+    keyword_demand: null,
+    plain_language_verdict: '',
+    page_status: 'ok',
+    quality_rubric: [],
+  };
+  const psRaw = row.page_status as string | null | undefined;
+  const page_status: BlogAuditAnalysis['page_status'] =
+    rawAnalysis.page_status === 'broken' ||
+    rawAnalysis.page_status === 'redirected' ||
+    rawAnalysis.page_status === 'empty' ||
+    rawAnalysis.page_status === 'ok'
+      ? rawAnalysis.page_status
+      : psRaw === 'broken' || psRaw === 'redirected' || psRaw === 'empty' || psRaw === 'ok'
+        ? psRaw
+        : 'ok';
+
   return {
     url: row.url,
     title: row.title ?? '',
@@ -505,19 +694,7 @@ function rowToRecord(row: AuditRow): PersistedBlogAudit {
         ? row.severity
         : 'low',
     primary_keyword: row.primary_keyword ?? '',
-    analysis: (row.analysis as unknown as BlogAuditAnalysis) ?? {
-      summary: '',
-      primary_keyword: '',
-      secondary_keywords: [],
-      issues: [],
-      content_gaps: [],
-      internal_link_opportunities: [],
-      suggested_funnel_stage: '',
-      keyword_demand: null,
-      plain_language_verdict: '',
-      page_status: 'ok',
-      quality_rubric: [],
-    },
+    analysis: { ...rawAnalysis, page_status },
     error: row.error || undefined,
     updated_at: row.updated_at ?? undefined,
   };

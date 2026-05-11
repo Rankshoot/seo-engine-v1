@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS blog_audits (
   severity TEXT DEFAULT 'low',
   primary_keyword TEXT DEFAULT '',
   analysis JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- Mirrors analysis.page_status for lightweight coverage queries.
+  page_status TEXT NOT NULL DEFAULT 'ok',
   scraped_chars INTEGER DEFAULT 0,
   error TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW(),

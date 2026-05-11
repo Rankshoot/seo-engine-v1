@@ -14,8 +14,10 @@
  *      `fix`. We treat the blog standalone — we do NOT compare it to the
  *      business brief (per product feedback) except for the light touch of
  *      suggesting internal links to peer URLs.
- *   5. (Optional) `fetchKeywordVitals` (Ahrefs-first in this codebase) for the
- *      primary keyword so demand can surface on the card.
+ *   5. (Optional) `fetchKeywordVitals` — Ahrefs overview when configured, else
+ *      DataForSEO `keyword_overview/live` — for the primary keyword on the card.
+ *      Optional Ahrefs URL metrics (organic keywords, anchors, internal inlinks,
+ *      crawled-pages precheck) run only when `AHREFS_API_KEY` is set — see `ahrefs.ts`.
  *   6. Compute a deterministic 0–100 health score blending structural signals
  *      + LLM quality score. Persist everything in `blog_audits`.
  */
@@ -29,6 +31,7 @@ import {
   ahrefsCrawledPages,
   ahrefsPagesByInternalLinks,
   ahrefsUrlOrganicKeywords,
+  isAhrefsConfigured,
   type AhrefsUrlKeyword,
 } from './ahrefs';
 
@@ -90,6 +93,19 @@ export interface BlogAuditAnalysis {
    * Computed server-side from the live scrape — not from the LLM.
    */
   quality_rubric?: QualityRubricRow[];
+  /** Present when Ahrefs returned data for this URL (requires AHREFS_API_KEY). */
+  ahrefs_signals?: {
+    url_rating: number | null;
+    http_code: number | null;
+    organic_keywords_top: Array<{
+      keyword: string;
+      position: number | null;
+      volume: number;
+      traffic: number | null;
+    }>;
+    top_anchors: Array<{ anchor: string; refdomains: number }>;
+    inbound_internal_links_to_url: number | null;
+  } | null;
 }
 
 /** One row in the Content Health "rules" checklist. */
@@ -122,6 +138,20 @@ export interface AuditBlogInput {
   language?: string;
 }
 
+/** Paid / vendor steps inside `auditBlogUrl` — returned to the client for debugging. */
+export type ContentAuditVendorTrace = {
+  provider: 'ahrefs' | 'dataforseo' | 'gemini' | 'jina';
+  step: string;
+  ok: boolean;
+  detail?: string;
+  ms?: number;
+};
+
+export type AuditBlogUrlResult = {
+  record: BlogAuditRecord;
+  trace: ContentAuditVendorTrace[];
+};
+
 interface StructuralSignals {
   title: string;
   word_count: number;
@@ -141,36 +171,69 @@ interface StructuralSignals {
 // ────────────────────────────────────────────────────────────────────────────
 // Public entry point — audit ONE URL end-to-end.
 
-export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditRecord> {
+export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlResult> {
+  const trace: ContentAuditVendorTrace[] = [];
   const { url, brief, sitePeerUrls, region = 'us', language = 'en' } = input;
 
   // 1. Pre-flight — dead URLs skip scrape + LLM spend.
+  const ahrefsT0 = Date.now();
   const ahrefsCrawl = await ahrefsCrawledPages(url);
+  trace.push({
+    provider: 'ahrefs',
+    step: 'site-explorer/crawled-pages',
+    // Optional vendor: skip is success — Jina preflight still runs when Ahrefs has no row.
+    ok: true,
+    detail: isAhrefsConfigured() ? (ahrefsCrawl ? 'ok' : 'no-row') : 'skipped — AHREFS_API_KEY unset',
+    ms: Date.now() - ahrefsT0,
+  });
+
   if (ahrefsCrawl) {
     if (ahrefsCrawl.http_code && (ahrefsCrawl.http_code === 404 || ahrefsCrawl.http_code === 410)) {
-      return brokenUrlRecord(url, `Site check shows HTTP ${ahrefsCrawl.http_code}.`);
+      return { record: brokenUrlRecord(url, `Site check shows HTTP ${ahrefsCrawl.http_code}.`), trace };
     }
     if (ahrefsCrawl.redirects_to_target && ahrefsCrawl.redirects_to_target > 0) {
-      return redirectToHomepageRecord(url, url);
+      return { record: redirectToHomepageRecord(url, url), trace };
     }
   } else {
     const pre = await preflight(url);
-    if (pre.status === 'broken') return brokenUrlRecord(url, pre.reason);
+    if (pre.status === 'broken') return { record: brokenUrlRecord(url, pre.reason), trace };
     if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
-      return redirectToHomepageRecord(url, pre.finalUrl);
+      return { record: redirectToHomepageRecord(url, pre.finalUrl), trace };
     }
   }
 
   // 2. Live body + Ahrefs context (ranking + inbound links + authority).
-  const [page, urlKeywords, anchors, internalLinksInbound] = await Promise.all([
-    hybridReadUrl(url, { timeoutMs: 25_000 }),
+  const scrapeT0 = Date.now();
+  const page = await hybridReadUrl(url, { timeoutMs: 25_000 });
+  trace.push({
+    provider: 'jina',
+    step: 'hybrid-read-url',
+    ok: page.ok,
+    detail: page.ok ? `${page.markdown.length} chars` : page.error,
+    ms: Date.now() - scrapeT0,
+  });
+
+  const ahrefsBatchT0 = Date.now();
+  const [urlKeywords, anchors, internalLinksInbound] = await Promise.all([
     ahrefsUrlOrganicKeywords(url, region, 40),
     ahrefsAnchors(url, 25),
     ahrefsPagesByInternalLinks(url, 1),
   ]);
+  trace.push({
+    provider: 'ahrefs',
+    step: 'organic-keywords+anchors+internal-inbound',
+    ok: true,
+    detail: isAhrefsConfigured()
+      ? `keywords=${urlKeywords.length} anchors=${anchors.length}`
+      : 'skipped — AHREFS_API_KEY unset (optional)',
+    ms: Date.now() - ahrefsBatchT0,
+  });
 
   if (!page.ok || page.markdown.trim().length < 160) {
-    return thinOrUnreadableRecord(url, page.error ?? 'Could not read enough text from this page.');
+    return {
+      record: thinOrUnreadableRecord(url, page.error ?? 'Could not read enough text from this page.'),
+      trace,
+    };
   }
 
   const signals = extractSignals(page);
@@ -179,7 +242,40 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
 
   const inboundPeerLinks = internalLinksInbound[0]?.links_to_target ?? 0;
 
-  let analysis = await diagnoseWithGemini({ url, page, signals, brief, sitePeerUrls });
+  const ahrefs_signals: NonNullable<BlogAuditAnalysis['ahrefs_signals']> = {
+    url_rating: ahrefsCrawl?.url_rating ?? null,
+    http_code: ahrefsCrawl?.http_code ?? null,
+    organic_keywords_top: urlKeywords.slice(0, 8).map(k => ({
+      keyword: k.keyword,
+      position: k.position ?? null,
+      volume: k.volume,
+      traffic: k.traffic ?? null,
+    })),
+    top_anchors: anchors.slice(0, 8).map(a => ({ anchor: a.anchor, refdomains: a.refdomains })),
+    inbound_internal_links_to_url: inboundPeerLinks,
+  };
+
+  let analysis = await diagnoseWithGemini({
+    url,
+    page,
+    signals,
+    brief,
+    sitePeerUrls,
+    ahrefs_signals: isAhrefsConfigured() ? ahrefs_signals : null,
+  });
+  trace.push({
+    provider: 'gemini',
+    step: 'diagnose-audit',
+    ok: !(
+      analysis.issues.length === 0 &&
+      (analysis.summary.startsWith('GEMINI_API_KEY') || analysis.summary.startsWith('LLM diagnosis failed'))
+    ),
+    detail: analysis.summary.startsWith('GEMINI_API_KEY')
+      ? 'skipped — GEMINI_API_KEY unset'
+      : analysis.summary.startsWith('LLM diagnosis failed')
+        ? analysis.summary.slice(0, 120)
+        : 'ok',
+  });
 
   const geminiSkipped =
     analysis.issues.length === 0 &&
@@ -191,7 +287,10 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
       ...ah,
       plain_language_verdict: analysis.summary,
       page_status: 'ok',
+      ahrefs_signals: isAhrefsConfigured() ? ahrefs_signals : null,
     };
+  } else {
+    analysis = { ...analysis, ahrefs_signals: isAhrefsConfigured() ? ahrefs_signals : null };
   }
 
   const ahrefsPrimary = urlKeywords[0]?.keyword?.trim().toLowerCase() ?? '';
@@ -200,7 +299,27 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
   }
 
   const kwLookup = analysis.primary_keyword.trim();
-  const vitalsMap = await fetchKeywordVitals(kwLookup ? [kwLookup] : [], region, language);
+  const dfsT0 = Date.now();
+  let vitalsMap: Map<string, KeywordVitals>;
+  try {
+    vitalsMap = await fetchKeywordVitals(kwLookup ? [kwLookup] : [], region, language);
+    trace.push({
+      provider: 'dataforseo',
+      step: 'keyword_overview/live',
+      ok: true,
+      detail: kwLookup ? `lookup="${kwLookup}"` : 'no primary keyword',
+      ms: Date.now() - dfsT0,
+    });
+  } catch (e) {
+    trace.push({
+      provider: 'dataforseo',
+      step: 'keyword_overview/live',
+      ok: false,
+      detail: e instanceof Error ? e.message : String(e),
+      ms: Date.now() - dfsT0,
+    });
+    vitalsMap = new Map();
+  }
   const vitals = kwLookup ? vitalsMap.get(kwLookup.toLowerCase()) : undefined;
   const demand = vitalsToKeywordDemand(vitals);
 
@@ -233,20 +352,24 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<BlogAuditReco
     ...analysis,
     keyword_demand: demand,
     quality_rubric,
-    plain_language_verdict: analysis.plain_language_verdict || synthesizeVerdict(signals, { ...analysis, keyword_demand: demand }),
+    plain_language_verdict:
+      analysis.plain_language_verdict || synthesizeVerdict(signals, { ...analysis, keyword_demand: demand }),
   };
 
   const { healthScore, severity } = computeHealthScore(signals, analysis);
 
   return {
-    url,
-    title: signals.title || analysis.primary_keyword || url,
-    word_count: signals.word_count,
-    scraped_chars: page.markdown.length,
-    health_score: healthScore,
-    severity,
-    primary_keyword: analysis.primary_keyword,
-    analysis: { ...analysis, page_status: 'ok' },
+    record: {
+      url,
+      title: signals.title || analysis.primary_keyword || url,
+      word_count: signals.word_count,
+      scraped_chars: page.markdown.length,
+      health_score: healthScore,
+      severity,
+      primary_keyword: analysis.primary_keyword,
+      analysis: { ...analysis, page_status: 'ok' },
+    },
+    trace,
   };
 }
 
@@ -682,18 +805,36 @@ interface DiagnoseInput {
   signals: StructuralSignals;
   brief: BusinessBrief | null;
   sitePeerUrls: string[];
+  ahrefs_signals: BlogAuditAnalysis['ahrefs_signals'];
 }
 
 async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalysis> {
-  const { url, page, signals, brief, sitePeerUrls } = input;
+  const { url, page, signals, brief, sitePeerUrls, ahrefs_signals } = input;
 
   const geminiKey = process.env.GEMINI_API_KEY?.trim();
   if (!geminiKey) {
     return emptyAnalysis('GEMINI_API_KEY missing; skipping LLM diagnosis.');
   }
 
-  const head = page.markdown.slice(0, 12_000);
+  const head = page.markdown.slice(0, 18_000);
+  const tail =
+    page.markdown.length > 28_000 ? page.markdown.slice(-Math.min(8_000, page.markdown.length)) : '';
   const peerSample = sitePeerUrls.filter(u => u !== url).slice(0, 30);
+
+  const ahrefsBlock =
+    ahrefs_signals && ahrefs_signals.organic_keywords_top.length
+      ? `AHREFS URL SIGNALS (trust these counts — do not invent backlinks):
+- URL rating (Ahrefs): ${ahrefs_signals.url_rating ?? 'n/a'}
+- HTTP code (last crawl): ${ahrefs_signals.http_code ?? 'n/a'}
+- Top keywords this URL ranks for: ${ahrefs_signals.organic_keywords_top
+          .map(k => `"${k.keyword}" pos~${k.position ?? '?'} vol~${k.volume}`)
+          .join('; ')}
+- Top inbound anchor texts (sample): ${ahrefs_signals.top_anchors.map(a => `"${a.anchor}" (${a.refdomains} refdomains)`).join('; ') || 'n/a'}
+- Inbound internal links from this site to this URL: ${ahrefs_signals.inbound_internal_links_to_url ?? 0}
+`
+      : ahrefs_signals
+        ? `AHREFS: URL rating ${ahrefs_signals.url_rating ?? 'n/a'}; no ranking keywords returned for this exact URL.`
+        : '(Ahrefs not configured — no off-page signals.)';
 
   // We keep business context MINIMAL — only the company name / niche — because
   // the audit is meant to diagnose THIS blog on its own merits. We do not want
@@ -726,15 +867,18 @@ STRUCTURAL SIGNALS (already computed, trust these, do not recount):
 - answer_first_intro_likely: ${signals.answer_first}
 - schema_ld_hint_found: ${signals.has_schema_hints}
 
+${ahrefsBlock}
+
 ${briefContextLite}
 
 PEER BLOG URLS ON THE SAME SITE (use ONLY these verbatim when suggesting internal_link_opportunities — never invent URLs):
 ${peerSample.map(u => `- ${u}`).join('\n') || '(none)'}
 
-BLOG POST BODY (first ~12k chars of markdown):
+BLOG POST BODY (first ~18k chars of markdown, plus tail excerpt for long pages):
 ---
 ${head}
 ---
+${tail ? `\n--- TAIL EXCERPT (last ~${Math.round(tail.length / 1000)}k chars) ---\n${tail}\n` : ''}
 
 Produce ONLY this JSON (no prose, no markdown fences, no commentary):
 

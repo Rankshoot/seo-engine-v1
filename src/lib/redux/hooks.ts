@@ -60,6 +60,10 @@ export function selectAiLongTailKeywordIds(state: RootState, projectId: string) 
   return state.keywordWorkspace.projects[projectId]?.aiAssistant?.longTailKeywordIds ?? [];
 }
 
+export function selectContentHealthAuditWorkspace(state: RootState, projectId: string) {
+  return state.contentHealthAudit.projects[projectId] ?? null;
+}
+
 export type ChatMsgToolCall = {
   id: string;
   params: Record<string, unknown>;

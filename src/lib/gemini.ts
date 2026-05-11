@@ -532,9 +532,13 @@ export async function generateBlogPost(
 
   // Company grounding from the Business Brief so the draft sounds like this
   // specific company rather than a generic explainer.
+  const writerCap =
+    writerNotes && writerNotes.includes("CONTENT HEALTH AUDIT")
+      ? 12_000
+      : 2500;
   const writerNotesBlock =
     writerNotes && writerNotes.length > 0
-      ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, 2500)}\n`
+      ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, writerCap)}\n`
       : "";
 
   const briefBlock = brief

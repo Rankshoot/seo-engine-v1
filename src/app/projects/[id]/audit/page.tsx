@@ -1,21 +1,31 @@
 "use client";
 
-import { useMemo, useState, useCallback, useEffect } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query";
-import type { AuditCoverage, PersistedBlogAudit, SitemapPage } from "@/app/actions/audit-actions";
+import type { AuditCoverage, PersistedBlogAudit } from "@/app/actions/audit-actions";
 import { auditsApi } from "@/frontend/api/audits";
 import { calendarApi } from "@/frontend/api/calendar";
 import { AuditDetailModal } from "@/components/AuditDetailModal";
-import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
 import { criticalityFromScore } from "@/lib/audit-criticality";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
-import type { KeywordStatus } from "@/lib/types";
-
-type AuditsResponse = Awaited<ReturnType<typeof auditsApi.list>>;
+import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
+import {
+  useAppDispatch,
+  useAppSelector,
+  selectContentHealthAuditWorkspace,
+} from "@/lib/redux/hooks";
+import {
+  contentHealthAuditFilterSet,
+  contentHealthAuditLoadFailed,
+  contentHealthAuditLoadStarted,
+  contentHealthAuditLoadSuccess,
+  contentHealthAuditReset,
+  type ContentHealthSeverityFilter,
+} from "@/lib/redux/content-health-audit-slice";
 
 const EMPTY_COVERAGE: AuditCoverage = {
   blogs_found: 0,
@@ -23,9 +33,8 @@ const EMPTY_COVERAGE: AuditCoverage = {
   last_updated_at: null,
   avg_health: 0,
   high_severity: 0,
+  severity_counts: { high: 0, medium: 0, low: 0 },
 };
-
-type SeverityFilter = "all" | "high" | "medium" | "low";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Visual lookup tables — single source of truth for colors + tooltips.
@@ -88,18 +97,18 @@ function scoreBar(score: number): string {
 export default function ContentHealthPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-
-  const AUDITS_KEY = qk.audits(projectId);
+  const dispatch = useAppDispatch();
+  const chStore = useAppSelector(s => selectContentHealthAuditWorkspace(s, projectId));
 
   const [running, setRunning] = useState(false);
   const [runSummary, setRunSummary] = useState<string>("");
   const [error, setError] = useState<string>("");
-  const [filter, setFilter] = useState<SeverityFilter>("all");
   const [modalAudit, setModalAudit] = useState<PersistedBlogAudit | null>(null);
   const [calendarAddingUrl, setCalendarAddingUrl] = useState<string | null>(null);
   /** URLs we successfully queued (or already had) on the calendar this session — drives the schedule control without an extra round-trip. */
   const [calendarLinkedByUrl, setCalendarLinkedByUrl] = useState<Record<string, boolean>>({});
   const [dismissedAuditUrls, setDismissedAuditUrls] = useState<Set<string>>(() => new Set());
+  const loadSeq = useRef(0);
 
   useEffect(() => {
     setDismissedAuditUrls(loadDismissedAuditUrls(projectId));
@@ -125,73 +134,67 @@ export default function ContentHealthPage() {
     [persistDismissedAuditUrls]
   );
 
-  // ── Page discovery state ──────────────────────────────────────────────
-  const [discoverTab, setDiscoverTab] = useState<"discover" | "audited">("audited");
-  const [selectedBasePath, setSelectedBasePath] = useState<string>("");
-  const [manualUrl, setManualUrl] = useState("");
-  const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
-  const [auditingSelected, setAuditingSelected] = useState(false);
-  const [discoverError, setDiscoverError] = useState("");
-
-  const { data: pagesData, isLoading: pagesLoading, refetch: refetchPages } = useQuery({
-    queryKey: ["sitemap-pages", projectId, selectedBasePath] as const,
-    queryFn: () => auditsApi.sitemapPages(projectId, selectedBasePath || undefined),
-    enabled: discoverTab === "discover",
-    staleTime: 5 * 60_000,
-    gcTime: 30 * 60_000,
-  });
-  const sitemapPages: SitemapPage[] = pagesData?.success ? pagesData.pages : [];
-  const basePaths: string[] = pagesData?.basePaths ?? [];
-
-  const togglePageSelect = useCallback((url: string) => {
-    setSelectedUrls(prev => {
-      const next = new Set(prev);
-      if (next.has(url)) next.delete(url);
-      else if (next.size < 5) next.add(url);
-      return next;
-    });
-  }, []);
-
-  const handleAuditSelected = async () => {
-    const urls = [...selectedUrls];
-    if (manualUrl.trim() && /^https?:\/\//i.test(manualUrl.trim())) {
-      urls.push(manualUrl.trim());
-    }
-    if (!urls.length) return;
-    if (urls.length > 5) { setDiscoverError("Maximum 5 pages at once"); return; }
-
-    setAuditingSelected(true);
-    setDiscoverError("");
-    const res = await auditsApi.auditSelected(projectId, urls.slice(0, 5));
-    if (res.success) {
-      setRunSummary(`Audited ${res.audited} page(s)${res.failed ? `, ${res.failed} failed` : ""}.`);
-      setSelectedUrls(new Set());
-      setManualUrl("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: AUDITS_KEY }),
-        queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
-        refetchPages(),
-      ]);
-      setDiscoverTab("audited");
-    } else {
-      setDiscoverError(res.error ?? "Audit failed");
-    }
-    setAuditingSelected(false);
-  };
-
   const BATCH_SIZE = 10;
+  const AUDIT_PAGE_SIZE = 20;
 
-  const { data: auditData, isLoading: loading } = useQuery<AuditsResponse>({
-    queryKey: AUDITS_KEY,
-    queryFn: async () => {
-      const res = await auditsApi.list(projectId);
-      if (!res.success) throw new Error(res.error ?? "Failed to load audits");
-      return res;
-    },
-    enabled: !!projectId,
-  });
-  const rows: PersistedBlogAudit[] = auditData?.success ? auditData.data : [];
-  const coverage: AuditCoverage = auditData?.success ? auditData.coverage : EMPTY_COVERAGE;
+  const refetchFirstAuditPage = useCallback(async () => {
+    if (!projectId) return;
+    const seq = ++loadSeq.current;
+    dispatch(contentHealthAuditLoadStarted({ projectId, mode: "replace" }));
+    const res = await auditsApi.list(projectId, { limit: AUDIT_PAGE_SIZE, offset: 0 });
+    if (seq !== loadSeq.current) return;
+    if (!res.success) {
+      dispatch(contentHealthAuditLoadFailed({ projectId, error: res.error ?? "Failed to load audits" }));
+      return;
+    }
+    dispatch(
+      contentHealthAuditLoadSuccess({
+        projectId,
+        mode: "replace",
+        data: res.data,
+        coverage: res.coverage,
+        total: res.total,
+        hasMore: res.hasMore,
+        limit: res.limit,
+        offset: res.offset,
+      })
+    );
+  }, [dispatch, projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    dispatch(contentHealthAuditReset({ projectId }));
+    void refetchFirstAuditPage();
+  }, [projectId, dispatch, refetchFirstAuditPage]);
+
+  const loadMoreAudits = useCallback(async () => {
+    if (!projectId || !chStore) return;
+    if (chStore.loading !== "idle" || !chStore.hasMore) return;
+    dispatch(contentHealthAuditLoadStarted({ projectId, mode: "append" }));
+    const res = await auditsApi.list(projectId, { limit: chStore.pageSize, offset: chStore.offset });
+    if (!res.success) {
+      dispatch(contentHealthAuditLoadFailed({ projectId, error: res.error ?? "Failed to load more" }));
+      return;
+    }
+    dispatch(
+      contentHealthAuditLoadSuccess({
+        projectId,
+        mode: "append",
+        data: res.data,
+        coverage: res.coverage,
+        total: res.total,
+        hasMore: res.hasMore,
+        limit: res.limit,
+        offset: res.offset,
+      })
+    );
+  }, [projectId, chStore, dispatch]);
+
+  const filter: ContentHealthSeverityFilter = chStore?.filter ?? "all";
+  const rows: PersistedBlogAudit[] = chStore?.rows ?? [];
+  const loading = chStore?.loading === "loading";
+  const loadingMore = chStore?.loading === "loadingMore";
+  const coverage: AuditCoverage = chStore?.coverage ?? EMPTY_COVERAGE;
 
   const handleRun = async (force: boolean) => {
     setRunning(true);
@@ -205,10 +208,12 @@ export default function ContentHealthPage() {
           remaining ? ` · ${remaining} still pending` : ""
         }`
       );
-      // Refresh the audit list and the sidebar pending-audit badge.
+      if (res.vendorTrace?.length) {
+        console.log("[content-health] vendorTrace", res.vendorTrace);
+      }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: AUDITS_KEY }),
         queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+        refetchFirstAuditPage(),
       ]);
     } else {
       setError(res.error ?? "Audit failed");
@@ -220,16 +225,11 @@ export default function ContentHealthPage() {
     if (!confirm("Delete all audit results for this project? You can re-run the audit any time.")) return;
     setRunning(true);
     await auditsApi.clear(projectId);
-    // Optimistically clear rows and zero the audited count, but keep blogs_found.
-    queryClient.setQueryData<AuditsResponse>(AUDITS_KEY, prev => {
-      if (!prev?.success) return prev;
-      return {
-        ...prev,
-        data: [],
-        coverage: { ...prev.coverage, blogs_audited: 0, last_updated_at: null, avg_health: 0, high_severity: 0 },
-      };
-    });
-    queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+    dispatch(contentHealthAuditReset({ projectId }));
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+      refetchFirstAuditPage(),
+    ]);
     setRunning(false);
   };
 
@@ -279,36 +279,6 @@ export default function ContentHealthPage() {
     return bySeverity;
   }, [rows, filter]);
 
-  const handleAuditKeywordStatus = (row: PersistedBlogAudit, next: KeywordStatus) => {
-    const url = row.url;
-    const dismissed = dismissedAuditUrls.has(url);
-    const onCal = !!calendarLinkedByUrl[url];
-
-    if (next === "rejected") {
-      if (!dismissed) dismissAuditRow(url);
-      return;
-    }
-    if (next === "approved") {
-      if (!onCal) void handleAddToCalendar(row);
-      return;
-    }
-    if (dismissed) {
-      setDismissedAuditUrls(prev => {
-        const n = new Set(prev);
-        n.delete(url);
-        persistDismissedAuditUrls(n);
-        return n;
-      });
-    }
-    if (onCal) {
-      setCalendarLinkedByUrl(prev => {
-        const { [url]: _removed, ...rest } = prev;
-        return rest;
-      });
-      setRunSummary("Marked as pending. Open Calendar if you still need to delete a scheduled slot for this page.");
-    }
-  };
-
   const pendingAudits = Math.max(0, coverage.blogs_found - coverage.blogs_audited);
 
   return (
@@ -329,43 +299,12 @@ export default function ContentHealthPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => handleRun(false)}
-            disabled={running || (coverage.blogs_audited > 0 && pendingAudits === 0)}
-            className="inline-flex h-10 items-center gap-2 rounded-[32px] bg-brand-primary px-6 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
+          <ProjectNavLink
+            href={`/projects/${projectId}/keywords`}
+            className="inline-flex h-10 items-center gap-2 rounded-[32px] border border-border-subtle bg-surface-secondary px-6 text-[14px] font-medium text-text-secondary transition-colors hover:border-brand-action/35 hover:bg-surface-hover hover:text-text-primary"
           >
-            {running ? (
-              <>
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
-                Auditing…
-              </>
-            ) : coverage.blogs_audited === 0 ? (
-              `Audit first ${Math.min(BATCH_SIZE, Math.max(coverage.blogs_found, BATCH_SIZE))} blogs`
-            ) : pendingAudits === 0 ? (
-              "All audited"
-            ) : (
-              `Re-audit ${Math.min(BATCH_SIZE, pendingAudits)} more`
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleRun(true)}
-            disabled={running || coverage.blogs_audited === 0}
-            title="Re-run the audit on 10 already-audited blogs."
-            className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
-          >
-            Re-audit 10
-          </button>
-          <button
-            type="button"
-            onClick={handleClear}
-            disabled={running || rows.length === 0}
-            title="Delete all stored audit results for this project."
-            className="inline-flex h-10 items-center rounded-[30px] border border-brand-coral/20 bg-brand-coral/10 px-4 text-[13px] font-medium text-brand-coral hover:bg-brand-coral/20 transition-colors disabled:opacity-40"
-          >
-            Clear all
-          </button>
+            Discover keywords
+          </ProjectNavLink>
         </div>
       </div>
 
@@ -411,198 +350,6 @@ export default function ContentHealthPage() {
         />
       </div>
 
-      {/* ── Discover / Audited Tab Switcher ────────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex gap-1 rounded-[10px] border border-border-subtle bg-surface-secondary p-1 w-fit">
-          <button
-            type="button"
-            onClick={() => setDiscoverTab("audited")}
-            className={`rounded-[7px] px-5 py-2 text-[13px] font-medium transition-all duration-150 ${
-              discoverTab === "audited"
-                ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
-                : "text-text-tertiary hover:text-text-secondary"
-            }`}
-          >
-            Audited ({coverage.blogs_audited})
-          </button>
-          <button
-            type="button"
-            onClick={() => setDiscoverTab("discover")}
-            className={`rounded-[7px] px-5 py-2 text-[13px] font-medium transition-all duration-150 ${
-              discoverTab === "discover"
-                ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle/80"
-                : "text-text-tertiary hover:text-text-secondary"
-            }`}
-          >
-            Discover Pages
-          </button>
-        </div>
-        {discoverTab === "discover" && basePaths.length > 0 && (
-          <div className="flex items-center gap-2">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-text-tertiary">Filter</label>
-            <select
-              value={selectedBasePath}
-              onChange={e => { setSelectedBasePath(e.target.value); setSelectedUrls(new Set()); }}
-              className="rounded-[8px] border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[13px] text-text-primary outline-none"
-            >
-              <option value="">All pages ({pagesData?.total ?? 0})</option>
-              {basePaths.map(bp => (
-                <option key={bp} value={bp}>{bp} ({sitemapPages.filter(p => p.basePath === bp).length || "…"})</option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
-
-      {/* ── Discover Pages View ────────────────────────────────────────────── */}
-      {discoverTab === "discover" && (
-        <div className="space-y-4">
-          {discoverError && (
-            <div className="flex items-start gap-3 p-4 rounded-[12px] bg-brand-coral/10 border border-brand-coral/20 text-brand-coral text-[13px]">
-              {discoverError}
-            </div>
-          )}
-
-          {/* Manual URL input */}
-          <div className="flex items-center gap-2">
-            <input
-              type="url"
-              value={manualUrl}
-              onChange={e => setManualUrl(e.target.value)}
-              placeholder="Paste a URL to audit manually…"
-              className="flex-1 rounded-[10px] border border-border-subtle bg-surface-elevated px-4 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 transition-colors"
-            />
-            <button
-              type="button"
-              disabled={auditingSelected || (!selectedUrls.size && !manualUrl.trim())}
-              onClick={() => void handleAuditSelected()}
-              className="inline-flex h-10 items-center gap-2 rounded-[32px] bg-brand-primary px-5 text-[13px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50 shrink-0"
-            >
-              {auditingSelected ? (
-                <>
-                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
-                  Auditing…
-                </>
-              ) : (
-                `Audit${selectedUrls.size ? ` ${selectedUrls.size} selected` : manualUrl.trim() ? " URL" : ""} (max 5)`
-              )}
-            </button>
-          </div>
-
-          {pagesLoading ? (
-            <div className="space-y-2">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="h-14 animate-pulse rounded-[12px] border border-border-subtle bg-surface-elevated" />
-              ))}
-            </div>
-          ) : sitemapPages.length === 0 ? (
-            <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-12 text-center">
-              <p className="text-[14px] text-text-tertiary">No pages found in your sitemap. Make sure sitemap.xml is reachable.</p>
-            </div>
-          ) : (
-            <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
-                    <tr>
-                      <th className="px-3 py-3 w-10 text-center">
-                        <span className="sr-only">Select</span>
-                      </th>
-                      <th className="px-4 py-3">URL</th>
-                      <th className="px-4 py-3 w-28">Section</th>
-                      <th className="px-4 py-3 w-28 text-center">Status</th>
-                      <th className="px-4 py-3 w-24 text-center">Score</th>
-                      <th className="px-4 py-3 w-32">Keyword</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-subtle/60">
-                    {sitemapPages.slice(0, 100).map(page => {
-                      const isSelected = selectedUrls.has(page.url);
-                      return (
-                        <tr
-                          key={page.url}
-                          onClick={() => togglePageSelect(page.url)}
-                          className={`cursor-pointer transition-colors ${
-                            isSelected ? "bg-brand-action/5" : "hover:bg-surface-hover/50"
-                          }`}
-                        >
-                          <td className="px-3 py-2.5 text-center">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => togglePageSelect(page.url)}
-                              disabled={!isSelected && selectedUrls.size >= 5}
-                              className="h-4 w-4 rounded border-border-subtle accent-brand-action"
-                            />
-                          </td>
-                          <td className="px-4 py-2.5 max-w-[400px]">
-                            <a
-                              href={page.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={e => e.stopPropagation()}
-                              className="block truncate text-[13px] text-brand-action hover:underline"
-                              title={page.url}
-                            >
-                              {(() => { try { return new URL(page.url).pathname; } catch { return page.url; } })()}
-                            </a>
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <span className="rounded-[4px] bg-surface-tertiary px-2 py-0.5 text-[11px] font-mono text-text-tertiary">
-                              {page.basePath}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5 text-center">
-                            {page.audited ? (
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
-                                page.severity === "high"
-                                  ? "border-rose-500/30 bg-rose-500/10 text-rose-400"
-                                  : page.severity === "medium"
-                                  ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-400"
-                                  : "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                              }`}>
-                                {page.severity ?? "audited"}
-                              </span>
-                            ) : (
-                              <span className="text-[11px] text-text-tertiary">Pending</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5 text-center">
-                            {page.audited && page.healthScore !== undefined ? (
-                              <span className={`font-mono text-[13px] font-bold ${healthColor(page.healthScore)}`}>
-                                {page.healthScore}
-                              </span>
-                            ) : (
-                              <span className="text-[11px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {page.primaryKeyword ? (
-                              <span className="text-[12px] text-text-secondary truncate block max-w-[120px]">{page.primaryKeyword}</span>
-                            ) : (
-                              <span className="text-[11px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {sitemapPages.length > 100 && (
-                <div className="border-t border-border-subtle px-4 py-3 bg-surface-secondary/50 text-[12px] text-text-tertiary">
-                  Showing first 100 of {sitemapPages.length} pages. Use the section filter to narrow down.
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Audited Results View ──────────────────────────────────────────── */}
-      {discoverTab === "audited" && (
-        <>
-
       {coverage.blogs_found === 0 && !loading && (
         <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
           <div className="mb-6 flex justify-center">
@@ -626,26 +373,37 @@ export default function ContentHealthPage() {
         </div>
       )}
 
-      {rows.length > 0 && (
-        <div className="flex flex-wrap gap-1 rounded-[8px] border border-border-subtle bg-surface-secondary p-1 w-fit">
-          {(["all", "high", "medium", "low"] as SeverityFilter[]).map(f => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setFilter(f)}
-              title={f === "all" ? "Show every audited blog." : SEVERITY_TOOLTIP[f]}
-              className={`rounded-[4px] px-4 py-1.5 text-[13px] font-medium capitalize transition-all ${
-                filter === f ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"
-              }`}
-            >
-              {f} (
-              {f === "all"
-                ? rows.length
-                : rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === f).length}
-              )
-            </button>
-          ))}
-        </div>
+      {coverage.blogs_audited > 0 && (
+        <PillTabFilterBar<ContentHealthSeverityFilter>
+          className="max-w-full"
+          items={[
+            {
+              id: "all",
+              label: "All",
+              count: coverage.blogs_audited,
+            },
+            {
+              id: "high",
+              label: "High",
+              count: coverage.severity_counts?.high ?? 0,
+            },
+            {
+              id: "medium",
+              label: "Medium",
+              count: coverage.severity_counts?.medium ?? 0,
+            },
+            {
+              id: "low",
+              label: "Low",
+              count: coverage.severity_counts?.low ?? 0,
+            },
+          ]}
+          activeId={filter}
+          onChange={f =>
+            dispatch(contentHealthAuditFilterSet({ projectId, filter: f }))
+          }
+          disabled={loading}
+        />
       )}
 
       {loading ? (
@@ -660,7 +418,7 @@ export default function ContentHealthPage() {
       ) : filtered.length === 0 && coverage.blogs_found > 0 ? (
         <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
           {coverage.blogs_audited === 0
-            ? `Click "Audit first ${BATCH_SIZE} blogs" to begin.`
+            ? `Use the audit controls below to run your first ${BATCH_SIZE} blogs.`
             : "No blogs match this filter."}
         </div>
       ) : (
@@ -672,15 +430,8 @@ export default function ContentHealthPage() {
             const crit = criticalityFromScore(row.health_score, a.page_status);
             const onCalendar = !!calendarLinkedByUrl[row.url];
             const calBusy = calendarAddingUrl === row.url;
-            const calLocked = calendarAddingUrl !== null && calendarAddingUrl !== row.url;
             const kw = extractCalendarFocusKeyword(row);
             const sno = idx + 1;
-
-            const auditRowStatus: KeywordStatus = dismissedAuditUrls.has(row.url)
-              ? "rejected"
-              : onCalendar
-                ? "approved"
-                : "pending";
 
             return (
               <div
@@ -768,38 +519,120 @@ export default function ContentHealthPage() {
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-brand-action/30 border-t-brand-action" />
                         …
                       </div>
-                    ) : (
-                      <div
-                        className="sm:w-full [&_button]:min-h-[1.75rem] [&_button]:text-[10px]"
-                        onClick={e => e.stopPropagation()}
-                        onPointerDown={e => e.stopPropagation()}
+                    ) : onCalendar ? (
+                      <ProjectNavLink
+                        href={`/projects/${projectId}/calendar`}
+                        className="inline-flex h-7 items-center justify-center rounded-lg border border-accent-500/35 bg-accent-500/10 px-2 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/20"
                       >
-                        <KeywordActionDropdown
-                          status={auditRowStatus}
-                          busy={calLocked}
-                          onChange={next => handleAuditKeywordStatus(row, next)}
-                        />
-                      </div>
+                        Scheduled
+                      </ProjectNavLink>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleAddToCalendar(row)}
+                        disabled={calendarAddingUrl !== null}
+                        className="inline-flex h-7 items-center justify-center rounded-lg bg-brand-primary px-2 text-[10px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+                      >
+                        Schedule
+                      </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => dismissAuditRow(row.url)}
+                      className="text-[10px] font-medium text-text-tertiary underline-offset-2 hover:text-rose-400 hover:underline"
+                    >
+                      Dismiss
+                    </button>
                   </div>
                 </div>
               </div>
             );
           })}
+          {loadingMore && (
+            <div className="space-y-2 pt-2">
+              {[...Array(4)].map((_, i) => (
+                <div
+                  key={`sk-${i}`}
+                  className="h-24 w-full animate-pulse rounded-[16px] border border-border-subtle bg-surface-elevated"
+                />
+              ))}
+            </div>
+          )}
+          {chStore?.hasMore && !loading && (
+            <div className="flex justify-center pt-4">
+              <button
+                type="button"
+                onClick={() => void loadMoreAudits()}
+                disabled={loadingMore}
+                className="inline-flex h-10 items-center gap-2 rounded-[32px] border border-border-subtle bg-surface-secondary px-6 text-[13px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+              >
+                {loadingMore ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-action/30 border-t-brand-action" />
+                    Loading…
+                  </>
+                ) : (
+                  `Load more (${chStore.rows.length} of ${chStore.total})`
+                )}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* close discoverTab === "audited" */}
-      </>
-      )}
+      <div className="flex flex-col gap-3 rounded-[20px] border border-border-subtle bg-surface-secondary/40 p-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <p className="text-[12px] text-text-tertiary max-w-xl">
+          Run audits in batches of {BATCH_SIZE}. Use <span className="font-medium text-text-secondary">Discover keywords</span> above to
+          expand your keyword set.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => handleRun(false)}
+            disabled={running || (coverage.blogs_audited > 0 && pendingAudits === 0)}
+            className="inline-flex h-10 items-center gap-2 rounded-[32px] bg-brand-primary px-6 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {running ? (
+              <>
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-on-primary/30 border-t-brand-on-primary" />
+                Auditing…
+              </>
+            ) : coverage.blogs_audited === 0 ? (
+              `Audit first ${Math.min(BATCH_SIZE, Math.max(coverage.blogs_found, BATCH_SIZE))} blogs`
+            ) : pendingAudits === 0 ? (
+              "All audited"
+            ) : (
+              `Re-audit ${Math.min(BATCH_SIZE, pendingAudits)} more`
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleRun(true)}
+            disabled={running || coverage.blogs_audited === 0}
+            title="Re-run the audit on 10 already-audited blogs."
+            className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
+          >
+            Re-audit 10
+          </button>
+          <button
+            type="button"
+            onClick={handleClear}
+            disabled={running || coverage.blogs_audited === 0}
+            title="Delete all stored audit results for this project."
+            className="inline-flex h-10 items-center rounded-[30px] border border-brand-coral/20 bg-brand-coral/10 px-4 text-[13px] font-medium text-brand-coral hover:bg-brand-coral/20 transition-colors disabled:opacity-40"
+          >
+            Clear all
+          </button>
+        </div>
+      </div>
 
       <AuditDetailModal
         open={!!modalAudit}
         row={modalAudit}
         projectId={projectId}
         onClose={() => setModalAudit(null)}
-        onApproveToCalendar={() => (modalAudit ? handleAddToCalendar(modalAudit) : Promise.resolve())}
-        approveBusy={!!modalAudit && calendarAddingUrl === modalAudit.url}
+        onScheduleToCalendar={() => (modalAudit ? handleAddToCalendar(modalAudit) : Promise.resolve())}
+        scheduleBusy={!!modalAudit && calendarAddingUrl === modalAudit.url}
         onCalendar={!!modalAudit && !!calendarLinkedByUrl[modalAudit.url]}
       />
     </div>

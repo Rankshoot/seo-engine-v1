@@ -107,7 +107,7 @@ export function formatContentHealthAuditForWriter(raw: unknown): string {
   const parts: string[] = [];
 
   parts.push(
-    "CONTENT HEALTH AUDIT — You are writing a NEW article for the calendar focus keyword. The URL below is the OLD page we diagnosed; do not assume the reader sees it. Use this list as mandatory remediation goals (structure, depth, links, schema intent, FAQ, answer-first opening)."
+    "CONTENT HEALTH AUDIT — Surgical revision mode. You are writing a NEW calendar article for the focus keyword. The URL below is the OLD page we diagnosed (context only). Apply ONLY the fixes listed — do not rewrite unrelated sections for style. Preserve strong paragraphs, examples, and structure that already meet the checklist. Expand or restructure only where an issue explicitly requires it."
   );
   parts.push(`Audited URL (context only): ${o.url}`);
   if (typeof o.health_score === "number") parts.push(`Legacy page health score: ${o.health_score}/100.`);

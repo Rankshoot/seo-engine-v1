@@ -1471,26 +1471,58 @@ export interface KeywordVitals {
  * Returns a Map keyed by the lower-cased keyword. May be empty if neither
  * provider is reachable — callers should treat this as optional.
  */
+function discoveredKeywordToVitals(kw: DiscoveredKeyword): KeywordVitals {
+  let trend_pct = 0;
+  const t = kw.trend?.trim();
+  if (t) {
+    const m = t.match(/^([+-]?\d+)/);
+    if (m) trend_pct = parseInt(m[1], 10);
+  }
+  const ms = kw.monthly_searches;
+  if (!trend_pct && ms.length >= 2) {
+    const a = ms[ms.length - 1]?.volume ?? 0;
+    const b = ms[ms.length - 2]?.volume ?? 0;
+    if (b > 0) trend_pct = Math.round(((a - b) / b) * 100);
+  }
+  return {
+    keyword: kw.keyword,
+    volume: kw.volume,
+    trend: kw.trend,
+    trend_pct,
+    monthly_searches: ms ?? [],
+  };
+}
+
 export async function fetchKeywordVitals(
   keywords: string[],
   region: string,
-  _language: string = 'en'
+  language: string = 'en'
 ): Promise<Map<string, KeywordVitals>> {
-  void _language;
   const out = new Map<string, KeywordVitals>();
   const clean = [...new Set(keywords.map(k => k.trim()).filter(Boolean))];
   if (!clean.length) return out;
-  if (!isAhrefsConfigured()) {
-    console.warn('[ahrefs] fetchKeywordVitals: AHREFS_API_KEY missing — returning empty vitals.');
-    return out;
-  }
-  try {
-    const overview = await ahrefsKeywordOverview(clean, region);
-    for (const [k, row] of overview.entries()) {
-      out.set(k, ahrefsRowToVitals(row));
+
+  if (isAhrefsConfigured()) {
+    try {
+      const overview = await ahrefsKeywordOverview(clean, region);
+      for (const [k, row] of overview.entries()) {
+        out.set(k, ahrefsRowToVitals(row));
+      }
+    } catch (e) {
+      console.warn('[ahrefs] fetchKeywordVitals failed:', e);
     }
-  } catch (e) {
-    console.warn('[ahrefs] fetchKeywordVitals failed:', e);
+  }
+
+  const missing = [...new Set(clean.map(k => k.trim().toLowerCase()))].filter(k => !out.has(k));
+  const auth = getAuthHeader();
+  if (!missing.length || !auth) return out;
+
+  const locationCode = getLocationCode(region);
+  const languageCode = (language || 'en').trim().slice(0, 2).toLowerCase() || 'en';
+  const trace: DataForSEOTraceEntry[] = [];
+  const dfsMap = await fetchKeywordOverview(missing, locationCode, languageCode, auth, trace);
+  for (const [k, dk] of dfsMap.entries()) {
+    if (!out.has(k)) out.set(k, discoveredKeywordToVitals(dk));
   }
   return out;
 }

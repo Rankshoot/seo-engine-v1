@@ -4,12 +4,17 @@ import {
   type KeywordWorkspaceState,
   type ProjectKeywordWorkspace,
 } from "@/lib/redux/keyword-workspace-slice";
+import {
+  contentHealthAuditSlice,
+  type ContentHealthAuditState,
+} from "@/lib/redux/content-health-audit-slice";
 import { dataRestSlice, type DataRestState } from "@/lib/redux/data-rest-slice";
 
 const STORAGE_KEY = "seo-engine:redux:v1";
 
 const rootReducer = combineReducers({
   keywordWorkspace: keywordWorkspaceSlice.reducer,
+  contentHealthAudit: contentHealthAuditSlice.reducer,
   dataRest: dataRestSlice.reducer,
 });
 
@@ -63,6 +68,6 @@ export function makeStore(preloadedState?: PersistedState) {
 export type AppStore = ReturnType<typeof makeStore>;
 export type RootState = ReturnType<AppStore["getState"]>;
 export type AppDispatch = AppStore["dispatch"];
-export type { KeywordWorkspaceState, DataRestState };
+export type { KeywordWorkspaceState, ContentHealthAuditState, DataRestState };
 
 export { persistState };

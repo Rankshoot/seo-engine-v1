@@ -3,13 +3,24 @@ import { apiDelete, apiGet, apiPost } from "./http";
 import { V1Routes } from "./routes";
 
 export const auditsApi = {
-  list(projectId: string): Promise<{
+  list(
+    projectId: string,
+    opts?: { limit?: number; offset?: number }
+  ): Promise<{
     success: boolean;
     error?: string;
     data: PersistedBlogAudit[];
     coverage: AuditCoverage;
+    total: number;
+    hasMore: boolean;
+    limit: number;
+    offset: number;
   }> {
-    return apiGet(V1Routes.contentHealthAudits(projectId));
+    const q =
+      opts?.limit != null
+        ? `?limit=${encodeURIComponent(String(opts.limit))}&offset=${encodeURIComponent(String(opts.offset ?? 0))}`
+        : "";
+    return apiGet(`${V1Routes.contentHealthAudits(projectId)}${q}`);
   },
 
   clear(projectId: string): Promise<{ success: boolean; error?: string }> {
@@ -26,6 +37,7 @@ export const auditsApi = {
     skipped: number;
     failed: number;
     coverage: AuditCoverage;
+    vendorTrace?: Array<{ url: string; provider: string; step: string; ok: boolean; detail?: string; ms?: number }>;
   }> {
     return apiPost(V1Routes.contentHealthAuditsRun(projectId), opts);
   },

@@ -53,8 +53,8 @@ export interface AuditDetailModalProps {
   row: PersistedBlogAudit | null;
   projectId: string;
   onClose: () => void;
-  onApproveToCalendar: () => Promise<void>;
-  approveBusy: boolean;
+  onScheduleToCalendar: () => Promise<void>;
+  scheduleBusy: boolean;
   onCalendar: boolean;
 }
 
@@ -63,8 +63,8 @@ export function AuditDetailModal({
   row,
   projectId,
   onClose,
-  onApproveToCalendar,
-  approveBusy,
+  onScheduleToCalendar,
+  scheduleBusy,
   onCalendar,
 }: AuditDetailModalProps) {
   const [tab, setTab] = useState<Tab>("issues");
@@ -356,7 +356,7 @@ export function AuditDetailModal({
 
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-surface-secondary/95 p-4 backdrop-blur">
           <p className="text-[11px] text-text-tertiary max-w-md">
-            Approving saves this full audit on the calendar entry. When you generate the blog from Calendar, the writer uses every fix above.
+            Scheduling places this audit (keyword + fixes) on the next open calendar day. Generation applies those fixes surgically — not a full rewrite unless the issues require it.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -376,11 +376,11 @@ export function AuditDetailModal({
             ) : (
               <button
                 type="button"
-                disabled={approveBusy}
-                onClick={() => void onApproveToCalendar()}
+                disabled={scheduleBusy}
+                onClick={() => void onScheduleToCalendar()}
                 className="inline-flex min-w-[148px] items-center justify-center rounded-xl bg-gradient-to-r from-brand-primary via-brand-action to-violet-600 px-5 py-2.5 text-xs font-bold text-brand-on-primary shadow-lg shadow-brand-primary/30 ring-1 ring-white/15 transition-all hover:opacity-95 hover:shadow-brand-primary/40 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {approveBusy ? "Adding…" : "Approve to calendar"}
+                {scheduleBusy ? "Scheduling…" : "Schedule repair"}
               </button>
             )}
           </div>

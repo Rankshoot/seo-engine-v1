@@ -267,7 +267,7 @@ export async function getProjectStats(projectId: string) {
     supabaseAdmin.from('keywords').select('status').eq('project_id', projectId),
     supabaseAdmin.from('calendar_entries').select('status').eq('project_id', projectId),
     supabaseAdmin.from('blogs').select('status').eq('project_id', projectId),
-    getBlogAudits(projectId),
+    getBlogAudits(projectId, { summaryOnly: true }),
   ]);
 
   const keywords = kwResult.data ?? [];

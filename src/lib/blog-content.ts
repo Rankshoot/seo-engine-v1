@@ -438,6 +438,18 @@ export async function sanitizeBlogContent(
   };
 }
 
+/** Word count for markdown bodies (matches blog-actions heuristic). */
+export function countWordsInMarkdown(markdown: string): number {
+  return markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/\[[^\]]+\]\([^)]+\)/g, ' ')
+    .replace(/[#>*_\-[\]()`~]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
 /**
  * Generate a download-safe filename from a blog title or slug. Strips path
  * separators and shell-unsafe characters, collapses whitespace, and trims to

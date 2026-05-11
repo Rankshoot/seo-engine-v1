@@ -507,6 +507,10 @@ export default function BlogViewerPage() {
 
   const handleRegenerate = async () => {
     if (!blog) return;
+    if (!blog.entry_id) {
+      setEditError("Imported articles are not on the calendar. Schedule a keyword on Calendar to run full AI generation.");
+      return;
+    }
     setRegenerating(true);
     setEditError("");
     try {
@@ -678,6 +682,16 @@ export default function BlogViewerPage() {
 
         {blog.source_url && blog.article_type === "Repair" && (
           <RepairBanner sourceUrl={blog.source_url} repairNotes={blog.repair_notes ?? []} projectId={projectId} />
+        )}
+
+        {blog.article_type === "Import" && (
+          <div className="rounded-[8px] px-4 py-3 border border-border-subtle bg-surface-secondary">
+            <p className="text-[10px] font-medium uppercase text-text-tertiary mb-1" style={MONO}>Imported draft</p>
+            <p className="text-[13px] text-text-secondary leading-relaxed">
+              This article was uploaded from Content Health → Analyze upload. Preview, SEO score, edits, selection AI, and exports work the same as generated posts.
+              Full calendar regeneration is only available for posts created from the schedule.
+            </p>
+          </div>
         )}
 
         {researchSources > 0 && (
@@ -957,9 +971,14 @@ export default function BlogViewerPage() {
             <Divider />
             <div className="px-4 py-4">
               <SLabel>Generate</SLabel>
-              <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">Runs full research + generation with Gemini AI</p>
+              <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
+                {blog.entry_id
+                  ? "Runs full research + generation with Gemini AI"
+                  : "Not available for imported drafts — create a scheduled post from Calendar to run full generation."}
+              </p>
               <button
-                onClick={handleRegenerate} disabled={regenerating}
+                onClick={handleRegenerate}
+                disabled={regenerating || !blog.entry_id}
                 className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
                 style={{ background: V.txt, color: V.bg }}
               >

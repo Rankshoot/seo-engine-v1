@@ -262,7 +262,8 @@ export interface CalendarEntry {
 
 export interface Blog {
   id: string;
-  entry_id: string;
+  /** Null for uploads analyzed under Content Health (no calendar row). */
+  entry_id: string | null;
   project_id: string;
   title: string;
   content: string;
@@ -300,6 +301,7 @@ export const ARTICLE_TYPES = [
   "Beginner's Guide",
   'Expert Interview',
   'Repair',
+  'Import',
 ] as const;
 
 export const TARGET_REGIONS = [

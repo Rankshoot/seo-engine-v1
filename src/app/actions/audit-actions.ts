@@ -10,6 +10,7 @@ import {
   type ContentAuditVendorTrace,
 } from '@/lib/content-audit';
 import { fetchBlogUrls, fetchSitemapUrls, isContentUrl, BLOG_URL_INVENTORY_MAX } from '@/lib/jina';
+import { urlMatchesProjectSite } from '@/lib/blog-content';
 import { generateBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 
@@ -313,10 +314,14 @@ export async function auditExistingBlogs(
       .select('url')
       .eq('project_id', projectId);
     const currentSet = new Set(blogUrls);
-    const stale =
-      (existingRows ?? [])
-        .map(r => r.url as string)
-        .filter(u => !isContentUrl(u) || !currentSet.has(u));
+    const stale = (existingRows ?? [])
+      .map(r => r.url as string)
+      .filter(u => {
+        if (!isContentUrl(u)) return true;
+        // Keep competitor / external reference audits — purge only project-domain URLs missing from sitemap.
+        if (!urlMatchesProjectSite(u, project.domain)) return false;
+        return !currentSet.has(u);
+      });
     if (stale.length) {
       await supabaseAdmin
         .from('blog_audits')
@@ -631,6 +636,202 @@ export async function auditSelectedUrls(
   }
 
   return { success: true, audited, failed, results };
+}
+
+function normalizeExternalAuditUrl(raw: string): { ok: true; href: string } | { ok: false; error: string } {
+  const t = raw.trim();
+  if (!t) return { ok: false, error: 'Enter a URL.' };
+  let u: URL;
+  try {
+    u = new URL(/^https?:\/\//i.test(t) ? t : `https://${t}`);
+  } catch {
+    return { ok: false, error: 'That does not look like a valid URL.' };
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    return { ok: false, error: 'Only http(s) links are supported.' };
+  }
+  const hn = u.hostname.toLowerCase();
+  if (hn === 'localhost' || hn === '127.0.0.1' || hn === '0.0.0.0' || hn.endsWith('.local')) {
+    return { ok: false, error: 'Local URLs are not supported.' };
+  }
+  const href = u.href.replace(/#.*$/, '');
+  if (href.length > 2048) return { ok: false, error: 'URL is too long.' };
+  if (!isContentUrl(href)) {
+    return {
+      ok: false,
+      error:
+        'That URL looks like a listing page, media file, or sitemap — paste a single article or blog post URL.',
+    };
+  }
+  return { ok: true, href };
+}
+
+/**
+ * Scrape + audit any public article URL (competitor or reference), persist to `blog_audits`,
+ * and return the same payload shape as batch audits (for Content Health + debugging traces).
+ */
+export async function auditExternalBlogUrl(
+  projectId: string,
+  rawUrl: string
+): Promise<{
+  success: boolean;
+  error?: string;
+  record?: PersistedBlogAudit;
+  trace?: ContentAuditVendorTrace[];
+}> {
+  const parsed = normalizeExternalAuditUrl(rawUrl);
+  if (!parsed.ok) return { success: false, error: parsed.error };
+
+  const { project, error } = await ensureOwner(projectId);
+  if (error || !project) return { success: false, error: error ?? 'Project not found' };
+
+  const region = (project as { target_region?: string }).target_region || 'us';
+  const language = (project as { target_language?: string }).target_language || 'en';
+
+  let sitePeerUrls: string[] = [];
+  try {
+    const host = new URL(parsed.href).hostname.replace(/^www\./i, '');
+    sitePeerUrls = (await fetchBlogUrls(host, 300)).filter(u => u !== parsed.href);
+  } catch {
+    sitePeerUrls = [];
+  }
+
+  const { record: r, trace } = await auditBlogUrl({
+    url: parsed.href,
+    brief: null,
+    sitePeerUrls,
+    region,
+    language,
+  });
+
+  const { data: prevRow } = await supabaseAdmin
+    .from('blog_audits')
+    .select('analysis')
+    .eq('project_id', projectId)
+    .eq('url', r.url)
+    .maybeSingle();
+  const prevMeta = (prevRow?.analysis as BlogAuditAnalysis | null | undefined)?.analyze_page_meta;
+  // Always preserve the analyze_page_meta marker so this row is discoverable
+  // by getExternalBlogAuditsForAnalyzePage regardless of whether the URL is
+  // on the project domain or an external site.
+  const analysisMerged: BlogAuditAnalysis = {
+    ...r.analysis,
+    analyze_page_meta: {
+      ...prevMeta,
+      sourced_from_analyze_page: true,
+    },
+  };
+
+  const row = {
+    project_id: projectId,
+    url: r.url,
+    title: r.title,
+    word_count: r.word_count,
+    health_score: r.health_score,
+    severity: r.severity,
+    primary_keyword: r.primary_keyword,
+    analysis: analysisMerged,
+    scraped_chars: r.scraped_chars,
+    error: r.error ?? '',
+    page_status: analysisMerged.page_status ?? 'ok',
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error: upErr } = await supabaseAdmin.from('blog_audits').upsert(row, { onConflict: 'project_id,url' });
+  if (upErr) return { success: false, error: upErr.message, trace };
+
+  return {
+    success: true,
+    record: { ...r, analysis: analysisMerged, updated_at: row.updated_at },
+    trace,
+  };
+}
+
+/** Rows saved through the Analyze content page (newest first). Uses the
+ * `analyze_page_meta.sourced_from_analyze_page` stamp set by `auditExternalBlogUrl`,
+ * so it works for both own-domain and external URLs.
+ */
+export async function getExternalBlogAuditsForAnalyzePage(
+  projectId: string,
+  limit = 40
+): Promise<{ success: boolean; error?: string; data: PersistedBlogAudit[] }> {
+  const { project, error } = await ensureOwner(projectId);
+  if (error || !project) return { success: false, error: error ?? 'Project not found', data: [] };
+
+  // Filter at the DB level: only rows whose analysis JSONB contains the marker
+  // set by auditExternalBlogUrl. This avoids mixing in regular site-audit rows.
+  const { data: rows, error: qErr } = await supabaseAdmin
+    .from('blog_audits')
+    .select('*')
+    .eq('project_id', projectId)
+    .not('analysis->analyze_page_meta', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(Math.max(limit, 80));
+
+  if (qErr) {
+    // Fallback: if the JSONB filter is unsupported, fetch all and filter in JS
+    const { data: fallback, error: fErr } = await supabaseAdmin
+      .from('blog_audits')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('updated_at', { ascending: false })
+      .limit(200);
+    if (fErr) return { success: false, error: fErr.message, data: [] };
+    const filtered = (fallback ?? [])
+      .map(rowToRecord)
+      .filter(r => (r.analysis as BlogAuditAnalysis).analyze_page_meta?.sourced_from_analyze_page === true)
+      .slice(0, limit);
+    return { success: true, data: filtered };
+  }
+
+  const out = (rows ?? [])
+    .map(rowToRecord)
+    .filter(r => (r.analysis as BlogAuditAnalysis).analyze_page_meta?.sourced_from_analyze_page === true)
+    .slice(0, limit);
+
+  return { success: true, data: out };
+}
+
+export async function markAnalyzePageAuditCalendarScheduled(
+  projectId: string,
+  auditUrl: string,
+  scheduledDateIso: string
+): Promise<{ success: boolean; error?: string }> {
+  const { project, error } = await ensureOwner(projectId);
+  if (error || !project) return { success: false, error: error ?? 'Project not found' };
+
+  const { data: row, error: fErr } = await supabaseAdmin
+    .from('blog_audits')
+    .select('analysis')
+    .eq('project_id', projectId)
+    .eq('url', auditUrl)
+    .maybeSingle();
+
+  if (fErr) return { success: false, error: fErr.message };
+  if (!row) return { success: false, error: 'Audit row not found' };
+
+  const prev = (row.analysis as BlogAuditAnalysis) ?? ({} as BlogAuditAnalysis);
+  const nextAnalysis: BlogAuditAnalysis = {
+    ...prev,
+    analyze_page_meta: {
+      ...prev.analyze_page_meta,
+      calendar_scheduled: true,
+      calendar_scheduled_at: new Date().toISOString(),
+      calendar_scheduled_date: scheduledDateIso.slice(0, 10),
+    },
+  };
+
+  const { error: uErr } = await supabaseAdmin
+    .from('blog_audits')
+    .update({
+      analysis: nextAnalysis as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('project_id', projectId)
+    .eq('url', auditUrl);
+
+  if (uErr) return { success: false, error: uErr.message };
+  return { success: true };
 }
 
 function emptyCoverage(): AuditCoverage {

@@ -206,7 +206,17 @@ export async function getBlogById(blogId: string) {
     .eq('id', blogId)
     .single();
 
-  if (error) return { success: false, error: error.message, data: null };
+  if (error || !data) return { success: false, error: error?.message ?? 'Not found', data: null };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', data.project_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false, error: 'Not found', data: null };
+
   return { success: true, data: { ...data, content: sanitizeBlogMarkdown(data.content ?? '') } as Blog };
 }
 
@@ -1150,7 +1160,11 @@ export async function getCalendarWithBlogs(projectId: string) {
     .select('id, entry_id, title, word_count, status, research_sources')
     .eq('project_id', projectId);
 
-  const blogMap = new Map((blogs ?? []).map(b => [b.entry_id, b]));
+  const blogMap = new Map(
+    (blogs ?? [])
+      .filter((b): b is typeof b & { entry_id: string } => Boolean(b.entry_id))
+      .map(b => [b.entry_id, b])
+  );
   const combined: CalendarEntryWithBlog[] = (entries ?? []).map(entry => ({
     ...entry,
     blog: blogMap.get(entry.id) ?? null,

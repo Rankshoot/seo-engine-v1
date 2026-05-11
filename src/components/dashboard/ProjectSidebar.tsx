@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
@@ -150,42 +150,66 @@ export default function ProjectSidebar({
     serverStats?.auditPending,
   ]);
 
-  const navItems = [
-    { icon: Icon.grid, label: "Overview", href: base },
+  const auditBase = `${base}/audit`;
+  type NavLeaf = {
+    icon: ReactNode;
+    label: string;
+    href: string;
+    badge?: string;
+    badgeColor?: string;
+    prefetchLabel: string;
+    children?: { label: string; href: string }[];
+  };
+
+  const navItems: NavLeaf[] = [
+    { icon: Icon.grid, label: "Overview", href: base, prefetchLabel: "Overview" },
     {
       icon: Icon.search,
       label: "Keywords",
       href: `${base}/keywords`,
       badge: navCountsReady && liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
+      prefetchLabel: "Keywords",
     },
     {
       icon: Icon.target,
       label: "Competitors",
       href: `${base}/competitors`,
+      prefetchLabel: "Competitors",
     },
     {
       icon: Icon.audit,
       label: "Content Health",
-      href: `${base}/audit`,
+      href: auditBase,
       badge: navCountsReady && liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
       badgeColor: navCountsReady && liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
+      prefetchLabel: "Content Health",
+      children: [
+        { label: "Site audit", href: auditBase },
+        { label: "Discover pages", href: `${auditBase}/discover-pages` },
+        { label: "Analyze content", href: `${auditBase}/import` },
+      ],
     },
     {
       icon: Icon.calendar,
       label: "Calendar",
       href: `${base}/calendar`,
       badge: navCountsReady && liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
+      prefetchLabel: "Calendar",
     },
     {
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
       badge: navCountsReady && liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
+      prefetchLabel: "Blogs",
     },
   ];
 
   const isActive = (href: string) =>
     href === base ? pathname === base : pathname.startsWith(href);
+
+  const groupActive = (item: NavLeaf) =>
+    item.children?.some(c => isActive(c.href)) || isActive(item.href);
 
   return (
     <aside 
@@ -329,12 +353,12 @@ export default function ProjectSidebar({
         </p>
         <ul className="space-y-1.5 mb-6">
           {navItems.map((item) => {
-            const active = isActive(item.href);
+            const active = item.children ? groupActive(item) : isActive(item.href);
             return (
               <li key={item.label}>
                 <ProjectNavLink
                   href={item.href}
-                  onClick={() => prefetchFor(item.label)}
+                  onClick={() => prefetchFor(item.prefetchLabel)}
                   className={`flex items-center rounded-[8px] text-[14px] font-medium transition-all duration-300 ease-in-out group relative
                     ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
                     ${active
@@ -344,11 +368,11 @@ export default function ProjectSidebar({
                   <span className={`shrink-0 transition-colors duration-300 ${active ? "text-brand-action" : "text-text-tertiary group-hover:text-text-primary"}`}>
                     {item.icon}
                   </span>
-                  
+
                   <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden flex-1 ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
                     {item.label}
                   </span>
-                  
+
                   <span className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[100px] opacity-100 ml-2"}`}>
                     {item.badge && (
                       <span className={`text-[10px] font-medium px-2 py-0.5 rounded-[4px] border ${item.badgeColor || "bg-surface-tertiary text-text-secondary border-border-subtle"}`}>
@@ -357,16 +381,50 @@ export default function ProjectSidebar({
                     )}
                   </span>
 
-                  {/* Tooltip for collapsed state */}
                   {isCollapsed && (
                     <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
                       {item.label}
+                      {item.children && (
+                        <span className="block text-[10px] text-text-tertiary mt-1">
+                          {item.children.map(c => c.label).join(" · ")}
+                        </span>
+                      )}
                       {navCountsReady && item.badge && (
                         <span className="ml-2 text-text-tertiary">({item.badge})</span>
                       )}
                     </div>
                   )}
                 </ProjectNavLink>
+
+                {!isCollapsed && item.children && (
+                  <ul className="mt-1.5 ml-4 space-y-0.5 overflow-hidden">
+                    {item.children.map(sub => {
+                      const subActive = isActive(sub.href);
+                      return (
+                        <li key={sub.href}>
+                          <ProjectNavLink
+                            href={sub.href}
+                            onClick={() => prefetchFor(item.prefetchLabel)}
+                            className={`group flex items-center gap-2.5 rounded-[8px] px-3 py-2 text-[13px] font-medium transition-all duration-150
+                              ${subActive
+                                ? "bg-brand-action/10 text-brand-action"
+                                : "text-text-tertiary hover:text-text-primary hover:bg-surface-hover"
+                              }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 transition-all duration-150 ${
+                                subActive
+                                  ? "bg-brand-action scale-125"
+                                  : "bg-text-tertiary/40 group-hover:bg-text-tertiary"
+                              }`}
+                            />
+                            {sub.label}
+                          </ProjectNavLink>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </li>
             );
           })}

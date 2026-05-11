@@ -106,6 +106,17 @@ export interface BlogAuditAnalysis {
     top_anchors: Array<{ anchor: string; refdomains: number }>;
     inbound_internal_links_to_url: number | null;
   } | null;
+  /**
+   * Analyze content page only — preserved across re-runs of `auditExternalBlogUrl`
+   * (merged server-side). Not produced by the LLM.
+   */
+  analyze_page_meta?: {
+    /** Set to true by auditExternalBlogUrl so history queries can find these rows. */
+    sourced_from_analyze_page?: boolean;
+    calendar_scheduled?: boolean;
+    calendar_scheduled_at?: string;
+    calendar_scheduled_date?: string;
+  };
 }
 
 /** One row in the Content Health "rules" checklist. */

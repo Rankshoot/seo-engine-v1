@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS calendar_entries (
 
 CREATE TABLE IF NOT EXISTS blogs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  entry_id UUID NOT NULL REFERENCES calendar_entries(id) ON DELETE CASCADE,
+  entry_id UUID REFERENCES calendar_entries(id) ON DELETE CASCADE,
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',

@@ -16,6 +16,7 @@ import { projectsApi } from "@/frontend/api/projects";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
 import type { Project } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
+import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { rangeSelectionToMarkdown } from "@/lib/editor-selection-markdown";
@@ -93,7 +94,11 @@ function rangeSelectionViewportRect(range: Range): DOMRect | null {
  * Positions the Ai fix control imperatively so selectionchange does not trigger
  * parent re-renders (which would reset contentEditable / React-managed children).
  */
-function editArticleSeedPropsEqual(prev: { blog: Blog }, next: { blog: Blog }): boolean {
+function editArticleSeedPropsEqual(
+  prev: { blog: Blog; ownSiteHost: string | null },
+  next: { blog: Blog; ownSiteHost: string | null }
+): boolean {
+  if (prev.ownSiteHost !== next.ownSiteHost) return false;
   const pi = prev.blog.internal_links ?? [];
   const ni = next.blog.internal_links ?? [];
   if (pi.length !== ni.length) return false;
@@ -110,11 +115,13 @@ function editArticleSeedPropsEqual(prev: { blog: Blog }, next: { blog: Blog }): 
 const MemoizedVisualBlogEditors = memo(
   function MemoizedVisualBlogEditors({
     blog,
+    ownSiteHost,
     titleRef,
     descRef,
     bodyRef,
   }: {
     blog: Blog;
+    ownSiteHost: string | null;
     titleRef: RefObject<HTMLHeadingElement | null>;
     descRef: RefObject<HTMLParagraphElement | null>;
     bodyRef: RefObject<HTMLDivElement | null>;
@@ -127,8 +134,8 @@ const MemoizedVisualBlogEditors = memo(
       const { heroTitle, body } = stripHeroHeading(blog);
       h.textContent = heroTitle;
       p.textContent = blog.meta_description ?? "";
-      bodyEl.innerHTML = markdownBodyToHtml(body, internalSetForBlog(blog));
-    }, [blog, titleRef, descRef, bodyRef]);
+      bodyEl.innerHTML = markdownBodyToHtml(body, internalSetForBlog(blog), ownSiteHost);
+    }, [blog, ownSiteHost, titleRef, descRef, bodyRef]);
 
     return (
       <>
@@ -380,6 +387,21 @@ export default function BlogViewerPage() {
   const [editingImage, setEditingImage] = useState<HTMLImageElement | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState(false);
 
+  const ownSiteHost = useMemo(
+    () => (project?.domain?.trim() ? normalizeSiteHost(project.domain) : null),
+    [project?.domain]
+  );
+
+  const { externalLinks, internalLinks } = useMemo(
+    () =>
+      reclassifyBlogLinkSidebarLists(
+        blog?.external_links ?? [],
+        blog?.internal_links ?? [],
+        project?.domain
+      ),
+    [blog?.external_links, blog?.internal_links, project?.domain]
+  );
+
   const handleImageUpload = (img: HTMLImageElement) => {
     setEditingImage(img);
     fileInputRef.current?.click();
@@ -539,7 +561,7 @@ export default function BlogViewerPage() {
         return;
       }
       range.deleteContents();
-      const frag = markdownAiSnippetToDocumentFragment(rewritten.trim(), blog, document);
+      const frag = markdownAiSnippetToDocumentFragment(rewritten.trim(), blog, document, ownSiteHost);
       range.insertNode(frag);
       const end = frag.lastChild;
       if (end) {
@@ -636,8 +658,6 @@ export default function BlogViewerPage() {
     );
   }
 
-  const externalLinks   = blog.external_links ?? [];
-  const internalLinks   = blog.internal_links ?? [];
   const researchSources = blog.research_sources ?? 0;
   const blogStatus      = asBlogStatus(blog.status);
   const statusInfo      = BLOG_STATUSES.find(s => s.value === blogStatus)!;
@@ -740,6 +760,7 @@ export default function BlogViewerPage() {
                 <MemoizedVisualBlogEditors
                   key={editSessionKey}
                   blog={blog}
+                  ownSiteHost={ownSiteHost}
                   titleRef={titleEditorRef}
                   descRef={descEditorRef}
                   bodyRef={editorRef}
@@ -753,7 +774,7 @@ export default function BlogViewerPage() {
               </p>
             </div>
           ) : activeView === "preview" ? (
-            <EditorialPreview blog={blog} />
+            <EditorialPreview blog={blog} ownSiteHost={ownSiteHost} />
           ) : (
             <div className="p-8">
               <pre className="text-[13px] whitespace-pre-wrap leading-relaxed overflow-x-auto text-text-secondary" style={{ fontFamily: "CohereMono, monospace" }}>
@@ -773,6 +794,7 @@ export default function BlogViewerPage() {
               <SEOScorePanel
                 key={`${blog.id}-${blog.updated_at}-${scoreVersion}`}
                 blog={blog}
+                projectDomain={project?.domain}
                 fixingIssue={fixingIssue}
                 onFixIssue={check => handleSeoFix(check.key)}
                 className="p-4 bg-transparent border-0"
@@ -985,7 +1007,7 @@ export default function BlogViewerPage() {
         renderMarkdownSnippet={md => (
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            components={buildMarkdownComponents(internalSetForBlog(blog))}
+            components={buildMarkdownComponents(internalSetForBlog(blog), ownSiteHost)}
             urlTransform={markdownUrlTransform}
           >
             {md}
@@ -1071,10 +1093,10 @@ function RepairBanner({ sourceUrl, repairNotes, projectId }: { sourceUrl: string
 }
 
 // ─── Editorial Preview ────────────────────────────────────────────────────
-function EditorialPreview({ blog }: { blog: Blog }) {
+function EditorialPreview({ blog, ownSiteHost }: { blog: Blog; ownSiteHost: string | null }) {
   const internalSet = useMemo(() => internalSetForBlog(blog), [blog]);
   const { heroTitle, body } = useMemo(() => stripHeroHeading(blog), [blog]);
-  const components = useMemo(() => buildMarkdownComponents(internalSet), [internalSet]);
+  const components = useMemo(() => buildMarkdownComponents(internalSet, ownSiteHost), [internalSet, ownSiteHost]);
   return (
     <>
       <ArticleMetaRow blog={blog} />
@@ -1145,18 +1167,29 @@ function markdownUrlTransform(url: string): string {
 }
 
 // ─── Markdown components ──────────────────────────────────────────────────
-function buildMarkdownComponents(internalSet: Set<string>): Components {
+function linkHostName(href: string): string | null {
+  try {
+    return new URL(href).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function buildMarkdownComponents(internalSet: Set<string>, ownSiteHost: string | null = null): Components {
   const MarkdownLink: ComponentType<AnchorHTMLAttributes<HTMLAnchorElement>> = ({ href = "", children, ...rest }) => {
-    const isExternal = /^https?:\/\//i.test(href);
-    // It's internal if it's not external and it's in the internalSet, OR if it's a relative path, OR if it's an absolute URL pointing to our domain (which is handled by internalSet)
-    const isInternal = (!isExternal && href.startsWith("/")) || internalSet.has(href);
+    const isHttp = /^https?:\/\//i.test(href);
+    const host = isHttp ? linkHostName(href) : null;
+    const isOwnSite =
+      Boolean(ownSiteHost && host && (host === ownSiteHost || host.endsWith(`.${ownSiteHost}`)));
+    const isInternal = (!isHttp && href.startsWith("/")) || internalSet.has(href) || isOwnSite;
+    const showExternalChrome = isHttp && !isOwnSite;
     const label = typeof children === "string" ? children : flattenChildren(children);
     return (
-      <a href={href} target="_blank" rel={isExternal ? "noopener noreferrer" : undefined}
+      <a href={href} target="_blank" rel={showExternalChrome ? "noopener noreferrer" : undefined}
         className="underline underline-offset-[3px] transition-colors rounded-sm px-0.5 inline-flex items-baseline gap-0.5"
         style={{ color: isInternal ? V.action : V.coral, textDecorationStyle: "dotted", textDecorationColor: "currentColor" }} {...rest}>
         {label}
-        {isExternal && (
+        {showExternalChrome && (
           <svg className="relative top-px inline h-3 w-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
             <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
           </svg>
@@ -1215,20 +1248,25 @@ function flattenChildren(node: ReactNode): string {
 }
 
 /** One-time HTML for the visual body editor — avoids React children inside contentEditable. */
-function markdownBodyToHtml(markdown: string, internalSet: Set<string>): string {
+function markdownBodyToHtml(markdown: string, internalSet: Set<string>, ownSiteHost: string | null): string {
   return renderToStaticMarkup(
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSet)} urlTransform={markdownUrlTransform}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSet, ownSiteHost)} urlTransform={markdownUrlTransform}>
       {markdown}
     </ReactMarkdown>
   );
 }
 
 /** Inserts AI rewriter output into contentEditable with the same link styling as the seeded editor. */
-function markdownAiSnippetToDocumentFragment(markdown: string, blog: Blog, doc: Document): DocumentFragment {
+function markdownAiSnippetToDocumentFragment(
+  markdown: string,
+  blog: Blog,
+  doc: Document,
+  ownSiteHost: string | null
+): DocumentFragment {
   const internalSet = internalSetForBlog(blog);
   const html = renderToStaticMarkup(
     <div className="text-text-secondary" style={{ fontSize: 17, lineHeight: 1.78 }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSet)} urlTransform={markdownUrlTransform}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={buildMarkdownComponents(internalSet, ownSiteHost)} urlTransform={markdownUrlTransform}>
         {markdown}
       </ReactMarkdown>
     </div>

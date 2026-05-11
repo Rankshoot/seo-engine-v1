@@ -6,6 +6,7 @@ import {
   parseFunnelStageLabel,
   type FunnelStage,
 } from '@/lib/keyword-funnel';
+import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
@@ -787,16 +788,18 @@ After the article, output EXACTLY this block (no extra text, no trailing comma, 
   // despite the INTERNAL PLANNING instruction. These lines begin with "STEP N —"
   // or are the ════ separator lines used in the planning section.
   function stripLeakedStepContent(raw: string): string {
-    return raw
-      // Remove lines that are exactly the ════ separator (8+ chars)
-      .replace(/^[═]{8,}\s*$/gm, '')
-      // Remove lines like "STEP 1 — ..." or "STEP 1: ..."
-      .replace(/^STEP\s+\d+\s*[—–:-].*$/gm, '')
-      // Remove [PLAN STEP …] markers if they leaked
-      .replace(/^\[PLAN STEP.*?\].*$/gm, '')
-      // Collapse 3+ consecutive blank lines into 2
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+    return stripEmptyFragmentAnchorTags(
+      raw
+        // Remove lines that are exactly the ════ separator (8+ chars)
+        .replace(/^[═]{8,}\s*$/gm, '')
+        // Remove lines like "STEP 1 — ..." or "STEP 1: ..."
+        .replace(/^STEP\s+\d+\s*[—–:-].*$/gm, '')
+        // Remove [PLAN STEP …] markers if they leaked
+        .replace(/^\[PLAN STEP.*?\].*$/gm, '')
+        // Collapse 3+ consecutive blank lines into 2
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+    );
   }
 
   // Parse content + metadata
@@ -1116,6 +1119,8 @@ Write the repaired blog now. End the blog content, then on the next line output 
       repair_notes = Array.isArray(metaJson.repair_notes) ? metaJson.repair_notes : [];
     } catch { /* use defaults */ }
   }
+
+  content = stripEmptyFragmentAnchorTags(content);
 
   // Re-scan markdown to pick up links the LLM embedded but omitted from meta.
   const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;

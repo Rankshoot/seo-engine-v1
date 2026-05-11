@@ -40,29 +40,46 @@ interface StabilityImageResponse {
 const STABILITY_SD3_ENDPOINT = 'https://api.stability.ai/v2beta/stable-image/generate/sd3';
 const STABILITY_MODEL = 'sd3.5-flash';
 
+/**
+ * Neutral inline SVG so markdown survives `sanitizeBlogContent` (empty `![]( )`
+ * is stripped). Alt text still describes the intended image for editors and a11y.
+ */
+const BLOG_IMAGE_PLACEHOLDER_URL =
+  'data:image/svg+xml;charset=utf-8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img">
+      <rect width="1600" height="900" fill="#27272a"/>
+      <rect x="1" y="1" width="1598" height="898" fill="none" stroke="#3f3f46" stroke-width="2"/>
+    </svg>`
+  );
+
+function assetWithPlaceholder(request: Omit<BlogImageAsset, 'url'>): BlogImageAsset {
+  return { ...request, url: BLOG_IMAGE_PLACEHOLDER_URL };
+}
+
 export async function generateBlogImages(input: GenerateBlogImagesInput): Promise<BlogImageAsset[]> {
-  const apiKey = process.env.STABILITY_API_KEY;
-  if (!apiKey) {
-    throw new Error('Stability API key is missing. Add STABILITY_API_KEY before generating blog images.');
-  }
-
   const imageRequests = buildImageRequests(input);
-  const requiredHero = await generateSingleImage(apiKey, imageRequests[0]);
-  if (!requiredHero) {
-    throw new Error('Stability did not return a usable hero image. Blog generation was stopped so it is not saved without an image.');
+  const apiKey = process.env.STABILITY_API_KEY?.trim();
+
+  if (!apiKey) {
+    console.warn('[stability] STABILITY_API_KEY missing — saving blog with image placeholders.');
+    return imageRequests.map(assetWithPlaceholder);
   }
 
-  if (imageRequests.length === 1) return [requiredHero];
+  const hero = (await generateSingleImage(apiKey, imageRequests[0])) ?? assetWithPlaceholder(imageRequests[0]);
+  if (imageRequests.length === 1) return [hero];
 
   const settled = await Promise.allSettled(
     imageRequests.slice(1).map(request => generateSingleImage(apiKey, request))
   );
 
-  const optionalImages = settled
-    .map(result => (result.status === 'fulfilled' ? result.value : null))
-    .filter((asset): asset is BlogImageAsset => Boolean(asset));
+  const rest = imageRequests.slice(1).map((request, i) => {
+    const result = settled[i];
+    if (result.status === 'fulfilled' && result.value) return result.value;
+    return assetWithPlaceholder(request);
+  });
 
-  return [requiredHero, ...optionalImages];
+  return [hero, ...rest];
 }
 
 export async function generateContextualBlogImage(

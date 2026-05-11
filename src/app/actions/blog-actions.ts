@@ -9,6 +9,7 @@ import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
 import { formatContentHealthAuditForWriter } from '@/lib/content-health-calendar';
+import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
   const user = await currentUser();
@@ -281,7 +282,7 @@ function replaceFirstH1(markdown: string, title: string): string {
 }
 
 function sanitizeBlogMarkdown(markdown: string): string {
-  return stripSchemaJsonBlocks(markdown)
+  return stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(markdown))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     // Strip the LLM's leftover `![alt](IMAGE_PLACEHOLDER)` artifacts so the

@@ -18,6 +18,20 @@
 export const MAX_IMAGES_PER_BLOG = 2;
 
 /**
+ * `react-markdown` does not render arbitrary HTML; `<a name="…"></a>` shows as
+ * literal text. Strip empty fragment anchors (`name` / `id`, no `href`).
+ */
+export function stripEmptyFragmentAnchorTags(markdown: string): string {
+  let out = markdown.replace(/<a\b[^>]*>\s*<\/a>/gi, full => {
+    if (/\bhref\s*=/i.test(full)) return full;
+    if (/\bname\s*=/i.test(full) || /\bid\s*=/i.test(full)) return '';
+    return full;
+  });
+  out = out.replace(/<a\b(?![^>]*\bhref\s*=)(?=[^>]*\b(?:name|id)\s*=)[^>]+\/>/gi, '');
+  return out;
+}
+
+/**
  * Domains we consider authoritative for SEO citations. We allow these
  * unconditionally even if they fail a probe — large news/research sites
  * occasionally block HEAD requests, but a Gartner / WEF / .gov citation is
@@ -109,6 +123,55 @@ function getHost(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Normalize `project.domain` (often stored as `taggd.in`) or a full site URL to a
+ * comparable hostname: lowercase, no `www.`. Required because `new URL('taggd.in')`
+ * throws, which previously made every `https://…` link look "external" during
+ * sanitization when the project domain had no protocol.
+ */
+export function normalizeSiteHost(domainOrUrl: string): string {
+  const raw = (domainOrUrl || '').trim();
+  if (!raw) return '';
+  const hostOnly = raw
+    .replace(/^https?:\/\//i, '')
+    .replace(/^www\./i, '')
+    .split('/')[0]
+    .split('?')[0];
+  try {
+    return new URL(`https://${hostOnly}`).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return hostOnly.toLowerCase();
+  }
+}
+
+/** True when `url` is absolute http(s) and its host matches the project site. */
+export function urlMatchesProjectSite(url: string, projectDomainRaw: string): boolean {
+  const own = normalizeSiteHost(projectDomainRaw);
+  if (!own || !/^https?:\/\//i.test(url)) return false;
+  const h = getHost(url);
+  if (!h) return false;
+  return h === own || h.endsWith(`.${own}`);
+}
+
+/** Move same-site URLs out of `external` for sidebar / UI (does not mutate DB). */
+export function reclassifyBlogLinkSidebarLists(
+  external: string[],
+  internal: string[],
+  projectDomainRaw: string | undefined | null
+): { externalLinks: string[]; internalLinks: string[] } {
+  const raw = (projectDomainRaw ?? '').trim();
+  if (!raw) {
+    return { externalLinks: [...external], internalLinks: [...internal] };
+  }
+  const internalOut = new Set(internal);
+  const externalOut: string[] = [];
+  for (const url of external) {
+    if (urlMatchesProjectSite(url, raw)) internalOut.add(url);
+    else externalOut.push(url);
+  }
+  return { externalLinks: externalOut, internalLinks: [...internalOut] };
 }
 
 /** A domain is credible if it's on the allow-list or ends in `.gov` / `.edu`. */
@@ -254,11 +317,14 @@ export async function sanitizeBlogContent(
   markdown: string,
   opts: SanitizeOpts = {}
 ): Promise<SanitizeResult> {
-  const ownHost = opts.ownDomain ? getHost(opts.ownDomain) : null;
+  const ownHost = opts.ownDomain?.trim() ? normalizeSiteHost(opts.ownDomain) : null;
   const maxImages = opts.maxImages ?? MAX_IMAGES_PER_BLOG;
 
+  // Phase 0 — empty `<a name|id>` tags (no href) leak as visible text in Markdown preview.
+  let next = stripEmptyFragmentAnchorTags(markdown);
+
   // Phase 1 — strip placeholder images. These are LLM artifacts, never real.
-  let next = markdown.replace(
+  next = next.replace(
     /!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)/gi,
     ''
   );

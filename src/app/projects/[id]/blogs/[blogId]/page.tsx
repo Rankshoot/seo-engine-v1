@@ -13,6 +13,9 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { blogsApi } from "@/frontend/api/blogs";
 import { projectsApi } from "@/frontend/api/projects";
+import { useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query";
+import toast from "react-hot-toast";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
 import type { Project } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
@@ -357,6 +360,7 @@ function BlogEditAiFixOverlay({
 
 export default function BlogViewerPage() {
   const { id: projectId, blogId } = useParams<{ id: string; blogId: string }>();
+  const queryClient = useQueryClient();
 
   const [blog, setBlog]                   = useState<Blog | null>(null);
   const [project, setProject]             = useState<Project | null>(null);
@@ -386,6 +390,7 @@ export default function BlogViewerPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingImage, setEditingImage] = useState<HTMLImageElement | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState(false);
+  const [addingToArticles, setAddingToArticles] = useState(false);
 
   const ownSiteHost = useMemo(
     () => (project?.domain?.trim() ? normalizeSiteHost(project.domain) : null),
@@ -472,6 +477,8 @@ export default function BlogViewerPage() {
   }, [editMode]);
 
   useEffect(() => {
+    setLoading(true);
+    setBlog(null);
     Promise.all([
       blogsApi.getById(blogId),
       projectsApi.get(projectId),
@@ -481,6 +488,29 @@ export default function BlogViewerPage() {
       setLoading(false);
     });
   }, [blogId, projectId]);
+
+  const handleAddToArticles = async () => {
+    if (!blogId?.trim() || !blog) return;
+    setAddingToArticles(true);
+    try {
+      // URL id is source of truth (matches `getById`); avoids any stale `blog.id` edge case.
+      const res = await blogsApi.addToArticlesLibrary(blogId);
+      if (res.success) {
+        setBlog((b) => (b && b.id === blogId ? { ...b, in_articles_library: true } : b));
+        if (res.alreadySaved) toast.success("Already in Articles");
+        else toast.success("Added to Articles");
+        void queryClient.invalidateQueries({ queryKey: qk.articlesLibrary(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      } else {
+        toast.error(res.error ?? "Could not add article");
+      }
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Could not add article");
+    } finally {
+      setAddingToArticles(false);
+    }
+  };
 
   const handleDownload = async (format: ExportFormat) => {
     if (!blog) return;
@@ -666,6 +696,11 @@ export default function BlogViewerPage() {
   const blogStatus      = asBlogStatus(blog.status);
   const statusInfo      = BLOG_STATUSES.find(s => s.value === blogStatus)!;
   const sidebarMuted    = editMode || savingContent || scoreRefreshing;
+  const isInstantArticle = Boolean(blog.article_type?.startsWith("Instant ·"));
+  const historyParentHref = isInstantArticle
+    ? `/projects/${projectId}/content-generator/history`
+    : `/projects/${projectId}/blogs`;
+  const historyParentLabel = isInstantArticle ? "Content history" : "Blogs";
 
   return (
     <div className="flex flex-col h-full overflow-hidden gap-3">
@@ -673,8 +708,8 @@ export default function BlogViewerPage() {
       {/* ── Top strip ───────────────────────────────────────────────────── */}
       <div className="shrink-0 flex flex-col gap-2">
         <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
-          <ProjectNavLink href={`/projects/${projectId}/blogs`} className="hover:text-text-primary transition-colors">
-            Content History
+          <ProjectNavLink href={historyParentHref} className="hover:text-text-primary transition-colors">
+            {historyParentLabel}
           </ProjectNavLink>
           <span className="opacity-30">›</span>
           <span className="font-medium text-text-primary truncate max-w-[380px]">{blog.title}</span>
@@ -694,23 +729,37 @@ export default function BlogViewerPage() {
           </div>
         )}
 
-        {researchSources > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {researchSources > 0 && (
             <Pill color={V.txtMute} border={V.borderS}>
               <ResearchIcon /> Researched: {researchSources} live sources
             </Pill>
-            {externalLinks.length > 0 && (
-              <Pill color={V.action} border={`${BRAND.actionBlue}44`} bg={`${BRAND.actionBlue}0d`}>
-                <ExternalLinkIcon /> {externalLinks.length} external links
-              </Pill>
-            )}
-            {internalLinks.length > 0 && (
-              <Pill color={V.coral} border={`${BRAND.coral}44`} bg={`${BRAND.coral}0d`}>
-                <LinkIcon /> {internalLinks.length} internal links
-              </Pill>
-            )}
-          </div>
-        )}
+          )}
+          {researchSources > 0 && externalLinks.length > 0 && (
+            <Pill color={V.action} border={`${BRAND.actionBlue}44`} bg={`${BRAND.actionBlue}0d`}>
+              <ExternalLinkIcon /> {externalLinks.length} external links
+            </Pill>
+          )}
+          {researchSources > 0 && internalLinks.length > 0 && (
+            <Pill color={V.coral} border={`${BRAND.coral}44`} bg={`${BRAND.coral}0d`}>
+              <LinkIcon /> {internalLinks.length} internal links
+            </Pill>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleAddToArticles()}
+            disabled={
+              editMode || savingContent || addingToArticles || Boolean(blog.in_articles_library)
+            }
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium border border-border-subtle transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              blog.in_articles_library
+                ? "text-text-tertiary"
+                : "text-text-secondary enabled:hover:bg-surface-hover enabled:hover:text-text-primary"
+            }`}
+          >
+            {addingToArticles ? "Adding…" : blog.in_articles_library ? "In Articles" : "Add this article"}
+          </button>
+        </div>
       </div>
 
       {/* ── Panels ──────────────────────────────────────────────────────── */}

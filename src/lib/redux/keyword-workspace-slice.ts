@@ -25,6 +25,7 @@ export type ProjectStatsSnapshot = {
   approvedKeywords: number;
   calendarEntries: number;
   blogsGenerated: number;
+  articlesInLibrary?: number;
   auditPending?: number;
 };
 
@@ -278,7 +279,7 @@ export const keywordWorkspaceSlice = createSlice({
       action: PayloadAction<{ projectId: string; count: number }>
     ) {
       const project = ensureProject(state, action.payload.projectId);
-      project.stats ??= { approvedKeywords: 0, calendarEntries: 0, blogsGenerated: 0 };
+      project.stats ??= { approvedKeywords: 0, calendarEntries: 0, blogsGenerated: 0, articlesInLibrary: 0 };
       project.stats.calendarEntries = action.payload.count;
     },
 

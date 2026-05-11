@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { generateBlogPost, geminiGenerate } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
-import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
+import { ArticleLibraryEntry, Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
@@ -218,6 +218,142 @@ export async function getBlogById(blogId: string) {
   if (pErr || !project) return { success: false, error: 'Not found', data: null };
 
   return { success: true, data: { ...data, content: sanitizeBlogMarkdown(data.content ?? '') } as Blog };
+}
+
+export async function getArticlesLibraryForProject(projectId: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated', data: [] as ArticleLibraryEntry[] };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false as const, error: 'Project not found', data: [] as ArticleLibraryEntry[] };
+
+  const { data, error } = await supabaseAdmin
+    .from('blogs')
+    .select('id, title, target_keyword, article_type, status, created_at, updated_at')
+    .eq('project_id', projectId)
+    .eq('in_articles_library', true)
+    .in('status', ['generated', 'approved', 'published'])
+    .order('updated_at', { ascending: false });
+
+  if (error) {
+    if (/in_articles_library|schema cache/i.test(error.message)) {
+      return { success: true as const, data: [] as ArticleLibraryEntry[] };
+    }
+    return { success: false as const, error: error.message, data: [] as ArticleLibraryEntry[] };
+  }
+
+  return { success: true as const, data: (data ?? []) as ArticleLibraryEntry[] };
+}
+
+/** Instant / web-research drafts created from Content Generator (`article_type` prefix). */
+const INSTANT_ARTICLE_TYPE_PREFIX = 'Instant ·';
+
+export async function getContentGeneratorHistoryForProject(projectId: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated', data: [] as ArticleLibraryEntry[] };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false as const, error: 'Project not found', data: [] as ArticleLibraryEntry[] };
+
+  const historyQuery = (columns: string) =>
+    supabaseAdmin
+      .from('blogs')
+      .select(columns)
+      .eq('project_id', projectId)
+      .like('article_type', `${INSTANT_ARTICLE_TYPE_PREFIX}%`)
+      .in('status', ['generated', 'approved', 'published'])
+      .order('updated_at', { ascending: false });
+
+  let { data, error } = await historyQuery(
+    'id, title, target_keyword, article_type, status, created_at, updated_at, in_articles_library'
+  );
+  if (error && /in_articles_library|schema cache/i.test(error.message)) {
+    const second = await historyQuery('id, title, target_keyword, article_type, status, created_at, updated_at');
+    data = second.data;
+    error = second.error;
+  }
+
+  if (error) return { success: false as const, error: error.message, data: [] as ArticleLibraryEntry[] };
+
+  const rows = (data ?? []) as unknown as Array<ArticleLibraryEntry & { in_articles_library?: boolean }>;
+  return { success: true as const, data: rows };
+}
+
+/**
+ * Pin the current blog to the project Articles list. Idempotent if already saved.
+ * Uses `select('*')` so this still loads the row before `in_articles_library` exists in DB
+ * (explicit `select(..., in_articles_library)` makes PostgREST error and looked like "Blog not found").
+ */
+export async function addBlogToArticlesLibrary(blogId: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated', alreadySaved: false };
+
+  const id = blogId?.trim();
+  if (!id) return { success: false as const, error: 'Missing blog id', alreadySaved: false };
+
+  const { data: row, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (bErr) {
+    return { success: false as const, error: bErr.message, alreadySaved: false };
+  }
+  if (!row) {
+    return { success: false as const, error: 'Blog not found', alreadySaved: false };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', row.project_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false as const, error: 'Not authorized', alreadySaved: false };
+
+  const already = Boolean((row as { in_articles_library?: boolean }).in_articles_library);
+  if (already) {
+    return { success: true as const, alreadySaved: true };
+  }
+
+  const { data: updated, error: uErr } = await supabaseAdmin
+    .from('blogs')
+    .update({ in_articles_library: true, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+
+  if (uErr) {
+    const hint =
+      /in_articles_library|schema cache/i.test(uErr.message)
+        ? ' Run the SQL migration `supabase-migration-blog-in-articles-library.sql` on your Supabase project.'
+        : '';
+    return { success: false as const, error: `${uErr.message}${hint}`, alreadySaved: false };
+  }
+
+  if (!updated) {
+    return {
+      success: false as const,
+      error: 'Update did not apply. Confirm the blog exists and `in_articles_library` is enabled in Supabase.',
+      alreadySaved: false,
+    };
+  }
+
+  return { success: true as const, alreadySaved: false };
 }
 
 export async function updateBlogStatus(blogId: string, status: BlogStatus) {

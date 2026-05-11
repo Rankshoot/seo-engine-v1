@@ -1,6 +1,7 @@
 import { CalendarEntry, Project } from './types';
 import { ResearchContext, formatResearchForPrompt } from './research';
 import type { BusinessBrief } from './business-brief';
+import { buildInstantWebResearchArticlePrompt } from './prompts/instant-web-research-article-prompt';
 import {
   deterministicFunnelStage,
   parseFunnelStageLabel,
@@ -492,6 +493,96 @@ export interface AhrefsBlogContext {
   }>;
 }
 
+/** Collapse leaked planning headers from Gemini blog output. */
+function stripLeakedStepContent(raw: string): string {
+  return stripEmptyFragmentAnchorTags(
+    raw
+      .replace(/^[═]{8,}\s*$/gm, '')
+      .replace(/^STEP\s+\d+\s*[—–:-].*$/gm, '')
+      .replace(/^\[PLAN STEP.*?\].*$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  );
+}
+
+function parseGeneratedBlogMarkdown(
+  rawText: string,
+  entry: { title: string; slug: string },
+  project: Project,
+  research?: ResearchContext
+): GeneratedBlog {
+  const text = rawText.trim();
+  const sepIdx = text.indexOf('---META---');
+  let content = stripLeakedStepContent(text);
+  let meta_description = '';
+  let slug = entry.slug;
+  let external_links: string[] = [];
+  let internal_links: string[] = [];
+
+  if (sepIdx !== -1) {
+    content = stripLeakedStepContent(text.substring(0, sepIdx).trim());
+    try {
+      const metaRaw = text.substring(sepIdx + 10).trim();
+      const metaJson = JSON.parse(metaRaw);
+      meta_description = metaJson.meta_description ?? '';
+      slug = metaJson.slug ?? entry.slug;
+      external_links = metaJson.external_links ?? [];
+      internal_links = metaJson.internal_links ?? [];
+    } catch {
+      /* use defaults */
+    }
+  }
+
+  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+  let match;
+  const ownHost = normalizeHost(project.domain);
+  while ((match = linkRegex.exec(content)) !== null) {
+    const url = match[2];
+    const host = safeHost(url);
+    const pointsToOwn = Boolean(host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`)));
+    if (pointsToOwn) {
+      if (!internal_links.includes(url)) internal_links.push(url);
+    } else if (!external_links.includes(url)) {
+      external_links.push(url);
+    }
+  }
+
+  const internalLinkRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
+  while ((match = internalLinkRegex.exec(content)) !== null) {
+    const path = match[2];
+    const absoluteUrl = project.domain ? `https://${project.domain}${path}` : path;
+    content = content.replace(`](${path})`, `](${absoluteUrl})`);
+    if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
+  }
+
+  const word_count = content.split(/\s+/).filter(Boolean).length;
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  const title = titleMatch ? titleMatch[1].replace(/\*/g, '').trim() : entry.title;
+
+  return {
+    title,
+    content,
+    meta_description,
+    slug,
+    word_count,
+    research_sources: research?.totalSourcesFound ?? 0,
+    external_links: [...new Set(external_links)].slice(0, 10),
+    internal_links: [...new Set(internal_links)].slice(0, 12),
+  };
+}
+
+function slugFromTopic(topic: string): string {
+  const base = topic
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 10)
+    .join('-');
+  return base || 'article';
+}
+
 export async function generateBlogPost(
   entry: CalendarEntry,
   project: Project,
@@ -783,89 +874,96 @@ After the article, output EXACTLY this block (no extra text, no trailing comma, 
 {"meta_description":"[140–165 chars, must include '${entry.focus_keyword}', written as a clear sentence]","slug":"url-slug-from-h1","external_links":["https://url1","https://url2","https://url3","https://url4","https://url5"],"internal_links":["/slug-or-absolute-url-1","/slug-or-absolute-url-2"]}`;
 
   const text = await geminiGenerate(prompt, 3, true);
+  return parseGeneratedBlogMarkdown(text, entry, project, research);
+}
 
-  // Safety strip: remove any leaked planning-step headers the LLM may have output
-  // despite the INTERNAL PLANNING instruction. These lines begin with "STEP N —"
-  // or are the ════ separator lines used in the planning section.
-  function stripLeakedStepContent(raw: string): string {
-    return stripEmptyFragmentAnchorTags(
-      raw
-        // Remove lines that are exactly the ════ separator (8+ chars)
-        .replace(/^[═]{8,}\s*$/gm, '')
-        // Remove lines like "STEP 1 — ..." or "STEP 1: ..."
-        .replace(/^STEP\s+\d+\s*[—–:-].*$/gm, '')
-        // Remove [PLAN STEP …] markers if they leaked
-        .replace(/^\[PLAN STEP.*?\].*$/gm, '')
-        // Collapse 3+ consecutive blank lines into 2
-        .replace(/\n{3,}/g, '\n\n')
-        .trim()
-    );
+export async function generateInstantWebResearchArticle(input: {
+  project: Project;
+  topic: string;
+  primaryKeyword: string;
+  regionName: string;
+  languageLabel: string;
+  writingStyleLabel: string;
+  articleTypeLabel: string;
+  optionalKeywordsCsv: string;
+  research: ResearchContext;
+  brief: BusinessBrief | null;
+  existingBlogs: Array<{ title: string; slug: string; target_keyword: string }>;
+}): Promise<GeneratedBlog> {
+  const {
+    project,
+    topic,
+    primaryKeyword,
+    regionName,
+    languageLabel,
+    writingStyleLabel,
+    articleTypeLabel,
+    optionalKeywordsCsv,
+    research,
+    brief,
+    existingBlogs,
+  } = input;
+
+  const siteLinks = (brief?.internal_link_candidates ?? [])
+    .filter(l => l.url && l.url.startsWith('http'))
+    .slice(0, 12);
+  const generatedLinks = (existingBlogs ?? [])
+    .filter(b => b.target_keyword !== primaryKeyword)
+    .slice(0, 8);
+
+  let internalLinksBlock = '';
+  if (siteLinks.length || generatedLinks.length) {
+    const siteBlock = siteLinks.length
+      ? `User's own website pages (prefer these — use the absolute URL as the link target):\n${siteLinks
+          .map(l => `- ${l.title || l.topic || 'Page'} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
+          .join('\n')}`
+      : '';
+    const generatedBlock = generatedLinks.length
+      ? `Blog posts generated in this project:\n${generatedLinks
+          .map(b => `- "${b.title}" → https://${project.domain}/${b.slug} (keyword: ${b.target_keyword})`)
+          .join('\n')}`
+      : '';
+    internalLinksBlock = `INTERNAL LINKING (pick 2–4 natural in-body links from the pools below):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
+  } else {
+    internalLinksBlock = 'INTERNAL LINKING: No internal URL pool is available for this project yet — do not invent internal links.';
   }
 
-  // Parse content + metadata
-  const sepIdx = text.indexOf('---META---');
-  let content = stripLeakedStepContent(text.trim());
-  let meta_description = '';
-  let slug = entry.slug;
-  let external_links: string[] = [];
-  let internal_links: string[] = [];
+  const briefBlock = brief
+    ? `
+- Summary: ${brief.summary || '(none)'}
+- Products / offerings: ${brief.products.slice(0, 10).join(', ') || '(none)'}
+- Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
+- USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
+- Default tone from brief: ${brief.tone || 'professional, expert, helpful'}
+`
+    : '(No cached business brief — infer tone from the company name and niche.)';
 
-  if (sepIdx !== -1) {
-    content = stripLeakedStepContent(text.substring(0, sepIdx).trim());
-    try {
-      const metaRaw = text.substring(sepIdx + 10).trim();
-      const metaJson = JSON.parse(metaRaw);
-      meta_description = metaJson.meta_description ?? '';
-      slug = metaJson.slug ?? entry.slug;
-      external_links = metaJson.external_links ?? [];
-      internal_links = metaJson.internal_links ?? [];
-    } catch { /* use defaults */ }
-  }
+  const researchBlock = formatResearchForPrompt(research);
 
-  // Extract additional links from content via regex. Any http(s) link that
-  // points to the user's own domain is an *internal* link (backlinks to their
-  // site); anything else is external.
-  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
-  let match;
-  const ownHost = normalizeHost(project.domain);
-  while ((match = linkRegex.exec(content)) !== null) {
-    const url = match[2];
-    const host = safeHost(url);
-    const pointsToOwn = Boolean(host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`)));
-    if (pointsToOwn) {
-      if (!internal_links.includes(url)) internal_links.push(url);
-    } else if (!external_links.includes(url)) {
-      external_links.push(url);
-    }
-  }
+  const prompt = buildInstantWebResearchArticlePrompt({
+    topic,
+    primaryKeyword,
+    secondaryKeywordsLine: optionalKeywordsCsv.trim(),
+    targetAudienceLine: `${project.target_audience} — infer the most relevant sub-audience for this specific topic.`,
+    targetRegionName: regionName,
+    languageLabel,
+    writingStyleLabel,
+    articleTypeLabel,
+    companyName: project.company,
+    companyDomain: project.domain,
+    niche: project.niche,
+    briefBlock,
+    internalLinksBlock,
+    researchBlock,
+  });
 
-  // Relative /slug links (our own generated blogs) — still internal.
-  // We will convert them to absolute URLs based on project.domain
-  const internalLinkRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
-  while ((match = internalLinkRegex.exec(content)) !== null) {
-    const path = match[2];
-    const absoluteUrl = project.domain ? `https://${project.domain}${path}` : path;
-    
-    // Replace the relative link in the content with the absolute URL
-    content = content.replace(`](${path})`, `](${absoluteUrl})`);
-    
-    if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
-  }
-
-  const word_count = content.split(/\s+/).filter(Boolean).length;
-  const titleMatch = content.match(/^#\s+(.+)$/m);
-  const title = titleMatch ? titleMatch[1].replace(/\*/g, '').trim() : entry.title;
-
-  return {
-    title,
-    content,
-    meta_description,
-    slug,
-    word_count,
-    research_sources: research?.totalSourcesFound ?? 0,
-    external_links: [...new Set(external_links)].slice(0, 10),
-    internal_links: [...new Set(internal_links)].slice(0, 12),
-  };
+  const text = await geminiGenerate(prompt, 3, true);
+  return parseGeneratedBlogMarkdown(
+    text,
+    { title: topic.trim() || 'Article', slug: slugFromTopic(topic) },
+    project,
+    research
+  );
 }
 
 export async function generateContentCalendar(
@@ -1253,4 +1351,144 @@ JSON rules:
   }
 
   return { analysisMarkdown, clusterKeywords };
+}
+
+const INSTANT_TOPIC_SUGGEST_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    topic: { type: 'STRING' },
+    keywords: {
+      type: 'ARRAY',
+      items: { type: 'STRING' },
+    },
+  },
+  required: ['topic', 'keywords'],
+} as const;
+
+/**
+ * One-shot topic + exactly four SEO keyword phrases for the Instant Article form (no web search).
+ */
+export async function suggestInstantArticleTopicAndKeywords(input: {
+  company: string;
+  niche: string;
+  domain: string;
+  targetAudience: string;
+  regionLabel: string;
+  languageLabel: string;
+  briefSummary: string | null;
+  seedPhrases: string[];
+}): Promise<{ topic: string; keywords: string[] }> {
+  const seeds =
+    input.seedPhrases
+      .map(s => s.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+      .join('\n') || '(none — infer from company and niche only)';
+
+  const briefBlock = input.briefSummary?.trim()
+    ? `PROJECT BRIEF (source of truth):\n${input.briefSummary.trim()}`
+    : 'No cached project brief — infer from company, niche, and domain only.';
+
+  const prompt = `You are an SEO content strategist. Propose ONE high-value blog topic and keyword targets for organic search.
+
+BUSINESS
+- Company: ${input.company}
+- Domain: ${input.domain}
+- Niche: ${input.niche}
+- Target audience: ${input.targetAudience}
+- Target region: ${input.regionLabel}
+- Article language: ${input.languageLabel}
+
+${briefBlock}
+
+SEED PHRASES (from our research — prefer angles that align with these when relevant):
+${seeds}
+
+Rules:
+- Topic: a specific, compelling article title or topic line (not generic fluff). Must fit the business and region; should plausibly earn clicks from search.
+- Keywords: EXACTLY 4 distinct short phrases (2–5 words each) that real searchers would type, tightly related to the topic. Use the article language. No hashtags, no duplicates, no numbering.
+
+Return JSON only with keys "topic" (string) and "keywords" (array of 4 strings).`;
+
+  const run = async (withResponseSchema: boolean): Promise<string> => {
+    const generationConfig: Record<string, unknown> = {
+      temperature: 0.65,
+      maxOutputTokens: 1024,
+      responseMimeType: 'application/json',
+    };
+    if (withResponseSchema) {
+      generationConfig.responseSchema = INSTANT_TOPIC_SUGGEST_SCHEMA;
+    }
+
+    const res = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig,
+      }),
+    });
+
+    if (res.status === 400 && withResponseSchema) {
+      const errText = await res.text();
+      console.warn('[instant-topic-suggest] responseSchema rejected; retrying without schema:', errText.slice(0, 200));
+      return run(false);
+    }
+
+    if (res.status === 429) {
+      const fallback = await pollinationsGeminiFallback(
+        prompt + '\n\nReturn valid JSON: {"topic":"...","keywords":["","","",""]}',
+        'Gemini API rate limit reached',
+        0.65
+      );
+      if (fallback) return fallback;
+      throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
+    }
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Gemini ${res.status}: ${err}`);
+    }
+
+    const json = await res.json();
+    const cand = json?.candidates?.[0];
+    const text = cand?.content?.parts?.[0]?.text;
+    if (!text) {
+      const reason = String(cand?.finishReason ?? '');
+      if (reason.includes('SAFETY')) {
+        throw new Error('Gemini blocked the response (safety filter).');
+      }
+      throw new Error('Empty response from Gemini');
+    }
+    return text;
+  };
+
+  const raw = await run(true);
+  let parsed: { topic?: string; keywords?: string[] };
+  try {
+    parsed = JSON.parse(raw) as { topic?: string; keywords?: string[] };
+  } catch {
+    const brace = raw.match(/\{[\s\S]*\}/);
+    if (!brace) throw new Error('Could not parse topic suggestion JSON');
+    parsed = JSON.parse(brace[0]) as { topic?: string; keywords?: string[] };
+  }
+
+  const topic = String(parsed.topic ?? '').trim();
+  const kwRaw = Array.isArray(parsed.keywords) ? parsed.keywords : [];
+  const keywords = kwRaw
+    .map(k => String(k).trim())
+    .filter(k => k.length > 0)
+    .slice(0, 4);
+
+  if (!topic) {
+    throw new Error('Model returned an empty topic');
+  }
+  if (keywords.length < 4) {
+    throw new Error(`Expected 4 keywords, got ${keywords.length}`);
+  }
+
+  return { topic, keywords };
 }

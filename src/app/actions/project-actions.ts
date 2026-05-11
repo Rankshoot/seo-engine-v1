@@ -263,16 +263,24 @@ export async function getProjectStats(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: null };
 
-  const [kwResult, calResult, blogResult, auditRes] = await Promise.all([
+  const [kwResult, calResult, auditRes] = await Promise.all([
     supabaseAdmin.from('keywords').select('status').eq('project_id', projectId),
     supabaseAdmin.from('calendar_entries').select('status').eq('project_id', projectId),
-    supabaseAdmin.from('blogs').select('status').eq('project_id', projectId),
     getBlogAudits(projectId, { summaryOnly: true }),
   ]);
 
+  const blogsFull = await supabaseAdmin
+    .from('blogs')
+    .select('status, in_articles_library')
+    .eq('project_id', projectId);
+
+  const blogs: { status: string; in_articles_library?: boolean }[] =
+    blogsFull.error && /in_articles_library|schema cache/i.test(blogsFull.error.message)
+      ? ((await supabaseAdmin.from('blogs').select('status').eq('project_id', projectId)).data ?? [])
+      : (blogsFull.data ?? []);
+
   const keywords = kwResult.data ?? [];
   const calendar = calResult.data ?? [];
-  const blogs = blogResult.data ?? [];
   const auditPending = auditRes.success ? Math.max(0, auditRes.coverage.blogs_found - auditRes.coverage.blogs_audited) : 0;
 
   return {
@@ -282,6 +290,7 @@ export async function getProjectStats(projectId: string) {
       approvedKeywords: keywords.filter(k => k.status === 'approved').length,
       calendarEntries: calendar.length,
       blogsGenerated: blogs.filter(b => ['generated', 'approved', 'published'].includes(b.status)).length,
+      articlesInLibrary: blogs.filter(b => Boolean((b as { in_articles_library?: boolean }).in_articles_library)).length,
       auditPending,
     },
   };

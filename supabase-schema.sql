@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS blogs (
   research_sources INTEGER DEFAULT 0,
   external_links TEXT[] DEFAULT '{}',
   internal_links TEXT[] DEFAULT '{}',
+  in_articles_library BOOLEAN NOT NULL DEFAULT false,
   source_url TEXT DEFAULT '',
   repair_notes TEXT[] DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),

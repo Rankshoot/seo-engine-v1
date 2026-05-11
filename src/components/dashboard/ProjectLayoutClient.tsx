@@ -59,7 +59,7 @@ function ProjectLayoutShell({
           />
         </div>
         <nav className={`flex-1 overflow-y-auto transition-all duration-300 ease-in-out ${isCollapsed ? "px-2" : "px-4"} space-y-2 mt-2`}>
-          {[0, 1, 2, 3, 4, 5].map(i => (
+          {[0, 1, 2, 3, 4, 5, 6].map(i => (
             <Skeleton
               key={i}
               className={isCollapsed ? "h-11 w-11 mx-auto rounded-[8px]" : "h-11 w-full rounded-[8px]"}

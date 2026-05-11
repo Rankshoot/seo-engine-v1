@@ -14,6 +14,8 @@ import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
 import { projectsApi } from "@/frontend/api/projects";
 import { briefApi } from "@/frontend/api/brief";
 import { calendarApi } from "@/frontend/api/calendar";
+import { articlesApi } from "@/frontend/api/articles";
+import { contentGeneratorApi } from "@/frontend/api/content-generator";
 import { auditsApi } from "@/frontend/api/audits";
 import { competitorsApi } from "@/frontend/api/competitors";
 
@@ -34,11 +36,35 @@ const Icon = {
   check: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>,
   plus: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8m-4-4h8"/></svg>,
   ai: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9.8 15.9 9 18.8l-.8-2.9a4.5 4.5 0 0 0-3.1-3.1L2.3 12l2.8-.8a4.5 4.5 0 0 0 3.1-3.1L9 5.3l.8 2.8a4.5 4.5 0 0 0 3.1 3.1l2.8.8-2.8.8a4.5 4.5 0 0 0-3.1 3.1Z"/><path d="M19 2v4"/><path d="M21 4h-4"/><path d="M19 18v4"/><path d="M21 20h-4"/></svg>,
+  /** Document + pen — content generation */
+  contentGen: (
+    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10.4 12.6a2 2 0 1 1 3 3L8 21l-4 1 1-4Z" />
+    </svg>
+  ),
+  /** Stacked pages — saved articles library */
+  articles: (
+    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8.5 3H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h1" strokeOpacity={0.35} />
+      <path d="M9 3h8.5L19 6.5V19a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+      <path d="M9 9h6" />
+      <path d="M9 13h6" />
+      <path d="M9 17h4" />
+    </svg>
+  ),
 };
 
 interface ProjectSidebarProps {
   project: Project;
-  stats?: { approvedKeywords: number; calendarEntries: number; blogsGenerated: number; auditPending?: number };
+  stats?: {
+    approvedKeywords: number;
+    calendarEntries: number;
+    blogsGenerated: number;
+    articlesInLibrary?: number;
+    auditPending?: number;
+  };
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
@@ -70,6 +96,7 @@ export default function ProjectSidebar({
         approvedKeywords: statsResponse.data.approvedKeywords,
         calendarEntries: statsResponse.data.calendarEntries,
         blogsGenerated: statsResponse.data.blogsGenerated,
+        articlesInLibrary: statsResponse.data.articlesInLibrary,
         auditPending: statsResponse.data.auditPending,
       };
     }
@@ -80,6 +107,7 @@ export default function ProjectSidebar({
     statsResponse?.data?.approvedKeywords,
     statsResponse?.data?.calendarEntries,
     statsResponse?.data?.blogsGenerated,
+    statsResponse?.data?.articlesInLibrary,
     statsResponse?.data?.auditPending,
   ]);
   const liveStats = useAppSelector(state => selectProjectStats(state, project.id, serverStats));
@@ -116,12 +144,23 @@ export default function ProjectSidebar({
       case "Blogs":
         safePrefetch(qk.calendarWithBlogs(id), () => calendarApi.withBlogs(id));
         break;
+      case "Articles":
+        safePrefetch(qk.articlesLibrary(id), () => articlesApi.library(id));
+        break;
       case "Competitors":
         safePrefetch(qk.competitors(id), () => competitorsApi.benchmark(id));
         break;
       case "Content Health":
         safePrefetch(qk.audits(id), () => auditsApi.list(id));
         break;
+      case "Content Generator": {
+        const kwo = keywordsListQueryOptions(id);
+        safePrefetch(kwo.queryKey, kwo.queryFn);
+        safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
+        safePrefetch(qk.brief(id), () => briefApi.get(id));
+        safePrefetch(qk.contentGeneratorHistory(id), () => contentGeneratorApi.history(id));
+        break;
+      }
       default:
         // Overview — project + calendar data from shared React Query keys.
         break;
@@ -147,6 +186,7 @@ export default function ProjectSidebar({
     serverStats?.approvedKeywords,
     serverStats?.calendarEntries,
     serverStats?.blogsGenerated,
+    serverStats?.articlesInLibrary,
     serverStats?.auditPending,
   ]);
 
@@ -169,6 +209,16 @@ export default function ProjectSidebar({
       href: `${base}/keywords`,
       badge: navCountsReady && liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
       prefetchLabel: "Keywords",
+    },
+    {
+      icon: Icon.contentGen,
+      label: "Content Generator",
+      href: `${base}/content-generator`,
+      prefetchLabel: "Content Generator",
+      children: [
+        { label: "Instant article", href: `${base}/content-generator/instant` },
+        { label: "Content history", href: `${base}/content-generator/history` },
+      ],
     },
     {
       icon: Icon.target,
@@ -202,6 +252,13 @@ export default function ProjectSidebar({
       href: `${base}/blogs`,
       badge: navCountsReady && liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
       prefetchLabel: "Blogs",
+    },
+    {
+      icon: Icon.articles,
+      label: "Articles",
+      href: `${base}/articles`,
+      badge: navCountsReady && liveStats?.articlesInLibrary ? `${liveStats.articlesInLibrary}` : undefined,
+      prefetchLabel: "Articles",
     },
   ];
 

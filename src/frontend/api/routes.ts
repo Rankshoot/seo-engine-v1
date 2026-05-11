@@ -33,6 +33,9 @@ export const V1Routes = {
   calendarAddCustom: (projectId: string) => `/projects/${projectId}/calendar/add-custom`,
   calendarContentHealth: (projectId: string) => `/projects/${projectId}/calendar/content-health`,
   calendarApproveAi: (projectId: string) => `/projects/${projectId}/calendar/approve-ai-suggestion`,
+  projectArticlesLibrary: (projectId: string) => `/projects/${projectId}/articles`,
+  projectContentGeneratorHistory: (projectId: string) =>
+    `/projects/${projectId}/content-generator/history`,
 
   // ── Competitors ────────────────────────────────────────────────────────────
   competitorsBenchmark: (projectId: string) => `/projects/${projectId}/competitors/benchmark`,
@@ -52,6 +55,7 @@ export const V1Routes = {
   blogsGenerate: "/blogs/generate",
   blogContent: (blogId: string) => `/blogs/${blogId}/content`,
   blogStatus: (blogId: string) => `/blogs/${blogId}/status`,
+  blogArticlesLibrary: (blogId: string) => `/blogs/${blogId}/articles-library`,
   blogFixSeo: (blogId: string) => `/blogs/${blogId}/fix-seo`,
   blogRewriteSelection: (blogId: string) => `/blogs/${blogId}/rewrite-selection`,
 } as const;

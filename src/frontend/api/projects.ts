@@ -13,6 +13,7 @@ export type ProjectStatsResponse = {
     approvedKeywords: number;
     calendarEntries: number;
     blogsGenerated: number;
+    articlesInLibrary: number;
     auditPending: number;
   } | null;
 };

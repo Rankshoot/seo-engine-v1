@@ -276,6 +276,8 @@ export interface Blog {
   research_sources: number;
   external_links: string[];
   internal_links: string[];
+  /** When true, listed on the project Articles page (saved from the blog viewer). */
+  in_articles_library?: boolean;
   /** If this blog is a repair of an existing public page, the original URL. */
   source_url?: string;
   /** Bullet list of changes the LLM made during repair (only set when article_type === 'Repair'). */
@@ -288,6 +290,12 @@ export interface Blog {
 export type CalendarEntryWithBlog = CalendarEntry & {
   blog: Pick<Blog, "id" | "entry_id" | "title" | "word_count" | "status" | "research_sources"> | null;
 };
+
+/** Row shape for the Articles library table (no body content). */
+export type ArticleLibraryEntry = Pick<
+  Blog,
+  "id" | "title" | "target_keyword" | "article_type" | "status" | "created_at" | "updated_at"
+>;
 
 export const ARTICLE_TYPES = [
   'How-to Guide',

@@ -884,11 +884,16 @@ export async function generateInstantWebResearchArticle(input: {
   regionName: string;
   languageLabel: string;
   writingStyleLabel: string;
+  articleType: string;
   articleTypeLabel: string;
   optionalKeywordsCsv: string;
   research: ResearchContext;
   brief: BusinessBrief | null;
   existingBlogs: Array<{ title: string; slug: string; target_keyword: string }>;
+  customSourcesMarkdown?: string | null;
+  researchMethod: 'web' | 'custom';
+  /** Number of user files/URLs successfully ingested into the prompt (for analytics). */
+  customSourceIngestCount?: number;
 }): Promise<GeneratedBlog> {
   const {
     project,
@@ -897,11 +902,15 @@ export async function generateInstantWebResearchArticle(input: {
     regionName,
     languageLabel,
     writingStyleLabel,
+    articleType,
     articleTypeLabel,
     optionalKeywordsCsv,
     research,
     brief,
     existingBlogs,
+    customSourcesMarkdown,
+    researchMethod,
+    customSourceIngestCount = 0,
   } = input;
 
   const siteLinks = (brief?.internal_link_candidates ?? [])
@@ -948,6 +957,7 @@ export async function generateInstantWebResearchArticle(input: {
     targetRegionName: regionName,
     languageLabel,
     writingStyleLabel,
+    articleTypeId: articleType,
     articleTypeLabel,
     companyName: project.company,
     companyDomain: project.domain,
@@ -955,15 +965,21 @@ export async function generateInstantWebResearchArticle(input: {
     briefBlock,
     internalLinksBlock,
     researchBlock,
+    customSourcesBlock: (customSourcesMarkdown ?? '').trim(),
+    researchMethod,
   });
 
   const text = await geminiGenerate(prompt, 3, true);
-  return parseGeneratedBlogMarkdown(
+  const parsed = parseGeneratedBlogMarkdown(
     text,
     { title: topic.trim() || 'Article', slug: slugFromTopic(topic) },
     project,
     research
   );
+  return {
+    ...parsed,
+    research_sources: (parsed.research_sources ?? 0) + customSourceIngestCount,
+  };
 }
 
 export async function generateContentCalendar(
@@ -1353,22 +1369,19 @@ JSON rules:
   return { analysisMarkdown, clusterKeywords };
 }
 
-const INSTANT_TOPIC_SUGGEST_SCHEMA = {
+const INSTANT_KEYWORD_TOPIC_SCHEMA = {
   type: 'OBJECT',
   properties: {
+    keyword: { type: 'STRING' },
     topic: { type: 'STRING' },
-    keywords: {
-      type: 'ARRAY',
-      items: { type: 'STRING' },
-    },
   },
-  required: ['topic', 'keywords'],
+  required: ['keyword', 'topic'],
 } as const;
 
 /**
- * One-shot topic + exactly four SEO keyword phrases for the Instant Article form (no web search).
+ * One keyword grounded in the project's website domain, then one article topic that targets that keyword (no web search).
  */
-export async function suggestInstantArticleTopicAndKeywords(input: {
+export async function suggestInstantArticleKeywordAndTopic(input: {
   company: string;
   niche: string;
   domain: string;
@@ -1377,23 +1390,34 @@ export async function suggestInstantArticleTopicAndKeywords(input: {
   languageLabel: string;
   briefSummary: string | null;
   seedPhrases: string[];
-}): Promise<{ topic: string; keywords: string[] }> {
+  /** Forces a different sub-intent each request (server-chosen). */
+  rotationHint: string;
+  /** Phrases the model must not repeat (e.g. prior Ask AI fills). */
+  avoidPhrases: string[];
+}): Promise<{ topic: string; keyword: string }> {
   const seeds =
     input.seedPhrases
       .map(s => s.trim())
       .filter(Boolean)
       .slice(0, 20)
-      .join('\n') || '(none — infer from company and niche only)';
+      .join('\n') || '(none — infer from domain and niche only)';
 
   const briefBlock = input.briefSummary?.trim()
     ? `PROJECT BRIEF (source of truth):\n${input.briefSummary.trim()}`
-    : 'No cached project brief — infer from company, niche, and domain only.';
+    : 'No cached project brief — infer primarily from the website domain, company, and niche.';
 
-  const prompt = `You are an SEO content strategist. Propose ONE high-value blog topic and keyword targets for organic search.
+  const avoidBlock =
+    input.avoidPhrases.length > 0
+      ? `BANNED PHRASES (case-insensitive; do not output the keyword or topic if it duplicates or only trivially rephrases any of these — use a clearly different search intent):\n${input.avoidPhrases.map(p => `- ${p}`).join('\n')}`
+      : '(No prior phrases to avoid — still pick a fresh angle.)';
 
-BUSINESS
+  const prompt = `You are an SEO content strategist for the Instant Article tool.
+
+PRIMARY ANCHOR — WEBSITE DOMAIN (this is what the keyword must be relevant to):
+${input.domain}
+
+BUSINESS CONTEXT
 - Company: ${input.company}
-- Domain: ${input.domain}
 - Niche: ${input.niche}
 - Target audience: ${input.targetAudience}
 - Target region: ${input.regionLabel}
@@ -1401,23 +1425,30 @@ BUSINESS
 
 ${briefBlock}
 
-SEED PHRASES (from our research — prefer angles that align with these when relevant):
+SEED PHRASES (optional alignment — only if they clearly match this domain's offering):
 ${seeds}
 
-Rules:
-- Topic: a specific, compelling article title or topic line (not generic fluff). Must fit the business and region; should plausibly earn clicks from search.
-- Keywords: EXACTLY 4 distinct short phrases (2–5 words each) that real searchers would type, tightly related to the topic. Use the article language. No hashtags, no duplicates, no numbering.
+VARIETY FOR THIS REQUEST (required — obey strictly):
+- ${input.rotationHint}
+- This run must feel like a new brainstorm: a different head term or query pattern than a generic default you might repeat. Same domain, new angle.
 
-Return JSON only with keys "topic" (string) and "keywords" (array of 4 strings).`;
+${avoidBlock}
+
+Process (follow in order):
+1) KEYWORD — Output exactly ONE short search phrase (2–6 words) in ${input.languageLabel} that a real searcher would type when looking for what this domain's business offers. It must be plausibly winnable organic demand for this site (not a random trending query unrelated to the domain). No brand name unless it is clearly a navigational product query for this company. No hashtags, no quotes, no numbering.
+2) TOPIC — One specific, compelling article title or headline that naturally centers that same keyword intent (not generic fluff). It should read like a strong blog title for ${input.regionLabel}.
+
+Return JSON only with keys "keyword" (string) and "topic" (string).`;
 
   const run = async (withResponseSchema: boolean): Promise<string> => {
     const generationConfig: Record<string, unknown> = {
-      temperature: 0.65,
+      temperature: 0.92,
+      topP: 0.94,
       maxOutputTokens: 1024,
       responseMimeType: 'application/json',
     };
     if (withResponseSchema) {
-      generationConfig.responseSchema = INSTANT_TOPIC_SUGGEST_SCHEMA;
+      generationConfig.responseSchema = INSTANT_KEYWORD_TOPIC_SCHEMA;
     }
 
     const res = await fetch(GEMINI_URL, {
@@ -1434,15 +1465,15 @@ Return JSON only with keys "topic" (string) and "keywords" (array of 4 strings).
 
     if (res.status === 400 && withResponseSchema) {
       const errText = await res.text();
-      console.warn('[instant-topic-suggest] responseSchema rejected; retrying without schema:', errText.slice(0, 200));
+      console.warn('[instant-keyword-topic] responseSchema rejected; retrying without schema:', errText.slice(0, 200));
       return run(false);
     }
 
     if (res.status === 429) {
       const fallback = await pollinationsGeminiFallback(
-        prompt + '\n\nReturn valid JSON: {"topic":"...","keywords":["","","",""]}',
+        prompt + '\n\nReturn valid JSON: {"keyword":"...","topic":"..."}',
         'Gemini API rate limit reached',
-        0.65
+        0.92
       );
       if (fallback) return fallback;
       throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
@@ -1467,28 +1498,24 @@ Return JSON only with keys "topic" (string) and "keywords" (array of 4 strings).
   };
 
   const raw = await run(true);
-  let parsed: { topic?: string; keywords?: string[] };
+  let parsed: { keyword?: string; topic?: string };
   try {
-    parsed = JSON.parse(raw) as { topic?: string; keywords?: string[] };
+    parsed = JSON.parse(raw) as { keyword?: string; topic?: string };
   } catch {
     const brace = raw.match(/\{[\s\S]*\}/);
-    if (!brace) throw new Error('Could not parse topic suggestion JSON');
-    parsed = JSON.parse(brace[0]) as { topic?: string; keywords?: string[] };
+    if (!brace) throw new Error('Could not parse keyword/topic suggestion JSON');
+    parsed = JSON.parse(brace[0]) as { keyword?: string; topic?: string };
   }
 
+  const keyword = String(parsed.keyword ?? '').trim();
   const topic = String(parsed.topic ?? '').trim();
-  const kwRaw = Array.isArray(parsed.keywords) ? parsed.keywords : [];
-  const keywords = kwRaw
-    .map(k => String(k).trim())
-    .filter(k => k.length > 0)
-    .slice(0, 4);
 
+  if (!keyword) {
+    throw new Error('Model returned an empty keyword');
+  }
   if (!topic) {
     throw new Error('Model returned an empty topic');
   }
-  if (keywords.length < 4) {
-    throw new Error(`Expected 4 keywords, got ${keywords.length}`);
-  }
 
-  return { topic, keywords };
+  return { topic, keyword };
 }

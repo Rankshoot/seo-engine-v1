@@ -57,11 +57,14 @@ export default function ContentGeneratorPage() {
         <h2 className="mb-6 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">Choose your writing mode</h2>
 
         <div className="grid gap-6 md:grid-cols-2">
-        {/* 10-Steps Article */}
-        <article className="flex flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
+        {/* 10-Steps Article — full flow not available yet */}
+        <article
+          className="flex flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated opacity-[0.92]"
+          aria-label="10-Steps Article — coming soon"
+        >
           <div className="relative bg-pink-100/90 px-6 pb-4 pt-8 dark:bg-pink-500/10">
-            <span className="absolute left-4 top-4 inline-flex rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300">
-              Recommended
+            <span className="absolute left-4 top-4 inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">
+              Coming soon
             </span>
             <div className="mx-auto flex h-[132px] items-center justify-center">
               <IllustrationTenSteps />
@@ -71,7 +74,7 @@ export default function ContentGeneratorPage() {
           <div className="flex flex-1 flex-col border-t border-border-subtle p-6">
             <div className="mb-4 flex flex-wrap items-center gap-2">
               <h3 className="text-[20px] font-bold text-text-primary">10-Steps Article</h3>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300">
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100/60 px-2 py-0.5 text-[11px] font-semibold text-emerald-800/80 dark:bg-emerald-500/15 dark:text-emerald-400/80">
                 <ClockIcon className="h-3.5 w-3.5" />
                 5 mins
               </span>
@@ -105,12 +108,13 @@ export default function ContentGeneratorPage() {
               </li>
             </ul>
 
-            <ProjectNavLink
-              href={`${base}/keywords`}
-              className="flex w-full items-center justify-center rounded-full border border-brand-action bg-transparent py-3 text-[14px] font-medium text-text-primary transition-colors hover:bg-brand-action/10"
+            <button
+              type="button"
+              disabled
+              className="flex w-full cursor-not-allowed items-center justify-center rounded-full border border-border-subtle bg-surface-secondary py-3 text-[14px] font-medium text-text-tertiary"
             >
-              Click to start
-            </ProjectNavLink>
+              Coming soon
+            </button>
           </div>
         </article>
 

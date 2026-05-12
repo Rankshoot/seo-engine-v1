@@ -1,5 +1,6 @@
 import mammoth from 'mammoth';
 import TurndownService from 'turndown';
+import pdfParse from 'pdf-parse';
 import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
 
 const TEXT_LIKE = new Set(['md', 'markdown', 'txt', 'text']);
@@ -11,13 +12,26 @@ export function extensionOf(filename: string): string {
 }
 
 /**
- * Convert upload bytes to Markdown (server-only). Supports .md/.markdown/.txt and .docx.
+ * Convert upload bytes to Markdown (server-only). Supports .md/.markdown/.txt, .docx, and .pdf.
  */
 export async function bytesToMarkdown(buffer: Buffer, filename: string): Promise<string> {
   const ext = extensionOf(filename);
   if (TEXT_LIKE.has(ext)) {
     const text = buffer.toString('utf8');
     return stripEmptyFragmentAnchorTags(text).replace(/\r\n/g, '\n').trim();
+  }
+  if (ext === 'doc') {
+    throw new Error(
+      'Legacy Word ".doc" is not supported. Open the file in Word or Google Docs and save as .docx, then upload again.'
+    );
+  }
+  if (ext === 'pdf') {
+    const parsed = await pdfParse(buffer);
+    const text = (parsed.text ?? '').replace(/\r\n/g, '\n').trim();
+    if (!text) {
+      throw new Error('This PDF has no extractable text (it may be image-only). Try a text-based PDF or paste a link instead.');
+    }
+    return stripEmptyFragmentAnchorTags(text);
   }
   if (ext === 'docx') {
     const { value: html } = await mammoth.convertToHtml({ buffer });
@@ -26,7 +40,7 @@ export async function bytesToMarkdown(buffer: Buffer, filename: string): Promise
     const md = td.turndown(html).replace(/\n{3,}/g, '\n\n').trim();
     return stripEmptyFragmentAnchorTags(md);
   }
-  throw new Error(`Unsupported format ".${ext}". Upload Markdown (.md), plain text (.txt), or Word (.docx).`);
+  throw new Error(`Unsupported format ".${ext}". Upload Markdown (.md), plain text (.txt), Word (.docx), or PDF (.pdf).`);
 }
 
 export function extractTitleFromMarkdown(markdown: string, filename: string): string {

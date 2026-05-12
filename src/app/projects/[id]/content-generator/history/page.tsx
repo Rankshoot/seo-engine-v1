@@ -99,7 +99,7 @@ export default function ContentGeneratorHistoryPage() {
           )}
           <ProjectNavLink
             href={`/projects/${projectId}/content-generator/instant`}
-            className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-text-primary px-6 text-[14px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
           >
             New instant article
           </ProjectNavLink>
@@ -132,20 +132,20 @@ export default function ContentGeneratorHistoryPage() {
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full min-w-[720px] text-left border-collapse">
               <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
                   <th className="px-3 py-3 w-12 text-center">#</th>
-                  <th className="px-4 py-3 w-28">Date</th>
-                  <th className="px-4 py-3 min-w-[8rem]">Keyword</th>
-                  <th className="px-4 py-3 min-w-[12rem]">Title</th>
+                  <th className="px-4 py-3 w-28 whitespace-nowrap">Date</th>
+                  <th className="px-4 py-3 min-w-[10rem] lg:min-w-[12rem]">Keyword</th>
+                  <th className="px-4 py-3 min-w-[12rem] lg:min-w-[16rem]">Title</th>
                   <th className="px-4 py-3 w-24">Type</th>
                   <th className="px-4 py-3 w-36">Status</th>
-                  <th className="px-4 py-3 w-28">Articles</th>
-                  <th className="px-4 py-3 text-right pr-4 w-[8.5rem]">Actions</th>
+                  <th className="px-4 py-3 w-28 whitespace-nowrap">Articles</th>
+                  <th className="px-4 py-3 text-right whitespace-nowrap w-[1%]">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle/60">
+              <tbody className="divide-y divide-border-subtle">
                 {rows.map((row, i) => {
                   const blogStatus = asBlogStatus(row.status);
                   const inLib = Boolean(row.in_articles_library);
@@ -157,12 +157,12 @@ export default function ContentGeneratorHistoryPage() {
                       <td className="px-4 py-2.5 align-middle tabular-nums text-[12px] text-text-primary whitespace-nowrap">
                         {fmtDate(row.created_at)}
                       </td>
-                      <td className="px-4 py-2.5 align-middle max-w-[11rem]">
+                      <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(20rem,32vw)]">
                         <p className="truncate text-[13px] font-medium text-text-primary" title={row.target_keyword}>
                           {row.target_keyword || "—"}
                         </p>
                       </td>
-                      <td className="px-4 py-2.5 align-middle max-w-[18rem]">
+                      <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(28rem,40vw)]">
                         <p className="truncate text-[13px] text-text-secondary" title={row.title}>
                           {row.title}
                         </p>
@@ -175,7 +175,7 @@ export default function ContentGeneratorHistoryPage() {
                           value={blogStatus}
                           onChange={(e) => void handleStatusChange(row.id, e.target.value as BlogStatus)}
                           disabled={savingStatus === row.id}
-                          className="max-w-[9.5rem] rounded-md border border-border-subtle bg-surface-secondary px-2 py-1 text-[11px] text-text-primary outline-none disabled:opacity-50"
+                          className="max-w-[10rem] rounded-full border border-border-subtle bg-surface-secondary px-3 py-1.5 text-[12px] text-text-primary outline-none transition-colors hover:bg-surface-hover disabled:opacity-50"
                         >
                           {BLOG_STATUSES.map((s) => (
                             <option key={s.value} value={s.value}>
@@ -197,7 +197,7 @@ export default function ContentGeneratorHistoryPage() {
                       <td className="px-4 py-2.5 align-middle text-right">
                         <ProjectNavLink
                           href={`/projects/${projectId}/blogs/${row.id}`}
-                          className="inline-flex h-8 items-center justify-center rounded-full border border-border-subtle min-w-[5.5rem] px-3 text-[11px] font-semibold text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                          className="inline-flex shrink-0 items-center justify-center rounded-full bg-text-primary px-4 py-2 text-[13px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
                         >
                           View article
                         </ProjectNavLink>

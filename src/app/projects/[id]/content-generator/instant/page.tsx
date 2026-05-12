@@ -10,6 +10,7 @@ import { toast } from "react-hot-toast";
 import {
   generateInstantWebResearchArticleAction,
   suggestInstantArticleTopicAction,
+  type InstantCustomRefPayload,
 } from "@/app/actions/instant-article-actions";
 
 /**
@@ -101,6 +102,40 @@ function cloneReferenceRows(rows: ReferenceRow[]): ReferenceRow[] {
     ...r,
     file: r.file,
   }));
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize) as unknown as number[]);
+  }
+  return btoa(binary);
+}
+
+async function serializeCustomReferences(rows: ReferenceRow[]): Promise<InstantCustomRefPayload[]> {
+  const out: InstantCustomRefPayload[] = [];
+  for (const r of rows) {
+    if (r.kind === "file" && r.file) {
+      const buf = await r.file.arrayBuffer();
+      if (buf.byteLength > 10 * 1024 * 1024) {
+        throw new Error(`"${r.file.name}" is over 10 MB.`);
+      }
+      out.push({
+        kind: "file",
+        filename: r.file.name,
+        mimeType: r.file.type || "application/octet-stream",
+        dataBase64: arrayBufferToBase64(buf),
+      });
+    } else if (r.kind === "link") {
+      const u = r.link.trim();
+      if (u.length > 4) {
+        out.push({ kind: "link", url: u });
+      }
+    }
+  }
+  return out;
 }
 
 function ChevronDown({ className }: { className?: string }) {
@@ -482,12 +517,18 @@ export default function InstantArticlePage() {
   }, [phase, step]);
 
   const heroLead = useMemo(() => {
-    if (phase === "generating")
-      return "Estimated time remaining: about 5 minutes. Keep this tab open while we run web research and drafting.";
-    if (step === 2)
-      return "Confirm your choices below. Generation uses live web research and your cached project brief.";
+    if (phase === "generating") {
+      return research === "custom"
+        ? "Estimated time: up to about 5 minutes. Keep this tab open while we ingest your references, add SERP context, and draft."
+        : "Estimated time remaining: about 5 minutes. Keep this tab open while we run web research and drafting.";
+    }
+    if (step === 2) {
+      return research === "custom"
+        ? "Confirm your choices below. Your saved files and links are merged into the writer prompt (with live SERP context) plus your cached project brief."
+        : "Confirm your choices below. Generation uses live web research and your cached project brief.";
+    }
     return "Configure topic, audience, and research — then produce a traffic-ready draft in one run.";
-  }, [phase, step]);
+  }, [phase, step, research]);
 
   async function askAi() {
     if (!projectId) {
@@ -496,14 +537,18 @@ export default function InstantArticlePage() {
     }
     setAskAiLoading(true);
     try {
-      const res = await suggestInstantArticleTopicAction(projectId, { region, language });
+      const res = await suggestInstantArticleTopicAction(projectId, {
+        region,
+        language,
+        avoidKeywordsCsv: keywords.trim() || undefined,
+      });
       if (res.suggestTrace?.length) {
         console.log("[Instant article] Ask AI trace:", res.suggestTrace);
       }
       if (res.success) {
         setTopic(res.topic);
         setKeywords(res.keywords);
-        toast.success("Topic and keywords filled from AI.");
+        toast.success("Topic and keyword filled from your project domain.");
       } else {
         toast.error(res.error || "Ask AI failed");
       }
@@ -547,14 +592,25 @@ export default function InstantArticlePage() {
       toast.error("Missing project.");
       return;
     }
-    if (research !== "web") {
-      toast.error("This flow is for AI Web Research. Switch research method or use the calendar.");
-      return;
-    }
     if (!topic.trim() || !writingStyle) {
       toast.error("Complete topic and writing style first.");
       return;
     }
+
+    let customReferences: InstantCustomRefPayload[] | undefined;
+    if (research === "custom") {
+      try {
+        customReferences = await serializeCustomReferences(customReferenceRows);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Could not read a reference file.");
+        return;
+      }
+      if (!customReferences.length) {
+        toast.error("Add at least one file or https link in Custom Sources (Save in Add References), or switch to AI Web Research.");
+        return;
+      }
+    }
+
     setPhase("generating");
     try {
       const res = await generateInstantWebResearchArticleAction(projectId, {
@@ -566,6 +622,8 @@ export default function InstantArticlePage() {
         keywords,
         articleType,
         articleTypeLabel: ARTICLE_TYPES.find(t => t.id === articleType)?.label ?? articleType,
+        researchMethod: research,
+        customReferences,
       });
       if (res.instantArticleTrace?.length) {
         console.log("[Instant article] trace:", res.instantArticleTrace);
@@ -596,6 +654,7 @@ export default function InstantArticlePage() {
     router,
     base,
     queryClient,
+    customReferenceRows,
   ]);
 
   return (
@@ -671,7 +730,6 @@ export default function InstantArticlePage() {
                   <button
                     type="button"
                     onClick={runWebResearchGeneration}
-                    disabled={research !== "web"}
                     className={`${C.btnPrimary} mt-4 w-full`}
                   >
                     Generate Article
@@ -943,7 +1001,7 @@ export default function InstantArticlePage() {
                   <p className={`mt-6 text-[14px] leading-relaxed ${C.muted}`}>
                     {research === "web"
                       ? "When you are ready, choose Generate Article (sidebar or footer). We will gather live SERP context, call Gemini with your project brief, then open the blog viewer with your draft."
-                      : "Instant generation with custom uploads is not available yet. Switch to AI Web Research above, or queue posts from the calendar."}
+                      : "When you are ready, we will read your saved files and public links (via our reader), add live SERP context for angles and external links, then draft in Gemini with your references prioritized in the prompt."}
                   </p>
                   <div className="mt-6 flex flex-wrap gap-3">
                     <ProjectNavLink href={`${base}/calendar}`} className={`${C.btnPrimary} inline-flex items-center justify-center no-underline`}>
@@ -959,12 +1017,17 @@ export default function InstantArticlePage() {
                 </div>
               </div>
             )}
+        </div>
 
-            <footer className="sticky bottom-0 z-30 mt-10 border-t border-border-subtle bg-surface-primary/90 py-4 pt-5 backdrop-blur-sm">
+        <footer className="sticky bottom-0 z-30 mt-8 pb-3 pt-2 lg:col-span-2 lg:mt-10">
+          <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-4 py-3 backdrop-blur-sm sm:px-5">
+            {phase === "generating" ? (
+              <p className="text-center text-[13px] text-text-tertiary">
+                Please keep this tab open while we finish drafting.
+              </p>
+            ) : (
               <div className="flex flex-wrap items-center justify-between gap-3">
-                {phase === "generating" ? (
-                  <span className="text-[13px] text-text-tertiary">Please keep this tab open…</span>
-                ) : step === 2 ? (
+                {step === 2 ? (
                   <button type="button" onClick={() => setStep(1)} className={C.btnSecondary}>
                     Back
                   </button>
@@ -974,52 +1037,28 @@ export default function InstantArticlePage() {
                   </ProjectNavLink>
                 )}
 
-                <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
-                  {phase === "generating" ? null : step === 1 ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void askAi()}
-                        disabled={askAiLoading}
-                        className={`${C.btnOutlineAccent} inline-flex items-center gap-2`}
-                      >
-                        <WandIcon className="h-4 w-4 text-brand-action" />
-                        {askAiLoading ? "Thinking…" : "Ask AI"}
-                      </button>
-                      <button type="button" onClick={goGenerate} className={C.btnPrimary}>
-                        Generate Article
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void askAi()}
-                        disabled={askAiLoading}
-                        className={`${C.btnOutlineAccent} inline-flex items-center gap-2`}
-                      >
-                        <WandIcon className="h-4 w-4 text-brand-action" />
-                        {askAiLoading ? "Thinking…" : "Ask AI"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (research !== "web") {
-                            toast.error("Instant generation with custom sources is not available yet. Switch to AI Web Research or use the calendar.");
-                            return;
-                          }
-                          void runWebResearchGeneration();
-                        }}
-                        className={C.btnPrimary}
-                      >
-                        Generate Article
-                      </button>
-                    </>
-                  )}
+                <div className="flex w-full flex-wrap items-center justify-center gap-2 sm:ml-auto sm:w-auto sm:justify-end sm:gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void askAi()}
+                    disabled={askAiLoading}
+                    className={`${C.btnOutlineAccent} inline-flex items-center gap-2`}
+                  >
+                    <WandIcon className="h-4 w-4 shrink-0 text-brand-action" />
+                    {askAiLoading ? "Thinking…" : "Ask AI"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={step === 1 ? goGenerate : () => void runWebResearchGeneration()}
+                    className={C.btnPrimary}
+                  >
+                    Generate Article
+                  </button>
                 </div>
               </div>
-            </footer>
-        </div>
+            )}
+          </div>
+        </footer>
       </div>
 
       <AddReferencesModal

@@ -1,13 +1,30 @@
 'use server';
 
+import { randomInt } from 'node:crypto';
 import { currentUser } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { researchKeyword } from '@/lib/research';
-import { generateInstantWebResearchArticle, suggestInstantArticleTopicAndKeywords } from '@/lib/gemini';
+import { generateInstantWebResearchArticle, suggestInstantArticleKeywordAndTopic } from '@/lib/gemini';
 import { sanitizeBlogContent, countWordsInMarkdown } from '@/lib/blog-content';
 import type { BusinessBrief } from '@/lib/business-brief';
 import type { Blog } from '@/lib/types';
 import { TARGET_REGIONS } from '@/lib/types';
+import { ingestInstantArticleCustomSources, type InstantCustomRefPayload } from '@/lib/instant-custom-sources';
+
+export type { InstantCustomRefPayload } from '@/lib/instant-custom-sources';
+
+const INSTANT_ASK_AI_ANGLE_HINTS = [
+  'Pick a how-to or step-by-step question real searchers ask in this space.',
+  'Pick a vs / alternatives / best-tools comparison angle.',
+  'Pick a cost, pricing, or ROI angle when it fits the niche.',
+  'Pick a common mistakes, pitfalls, or myths-to-avoid angle.',
+  'Pick a checklist, template, or framework angle.',
+  'Pick a getting-started or beginner guide angle.',
+  'Pick a use case aimed at a specific role or company size (e.g. startup vs enterprise).',
+  'Pick a benefits, outcomes, or why-it-matters angle.',
+  'Pick a definition / what-is / deep-dive explainer angle.',
+  'Pick a planning, strategy, or roadmap angle (still concrete, not vague thought leadership).',
+] as const;
 
 export type InstantArticleTraceEntry = {
   step: string;
@@ -16,11 +33,11 @@ export type InstantArticleTraceEntry = {
 };
 
 /**
- * Ask AI — Gemini suggests a topic + 4 keywords for the Instant Article form (no Serper).
+ * Ask AI — one keyword anchored to the project's website domain, then a topic for that keyword (no Serper).
  */
 export async function suggestInstantArticleTopicAction(
   projectId: string,
-  payload: { region: string; language: string }
+  payload: { region: string; language: string; avoidKeywordsCsv?: string }
 ): Promise<
   | { success: true; topic: string; keywords: string; suggestTrace: InstantArticleTraceEntry[] }
   | { success: false; error: string; suggestTrace: InstantArticleTraceEntry[] }
@@ -48,6 +65,16 @@ export async function suggestInstantArticleTopicAction(
     return { success: false, error: 'Project not found', suggestTrace: trace };
   }
 
+  const domain = String(project.domain ?? '').trim();
+  if (!domain) {
+    mark('domain', 'missing — need website domain on project');
+    return {
+      success: false,
+      error: 'Add your website domain on the project (Basic info) so Ask AI can suggest a relevant keyword.',
+      suggestTrace: trace,
+    };
+  }
+
   let brief: BusinessBrief | null = null;
   try {
     const { data: briefRow } = await supabaseAdmin
@@ -71,23 +98,34 @@ export async function suggestInstantArticleTopicAction(
   };
   const languageLabel = langLabels[payload.language] ?? payload.language;
 
+  const avoidPhrases = (payload.avoidKeywordsCsv ?? '')
+    .split(/[,;\n]/)
+    .map(s => s.trim())
+    .filter(s => s.length > 2)
+    .slice(0, 10);
+
+  const rotationHint =
+    INSTANT_ASK_AI_ANGLE_HINTS[randomInt(0, INSTANT_ASK_AI_ANGLE_HINTS.length - 1)];
+
   const t0 = Date.now();
   try {
-    const { topic, keywords } = await suggestInstantArticleTopicAndKeywords({
+    const { topic, keyword } = await suggestInstantArticleKeywordAndTopic({
       company: String(project.company ?? '').trim() || 'Company',
       niche: String(project.niche ?? '').trim() || 'General',
-      domain: String(project.domain ?? '').trim() || '',
+      domain,
       targetAudience: String(project.target_audience ?? '').trim() || 'General audience',
       regionLabel: regionName,
       languageLabel,
       briefSummary: brief?.summary?.trim() ?? null,
       seedPhrases: brief?.seed_phrases ?? [],
+      rotationHint,
+      avoidPhrases,
     });
-    mark('gemini', `topic + 4 keywords`, Date.now() - t0);
+    mark('gemini', `domain keyword + topic`, Date.now() - t0);
     return {
       success: true,
       topic,
-      keywords: keywords.join(', '),
+      keywords: keyword,
       suggestTrace: trace,
     };
   } catch (e) {
@@ -112,7 +150,7 @@ function derivePrimaryKeyword(topic: string, keywordsCsv: string): string {
 }
 
 /**
- * Instant Article — AI Web Research path: Serper context + Gemini (Google Search tool) + blog row (no calendar entry).
+ * Instant Article: Serper context + Gemini (Google Search tool) + optional user references (PDF/DOCX/links via Jina) → `blogs` row (no calendar entry).
  */
 export async function generateInstantWebResearchArticleAction(
   projectId: string,
@@ -125,6 +163,8 @@ export async function generateInstantWebResearchArticleAction(
     keywords: string;
     articleType: string;
     articleTypeLabel: string;
+    researchMethod: 'web' | 'custom';
+    customReferences?: InstantCustomRefPayload[];
   }
 ): Promise<
   | { success: true; data: Blog; instantArticleTrace: InstantArticleTraceEntry[] }
@@ -165,6 +205,45 @@ export async function generateInstantWebResearchArticleAction(
 
   const primaryKeyword = derivePrimaryKeyword(topic, payload.keywords);
   mark('keyword', `primary research query: "${primaryKeyword.slice(0, 80)}${primaryKeyword.length > 80 ? '…' : ''}"`);
+
+  const researchMethod = payload.researchMethod === 'custom' ? 'custom' : 'web';
+  let customSourcesMarkdown = '';
+  let customSourceIngestCount = 0;
+
+  if (researchMethod === 'custom') {
+    const refs = payload.customReferences ?? [];
+    if (!refs.length) {
+      mark('custom_refs', 'none supplied');
+      return {
+        success: false,
+        error: 'Add at least one file or link in Custom Sources, or switch to AI Web Research.',
+        instantArticleTrace: trace,
+      };
+    }
+    const tIn = Date.now();
+    try {
+      const ingested = await ingestInstantArticleCustomSources(refs);
+      ingested.details.forEach(d => mark('custom_refs', d));
+      customSourcesMarkdown = ingested.combinedBlock;
+      customSourceIngestCount = ingested.okCount;
+      mark('custom_refs', `ingested ${ingested.okCount} source(s)`, Date.now() - tIn);
+    } catch (e) {
+      mark('custom_refs', `ingest error: ${e instanceof Error ? e.message : String(e)}`, Date.now() - tIn);
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : 'Could not read custom references',
+        instantArticleTrace: trace,
+      };
+    }
+    if (!customSourcesMarkdown.trim() || customSourceIngestCount === 0) {
+      return {
+        success: false,
+        error:
+          'Could not extract text from your references. Check that links are public (https) and files are text-based PDF or DOCX.',
+        instantArticleTrace: trace,
+      };
+    }
+  }
 
   let research;
   const t0 = Date.now();
@@ -231,11 +310,15 @@ export async function generateInstantWebResearchArticleAction(
       regionName,
       languageLabel,
       writingStyleLabel: payload.writingStyleLabel,
+      articleType: payload.articleType,
       articleTypeLabel: payload.articleTypeLabel,
       optionalKeywordsCsv: payload.keywords,
       research,
       brief,
       existingBlogs,
+      customSourcesMarkdown: customSourcesMarkdown || null,
+      researchMethod,
+      customSourceIngestCount,
     });
     mark('gemini', `draft parsed — ${blogData.word_count} words (pre-sanitize)`, Date.now() - t1);
   } catch (e) {

@@ -181,7 +181,7 @@ export default function ArticlesPage() {
                       <td className="px-4 py-2.5 align-middle text-right">
                         <ProjectNavLink
                           href={`/projects/${projectId}/blogs/${row.id}`}
-                          className="inline-flex h-8 items-center justify-center rounded-full border border-border-subtle min-w-[5.5rem] px-3 text-[11px] font-semibold text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                          className="inline-flex shrink-0 items-center justify-center rounded-full bg-text-primary px-4 py-2 text-[13px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
                         >
                           View article
                         </ProjectNavLink>

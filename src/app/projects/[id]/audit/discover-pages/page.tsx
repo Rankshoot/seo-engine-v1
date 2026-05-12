@@ -6,6 +6,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { auditsApi } from "@/frontend/api/audits";
 import { qk } from "@/lib/query";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { contentHealthAuditMarkStale } from "@/lib/redux/content-health-audit-slice";
 import type { SitemapPage } from "@/app/actions/audit-actions";
 import {
   CHPageShell,
@@ -25,6 +27,7 @@ const MAX_SELECT = 5;
 export default function DiscoverPagesPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const [basePath, setBasePath] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [auditing, setAuditing] = useState(false);
@@ -64,6 +67,7 @@ export default function DiscoverPagesPage() {
         setActionOk(`Audited ${res.audited} page${res.audited === 1 ? "" : "s"}.${res.failed ? ` ${res.failed} failed.` : ""}`);
         setSelected(new Set());
         await queryClient.invalidateQueries({ queryKey: qk.audits(projectId) });
+        dispatch(contentHealthAuditMarkStale({ projectId }));
         await refetch();
       } else { setActionError(res.error ?? "Audit failed."); }
     } catch (e) { setActionError(e instanceof Error ? e.message : "Audit failed."); }
@@ -72,8 +76,6 @@ export default function DiscoverPagesPage() {
 
   return (
     <CHPageShell
-      backHref={`/projects/${projectId}/audit`}
-      backLabel="← Site audit"
       title="Discover pages"
       subtitle={`Browse every URL in your live sitemap. Select up to ${MAX_SELECT} pages and run a full Content Health audit on demand — results appear on Site audit.`}
     >

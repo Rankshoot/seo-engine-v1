@@ -190,7 +190,7 @@ export function CHPageShell({
             {backLabel}
           </ProjectNavLink>
         )}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-[36px] sm:text-[42px] font-normal tracking-[-0.84px] leading-none text-text-primary font-display">
               {title}

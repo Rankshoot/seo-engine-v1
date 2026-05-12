@@ -19,19 +19,44 @@ const rootReducer = combineReducers({
 });
 
 type RootStateFromReducer = ReturnType<typeof rootReducer>;
-type PersistedState = Partial<Pick<RootStateFromReducer, "keywordWorkspace">>;
+type PersistedState = Partial<Pick<RootStateFromReducer, "keywordWorkspace" | "contentHealthAudit">>;
+
+function sanitizeContentHealthForPersist(
+  ch: ContentHealthAuditState | undefined
+): ContentHealthAuditState | undefined {
+  if (!ch?.projects) return ch;
+  return {
+    projects: Object.fromEntries(
+      Object.entries(ch.projects).map(([pid, p]) => [
+        pid,
+        {
+          ...p,
+          loading: "idle" as const,
+          error: null,
+          stale: typeof p.stale === "boolean" ? p.stale : false,
+        },
+      ])
+    ),
+  };
+}
 
 function stripLegacyApiCaches(state: PersistedState): PersistedState {
-  const kw = state.keywordWorkspace;
-  if (!kw?.projects) return state;
-  const projects = { ...kw.projects } as Record<string, ProjectKeywordWorkspace & Record<string, unknown>>;
-  for (const id of Object.keys(projects)) {
-    const p = { ...projects[id] } as ProjectKeywordWorkspace & Record<string, unknown>;
-    delete p.keywordsCache;
-    delete p.briefCache;
-    projects[id] = p as ProjectKeywordWorkspace;
+  let next: PersistedState = { ...state };
+  const kw = next.keywordWorkspace;
+  if (kw?.projects) {
+    const projects = { ...kw.projects } as Record<string, ProjectKeywordWorkspace & Record<string, unknown>>;
+    for (const id of Object.keys(projects)) {
+      const p = { ...projects[id] } as ProjectKeywordWorkspace & Record<string, unknown>;
+      delete p.keywordsCache;
+      delete p.briefCache;
+      projects[id] = p as ProjectKeywordWorkspace;
+    }
+    next = { ...next, keywordWorkspace: { ...kw, projects } };
   }
-  return { keywordWorkspace: { ...kw, projects } };
+  if (next.contentHealthAudit) {
+    next = { ...next, contentHealthAudit: sanitizeContentHealthForPersist(next.contentHealthAudit) };
+  }
+  return next;
 }
 
 function loadPersistedState(): PersistedState | undefined {
@@ -51,6 +76,7 @@ function persistState(state: RootStateFromReducer) {
   try {
     const persisted: PersistedState = stripLegacyApiCaches({
       keywordWorkspace: state.keywordWorkspace,
+      contentHealthAudit: sanitizeContentHealthForPersist(state.contentHealthAudit),
     });
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
   } catch {

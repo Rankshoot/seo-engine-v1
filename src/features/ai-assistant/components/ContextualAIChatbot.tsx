@@ -21,6 +21,7 @@ import { competitorsApi } from "@/frontend/api/competitors";
 import { calendarApi } from "@/frontend/api/calendar";
 import { auditsApi } from "@/frontend/api/audits";
 import { aiAssistantMemoryUpdated } from "@/lib/redux/keyword-workspace-slice";
+import { contentHealthAuditMarkStale } from "@/lib/redux/content-health-audit-slice";
 import { getAIContext } from "@/features/ai-assistant/context/contextManager";
 import { detectAIPageFromPath } from "@/features/ai-assistant/context/page";
 import { executeAgentAction } from "@/features/ai-assistant/agent/executor";
@@ -954,6 +955,7 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
           queryClient.invalidateQueries({ queryKey: qk.calendar(project.id) });
           queryClient.invalidateQueries({ queryKey: qk.keywords(project.id) });
           queryClient.invalidateQueries({ queryKey: qk.audits(project.id) });
+          dispatch(contentHealthAuditMarkStale({ projectId: project.id }));
           if (blogId) queryClient.invalidateQueries({ queryKey: qk.blog(blogId) });
         }
 

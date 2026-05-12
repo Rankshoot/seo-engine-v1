@@ -31,12 +31,6 @@ import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdo
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 import { toast } from "react-hot-toast";
-import {
-  effectiveKeywordFunnelStage,
-  funnelStageSortKey,
-  type FunnelStage,
-} from "@/lib/keyword-funnel";
-
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
 function regionName(code: string): string {
@@ -127,7 +121,6 @@ type TableSortColumn =
   | "kd"
   | "cpc"
   | "intent"
-  | "funnel_stage"
   | "analysis_score"
   | "status";
 
@@ -137,7 +130,7 @@ const STATUS_ORDER: Record<KeywordStatus, number> = { pending: 0, approved: 1, r
 
 /** Default first-click direction when activating a column. */
 function defaultDirForSortColumn(col: TableSortColumn): SortDir {
-  return col === "keyword" || col === "intent" || col === "funnel_stage" ? "asc" : "desc";
+  return col === "keyword" || col === "intent" ? "asc" : "desc";
 }
 
 function compareDomainRows(
@@ -187,15 +180,6 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
       return m * ((a.cpc || 0) - (b.cpc || 0));
     case "intent":
       return m * ((a.intent || "").localeCompare(b.intent || ""));
-    case "funnel_stage": {
-      const fa = funnelStageSortKey(
-        effectiveKeywordFunnelStage(a.funnel_stage, a.intent || "", a.keyword)
-      );
-      const fb = funnelStageSortKey(
-        effectiveKeywordFunnelStage(b.funnel_stage, b.intent || "", b.keyword)
-      );
-      return m * (fa - fb);
-    }
     case "analysis_score":
       return m * ((a.keyword_analysis_score ?? 0) - (b.keyword_analysis_score ?? 0));
     case "status":
@@ -218,8 +202,6 @@ export default function KeywordsPage() {
   const [discovering, setDiscovering] = useState(false);
   /** True while POST refresh hits DataForSEO (not the same as React Query `isFetching` for GET). */
   const [domainRefreshing, setDomainRefreshing] = useState(false);
-  /** Industry keywords only — Gemini batch intent relabel. */
-  const [intentRefreshing, setIntentRefreshing] = useState(false);
   const filter = keywordPrefs.filter as FilterTab;
   const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
@@ -398,11 +380,7 @@ export default function KeywordsPage() {
 
   useEffect(() => {
     if (sourceTab !== "domain") return;
-    if (
-      tableSort.column === "est_traffic" ||
-      tableSort.column === "intent" ||
-      tableSort.column === "funnel_stage"
-    ) {
+    if (tableSort.column === "est_traffic" || tableSort.column === "intent") {
       dispatch(
         rememberKeywordSort({
           projectId,
@@ -532,30 +510,6 @@ export default function KeywordsPage() {
   const handleRediscover = () => {
     if (sourceTab === "domain") void handleDomainRediscover();
     else void handleDiscover();
-  };
-
-  const handleRefreshAiIntent = async () => {
-    if (sourceTab !== "industry" || !keywords.length) return;
-    setIntentRefreshing(true);
-    setError("");
-    try {
-      const res = await keywordsApi.refreshAiIntent(projectId);
-      if (res.intentTrace?.length) {
-        console.groupCollapsed(`[Keywords] Gemini intent refresh (${res.intentTrace.length} batch(es))`);
-        for (const t of res.intentTrace) {
-          console.log(`batch ${t.batch_index}`, t);
-        }
-        console.groupEnd();
-      }
-      if (res.success) {
-        toast.success(`Updated intent & funnel stage for ${res.updated} of ${res.total} keyword(s)`);
-        await queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
-      } else {
-        setError(res.error ?? "Intent refresh failed");
-      }
-    } finally {
-      setIntentRefreshing(false);
-    }
   };
 
   const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string): Promise<boolean> => {
@@ -1100,7 +1054,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip:
-        'SERP-style intent for your business context: informational, commercial, transactional, or navigational. Use "AI intent" in the header to re-label all industry keywords with Gemini (project + cached brief).',
+        "SERP-style search intent from keyword data: informational, commercial, transactional, or navigational.",
       cell: (kw: any) => kw.intent ? (
         <span
           className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
@@ -1116,32 +1070,6 @@ export default function KeywordsPage() {
       ) : (
         <span className="text-[13px] text-text-tertiary">—</span>
       )
-    },
-    {
-      id: "funnel_stage",
-      header: "Keyword Funnel Stage",
-      align: "center",
-      sortable: true,
-      tooltip:
-        "Top (TOFU), middle (MOFU), or bottom (BOFU) of the marketing funnel. Gemini assigns this when you run “AI intent”; new rows use intent + phrasing until then.",
-      cell: (kw: any) => {
-        const stage: FunnelStage = effectiveKeywordFunnelStage(
-          kw.funnel_stage,
-          kw.intent || "",
-          kw.keyword
-        );
-        const pill =
-          stage === "BOFU"
-            ? "border-brand-action/20 bg-brand-action/10 text-brand-action"
-            : stage === "MOFU"
-              ? "border-[#3b82f6]/20 bg-[#3b82f6]/10 text-[#60a5fa]"
-              : "border-[#10b981]/20 bg-[#10b981]/10 text-[#34d399]";
-        return (
-          <span className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${pill}`}>
-            {stage}
-          </span>
-        );
-      }
     },
     {
       id: "analysis_score",
@@ -1217,7 +1145,7 @@ export default function KeywordsPage() {
           <button
               type="button"
               onClick={() => void handleRediscover()}
-              disabled={discovering || domainRefreshing || intentRefreshing}
+              disabled={discovering || domainRefreshing}
               className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
             >
               {!mounted ? (
@@ -1258,29 +1186,6 @@ export default function KeywordsPage() {
                 </>
               )}
             </button>
-            {sourceTab === "industry" && keywords.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => void handleRefreshAiIntent()}
-                disabled={discovering || domainRefreshing || intentRefreshing}
-                title="Re-label intent and funnel stage (TOFU/MOFU/BOFU) for every saved industry keyword using Gemini, your project fields, and the cached business brief."
-                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
-              >
-                {intentRefreshing ? (
-                  <>
-                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
-                    AI intent…
-                  </>
-                ) : (
-                  <>
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-                    </svg>
-                    AI intent
-                  </>
-                )}
-              </button>
-            ) : null}
             <ProjectNavLink
               href={`/projects/${projectId}/calendar`}
               className="inline-flex items-center gap-2 rounded-[32px] bg-brand-primary px-4 py-2 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"

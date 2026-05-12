@@ -16,7 +16,6 @@ export type KeywordTableSortColumn =
   | "kd"
   | "cpc"
   | "intent"
-  | "funnel_stage"
   | "analysis_score"
   | "status";
 export type KeywordSortDir = "asc" | "desc";
@@ -156,6 +155,10 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
   if (f === "low_competition" || f === "long_tail") proj.prefs.filter = "all";
   const col = proj.prefs.tableSort.column as string;
   if (col === "ai_score") proj.prefs.tableSort.column = "analysis_score";
+  if (col === "funnel_stage") {
+    proj.prefs.tableSort.column = "analysis_score";
+    proj.prefs.tableSort.dir = "desc";
+  }
   const pf = proj.aiAssistant.preferredFilter as string;
   if (pf === "low_competition" || pf === "long_tail") proj.aiAssistant.preferredFilter = "all";
   proj.prefs.discoverySourceTab ??= "industry";

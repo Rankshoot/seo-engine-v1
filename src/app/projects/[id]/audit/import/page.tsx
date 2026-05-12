@@ -1,23 +1,32 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "react-hot-toast";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { contentHealthAuditMarkStale } from "@/lib/redux/content-health-audit-slice";
+import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { importUploadedArticle } from "@/app/actions/import-content-actions";
 import {
   auditExternalBlogUrl,
+  getContentHealthCalendarLinksByAuditUrl,
   getExternalBlogAuditsForAnalyzePage,
   markAnalyzePageAuditCalendarScheduled,
+  type ContentHealthCalendarLinkRow,
 } from "@/app/actions/audit-actions";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { qk } from "@/lib/query";
 import type { PersistedBlogAudit } from "@/app/actions/audit-actions";
+import { calendarApi } from "@/frontend/api/calendar";
+import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
+import { AUDIT_SCRAPE_STORAGE_CAP } from "@/lib/audit-scrape-storage";
+import { useDeveloperMode } from "@/lib/developer-mode";
 import {
   CHPageShell,
   ScoreRing,
   SeverityChip,
   DemandChip,
-  FunnelChip,
   ErrorBanner,
   SuccessBanner,
   SkeletonRows,
@@ -28,6 +37,149 @@ import {
 
 type AnalyzeTab = "upload" | "url";
 
+function scrapeDownloadFilename(url: string): string {
+  try {
+    const u = new URL(url);
+    const slug = `${u.hostname.replace(/^www\./i, "")}${u.pathname}`
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 72);
+    return `scrape-${slug || "page"}.md`;
+  } catch {
+    return "scrape.md";
+  }
+}
+
+/** Markdown from hybrid reader: view, copy, download — matches DB `blog_audits.scraped_markdown`. */
+function RawScrapePanel({
+  url,
+  markdown,
+  heading = "Raw scrape (hybrid reader)",
+}: {
+  url: string;
+  markdown: string;
+  heading?: string;
+}) {
+  const [open, setOpen] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const truncated = markdown.includes("[truncated at");
+
+  function download() {
+    const body = `<!-- source: ${url} -->\n\n${markdown}`;
+    const blob = new Blob([body], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = scrapeDownloadFilename(url);
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setCopied(true);
+      toast.success("Copied raw scrape");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Could not copy");
+    }
+  }
+
+  return (
+    <div className="rounded-[14px] border border-sky-500/25 bg-sky-500/6 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-surface-hover/50 transition-colors"
+      >
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-sky-300/90">{heading}</p>
+          <p className="mt-0.5 truncate font-mono text-[11px] text-text-tertiary" title={url}>
+            {url}
+          </p>
+        </div>
+        <svg
+          className={`h-4 w-4 shrink-0 text-text-tertiary transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-border-subtle px-3 pb-3">
+          <div className="flex flex-wrap items-center gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => void copy()}
+              className="inline-flex h-8 items-center rounded-full border border-border-subtle bg-surface-elevated px-3 text-[12px] font-semibold text-text-secondary hover:text-text-primary transition-colors"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button
+              type="button"
+              onClick={download}
+              className="inline-flex h-8 items-center rounded-full bg-brand-primary px-3 text-[12px] font-semibold text-brand-on-primary hover:opacity-90 transition-opacity"
+            >
+              Download .md
+            </button>
+            {truncated ? (
+              <span className="text-[10px] text-amber-400/90">
+                Truncated at {AUDIT_SCRAPE_STORAGE_CAP.toLocaleString()} chars for storage
+              </span>
+            ) : (
+              <span className="text-[10px] text-text-tertiary">{markdown.length.toLocaleString()} characters</span>
+            )}
+          </div>
+          <pre className="max-h-[min(50vh,420px)] overflow-auto wrap-break-word whitespace-pre-wrap rounded-[10px] border border-border-subtle bg-surface-primary p-3 font-mono text-[11px] leading-relaxed text-text-secondary">
+            {markdown}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeveloperModeToggle({
+  developerMode,
+  onChange,
+  forcedByEnv,
+}: {
+  developerMode: boolean;
+  onChange: (v: boolean) => void;
+  forcedByEnv: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-amber-500/20 bg-amber-500/6 px-3 py-2.5">
+      <div className="min-w-0">
+        <p className="text-[12px] font-semibold text-text-primary">Developer mode</p>
+        <p className="text-[11px] text-text-tertiary leading-snug mt-0.5">
+          {forcedByEnv ? (
+            <>Enabled for this deployment via <span className="font-mono">NEXT_PUBLIC_DEVELOPER_TOOLS</span>.</>
+          ) : (
+            <>
+              Shows hybrid-reader raw scrape after analyze and inside expanded audits. Open this page with{" "}
+              <span className="font-mono">?dev=1</span> once to turn it on and save the choice in this browser.
+            </>
+          )}
+        </p>
+      </div>
+      <label className="inline-flex items-center gap-2 shrink-0 select-none cursor-pointer">
+        <span className="text-[11px] font-medium text-text-secondary">{developerMode ? "On" : "Off"}</span>
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-border-subtle text-brand-primary focus:ring-brand-action/40"
+          checked={developerMode}
+          disabled={forcedByEnv}
+          onChange={e => onChange(e.target.checked)}
+        />
+      </label>
+    </div>
+  );
+}
+
 function fmtWhen(iso?: string) {
   if (!iso) return "";
   try {
@@ -35,24 +187,256 @@ function fmtWhen(iso?: string) {
   } catch { return iso; }
 }
 
+function normalizeCalendarDay(raw: string): string {
+  return String(raw).slice(0, 10);
+}
+
+function fmtScheduleDay(iso: string): string {
+  const d = normalizeCalendarDay(iso);
+  try {
+    return new Date(d + "T12:00:00").toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return d;
+  }
+}
+
+const TERMINAL_CAL_STATUSES = new Set(["generated", "downloaded", "approved", "published"]);
+
+function AnalyzeAuditActions({
+  record,
+  link,
+  projectId,
+  variant,
+  scheduleBusy,
+  generateBusy,
+  enhanceBusy,
+  repairSessionBlogId,
+  onSchedule,
+  onGenerate,
+  onGenerateEnhanced,
+  scheduleMsg,
+  scheduledDatesSet,
+  datePickerOpen,
+  onDatePickerOpenChange,
+  onRescheduleConfirm,
+  rescheduleSaving,
+}: {
+  record: PersistedBlogAudit;
+  link: ContentHealthCalendarLinkRow | undefined;
+  projectId: string;
+  variant: "compact" | "full";
+  scheduleBusy: boolean;
+  generateBusy: boolean;
+  enhanceBusy: boolean;
+  /** Set after “Generate enhanced version” in this session so we can offer View blog without a calendar snapshot row. */
+  repairSessionBlogId?: string | null;
+  onSchedule: () => void;
+  onGenerate: () => void;
+  onGenerateEnhanced: () => void;
+  scheduleMsg?: string;
+  scheduledDatesSet: Set<string>;
+  datePickerOpen: boolean;
+  onDatePickerOpenChange: (open: boolean) => void;
+  onRescheduleConfirm: (date: string) => void;
+  rescheduleSaving: boolean;
+}) {
+  const meta = record.analysis.analyze_page_meta;
+  const scheduled = Boolean(meta?.calendar_scheduled);
+  const scheduledDate = meta?.calendar_scheduled_date;
+  const focusOk = extractCalendarFocusKeyword(record).length >= 2;
+  const blogId = link?.blogId ?? null;
+  const effectiveBlogId = blogId ?? repairSessionBlogId ?? null;
+  const status = link?.status ?? "";
+  const entryId = link?.entryId;
+  const isGenerating = status === "generating";
+  const isTerminal = TERMINAL_CAL_STATUSES.has(status);
+
+  const showSchedule = !scheduled && focusOk;
+  const showGenerate = Boolean(
+    scheduled && entryId && !effectiveBlogId && !isGenerating && !isTerminal
+  );
+  const showViewBlog = Boolean(effectiveBlogId);
+  const pageBroken = record.analysis.page_status === "broken";
+  /** Skip calendar: same repair+SEO pipeline as Site audit, opens blog viewer when done. */
+  const showEnhancedVersion = !pageBroken && !effectiveBlogId && !showGenerate;
+  const allowRescheduleDate = Boolean(
+    scheduled && scheduledDate && entryId && !isGenerating && !generateBusy && !enhanceBusy
+  );
+
+  const btn =
+    variant === "compact"
+      ? "inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[11px] font-semibold transition-opacity disabled:opacity-50"
+      : "inline-flex h-9 items-center justify-center gap-2 rounded-full px-4 text-[13px] font-semibold transition-opacity disabled:opacity-50";
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2"
+      onClick={e => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onKeyDown={e => e.stopPropagation()}
+      role="presentation"
+    >
+      {scheduled && scheduledDate && (
+        <div
+          className={[
+            "group/dt inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 sm:px-2.5",
+            variant === "compact" ? "max-w-full flex-wrap" : "",
+          ].join(" ")}
+        >
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 shrink-0">
+            <svg className="w-2.5 h-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
+            </svg>
+            <span className="tabular-nums">{fmtScheduleDay(scheduledDate)}</span>
+          </span>
+          {allowRescheduleDate && (
+            <span className="inline-flex opacity-100 sm:opacity-0 sm:group-hover/dt:opacity-100 sm:focus-within:opacity-100 transition-opacity">
+              <CalendarDatePicker
+                open={datePickerOpen}
+                onOpenChange={onDatePickerOpenChange}
+                currentDate={normalizeCalendarDay(scheduledDate)}
+                onConfirm={onRescheduleConfirm}
+                saving={rescheduleSaving}
+                scheduledDates={scheduledDatesSet}
+                iconOnly
+              />
+            </span>
+          )}
+        </div>
+      )}
+      {showSchedule && (
+        <button
+          type="button"
+          disabled={scheduleBusy || enhanceBusy}
+          onClick={onSchedule}
+          className={`${btn} bg-brand-primary text-brand-on-primary hover:opacity-90`}
+        >
+          {scheduleBusy ? (
+            <>
+              <Spinner size={14} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Scheduling…
+            </>
+          ) : (
+            <>
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <path d="M16 2v4M8 2v4M3 10h18" />
+              </svg>
+              Schedule
+            </>
+          )}
+        </button>
+      )}
+      {showEnhancedVersion && (
+        <button
+          type="button"
+          disabled={enhanceBusy || scheduleBusy || generateBusy}
+          onClick={onGenerateEnhanced}
+          title="Re-scrape the live article, fix every issue from this audit, and produce an SEO-ready version (schema, structure, internal links). Opens in the blog viewer."
+          className={`${btn} border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15`}
+        >
+          {enhanceBusy ? (
+            <>
+              <Spinner size={14} className="border-emerald-400/30 border-t-emerald-400" /> Generating…
+            </>
+          ) : (
+            <>
+              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+              </svg>
+              {variant === "compact" ? "Enhanced" : "Generate enhanced version"}
+            </>
+          )}
+        </button>
+      )}
+      {!focusOk && !scheduled && (
+        <span className="text-[10px] text-text-tertiary max-w-[140px] leading-tight">Add a clearer keyword to schedule.</span>
+      )}
+      {showGenerate && (
+        <button
+          type="button"
+          disabled={generateBusy || isGenerating || enhanceBusy}
+          onClick={onGenerate}
+          className={`${btn} bg-text-primary text-surface-primary hover:opacity-90`}
+        >
+          {generateBusy || isGenerating ? (
+            <>
+              <Spinner size={14} className="border-surface-primary/30 border-t-surface-primary" /> Generating…
+            </>
+          ) : (
+            <>
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+              </svg>
+              Generate
+            </>
+          )}
+        </button>
+      )}
+      {showViewBlog && effectiveBlogId && (
+        <ProjectNavLink
+          href={`/projects/${projectId}/blogs/${effectiveBlogId}`}
+          className={`${btn} border border-emerald-500/35 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15`}
+        >
+          View blog
+        </ProjectNavLink>
+      )}
+      {scheduleMsg && (
+        <span
+          className={`w-full sm:w-auto text-[11px] font-medium ${scheduleMsg.startsWith("Scheduled") || scheduleMsg.startsWith("On calendar") || scheduleMsg.startsWith("Blog ready") ? "text-emerald-400" : "text-rose-400"}`}
+        >
+          {scheduleMsg}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── inline expanded analysis ─────────────────────────────────────────────
 
 function AnalysisPanel({
   record,
   projectId,
+  link,
   scheduleBusy,
+  generateBusy,
+  enhanceBusy,
+  repairSessionBlogId,
   onSchedule,
+  onGenerate,
+  onGenerateEnhanced,
   scheduleMsg,
+  scheduledDatesSet,
+  datePickerOpen,
+  onDatePickerOpenChange,
+  onRescheduleConfirm,
+  rescheduleSaving,
+  developerMode,
 }: {
   record: PersistedBlogAudit;
   projectId: string;
+  link: ContentHealthCalendarLinkRow | undefined;
   scheduleBusy: boolean;
+  generateBusy: boolean;
+  enhanceBusy: boolean;
+  repairSessionBlogId?: string | null;
   onSchedule: () => void;
+  onGenerate: () => void;
+  onGenerateEnhanced: () => void;
   scheduleMsg?: string;
+  scheduledDatesSet: Set<string>;
+  datePickerOpen: boolean;
+  onDatePickerOpenChange: (open: boolean) => void;
+  onRescheduleConfirm: (date: string) => void;
+  rescheduleSaving: boolean;
+  developerMode: boolean;
 }) {
   const a = record.analysis;
-  const meta = a.analyze_page_meta;
-  const alreadyScheduled = meta?.calendar_scheduled && meta.calendar_scheduled_date;
   const { text } = healthScoreColor(record.health_score);
   const rubric = a.quality_rubric ?? [];
   const rcPass = rubric.filter(r => r.status === "pass").length;
@@ -60,7 +444,15 @@ function AnalysisPanel({
   const rcFail = rubric.filter(r => r.status === "fail").length;
 
   return (
-    <div className="mt-4 space-y-6 border-t border-border-subtle pt-5">
+    <div className="mt-0 border-t border-border-subtle">
+      <div className="max-h-[min(70vh,520px)] overflow-y-auto overscroll-contain pr-1 space-y-6 py-4">
+      {developerMode && record.scraped_markdown ? (
+        <RawScrapePanel
+          url={record.url}
+          markdown={record.scraped_markdown}
+          heading="Raw scrape (stored with this audit)"
+        />
+      ) : null}
       {/* metrics row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
         {[
@@ -158,38 +550,28 @@ function AnalysisPanel({
           </ul>
         </div>
       ) : null}
+      </div>
 
-      {/* schedule action */}
-      <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border-subtle">
-        {alreadyScheduled ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-[13px] font-medium text-emerald-400">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7"/></svg>
-            On calendar · {meta.calendar_scheduled_date}
-          </span>
-        ) : (
-          <button
-            type="button"
-            disabled={scheduleBusy || !record.primary_keyword?.trim()}
-            onClick={onSchedule}
-            className="inline-flex h-9 items-center gap-2 rounded-full bg-brand-primary px-5 text-[13px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {scheduleBusy ? <><Spinner size={14} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Scheduling…</> : <>
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-              Schedule keyword on calendar
-            </>}
-          </button>
-        )}
-        <ProjectNavLink
-          href={`/projects/${projectId}/audit`}
-          className="text-[13px] text-text-tertiary underline-offset-2 hover:text-text-primary hover:underline transition-colors"
-        >
-          Open Site audit →
-        </ProjectNavLink>
-        {scheduleMsg && (
-          <span className={`text-[12px] font-medium ${scheduleMsg.startsWith("Scheduled") || scheduleMsg.startsWith("On calendar") ? "text-emerald-400" : "text-rose-400"}`}>
-            {scheduleMsg}
-          </span>
-        )}
+      <div className="flex flex-wrap items-center gap-3 pt-3 pb-1 border-t border-border-subtle">
+        <AnalyzeAuditActions
+          record={record}
+          link={link}
+          projectId={projectId}
+          variant="full"
+          scheduleBusy={scheduleBusy}
+          generateBusy={generateBusy}
+          enhanceBusy={enhanceBusy}
+          repairSessionBlogId={repairSessionBlogId}
+          onSchedule={onSchedule}
+          onGenerate={onGenerate}
+          onGenerateEnhanced={onGenerateEnhanced}
+          scheduleMsg={scheduleMsg}
+          scheduledDatesSet={scheduledDatesSet}
+          datePickerOpen={datePickerOpen}
+          onDatePickerOpenChange={onDatePickerOpenChange}
+          onRescheduleConfirm={onRescheduleConfirm}
+          rescheduleSaving={rescheduleSaving}
+        />
       </div>
     </div>
   );
@@ -202,22 +584,45 @@ function HistoryRow({
   open,
   onToggle,
   projectId,
+  link,
   scheduleBusy,
+  generateBusy,
+  enhanceBusy,
+  repairSessionBlogId,
   onSchedule,
+  onGenerate,
+  onGenerateEnhanced,
   scheduleMsg,
+  scheduledDatesSet,
+  datePickerOpen,
+  onDatePickerOpenChange,
+  onRescheduleConfirm,
+  rescheduleSaving,
+  developerMode,
 }: {
   record: PersistedBlogAudit;
   open: boolean;
   onToggle: () => void;
   projectId: string;
+  link: ContentHealthCalendarLinkRow | undefined;
   scheduleBusy: boolean;
+  generateBusy: boolean;
+  enhanceBusy: boolean;
+  repairSessionBlogId?: string | null;
   onSchedule: () => void;
+  onGenerate: () => void;
+  onGenerateEnhanced: () => void;
   scheduleMsg?: string;
+  scheduledDatesSet: Set<string>;
+  datePickerOpen: boolean;
+  onDatePickerOpenChange: (open: boolean) => void;
+  onRescheduleConfirm: (date: string) => void;
+  rescheduleSaving: boolean;
+  developerMode: boolean;
 }) {
   const a = record.analysis;
   const meta = a.analyze_page_meta;
   const scheduled = meta?.calendar_scheduled && meta.calendar_scheduled_date;
-  const { text } = healthScoreColor(record.health_score);
 
   let host = record.url;
   try { host = new URL(record.url).hostname.replace(/^www\./, ""); } catch { /**/ }
@@ -225,44 +630,88 @@ function HistoryRow({
   return (
     <div className={`rounded-[14px] border transition-all ${open ? "border-brand-action/30 bg-surface-elevated" : "border-border-subtle bg-surface-elevated hover:border-border-strong"}`}>
       {/* summary row */}
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full flex items-center gap-4 px-4 py-3.5 text-left"
-      >
-        <ScoreRing score={record.health_score} size={44} />
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-semibold text-text-primary truncate" title={record.title}>{record.title || host}</p>
-          <p className="text-[11px] text-text-tertiary truncate">{host} · {fmtWhen(record.updated_at)}</p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {scheduled && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
-              <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7"/></svg>
-              Scheduled
-            </span>
-          )}
+      <div className="flex items-stretch gap-2 px-3 py-2.5 sm:px-4 sm:py-3.5">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4 text-left"
+        >
+          <ScoreRing score={record.health_score} size={44} />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-semibold text-text-primary truncate" title={record.title}>{record.title || host}</p>
+            <p className="text-[11px] text-text-tertiary truncate">{host} · {fmtWhen(record.updated_at)}</p>
+          </div>
           {a.issues?.some(i => i.severity === "high") && !scheduled && (
-            <span className="w-2 h-2 rounded-full bg-rose-400 shrink-0" title="High-severity issues" />
+            <span className="hidden sm:inline w-2 h-2 rounded-full bg-rose-400 shrink-0" title="High-severity issues" />
           )}
+        </button>
+        <div className="flex flex-col items-end justify-center gap-2 shrink-0 max-w-[min(100%,220px)] sm:max-w-none">
+          <AnalyzeAuditActions
+            record={record}
+            link={link}
+            projectId={projectId}
+            variant="compact"
+            scheduleBusy={scheduleBusy}
+            generateBusy={generateBusy}
+            enhanceBusy={enhanceBusy}
+            repairSessionBlogId={repairSessionBlogId}
+            onSchedule={onSchedule}
+            onGenerate={onGenerate}
+            onGenerateEnhanced={onGenerateEnhanced}
+            scheduleMsg={scheduleMsg}
+            scheduledDatesSet={scheduledDatesSet}
+            datePickerOpen={datePickerOpen}
+            onDatePickerOpenChange={onDatePickerOpenChange}
+            onRescheduleConfirm={onRescheduleConfirm}
+            rescheduleSaving={rescheduleSaving}
+          />
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={open ? "Collapse analysis" : "Expand analysis"}
+          className="flex w-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors"
+        >
           <svg
-            className={`w-4 h-4 text-text-tertiary transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+            className={`w-4 h-4 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
             viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
           </svg>
+        </button>
+      </div>
+      {scheduleMsg && !open && (
+        <div className="px-4 pb-2 -mt-1 sm:hidden">
+          <span
+            className={`text-[11px] font-medium ${scheduleMsg.startsWith("Scheduled") || scheduleMsg.startsWith("On calendar") || scheduleMsg.startsWith("Blog ready") ? "text-emerald-400" : "text-rose-400"}`}
+          >
+            {scheduleMsg}
+          </span>
         </div>
-      </button>
+      )}
 
       {/* expanded panel */}
       {open && (
-        <div className="px-4 pb-5">
+        <div className="px-4 pb-4">
           <AnalysisPanel
             record={record}
             projectId={projectId}
+            link={link}
             scheduleBusy={scheduleBusy}
+            generateBusy={generateBusy}
+            enhanceBusy={enhanceBusy}
+            repairSessionBlogId={repairSessionBlogId}
             onSchedule={onSchedule}
+            onGenerate={onGenerate}
+            onGenerateEnhanced={onGenerateEnhanced}
             scheduleMsg={scheduleMsg}
+            scheduledDatesSet={scheduledDatesSet}
+            datePickerOpen={datePickerOpen}
+            onDatePickerOpenChange={onDatePickerOpenChange}
+            onRescheduleConfirm={onRescheduleConfirm}
+            rescheduleSaving={rescheduleSaving}
+            developerMode={developerMode}
           />
         </div>
       )}
@@ -276,7 +725,9 @@ export default function AuditImportPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<AnalyzeTab>("upload");
+  const dispatch = useAppDispatch();
+  const { developerMode, setDeveloperMode, forcedByEnv } = useDeveloperMode();
+  const [tab, setTab] = useState<AnalyzeTab>("url");
 
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadErr, setUploadErr] = useState("");
@@ -285,11 +736,17 @@ export default function AuditImportPage() {
   const [urlInput, setUrlInput] = useState("");
   const [urlBusy, setUrlBusy] = useState(false);
   const [urlErr, setUrlErr] = useState("");
+  const [lastRawScrape, setLastRawScrape] = useState<{ url: string; markdown: string } | null>(null);
 
   const [schedulingUrl, setSchedulingUrl] = useState<string | null>(null);
+  const [generatingUrl, setGeneratingUrl] = useState<string | null>(null);
+  const [pickingDateForAuditUrl, setPickingDateForAuditUrl] = useState<string | null>(null);
+  const [rescheduleSaving, setRescheduleSaving] = useState(false);
   const [scheduleMessages, setScheduleMessages] = useState<Record<string, string>>({});
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(true);
+  const [enhancingUrl, setEnhancingUrl] = useState<string | null>(null);
+  const [repairBlogIdByAuditUrl, setRepairBlogIdByAuditUrl] = useState<Record<string, string>>({});
 
   const historyQuery = useQuery({
     queryKey: [...qk.audits(projectId!), "external-analyze-history"],
@@ -297,6 +754,28 @@ export default function AuditImportPage() {
     enabled: Boolean(projectId),
   });
   const historyRows = historyQuery.data?.success ? historyQuery.data.data : [];
+
+  const calendarLinksQuery = useQuery({
+    queryKey: qk.analyzeCalendarLinks(projectId!),
+    queryFn: () => getContentHealthCalendarLinksByAuditUrl(projectId!),
+    enabled: Boolean(projectId),
+    staleTime: 10_000,
+  });
+  const linksByUrl =
+    calendarLinksQuery.data?.success ? calendarLinksQuery.data.byAuditUrl : ({} as Record<string, ContentHealthCalendarLinkRow>);
+
+  const calendarEntriesQuery = useQuery({
+    queryKey: qk.calendar(projectId!),
+    queryFn: () => calendarApi.entries(projectId!),
+    enabled: Boolean(projectId),
+    staleTime: 15_000,
+  });
+  const scheduledDatesSet = useMemo(() => {
+    if (!calendarEntriesQuery.data?.success) return new Set<string>();
+    return new Set(
+      calendarEntriesQuery.data.data.map(e => normalizeCalendarDay(String(e.scheduled_date)))
+    );
+  }, [calendarEntriesQuery.data]);
 
   const refetchHistory = useCallback(async () => {
     if (!projectId) return;
@@ -307,8 +786,13 @@ export default function AuditImportPage() {
     e.preventDefault();
     if (!projectId) return;
     const fd = new FormData(e.currentTarget);
+    const pasted = String(fd.get("pasted_text") ?? "").trim();
     const file = fd.get("file");
-    if (!file || !(file instanceof File) || file.size === 0) { setUploadErr("Choose a file to upload."); return; }
+    const hasFile = file instanceof File && file.size > 0;
+    if (!pasted && !hasFile) {
+      setUploadErr("Choose a file or paste your article text.");
+      return;
+    }
     setUploadBusy(true); setUploadErr("");
     try {
       const res = await importUploadedArticle(projectId, fd);
@@ -322,13 +806,19 @@ export default function AuditImportPage() {
   async function onAnalyzeUrl(e: React.FormEvent) {
     e.preventDefault();
     if (!projectId) return;
-    setUrlBusy(true); setUrlErr("");
+    setUrlBusy(true);
+    setUrlErr("");
+    setLastRawScrape(null);
     try {
       const res = await auditExternalBlogUrl(projectId, urlInput);
       if (res.trace?.length) console.log("[content-health external URL] trace", res.trace);
       if (res.success && res.record) {
         setExpandedUrl(res.record.url);
+        if (res.record.scraped_markdown) {
+          setLastRawScrape({ url: res.record.url, markdown: res.record.scraped_markdown });
+        }
         await queryClient.invalidateQueries({ queryKey: qk.audits(projectId) });
+        dispatch(contentHealthAuditMarkStale({ projectId }));
         await refetchHistory();
         return;
       }
@@ -338,74 +828,201 @@ export default function AuditImportPage() {
   }
 
   async function scheduleKeyword(record: PersistedBlogAudit) {
-    if (!projectId || !record.primary_keyword?.trim()) return;
+    if (!projectId) return;
+    const focus = extractCalendarFocusKeyword(record);
+    if (focus.length < 2) return;
     const url = record.url;
     setSchedulingUrl(url);
     try {
-      const kw = record.primary_keyword.trim();
-      const res = await fetch(`/api/v1/projects/${projectId}/calendar/add-custom`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keyword: kw, title: record.title?.trim() || kw, articleType: "Blog Post", writerNotes: `Scheduled from external reference audit.\nSource: ${url}` }),
+      const snapshot = buildContentHealthAuditSnapshot(record);
+      const res = await calendarApi.addContentHealth(projectId, {
+        focusKeyword: focus,
+        auditUrl: url,
+        contentHealthAudit: snapshot as unknown as Record<string, unknown>,
       });
-      const data = (await res.json()) as { success?: boolean; error?: string; scheduled_date?: string };
-      if (data.success && data.scheduled_date) {
-        await markAnalyzePageAuditCalendarScheduled(projectId, url, data.scheduled_date);
-        setScheduleMessages(m => ({ ...m, [url]: `Scheduled for ${data.scheduled_date!.slice(0, 10)}.` }));
+      if (res.success) {
+        const r = res as { data?: { scheduled_date?: string }; scheduled_date?: string };
+        const sd =
+          (typeof r.scheduled_date === "string" ? r.scheduled_date : undefined) ??
+          r.data?.scheduled_date;
+        const day = sd ? sd.slice(0, 10) : new Date().toISOString().slice(0, 10);
+        await markAnalyzePageAuditCalendarScheduled(projectId, url, sd ?? day);
+        setScheduleMessages(m => ({
+          ...m,
+          [url]: `Scheduled for ${day}. Generation will repair the reference article (not a full rewrite).`,
+        }));
         await queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
         await queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        await queryClient.invalidateQueries({ queryKey: qk.analyzeCalendarLinks(projectId) });
         await queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
         await refetchHistory();
       } else {
-        setScheduleMessages(m => ({ ...m, [url]: data.error ?? "Could not add to calendar." }));
+        setScheduleMessages(m => ({
+          ...m,
+          [url]: ("error" in res && res.error) ? res.error : "Could not add to calendar.",
+        }));
       }
-    } catch { setScheduleMessages(m => ({ ...m, [record.url]: "Could not add to calendar." })); }
-    finally { setSchedulingUrl(null); }
+    } catch {
+      setScheduleMessages(m => ({ ...m, [record.url]: "Could not add to calendar." }));
+    } finally {
+      setSchedulingUrl(null);
+    }
   }
+
+  async function generateFromAnalyze(record: PersistedBlogAudit) {
+    if (!projectId) return;
+    const link = linksByUrl[record.url];
+    if (!link?.entryId) {
+      setScheduleMessages(m => ({
+        ...m,
+        [record.url]: "Calendar row not found — try scheduling again.",
+      }));
+      return;
+    }
+    setGeneratingUrl(record.url);
+    setScheduleMessages(m => {
+      const next = { ...m };
+      delete next[record.url];
+      return next;
+    });
+    try {
+      const { generateBlog } = await import("@/app/actions/blog-actions");
+      const res = await generateBlog(link.entryId, 2500);
+      if (res.success && res.data?.id) {
+        await queryClient.invalidateQueries({ queryKey: qk.analyzeCalendarLinks(projectId) });
+        await queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        await queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        setScheduleMessages(m => ({
+          ...m,
+          [record.url]: "Blog ready — open View blog.",
+        }));
+      } else {
+        setScheduleMessages(m => ({
+          ...m,
+          [record.url]: ("error" in res && res.error) ? res.error : "Generation failed.",
+        }));
+      }
+    } catch (ex) {
+      setScheduleMessages(m => ({
+        ...m,
+        [record.url]: ex instanceof Error ? ex.message : "Generation failed.",
+      }));
+    } finally {
+      setGeneratingUrl(null);
+    }
+  }
+
+  async function generateEnhancedVersion(record: PersistedBlogAudit) {
+    if (!projectId) return;
+    const url = record.url;
+    setEnhancingUrl(url);
+    try {
+      const { repairBlogFromAudit } = await import("@/app/actions/repair-actions");
+      const res = await repairBlogFromAudit(projectId, url);
+      if (res.success && res.data.blogId) {
+        setRepairBlogIdByAuditUrl(m => ({ ...m, [url]: res.data.blogId }));
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: qk.analyzeCalendarLinks(projectId) }),
+          queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) }),
+          queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) }),
+          queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
+          refetchHistory(),
+        ]);
+        dispatch(contentHealthAuditMarkStale({ projectId }));
+        toast.success("Enhanced version ready — opening blog viewer.");
+        router.push(`/projects/${projectId}/blogs/${res.data.blogId}`);
+      } else {
+        toast.error(!res.success ? res.error : "Could not generate enhanced version.");
+      }
+    } catch (ex) {
+      toast.error(ex instanceof Error ? ex.message : "Could not generate enhanced version.");
+    } finally {
+      setEnhancingUrl(null);
+    }
+  }
+
+  const rescheduleAnalyzeEntry = useCallback(
+    async (auditUrl: string, entryId: string, date: string) => {
+      if (!projectId) return;
+      const dateNorm = normalizeCalendarDay(date);
+      setRescheduleSaving(true);
+      try {
+        const res = await calendarApi.rescheduleEntry(projectId, { entryId, date: dateNorm });
+        if (res.success) {
+          await markAnalyzePageAuditCalendarScheduled(projectId, auditUrl, dateNorm);
+          await queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+          await queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+          await queryClient.invalidateQueries({ queryKey: qk.analyzeCalendarLinks(projectId) });
+          await refetchHistory();
+          toast.success(`Rescheduled for ${fmtScheduleDay(dateNorm)}`);
+          setPickingDateForAuditUrl(null);
+        } else {
+          toast.error(res.error ?? "Could not change date");
+        }
+      } catch {
+        toast.error("Could not change date");
+      } finally {
+        setRescheduleSaving(false);
+      }
+    },
+    [projectId, queryClient, refetchHistory]
+  );
+
+  const tabSwitcher = (
+    <div
+      className="flex w-full min-w-[min(100%,280px)] max-w-sm rounded-full border border-border-subtle p-0.5 bg-surface-elevated shrink-0"
+      role="tablist"
+      aria-label="Analyze mode"
+    >
+      {(["url", "upload"] as AnalyzeTab[]).map(t => (
+        <button
+          key={t}
+          type="button"
+          role="tab"
+          aria-selected={tab === t}
+          onClick={() => setTab(t)}
+          className={`flex-1 rounded-full py-2.5 px-2 text-[13px] font-semibold transition-all duration-150 ${
+            tab === t
+              ? "bg-text-primary text-surface-primary shadow-sm"
+              : "text-text-secondary hover:text-text-primary"
+          }`}
+        >
+          {t === "upload" ? "Upload article" : "Analyze URL"}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <CHPageShell
-      backHref={`/projects/${projectId}/audit`}
-      backLabel="← Site audit"
       title="Analyze content"
       subtitle="Upload a draft to open it in the blog workspace, or analyze any public article URL through the full Content Health pipeline and optionally schedule the inferred keyword."
+      actions={tabSwitcher}
     >
-      {/* ── tab switch ─────────────────────────────────────────────────── */}
-      <div
-        className="flex max-w-sm rounded-full border border-border-subtle p-0.5 bg-surface-elevated"
-        role="tablist"
-        aria-label="Analyze mode"
-      >
-        {(["upload", "url"] as AnalyzeTab[]).map(t => (
-          <button
-            key={t}
-            type="button"
-            role="tab"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            className={`flex-1 rounded-full py-2.5 text-[13px] font-semibold transition-all duration-150 ${
-              tab === t
-                ? "bg-text-primary text-surface-primary shadow-sm"
-                : "text-text-secondary hover:text-text-primary"
-            }`}
-          >
-            {t === "upload" ? "Upload file" : "Blog link"}
-          </button>
-        ))}
-      </div>
-
       {/* ── upload tab ─────────────────────────────────────────────────── */}
       <div hidden={tab !== "upload"}>
         <p className="text-[14px] text-text-secondary leading-relaxed mb-5">
-          Markdown (.md), plain text (.txt), or Word (.docx). We normalize links, infer keyword and meta description with Gemini, then open the blog workspace.
+          Markdown (.md), plain text (.txt), Word (.docx), or paste article text below. We normalize links, infer keyword and meta description with Gemini, then open the blog workspace.
         </p>
         <form
           ref={formRef}
           onSubmit={onUploadSubmit}
-          className="max-w-lg rounded-[16px] border border-border-subtle bg-surface-elevated p-6 space-y-4"
+          className="max-w-2xl rounded-[16px] border border-border-subtle bg-surface-elevated p-6 space-y-4"
         >
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-widest text-text-tertiary mb-2">File</label>
+            <label className="block text-[11px] font-semibold uppercase tracking-widest text-text-tertiary mb-2">
+              Paste article text
+            </label>
+            <textarea
+              name="pasted_text"
+              rows={10}
+              disabled={uploadBusy}
+              placeholder="Paste markdown or plain text (optional if you upload a file instead)…"
+              className="w-full rounded-[12px] border border-border-subtle bg-surface-primary px-3.5 py-3 text-[13px] text-text-primary placeholder:text-text-tertiary/50 focus:outline-none focus:border-brand-action/50 transition-colors resize-y min-h-[160px] font-mono leading-relaxed"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-widest text-text-tertiary mb-2">Or choose file</label>
             <input
               name="file"
               type="file"
@@ -430,6 +1047,12 @@ export default function AuditImportPage() {
         <p className="text-[14px] text-text-secondary leading-relaxed">
           Paste any public article URL. We scrape the live page, attach vendor signals, run Gemini diagnosis, and save the result to your project.
         </p>
+
+        <DeveloperModeToggle
+          developerMode={developerMode}
+          onChange={setDeveloperMode}
+          forcedByEnv={forcedByEnv}
+        />
 
         {/* form */}
         <form
@@ -466,6 +1089,14 @@ export default function AuditImportPage() {
 
         {urlErr && <ErrorBanner message={urlErr} />}
 
+        {developerMode && lastRawScrape ? (
+          <RawScrapePanel
+            url={lastRawScrape.url}
+            markdown={lastRawScrape.markdown}
+            heading="Latest analyze — raw scrape"
+          />
+        ) : null}
+
         {/* ── history list ──────────────────────────────────────────────── */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -494,18 +1125,38 @@ export default function AuditImportPage() {
                   No external URL audits yet. Analyze a blog link above — it will appear here.
                 </p>
               ) : (
-                historyRows.map(row => (
+                historyRows.map(row => {
+                  const entryId = linksByUrl[row.url]?.entryId;
+                  return (
                   <HistoryRow
                     key={row.url}
                     record={row}
                     open={expandedUrl === row.url}
                     onToggle={() => setExpandedUrl(prev => prev === row.url ? null : row.url)}
                     projectId={projectId!}
+                    link={linksByUrl[row.url]}
                     scheduleBusy={schedulingUrl === row.url}
+                    generateBusy={generatingUrl === row.url}
+                    enhanceBusy={enhancingUrl === row.url}
+                    repairSessionBlogId={repairBlogIdByAuditUrl[row.url]}
                     onSchedule={() => void scheduleKeyword(row)}
+                    onGenerate={() => void generateFromAnalyze(row)}
+                    onGenerateEnhanced={() => void generateEnhancedVersion(row)}
                     scheduleMsg={scheduleMessages[row.url]}
+                    scheduledDatesSet={scheduledDatesSet}
+                    datePickerOpen={pickingDateForAuditUrl === row.url}
+                    onDatePickerOpenChange={open => {
+                      if (open && !entryId) return;
+                      setPickingDateForAuditUrl(open ? row.url : null);
+                    }}
+                    onRescheduleConfirm={date => {
+                      if (entryId) void rescheduleAnalyzeEntry(row.url, entryId, date);
+                    }}
+                    rescheduleSaving={rescheduleSaving}
+                    developerMode={developerMode}
                   />
-                ))
+                  );
+                })
               )}
             </div>
           )}

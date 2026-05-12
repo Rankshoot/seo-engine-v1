@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS blog_audits (
   -- Mirrors analysis.page_status for lightweight coverage queries.
   page_status TEXT NOT NULL DEFAULT 'ok',
   scraped_chars INTEGER DEFAULT 0,
+  scraped_markdown TEXT,
   error TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),

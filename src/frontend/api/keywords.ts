@@ -45,25 +45,6 @@ export const keywordsApi = {
     return apiPost(V1Routes.keywords(projectId), { action: "discover-pipeline", topN });
   },
 
-  /** Gemini: re-classify intent for all saved industry keywords using project + brief context. */
-  refreshAiIntent(projectId: string): Promise<{
-    success: boolean;
-    error?: string;
-    updated: number;
-    total: number;
-    intentTrace?: Array<{
-      ts: string;
-      batch_index: number;
-      batch_size: number;
-      ok: boolean;
-      ms: number;
-      updated_in_batch: number;
-      error?: string;
-    }>;
-  }> {
-    return apiPost(V1Routes.keywords(projectId), { action: "refresh-ai-intent" });
-  },
-
   deleteAll(projectId: string): Promise<{ success: boolean; error?: string }> {
     return apiPost(V1Routes.keywords(projectId), { action: "delete-all" });
   },

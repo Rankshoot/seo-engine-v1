@@ -19,6 +19,8 @@ export const qk = {
   contentGeneratorHistory: (id: string) => ["project", id, "content-generator-history"] as const,
 
   audits: (id: string) => ["audits", id] as const,
+  /** Content Health snapshot URL → calendar entry + blog id (Analyze content history actions). */
+  analyzeCalendarLinks: (id: string) => ["audits", id, "analyze-calendar-links"] as const,
   competitors: (id: string) => ["competitors", id] as const,
   brief: (id: string) => ["brief", id] as const,
   blog: (blogId: string) => ["blog", blogId] as const,

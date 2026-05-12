@@ -13,6 +13,8 @@ export type ProjectContentHealthAuditState = {
   loading: "idle" | "loading" | "loadingMore";
   filter: ContentHealthSeverityFilter;
   error: string | null;
+  /** True when another flow (import, discover, AI tools) may have changed server audits — refetch in background on next visit. */
+  stale: boolean;
 };
 
 export type ContentHealthAuditState = {
@@ -31,11 +33,14 @@ const defaultProjectState = (): ProjectContentHealthAuditState => ({
   loading: "idle",
   filter: "all",
   error: null,
+  stale: false,
 });
 
 function ensureProject(state: ContentHealthAuditState, projectId: string): ProjectContentHealthAuditState {
   state.projects[projectId] ??= defaultProjectState();
-  return state.projects[projectId];
+  const p = state.projects[projectId];
+  if (typeof p.stale !== "boolean") p.stale = false;
+  return p;
 }
 
 export const contentHealthAuditSlice = createSlice({
@@ -51,6 +56,10 @@ export const contentHealthAuditSlice = createSlice({
       action: PayloadAction<{ projectId: string; filter: ContentHealthSeverityFilter }>
     ) {
       ensureProject(state, action.payload.projectId).filter = action.payload.filter;
+    },
+
+    contentHealthAuditMarkStale(state, action: PayloadAction<{ projectId: string }>) {
+      ensureProject(state, action.payload.projectId).stale = true;
     },
 
     contentHealthAuditLoadStarted(
@@ -93,12 +102,14 @@ export const contentHealthAuditSlice = createSlice({
       } else {
         p.rows = action.payload.data;
       }
+      p.stale = false;
     },
 
     contentHealthAuditLoadFailed(state, action: PayloadAction<{ projectId: string; error: string }>) {
       const p = ensureProject(state, action.payload.projectId);
       p.loading = "idle";
       p.error = action.payload.error;
+      p.stale = false;
     },
   },
 });
@@ -106,6 +117,7 @@ export const contentHealthAuditSlice = createSlice({
 export const {
   contentHealthAuditReset,
   contentHealthAuditFilterSet,
+  contentHealthAuditMarkStale,
   contentHealthAuditLoadStarted,
   contentHealthAuditLoadSuccess,
   contentHealthAuditLoadFailed,

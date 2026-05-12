@@ -22,6 +22,7 @@
  *      + LLM quality score. Persist everything in `blog_audits`.
  */
 
+import { AUDIT_SCRAPE_STORAGE_CAP } from './audit-scrape-storage';
 import { criticalityFromScore } from './audit-criticality';
 import type { BusinessBrief } from './business-brief';
 import { hybridReadUrl, type ScrapedPageMarkdown as JinaPage } from '@/services/hybridScraper';
@@ -113,6 +114,8 @@ export interface BlogAuditAnalysis {
   analyze_page_meta?: {
     /** Set to true by auditExternalBlogUrl so history queries can find these rows. */
     sourced_from_analyze_page?: boolean;
+    /** Set when the user queued the audit from Discover pages → Site audit pipeline. */
+    sourced_from_discover_pages?: boolean;
     calendar_scheduled?: boolean;
     calendar_scheduled_at?: string;
     calendar_scheduled_date?: string;
@@ -137,6 +140,15 @@ export interface BlogAuditRecord {
   primary_keyword: string;
   analysis: BlogAuditAnalysis;
   error?: string;
+  /** Raw markdown from `hybridReadUrl` (Jina / fallback), capped for DB storage — inspect before LLM diagnosis. */
+  scraped_markdown?: string;
+}
+
+export { AUDIT_SCRAPE_STORAGE_CAP } from './audit-scrape-storage';
+
+export function capAuditScrapeForStorage(markdown: string): string {
+  if (markdown.length <= AUDIT_SCRAPE_STORAGE_CAP) return markdown;
+  return `${markdown.slice(0, AUDIT_SCRAPE_STORAGE_CAP)}\n\n… [truncated at ${AUDIT_SCRAPE_STORAGE_CAP.toLocaleString()} characters for storage]`;
 }
 
 export interface AuditBlogInput {
@@ -241,8 +253,14 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
   });
 
   if (!page.ok || page.markdown.trim().length < 160) {
+    const partial =
+      page.markdown?.trim().length > 0 ? capAuditScrapeForStorage(page.markdown) : undefined;
     return {
-      record: thinOrUnreadableRecord(url, page.error ?? 'Could not read enough text from this page.'),
+      record: {
+        ...thinOrUnreadableRecord(url, page.error ?? 'Could not read enough text from this page.'),
+        scraped_chars: page.markdown?.length ?? 0,
+        scraped_markdown: partial,
+      },
       trace,
     };
   }
@@ -379,6 +397,7 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
       severity,
       primary_keyword: analysis.primary_keyword,
       analysis: { ...analysis, page_status: 'ok' },
+      scraped_markdown: capAuditScrapeForStorage(page.markdown),
     },
     trace,
   };

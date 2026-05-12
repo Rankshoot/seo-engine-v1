@@ -385,6 +385,7 @@ export async function auditExistingBlogs(
               quality_rubric: [],
             },
             error: e instanceof Error ? e.message : String(e),
+            scraped_markdown: undefined as string | undefined,
           },
           trace: [
             {
@@ -412,6 +413,7 @@ export async function auditExistingBlogs(
         primary_keyword: r.primary_keyword,
         analysis: r.analysis,
         scraped_chars: r.scraped_chars,
+        scraped_markdown: r.scraped_markdown ?? null,
         error: r.error ?? '',
         updated_at: new Date().toISOString(),
       };
@@ -608,6 +610,13 @@ export async function auditSelectedUrls(
   for (const url of urls) {
     try {
       const { record: r } = await auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language });
+      const analysisMerged: BlogAuditAnalysis = {
+        ...r.analysis,
+        analyze_page_meta: {
+          ...r.analysis.analyze_page_meta,
+          sourced_from_discover_pages: true,
+        },
+      };
       const row = {
         project_id: projectId,
         url: r.url,
@@ -616,8 +625,9 @@ export async function auditSelectedUrls(
         health_score: r.health_score,
         severity: r.severity,
         primary_keyword: r.primary_keyword,
-        analysis: r.analysis,
+        analysis: analysisMerged,
         scraped_chars: r.scraped_chars,
+        scraped_markdown: r.scraped_markdown ?? null,
         error: r.error ?? '',
         updated_at: new Date().toISOString(),
       };
@@ -628,7 +638,7 @@ export async function auditSelectedUrls(
         failed++;
       } else {
         audited++;
-        results.push({ ...r, updated_at: row.updated_at });
+        results.push({ ...r, analysis: analysisMerged, updated_at: row.updated_at });
       }
     } catch (e) {
       failed++;
@@ -732,6 +742,7 @@ export async function auditExternalBlogUrl(
     primary_keyword: r.primary_keyword,
     analysis: analysisMerged,
     scraped_chars: r.scraped_chars,
+    scraped_markdown: r.scraped_markdown ?? null,
     error: r.error ?? '',
     page_status: analysisMerged.page_status ?? 'ok',
     updated_at: new Date().toISOString(),
@@ -740,11 +751,97 @@ export async function auditExternalBlogUrl(
   const { error: upErr } = await supabaseAdmin.from('blog_audits').upsert(row, { onConflict: 'project_id,url' });
   if (upErr) return { success: false, error: upErr.message, trace };
 
+  const debugDir = process.env.AUDIT_SCRAPE_DEBUG_DIR?.trim();
+  if (debugDir && r.scraped_markdown) {
+    void writeAuditScrapeDebugFile(debugDir, r.url, r.scraped_markdown);
+  }
+
   return {
     success: true,
-    record: { ...r, analysis: analysisMerged, updated_at: row.updated_at },
+    record: { ...r, analysis: analysisMerged, scraped_markdown: r.scraped_markdown, updated_at: row.updated_at },
     trace,
   };
+}
+
+async function writeAuditScrapeDebugFile(dir: string, url: string, markdown: string): Promise<void> {
+  try {
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    await fs.mkdir(dir, { recursive: true });
+    const host = new URL(url).hostname.replace(/[^a-z0-9.-]/gi, '_');
+    const fn = path.join(dir, `${host}-${Date.now()}.md`);
+    await fs.writeFile(fn, `# Source: ${url}\n\n${markdown}`, 'utf8');
+    console.log(`[audit] AUDIT_SCRAPE_DEBUG_DIR wrote ${fn}`);
+  } catch (e) {
+    console.warn('[audit] AUDIT_SCRAPE_DEBUG_DIR write failed:', e instanceof Error ? e.message : e);
+  }
+}
+
+/** Maps audited article URL → calendar row + blog id for Content Health scheduled repairs (Analyze content). */
+export type ContentHealthCalendarLinkRow = {
+  entryId: string;
+  status: string;
+  blogId: string | null;
+};
+
+function snapshotAuditUrlFromContentHealthJson(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as { version?: number; url?: string };
+  if (o.version !== 1 && o.version !== 2) return null;
+  const u = typeof o.url === 'string' ? o.url.trim() : '';
+  return u || null;
+}
+
+/**
+ * For each calendar row with a v1/v2 `content_health_audit` snapshot, index by `url`
+ * so the Analyze content UI can offer Generate / View blog without scanning all entries client-side.
+ */
+export async function getContentHealthCalendarLinksByAuditUrl(projectId: string): Promise<{
+  success: boolean;
+  error?: string;
+  byAuditUrl: Record<string, ContentHealthCalendarLinkRow>;
+}> {
+  const { project, error } = await ensureOwner(projectId);
+  if (error || !project) return { success: false, error: error ?? 'Project not found', byAuditUrl: {} };
+
+  const { data: entries, error: eErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id, status, content_health_audit, created_at')
+    .eq('project_id', projectId)
+    .not('content_health_audit', 'is', null)
+    .order('created_at', { ascending: false });
+
+  if (eErr) return { success: false, error: eErr.message, byAuditUrl: {} };
+
+  const { data: blogs, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, entry_id')
+    .eq('project_id', projectId)
+    .order('updated_at', { ascending: false });
+
+  if (bErr) return { success: false, error: bErr.message, byAuditUrl: {} };
+
+  const blogByEntry = new Map<string, string>();
+  for (const b of blogs ?? []) {
+    const eid = b.entry_id as string | null | undefined;
+    if (eid && !blogByEntry.has(eid)) {
+      blogByEntry.set(eid, b.id as string);
+    }
+  }
+
+  const byAuditUrl: Record<string, ContentHealthCalendarLinkRow> = {};
+  for (const row of entries ?? []) {
+    const url = snapshotAuditUrlFromContentHealthJson(row.content_health_audit);
+    if (!url || byAuditUrl[url]) continue;
+    const eid = row.id as string;
+    byAuditUrl[url] = {
+      entryId: eid,
+      status: (row.status as string) ?? 'scheduled',
+      blogId: blogByEntry.get(eid) ?? null,
+    };
+  }
+
+  return { success: true, byAuditUrl };
 }
 
 /** Rows saved through the Analyze content page (newest first). Uses the
@@ -855,6 +952,7 @@ interface AuditRow {
   analysis: Record<string, unknown> | null;
   page_status?: string | null;
   scraped_chars: number | null;
+  scraped_markdown?: string | null;
   error: string | null;
   updated_at: string | null;
 }
@@ -898,5 +996,6 @@ function rowToRecord(row: AuditRow): PersistedBlogAudit {
     analysis: { ...rawAnalysis, page_status },
     error: row.error || undefined,
     updated_at: row.updated_at ?? undefined,
+    scraped_markdown: row.scraped_markdown?.trim() ? row.scraped_markdown : undefined,
   };
 }

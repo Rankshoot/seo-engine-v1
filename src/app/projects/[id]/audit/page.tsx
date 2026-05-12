@@ -95,21 +95,48 @@ export default function ContentHealthPage() {
     });
   }, [persistDismissed]);
 
-  const refetchFirstPage = useCallback(async () => {
-    if (!projectId) return;
-    const seq = ++loadSeq.current;
-    dispatch(contentHealthAuditLoadStarted({ projectId, mode: "replace" }));
-    const res = await auditsApi.list(projectId, { limit: AUDIT_PAGE_SIZE, offset: 0 });
-    if (seq !== loadSeq.current) return;
-    if (!res.success) { dispatch(contentHealthAuditLoadFailed({ projectId, error: res.error ?? "Failed" })); return; }
-    dispatch(contentHealthAuditLoadSuccess({ projectId, mode: "replace", data: res.data, coverage: res.coverage, total: res.total, hasMore: res.hasMore, limit: res.limit, offset: res.offset }));
-  }, [dispatch, projectId]);
+  const refetchFirstPage = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!projectId) return;
+      const seq = ++loadSeq.current;
+      if (!opts?.silent) dispatch(contentHealthAuditLoadStarted({ projectId, mode: "replace" }));
+      const res = await auditsApi.list(projectId, { limit: AUDIT_PAGE_SIZE, offset: 0 });
+      if (seq !== loadSeq.current) return;
+      if (!res.success) {
+        dispatch(contentHealthAuditLoadFailed({ projectId, error: res.error ?? "Failed" }));
+        return;
+      }
+      dispatch(
+        contentHealthAuditLoadSuccess({
+          projectId,
+          mode: "replace",
+          data: res.data,
+          coverage: res.coverage,
+          total: res.total,
+          hasMore: res.hasMore,
+          limit: res.limit,
+          offset: res.offset,
+        })
+      );
+    },
+    [dispatch, projectId]
+  );
 
   useEffect(() => {
     if (!projectId) return;
-    dispatch(contentHealthAuditReset({ projectId }));
+    if (chStore == null) {
+      void refetchFirstPage();
+      return;
+    }
+    if (chStore.loading === "loading" || chStore.loading === "loadingMore") return;
+    if (chStore.stale && chStore.coverage != null) {
+      void refetchFirstPage({ silent: true });
+      return;
+    }
+    if (chStore.coverage != null && !chStore.stale) return;
+    if (chStore.coverage == null && chStore.error) return;
     void refetchFirstPage();
-  }, [projectId, dispatch, refetchFirstPage]);
+  }, [projectId, chStore, refetchFirstPage]);
 
   const loadMore = useCallback(async () => {
     if (!projectId || !chStore) return;

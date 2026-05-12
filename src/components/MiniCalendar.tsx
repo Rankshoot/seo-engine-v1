@@ -357,6 +357,7 @@ export function MiniCalendar({
                     const kd_ = kdLabel(kwData?.kd);
                     const isGenerated = entry.status === "generated" || entry.status === "downloaded";
                     const origin = resolveCalendarKeywordOrigin({
+                      contentHealthAudit: entry.content_health_audit,
                       keywordSourceType: kwData?.source_type,
                       articleType: entry.article_type,
                       aiSourceFromEntry: entry.ai_source,

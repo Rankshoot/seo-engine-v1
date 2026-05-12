@@ -524,9 +524,16 @@ export async function addContentHealthKeywordToCalendar(
       : {};
 
   if (keywordId) {
-    return addKeywordToCalendarOnDate(keywordId, projectId, scheduledDate, {
+    const r = await addKeywordToCalendarOnDate(keywordId, projectId, scheduledDate, {
       contentHealthAudit: opts.contentHealthAudit ?? null,
     });
+    if (!r.success) return r;
+    const entry = 'data' in r ? r.data : undefined;
+    const sd =
+      entry && typeof entry === 'object' && entry !== null && 'scheduled_date' in entry
+        ? String((entry as { scheduled_date: string }).scheduled_date).slice(0, 10)
+        : scheduledDate.slice(0, 10);
+    return { success: true as const, data: entry, scheduled_date: sd };
   }
 
   const titleBase = canonical.slice(0, 120) || 'Content improvement';

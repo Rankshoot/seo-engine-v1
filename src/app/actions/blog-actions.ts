@@ -2,13 +2,15 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { generateBlogPost, geminiGenerate } from '@/lib/gemini';
+import { generateBlogPost, geminiGenerate, repairBlogPost } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
 import { ArticleLibraryEntry, Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
-import { formatContentHealthAuditForWriter } from '@/lib/content-health-calendar';
+import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan } from '@/lib/content-health-calendar';
+import { hybridReadUrl } from '@/services/hybridScraper';
+import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
@@ -38,6 +40,142 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     .eq('id', entryId);
 
   try {
+    // Load the cached Business Brief — used for internal-link pools + repair tone.
+    let brief: BusinessBrief | null = null;
+    try {
+      const { data: briefRow } = await supabaseAdmin
+        .from('project_briefs')
+        .select('brief')
+        .eq('project_id', entry.project_id)
+        .maybeSingle();
+      brief = (briefRow?.brief as BusinessBrief | undefined) ?? null;
+    } catch {
+      /* optional */
+    }
+
+    const contentHealthRaw = (entry as { content_health_audit?: unknown }).content_health_audit;
+    const repairPlan = parseContentHealthRepairPlan(contentHealthRaw);
+
+    // ── Content Health → repair mode (same pipeline as audit "Repair with AI") ──
+    if (repairPlan) {
+      const analysis = repairPlan.analysis;
+      const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
+      if (!fresh.ok || fresh.markdown.length < 400) {
+        throw new Error(
+          fresh.error ||
+            'Could not read the reference article for repair. Check the URL is public, then re-run the audit and try again.'
+        );
+      }
+
+      const fromAudit = (analysis.internal_link_opportunities ?? []).map(i => i.target_url);
+      const fromBrief = (brief?.internal_link_candidates ?? []).map(c => c.url);
+      const fromBriefBlogs = brief?.blog_urls ?? [];
+      const internalLinkPool = Array.from(new Set([...fromAudit, ...fromBrief, ...fromBriefBlogs])).filter(
+        u => u && u !== repairPlan.url
+      );
+
+      const repaired = await repairBlogPost({
+        sourceUrl: repairPlan.url,
+        originalTitle: repairPlan.title || '',
+        originalMarkdown: fresh.markdown,
+        issues: analysis.issues.map(i => ({
+          label: i.label,
+          detail: i.detail,
+          fix: i.fix,
+          severity: i.severity,
+          why_it_matters: i.why_it_matters,
+        })),
+        contentGaps: analysis.content_gaps ?? [],
+        internalLinkPool,
+        primaryKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
+        secondaryKeywords: analysis.secondary_keywords ?? [],
+        brief,
+        project,
+        wordCount: Math.min(4000, Math.max(1200, countWords(fresh.markdown) + 200)),
+      });
+
+      const preserveTitle = !repairTitleNeedsRepairFlag(analysis) && Boolean(repairPlan.title);
+      const finalTitle = preserveTitle ? repairPlan.title : repaired.title;
+      const rawMarkdown = preserveTitle ? replaceFirstH1(repaired.content, repairPlan.title) : repaired.content;
+      const finalMetaDescription = repairMetaNeedsRepairFlag(analysis)
+        ? repaired.meta_description
+        : (analysis.summary || repaired.meta_description);
+      const repairNotes = normalizeRepairNotesFromModel(repaired.repair_notes, analysis);
+
+      const images = await generateBlogImages({
+        title: finalTitle,
+        targetKeyword: entry.focus_keyword,
+        articleType: entry.article_type,
+        niche: project.niche,
+        audience: project.target_audience,
+        company: project.company,
+        wordCount: countWords(rawMarkdown),
+      });
+      const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(rawMarkdown, images));
+      const sanitized = await sanitizeBlogContent(contentWithImages, {
+        ownDomain: project.domain ?? '',
+      });
+      if (sanitized.removedLinks.length) {
+        console.log(
+          `[blog repair] dropped ${sanitized.removedLinks.length} dead external link(s) from "${finalTitle}":`,
+          sanitized.removedLinks.slice(0, 5)
+        );
+      }
+      const finalContent = sanitized.content;
+      const finalWordCount = countWords(finalContent);
+
+      const { data: existing } = await supabaseAdmin
+        .from('blogs')
+        .select('id')
+        .eq('entry_id', entryId)
+        .maybeSingle();
+
+      const upsertPayload = {
+        title: finalTitle,
+        content: finalContent,
+        meta_description: finalMetaDescription,
+        slug: repaired.slug,
+        word_count: finalWordCount,
+        target_keyword: entry.focus_keyword,
+        article_type: 'Repair',
+        status: 'generated' as const,
+        research_sources: repaired.research_sources,
+        external_links: sanitized.externalLinks.slice(0, 10),
+        internal_links: sanitized.internalLinks.slice(0, 12),
+        source_url: repairPlan.url,
+        repair_notes: repairNotes,
+        updated_at: new Date().toISOString(),
+      };
+
+      let blog: Blog;
+      if (existing) {
+        const { data, error } = await supabaseAdmin
+          .from('blogs')
+          .update(upsertPayload)
+          .eq('id', existing.id)
+          .select()
+          .single();
+        if (error) throw error;
+        blog = data as Blog;
+      } else {
+        const { data, error } = await supabaseAdmin
+          .from('blogs')
+          .insert({ ...upsertPayload, entry_id: entryId, project_id: entry.project_id })
+          .select()
+          .single();
+        if (error) throw error;
+        blog = data as Blog;
+      }
+
+      await supabaseAdmin
+        .from('calendar_entries')
+        .update({ status: 'generated', title: finalTitle, article_type: 'Repair' })
+        .eq('id', entryId);
+
+      return { success: true, data: blog };
+    }
+
+    // ── Standard net-new generation ─────────────────────────────────────────
     let research = null;
     try {
       research = await researchKeyword(
@@ -48,9 +186,6 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     } catch (e) {
       console.warn('Research step failed, proceeding without context:', e);
     }
-
-    // External rank-data keyword/SERP enrichment disabled — generation uses
-    // `researchKeyword` + Serper inside `generateBlogPost` only.
 
     let existingBlogs: { title: string; slug: string; target_keyword: string }[] = [];
     try {
@@ -63,26 +198,10 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
         .limit(15);
       existingBlogs = blogs ?? [];
     } catch {
-      // optional context for internal links
+      /* optional */
     }
 
-    // Load the cached Business Brief for this project — powers company
-    // grounding + internal links to the user's REAL site pages.
-    let brief: BusinessBrief | null = null;
-    try {
-      const { data: briefRow } = await supabaseAdmin
-        .from('project_briefs')
-        .select('brief')
-        .eq('project_id', entry.project_id)
-        .maybeSingle();
-      brief = (briefRow?.brief as BusinessBrief | undefined) ?? null;
-    } catch {
-      // Brief is optional at the DB layer — generation must still work if it's missing.
-    }
-
-    const auditWriterBlock = formatContentHealthAuditForWriter(
-      (entry as { content_health_audit?: unknown }).content_health_audit
-    );
+    const auditWriterBlock = formatContentHealthAuditForWriter(contentHealthRaw);
     const mergedWriterNotes = [writerNotes?.trim(), auditWriterBlock || '']
       .filter(Boolean)
       .join('\n\n---\n\n');
@@ -108,10 +227,6 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     });
     const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(blogData.content, images));
 
-    // Probe every external link, drop dead ones, cap rendered images at 2
-    // and strip leftover IMAGE_PLACEHOLDER artifacts so the preview and the
-    // exported file always agree. `external_links` / `internal_links` are
-    // rebuilt from the sanitized markdown so the sidebar counts can't drift.
     const sanitized = await sanitizeBlogContent(contentWithImages, {
       ownDomain: project.domain ?? '',
     });
@@ -142,6 +257,8 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       research_sources: blogData.research_sources,
       external_links: sanitized.externalLinks.slice(0, 10),
       internal_links: sanitized.internalLinks.slice(0, 12),
+      source_url: '',
+      repair_notes: [] as string[],
       updated_at: new Date().toISOString(),
     };
 
@@ -425,6 +542,33 @@ function replaceFirstH1(markdown: string, title: string): string {
   if (!safeTitle) return markdown;
   if (/^#\s+.+$/m.test(markdown)) return markdown.replace(/^#\s+.+$/m, `# ${safeTitle}`);
   return `# ${safeTitle}\n\n${markdown.trim()}`;
+}
+
+function repairTitleNeedsRepairFlag(analysis: BlogAuditAnalysis): boolean {
+  return analysis.issues.some(i =>
+    /title|h1|headline|keyword in title|target keyword/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+}
+
+function repairMetaNeedsRepairFlag(analysis: BlogAuditAnalysis): boolean {
+  return analysis.issues.some(i =>
+    /meta description|meta tag|description/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+}
+
+function normalizeRepairNotesFromModel(notes: string[], analysis: BlogAuditAnalysis): string[] {
+  const cleaned = notes.map(n => n.trim()).filter(Boolean);
+  const hasDone = cleaned.some(n => /^done:/i.test(n));
+  const hasStill = cleaned.some(n => /^still to do:/i.test(n));
+  const done = hasDone
+    ? cleaned.filter(n => /^done:/i.test(n))
+    : analysis.issues.slice(0, 6).map(i => `Done: ${i.fix || i.label}`);
+  const still = hasStill
+    ? cleaned.filter(n => /^still to do:/i.test(n))
+    : [
+        'Still to do: none — re-run Content Health after publishing to verify the fixes.',
+      ];
+  return [...done, ...still].slice(0, 10);
 }
 
 function sanitizeBlogMarkdown(markdown: string): string {

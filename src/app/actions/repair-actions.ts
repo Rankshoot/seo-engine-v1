@@ -127,7 +127,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
 
   // Build the internal link pool: everything the audit already picked +
   // other peer URLs from the brief. Keep it verbatim so the LLM can't invent.
-  const fromAudit = analysis.internal_link_opportunities.map(i => i.target_url);
+  const fromAudit = (analysis.internal_link_opportunities ?? []).map(i => i.target_url);
   const fromBrief = (brief?.internal_link_candidates ?? []).map(c => c.url);
   const fromBriefBlogs = brief?.blog_urls ?? [];
   const internalLinkPool = Array.from(
@@ -176,7 +176,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
         severity: i.severity,
         why_it_matters: i.why_it_matters,
       })),
-      contentGaps: analysis.content_gaps,
+      contentGaps: analysis.content_gaps ?? [],
       internalLinkPool,
       primaryKeyword: analysis.primary_keyword || auditRow.primary_keyword || '',
       secondaryKeywords: analysis.secondary_keywords ?? [],

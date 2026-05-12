@@ -481,6 +481,7 @@ export default function CalendarPage() {
                 const kw = entry.keywords;
                 const isRepairRow = entry.article_type === "Repair";
                 const origin = resolveCalendarKeywordOrigin({
+                  contentHealthAudit: entry.content_health_audit,
                   keywordSourceType: kw?.source_type,
                   articleType: entry.article_type,
                   aiSourceFromEntry: entry.ai_source,

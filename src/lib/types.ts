@@ -37,7 +37,9 @@ export type KeywordSourceType =
   | 'competitor_benchmark'
   | 'quick_win'
   /** Google Ads `keywords_for_site` — domain tab live list. */
-  | 'google_ads_domain';
+  | 'google_ads_domain'
+  /** Added via calendar “custom keyword” flow. */
+  | 'manual';
 
 /** Multi-intent flags as Ahrefs returns them. Structurally matches `AhrefsIntentObject`. */
 export interface KeywordIntents {

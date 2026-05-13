@@ -393,18 +393,46 @@ export async function getContentGeneratorHistoryForProject(projectId: string) {
       .in('status', ['generated', 'approved', 'published'])
       .order('updated_at', { ascending: false });
 
-  let { data, error } = await historyQuery(
-    'id, title, target_keyword, article_type, status, created_at, updated_at, in_articles_library'
-  );
+  // Full query — includes the FK relation `calendar_entries(scheduled_date)`
+  // so the UI can show "Scheduled for ..." instead of "Schedule".
+  const FULL_COLS =
+    'id, title, target_keyword, article_type, status, created_at, updated_at, in_articles_library, entry_id, calendar_entries:entry_id(scheduled_date)';
+  let { data, error } = await historyQuery(FULL_COLS);
+
+  // Older databases may not have `in_articles_library` yet — fall back.
   if (error && /in_articles_library|schema cache/i.test(error.message)) {
-    const second = await historyQuery('id, title, target_keyword, article_type, status, created_at, updated_at');
+    const second = await historyQuery(
+      'id, title, target_keyword, article_type, status, created_at, updated_at, entry_id, calendar_entries:entry_id(scheduled_date)'
+    );
     data = second.data;
     error = second.error;
+  }
+  // If the FK embed itself isn't available, retry without it.
+  if (error && /calendar_entries|relationship/i.test(error.message)) {
+    const third = await historyQuery(
+      'id, title, target_keyword, article_type, status, created_at, updated_at, in_articles_library, entry_id'
+    );
+    data = third.data;
+    error = third.error;
   }
 
   if (error) return { success: false as const, error: error.message, data: [] as ArticleLibraryEntry[] };
 
-  const rows = (data ?? []) as unknown as Array<ArticleLibraryEntry & { in_articles_library?: boolean }>;
+  // Flatten the embedded calendar relation into a top-level scheduled_date.
+  type EmbeddedRow = ArticleLibraryEntry & {
+    in_articles_library?: boolean;
+    entry_id?: string | null;
+    // Supabase returns embedded relations as either a single object or array.
+    calendar_entries?: { scheduled_date: string } | { scheduled_date: string }[] | null;
+  };
+  const rows = ((data ?? []) as unknown as EmbeddedRow[]).map((r) => {
+    const sched = Array.isArray(r.calendar_entries)
+      ? r.calendar_entries[0]?.scheduled_date
+      : r.calendar_entries?.scheduled_date;
+    const { calendar_entries: _unused, ...rest } = r;
+    void _unused;
+    return { ...rest, scheduled_date: sched ?? null };
+  });
   return { success: true as const, data: rows };
 }
 

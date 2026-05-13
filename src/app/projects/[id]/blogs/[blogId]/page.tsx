@@ -7,7 +7,7 @@ import {
   type RefObject,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -16,7 +16,7 @@ import { projectsApi } from "@/frontend/api/projects";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query";
 import toast from "react-hot-toast";
-import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat } from "@/lib/types";
+import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat, type CalendarEntry } from "@/lib/types";
 import type { Project } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
@@ -25,6 +25,7 @@ import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { rangeSelectionToMarkdown } from "@/lib/editor-selection-markdown";
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { calendarApi } from "@/frontend/api/calendar";
+import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
 
@@ -42,6 +43,9 @@ const V = {
 } as const;
 
 const MONO = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
+
+/** Query value for `?from=` — set when opening the blog viewer from Analyze content (`/audit/import`). */
+const BLOG_VIEW_FROM_ANALYZE_CONTENT = "analyze-content";
 
 const FORMATS: { key: ExportFormat; label: string; ext: string }[] = [
   { key: "markdown", label: "Markdown",   ext: ".md"   },
@@ -665,6 +669,8 @@ function BlogContentAnalysisModal({
 
 export default function BlogViewerPage() {
   const { id: projectId, blogId } = useParams<{ id: string; blogId: string }>();
+  const searchParams = useSearchParams();
+  const fromAnalyzeContentPage = searchParams.get("from") === BLOG_VIEW_FROM_ANALYZE_CONTENT;
   const queryClient = useQueryClient();
 
   const [blog, setBlog]                   = useState<Blog | null>(null);
@@ -707,6 +713,12 @@ export default function BlogViewerPage() {
   const [analysisSnapshotAt, setAnalysisSnapshotAt] = useState<string | null>(null);
   const [analysisEnhancing, setAnalysisEnhancing] = useState(false);
   const [analysisScheduling, setAnalysisScheduling] = useState(false);
+
+  // ── Schedule-on-calendar (Instant Articles) ────────────────────────────
+  const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([]);
+  const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduleVersion, setScheduleVersion] = useState(0);
 
   const analysisIsStale = Boolean(
     contentAnalysis && analysisSnapshotAt && blog && blog.updated_at !== analysisSnapshotAt
@@ -842,7 +854,8 @@ export default function BlogViewerPage() {
       const res = await repairBlogFromContent(blog.id, contentAnalysis);
       if (res.success && res.data.blogId) {
         toast.success("Enhanced version ready — opening.");
-        window.location.href = `/projects/${projectId}/blogs/${res.data.blogId}`;
+        const q = fromAnalyzeContentPage ? `?from=${BLOG_VIEW_FROM_ANALYZE_CONTENT}` : "";
+        window.location.href = `/projects/${projectId}/blogs/${res.data.blogId}${q}`;
       } else {
         toast.error(!res.success ? res.error : "Could not generate enhanced version.");
       }
@@ -874,6 +887,65 @@ export default function BlogViewerPage() {
       toast.error(ex instanceof Error ? ex.message : "Could not schedule.");
     } finally {
       setAnalysisScheduling(false);
+    }
+  };
+
+  // Calendar entries — used to power the right-sidebar Schedule date picker
+  // (`scheduledDates` for the picker + looking up `scheduled_date` by entry_id).
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    calendarApi.entries(projectId).then((r) => {
+      if (cancelled) return;
+      if (r.success) setCalendarEntries(r.data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, scheduleVersion]);
+
+  const scheduledDatesSet = useMemo(
+    () => new Set(calendarEntries.map((e) => String(e.scheduled_date).slice(0, 10))),
+    [calendarEntries],
+  );
+
+  const scheduledDate = useMemo(() => {
+    if (!blog?.entry_id) return null;
+    const hit = calendarEntries.find((e) => e.id === blog.entry_id);
+    return hit ? String(hit.scheduled_date).slice(0, 10) : null;
+  }, [blog?.entry_id, calendarEntries]);
+
+  const handleScheduleBlog = async (date: string) => {
+    if (!blog) return;
+    setScheduling(true);
+    try {
+      const res = await calendarApi.scheduleExistingBlog(projectId, {
+        blogId: blog.id,
+        targetDate: date,
+        source: "Instant Article",
+      });
+      if (res.success) {
+        const niceDate = new Date(`${res.scheduled_date}T00:00:00`).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        });
+        toast.success(
+          res.rescheduled ? `Moved to ${niceDate}.` : `Scheduled for ${niceDate}.`,
+        );
+        setBlog((b) => (b ? { ...b, entry_id: res.data.id } : b));
+        setScheduleVersion((v) => v + 1);
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+      } else {
+        toast.error(res.error || "Could not schedule");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not schedule");
+    } finally {
+      setScheduling(false);
+      setSchedulePickerOpen(false);
     }
   };
 
@@ -1248,38 +1320,41 @@ export default function BlogViewerPage() {
         <div className="w-[288px] shrink-0 rounded-[10px] border border-border-subtle bg-surface-secondary overflow-hidden">
           <div className="h-full overflow-y-auto blog-sidebar-scroll">
 
-            {/* ── Content Analysis button ───────────────────────────── */}
-            <div className="px-4 pt-4 pb-3">
-              <button
-                type="button"
-                onClick={() => void openAnalysisModal()}
-                disabled={editMode || savingContent}
-                className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 ${
-                  analysisIsStale
-                    ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
-                    : contentAnalysis
-                    ? "bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
-                    : "bg-brand-action text-brand-on-primary hover:opacity-90 shadow-md shadow-brand-action/20"
-                }`}
-              >
-                {/* AI sparkle icon */}
-                <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
-                </svg>
-                {analysisIsStale ? "Content changed — re-analyse" : contentAnalysis ? "View analysis" : "Analyse content"}
-              </button>
-              {contentAnalysis && !analysisIsStale && (
-                <div className="mt-1.5 flex items-center justify-center gap-2 text-[10px] text-text-tertiary">
-                  {contentAnalysis.conclusion && (
-                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold text-[9px] uppercase ${CONCLUSION_META[contentAnalysis.conclusion.verdict].cls}`}>
-                      {CONCLUSION_META[contentAnalysis.conclusion.verdict].label}
-                    </span>
+            {/* ── Content Analysis (Analyze content page entry only) ───── */}
+            {fromAnalyzeContentPage && (
+              <>
+                <div className="px-4 pt-4 pb-3">
+                  <button
+                    type="button"
+                    onClick={() => void openAnalysisModal()}
+                    disabled={editMode || savingContent}
+                    className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 ${
+                      analysisIsStale
+                        ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
+                        : contentAnalysis
+                          ? "bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
+                          : "bg-brand-action text-brand-on-primary hover:opacity-90 shadow-md shadow-brand-action/20"
+                    }`}
+                  >
+                    <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                    </svg>
+                    {analysisIsStale ? "Content changed — re-analyse" : contentAnalysis ? "View analysis" : "Analyse content"}
+                  </button>
+                  {contentAnalysis && !analysisIsStale && (
+                    <div className="mt-1.5 flex items-center justify-center gap-2 text-[10px] text-text-tertiary">
+                      {contentAnalysis.conclusion && (
+                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold text-[9px] uppercase ${CONCLUSION_META[contentAnalysis.conclusion.verdict].cls}`}>
+                          {CONCLUSION_META[contentAnalysis.conclusion.verdict].label}
+                        </span>
+                      )}
+                      <span>{contentAnalysis.issues.length} issues</span>
+                    </div>
                   )}
-                  <span>{contentAnalysis.issues.length} issues</span>
                 </div>
-              )}
-            </div>
-            <div className="h-px mx-4 bg-border-subtle opacity-60" />
+                <div className="h-px mx-4 bg-border-subtle opacity-60" />
+              </>
+            )}
 
             {/* SEO Score — borderless embed, blends into panel bg */}
             <div className={`transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>
@@ -1445,6 +1520,64 @@ export default function BlogViewerPage() {
                 ))}
               </div>
             </div>
+
+            {/* ── Schedule on calendar (Instant Articles) ───────────────── */}
+            {isInstantArticle && (
+              <>
+                <Divider />
+                <div className="px-4 py-4">
+                  <SLabel>Schedule</SLabel>
+                  {scheduledDate ? (
+                    <>
+                      <div className="mb-2.5 flex items-center gap-2">
+                        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] bg-brand-action/10 text-brand-action">
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                            <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+                            <line x1="16" x2="16" y1="2" y2="6" />
+                            <line x1="8" x2="8" y1="2" y2="6" />
+                            <line x1="3" x2="21" y1="10" y2="10" />
+                          </svg>
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[12px] font-semibold text-text-primary leading-tight">
+                            {new Date(`${scheduledDate}T00:00:00`).toLocaleDateString("en-US", {
+                              month: "long",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </p>
+                          <p className="text-[10px] text-text-tertiary">On the content calendar</p>
+                        </div>
+                      </div>
+                      <CalendarDatePicker
+                        open={schedulePickerOpen}
+                        onOpenChange={setSchedulePickerOpen}
+                        currentDate={scheduledDate}
+                        onConfirm={(d) => void handleScheduleBlog(d)}
+                        saving={scheduling}
+                        scheduledDates={scheduledDatesSet}
+                        variant="change"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
+                        Place this draft on the content calendar to publish on a specific date.
+                      </p>
+                      <CalendarDatePicker
+                        open={schedulePickerOpen}
+                        onOpenChange={setSchedulePickerOpen}
+                        currentDate={null}
+                        onConfirm={(d) => void handleScheduleBlog(d)}
+                        saving={scheduling}
+                        scheduledDates={scheduledDatesSet}
+                        variant="pick"
+                      />
+                    </>
+                  )}
+                </div>
+              </>
+            )}
 
             {/* ── Generate — hidden for imported/repaired content ──────── */}
             {!isImport && !isRepair && (

@@ -13,8 +13,9 @@ export function InfoIcon({ className = "h-[14px] w-[14px] opacity-50 hover:opaci
 
 export type TooltipPlacement = "above" | "below";
 
-const TOOLTIP_GAP = 8; // px between anchor and tooltip box
-const VIEWPORT_PADDING = 12; // min px from viewport edge
+/** How far the tooltip box is offset from the cursor */
+const CURSOR_OFFSET = 16;
+const VIEWPORT_PADDING = 10;
 
 export function Tooltip({
   children,
@@ -30,75 +31,80 @@ export function Tooltip({
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const tooltipRef = React.useRef<HTMLDivElement>(null);
   const [visible, setVisible] = React.useState(false);
-  const [pos, setPos] = React.useState<{ top: number; left: number; actualPlacement: TooltipPlacement }>({
-    top: 0,
-    left: 0,
-    actualPlacement: placement,
-  });
+  const [pos, setPos] = React.useState({ top: -9999, left: -9999 });
   const [mounted, setMounted] = React.useState(false);
+  const cursorRef = React.useRef({ x: 0, y: 0 });
 
   React.useEffect(() => { setMounted(true); }, []);
 
-  const computePosition = React.useCallback(() => {
-    const anchor = anchorRef.current;
+  const computeFromCursor = React.useCallback((cx: number, cy: number) => {
     const tip = tooltipRef.current;
-    if (!anchor || !tip) return;
+    if (!tip) return;
 
-    const ar = anchor.getBoundingClientRect();
-    const tr = tip.getBoundingClientRect();
+    const tw = tip.offsetWidth  || 320;
+    const th = tip.offsetHeight || 200;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
 
-    // Decide placement: prefer requested, flip if not enough space
-    let useAbove = placement === "above";
-    if (useAbove && ar.top - tr.height - TOOLTIP_GAP < VIEWPORT_PADDING) useAbove = false;
-    if (!useAbove && ar.bottom + tr.height + TOOLTIP_GAP > vh - VIEWPORT_PADDING) useAbove = true;
+    // Determine which quadrant has the most space relative to the cursor
+    const spaceRight  = vw - cx - CURSOR_OFFSET - VIEWPORT_PADDING;
+    const spaceLeft   = cx - CURSOR_OFFSET - VIEWPORT_PADDING;
+    const spaceBelow  = vh - cy - CURSOR_OFFSET - VIEWPORT_PADDING;
+    const spaceAbove  = cy - CURSOR_OFFSET - VIEWPORT_PADDING;
 
-    // Vertical position
-    const top = useAbove
-      ? ar.top + window.scrollY - tr.height - TOOLTIP_GAP
-      : ar.bottom + window.scrollY + TOOLTIP_GAP;
+    // Horizontal axis: prefer the side chosen by `placement`, flip if needed
+    const preferLeft = placement === "above"
+      ? spaceLeft >= tw || spaceLeft > spaceRight   // "above" hint → try left first
+      : spaceRight >= tw || spaceRight >= spaceLeft; // "below" hint → try right first
 
-    // Horizontal: centre on anchor, then clamp to viewport
-    let left = ar.left + window.scrollX + ar.width / 2 - tr.width / 2;
-    left = Math.max(VIEWPORT_PADDING, Math.min(left, vw - tr.width - VIEWPORT_PADDING));
+    let left: number;
+    if (preferLeft && spaceLeft >= tw) {
+      left = cx - tw - CURSOR_OFFSET;
+    } else if (!preferLeft && spaceRight >= tw) {
+      left = cx + CURSOR_OFFSET;
+    } else if (spaceRight >= spaceLeft) {
+      left = cx + CURSOR_OFFSET;
+    } else {
+      left = cx - tw - CURSOR_OFFSET;
+    }
 
-    setPos({ top, left, actualPlacement: useAbove ? "above" : "below" });
+    // Vertical: align top of tooltip to cursor, slide up if near bottom
+    let top = cy - Math.min(th * 0.3, 60); // anchor ~1/3 from tooltip top
+    // Clamp vertically
+    top = Math.max(window.scrollY + VIEWPORT_PADDING, top);
+    top = Math.min(window.scrollY + vh - th - VIEWPORT_PADDING, top);
+
+    // If horizontal placement forces tooltip to be too narrow, centre vertically on cursor instead
+    // Clamp horizontal too
+    left = Math.max(window.scrollX + VIEWPORT_PADDING, Math.min(left, window.scrollX + vw - tw - VIEWPORT_PADDING));
+
+    // Vertical preference: if above has more space, bias upward
+    if (spaceAbove > spaceBelow) {
+      top = cy + window.scrollY - th - CURSOR_OFFSET;
+      top = Math.max(window.scrollY + VIEWPORT_PADDING, top);
+    } else {
+      top = cy + window.scrollY + CURSOR_OFFSET;
+      top = Math.min(window.scrollY + vh - th - VIEWPORT_PADDING, top);
+    }
+
+    setPos({ top, left: left + window.scrollX });
   }, [placement]);
 
-  const handleMouseEnter = React.useCallback(() => {
+  const handleMouseMove = React.useCallback((e: React.MouseEvent) => {
+    cursorRef.current = { x: e.clientX, y: e.clientY };
+    if (visible) computeFromCursor(e.clientX, e.clientY);
+  }, [visible, computeFromCursor]);
+
+  const handleMouseEnter = React.useCallback((e: React.MouseEvent) => {
+    cursorRef.current = { x: e.clientX, y: e.clientY };
     setVisible(true);
-  }, []);
+    // Position immediately using cursor coords (rAF so tooltip is painted first)
+    requestAnimationFrame(() => computeFromCursor(e.clientX, e.clientY));
+  }, [computeFromCursor]);
 
   const handleMouseLeave = React.useCallback(() => {
     setVisible(false);
   }, []);
-
-  // Recompute position whenever visibility changes or on resize/scroll
-  React.useLayoutEffect(() => {
-    if (!visible) return;
-    computePosition();
-    const onUpdate = () => computePosition();
-    window.addEventListener("scroll", onUpdate, true);
-    window.addEventListener("resize", onUpdate);
-    return () => {
-      window.removeEventListener("scroll", onUpdate, true);
-      window.removeEventListener("resize", onUpdate);
-    };
-  }, [visible, computePosition]);
-
-  const arrowUp = (
-    <>
-      <div className="absolute -top-[5px] left-1/2 -translate-x-1/2 border-[5px] border-transparent border-b-border-subtle" />
-      <div className="absolute -top-[4px] left-1/2 -translate-x-1/2 border-[5px] border-transparent border-b-surface-elevated" />
-    </>
-  );
-  const arrowDown = (
-    <>
-      <div className="absolute -bottom-[5px] left-1/2 -translate-x-1/2 border-[5px] border-transparent border-t-border-subtle" />
-      <div className="absolute -bottom-[4px] left-1/2 -translate-x-1/2 border-[5px] border-transparent border-t-surface-elevated" />
-    </>
-  );
 
   return (
     <div
@@ -106,6 +112,7 @@ export function Tooltip({
       className={`group/tooltip relative inline-flex items-center justify-center ${className}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onMouseMove={handleMouseMove}
     >
       {children}
 
@@ -121,13 +128,14 @@ export function Tooltip({
             zIndex: 99999,
             pointerEvents: visible ? "auto" : "none",
             opacity: visible ? 1 : 0,
-            transform: visible ? "scale(1) translateY(0)" : `scale(0.95) translateY(${pos.actualPlacement === "above" ? "4px" : "-4px"})`,
-            transition: "opacity 150ms ease, transform 150ms ease",
+            transform: visible ? "scale(1)" : "scale(0.96)",
+            transition: "opacity 120ms ease, transform 120ms ease",
+            maxHeight: `calc(100vh - ${VIEWPORT_PADDING * 2}px)`,
+            overflow: "auto",
           }}
         >
-          <div className="relative w-max max-w-xs rounded-xl border border-border-subtle bg-surface-elevated text-xs font-medium text-text-secondary shadow-2xl shadow-black/40">
+          <div className="relative w-max max-w-xs rounded-xl border border-border-subtle bg-surface-elevated text-xs font-medium text-text-secondary shadow-2xl shadow-black/50">
             {content}
-            {pos.actualPlacement === "below" ? arrowUp : arrowDown}
           </div>
         </div>,
         document.body

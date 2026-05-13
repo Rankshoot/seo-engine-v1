@@ -40,6 +40,9 @@ import {
 
 type AnalyzeTab = "upload" | "url";
 
+/** Matches `BLOG_VIEW_FROM_ANALYZE_CONTENT` in `blogs/[blogId]/page.tsx` — shows Analyse content in blog sidebar. */
+const BLOG_QUERY_FROM_ANALYZE_CONTENT = "?from=analyze-content";
+
 function scrapeDownloadFilename(url: string): string {
   try {
     const u = new URL(url);
@@ -310,7 +313,7 @@ function AnalyzeAuditActions({
 
       {/* ── View blog ─────────────────────────────────────────────────── */}
       {showViewBlog && effectiveBlogId && (
-        <ProjectNavLink href={`/projects/${projectId}/blogs/${effectiveBlogId}`}
+        <ProjectNavLink href={`/projects/${projectId}/blogs/${effectiveBlogId}${BLOG_QUERY_FROM_ANALYZE_CONTENT}`}
           className={`${btnBase} border border-emerald-500/35 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15`}>
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
           View blog
@@ -732,7 +735,7 @@ export default function AuditImportPage() {
             uploadedAt: new Date().toISOString(),
           },
         }));
-        router.push(`/projects/${projectId}/blogs/${res.blogId}`);
+        router.push(`/projects/${projectId}/blogs/${res.blogId}${BLOG_QUERY_FROM_ANALYZE_CONTENT}`);
         return;
       }
       setUploadErr(res.error ?? "Import failed.");
@@ -867,7 +870,7 @@ export default function AuditImportPage() {
         ]);
         dispatch(contentHealthAuditMarkStale({ projectId }));
         toast.success("Enhanced version ready — opening blog viewer.");
-        router.push(`/projects/${projectId}/blogs/${res.data.blogId}`);
+        router.push(`/projects/${projectId}/blogs/${res.data.blogId}${BLOG_QUERY_FROM_ANALYZE_CONTENT}`);
       } else {
         toast.error(!res.success ? res.error : "Could not generate enhanced version.");
       }
@@ -1013,7 +1016,7 @@ export default function AuditImportPage() {
                     </div>
                   </div>
                   <ProjectNavLink
-                    href={`/projects/${projectId}/blogs/${entry.blogId}`}
+                    href={`/projects/${projectId}/blogs/${entry.blogId}${BLOG_QUERY_FROM_ANALYZE_CONTENT}`}
                     className="shrink-0 inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-secondary px-3 text-[11px] font-semibold text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors"
                   >
                     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"/><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>

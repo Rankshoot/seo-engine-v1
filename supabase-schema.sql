@@ -120,6 +120,14 @@ ALTER TABLE keywords
 ALTER TABLE keywords
   ADD COLUMN IF NOT EXISTS ai_eval_at TIMESTAMPTZ DEFAULT NULL;
 
+-- Gemini AI eval for competitor keyword gaps. See supabase-migration-keyword-gaps-ai-eval.sql.
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS ai_eval_score INTEGER DEFAULT NULL;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS ai_eval_data JSONB DEFAULT NULL;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS ai_eval_at TIMESTAMPTZ DEFAULT NULL;
+
 -- One-row-per-keyword modal payload (overview / history / by-country / SERP).
 CREATE TABLE IF NOT EXISTS keyword_details (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

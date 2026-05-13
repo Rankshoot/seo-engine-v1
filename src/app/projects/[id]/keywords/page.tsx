@@ -1028,7 +1028,7 @@ export default function KeywordsPage() {
         );
       }
     }
-  ], [aiSuggestedIds, busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [aiSuggestedIds, busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
 
   const industryColumns = useMemo<ColumnDef<Keyword>[]>(() => [
     {
@@ -1190,7 +1190,7 @@ export default function KeywordsPage() {
         </div>
       )
     }
-  ], [aiSuggestedIds, busyRowId, handleStatusUpdate, projectData]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [aiSuggestedIds, busyRowId, handleStatusUpdate, projectData]);
 
   const thBtn =
     "group inline-flex items-center gap-0.5 rounded-[6px] px-1 py-0.5 -mx-1 text-left uppercase tracking-widest hover:bg-surface-hover/80 hover:text-text-secondary transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40";

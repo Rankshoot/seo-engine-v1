@@ -1547,3 +1547,175 @@ export async function scoreKeywordsWithAI(
 
   return { success: true, scored, skipped: rows.length - scored };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// scoreCompetitorKeywordsWithAI
+//
+// Same Gemini evaluation pipeline but targeted at keyword_gaps rows (competitor
+// keyword gaps on the Competitor Insights page). Prompt is tuned for competitor
+// research and blog-writing opportunity signals rather than pure industry intent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildCompetitorEvalPrompt(
+  project: { name: string; domain: string; niche: string; target_audience: string; target_region: string },
+  brief: BusinessBrief | null,
+  competitors: string[],
+  gaps: Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+): string {
+  const briefSnippet = brief
+    ? [
+        brief.summary?.slice(0, 500),
+        brief.products?.length ? `Core offerings: ${brief.products.slice(0, 8).join(', ')}` : '',
+        brief.audiences?.length ? `Audience: ${brief.audiences.slice(0, 3).join('; ')}` : '',
+        brief.usps?.length ? `USPs: ${brief.usps.slice(0, 3).join('; ')}` : '',
+      ].filter(Boolean).join('\n')
+    : `Company: ${project.name}, Niche: ${project.niche}, Audience: ${project.target_audience}`;
+
+  const kwList = gaps
+    .map((g, i) =>
+      `${i + 1}. "${g.keyword}" | vol=${g.volume} | KD=${g.kd} | gap=${g.gap_type} | competitor_weakness=${g.competitor_weakness} | top_competitor=${g.top_competitor_domain}`
+    )
+    .join('\n');
+
+  return `You are a senior content strategist and competitive SEO expert evaluating competitor keyword gaps for a production content platform.
+
+## BUSINESS CONTEXT
+Company: ${project.name}
+Domain: ${project.domain}
+Niche: ${project.niche}
+Target audience: ${project.target_audience}
+Region: ${project.target_region}
+Main competitors: ${competitors.slice(0, 6).join(', ') || 'unknown'}
+
+## BUSINESS BRIEF
+${briefSnippet}
+
+## GAP TYPE DEFINITIONS
+- missing: You have no content for this keyword — competitor ranks, you don't
+- weak: You have content but it underperforms competitor content
+- untapped: High-value keyword neither you nor competitors dominate yet
+
+## EVALUATION FRAMEWORK (weighted scoring for competitor gap keywords)
+- Business Relevance (20%): Does this keyword align with company services / audience goals?
+- Blog Writing Potential (20%): Can a high-quality 1500+ word article be written on this topic? Rich subtopics, FAQs, use cases?
+- Competitive Takeover Opportunity (20%): Gap type + competitor weakness score — how realistic is outranking the current result?
+- Search Intent Quality (15%): Informational / commercial intent that drives discovery and consideration. Avoid pure transactional or navigational.
+- Traffic Potential (10%): Organic volume and CTR opportunity in the niche context
+- Trend & Freshness (10%): Rising demand or evergreen; avoid declining or seasonal-only terms
+- Audience Fit (5%): Does the audience searching this match the company's ideal customer profile?
+
+## CATEGORY DEFINITIONS
+- high_opportunity: score ≥ 75 — strong blog angle, realistic to outrank, business-relevant
+- good_fit: score 55–74 — solid topic, worth writing, some competition
+- moderate: score 35–54 — borderline value or hard to rank
+- low_priority: score < 35 — too generic, irrelevant, or impossible gap
+- avoid: competitor brand, navigational, spam, no writing angle
+
+## COMPETITOR KEYWORDS TO EVALUATE
+${kwList}
+
+## CRITICAL RULES
+1. A missing/untapped keyword with competitor_weakness > 60 is a prime blog target — score high.
+2. A weak gap with competitor_weakness > 40 is still a rewrite/upgrade opportunity.
+3. Prioritise keywords with clear article angles (how-to, comparison, guide, list, case study).
+4. Reject / heavily penalise competitor brand names, pure navigational queries, product-only transactional queries.
+5. B2B niche: 300 vol / KD 25 beating a thin competitor page = high score.
+6. All string values must use plain ASCII quotes.
+
+Return a JSON array. Each element must have exactly these fields:
+- keyword (string — exact match from input)
+- score (integer 0-100)
+- category (one of: high_opportunity, good_fit, moderate, low_priority, avoid)
+- analysis (object with integer fields 1-10: businessRelevance, blogPotential, competitiveTakeover, intentQuality, trafficPotential, trendGrowth, audienceFit, contentDepth)
+- reasoning (object with: summary string, strengths string array, weaknesses string array, rankingOpportunity string, contentOpportunity string)
+
+Keep all strings short (summary ≤ 120 chars, each strength/weakness ≤ 80 chars, rankingOpportunity ≤ 100 chars, contentOpportunity ≤ 100 chars) to avoid truncation.`;
+}
+
+export async function scoreCompetitorKeywordsWithAI(
+  projectId: string,
+  opts?: { force?: boolean }
+): Promise<{
+  success: boolean;
+  scored: number;
+  skipped: number;
+  error?: string;
+}> {
+  const user = await currentUser();
+  if (!user) return { success: false, scored: 0, skipped: 0, error: 'Not authenticated' };
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, name, domain, niche, target_audience, target_region')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, scored: 0, skipped: 0, error: 'Project not found' };
+
+  const { data: compRows } = await supabaseAdmin
+    .from('project_competitors')
+    .select('domain')
+    .eq('project_id', projectId);
+  const competitors = (compRows ?? []).map(c => c.domain);
+
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.brief;
+
+  let query = supabaseAdmin
+    .from('keyword_gaps')
+    .select('id, keyword, volume, kd, gap_type, competitor_weakness, top_competitor_domain, ai_eval_score')
+    .eq('project_id', projectId)
+    .order('volume', { ascending: false })
+    .limit(300);
+
+  if (!opts?.force) {
+    query = query.is('ai_eval_score', null);
+  }
+
+  const { data: rows, error: fetchErr } = await query;
+  if (fetchErr) return { success: false, scored: 0, skipped: 0, error: fetchErr.message };
+  if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
+
+  let scored = 0;
+
+  for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
+    const batch = rows.slice(i, i + AI_EVAL_BATCH);
+    const prompt = buildCompetitorEvalPrompt(
+      project,
+      brief,
+      competitors,
+      batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+    );
+
+    let results: Array<{ keyword: string; score: number; category: string; analysis: Record<string, number>; reasoning: AiEvalData['reasoning'] }>;
+    try {
+      const raw = await callGeminiForEval(prompt);
+      results = JSON.parse(extractJsonArray(raw));
+    } catch (e) {
+      console.error('[scoreCompetitorKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);
+      continue;
+    }
+
+    const lookup = new Map(results.map(r => [r.keyword.toLowerCase().trim(), r]));
+    const now = new Date().toISOString();
+
+    const updates = batch.flatMap(row => {
+      const hit = lookup.get(row.keyword.toLowerCase().trim());
+      if (!hit) return [];
+      const evalData = { category: hit.category, analysis: hit.analysis, reasoning: hit.reasoning };
+      return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+    });
+
+    if (updates.length) {
+      for (const upd of updates) {
+        await supabaseAdmin
+          .from('keyword_gaps')
+          .update({ ai_eval_score: upd.ai_eval_score, ai_eval_data: upd.ai_eval_data, ai_eval_at: upd.ai_eval_at })
+          .eq('id', upd.id);
+      }
+      scored += updates.length;
+    }
+  }
+
+  return { success: true, scored, skipped: rows.length - scored };
+}

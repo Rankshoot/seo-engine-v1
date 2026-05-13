@@ -14,6 +14,8 @@ import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdo
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
 import { PageTitle, EmptyState } from "@/components/common";
+import { scoreCompetitorKeywordsWithAI } from "@/app/actions/keyword-actions";
+import { Tooltip } from "@/components/Tooltip";
 
 function logoUrlCandidates(host: string): string[] {
   if (!host) return [];
@@ -192,6 +194,8 @@ export default function CompetitorsPage() {
   const [rejectedGapKeywords, setRejectedGapKeywords] = useState<Set<string>>(new Set());
   const [competitorStatuses, setCompetitorStatuses] = useState<Record<string, KeywordStatus>>({});
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
+  const [aiScoring, setAiScoring] = useState(false);
+  const [aiScoringDone, setAiScoringDone] = useState(false);
   const aiSuggestedGapKeywords = useAppSelector(state =>
     selectAiSuggestedGapKeywords(state, projectId)
   );
@@ -370,6 +374,23 @@ export default function CompetitorsPage() {
     }
   };
 
+  const handleRunAiScoring = async () => {
+    if (aiScoring) return;
+    setAiScoring(true);
+    setAiScoringDone(false);
+    try {
+      const res = await scoreCompetitorKeywordsWithAI(projectId);
+      if (res.success) {
+        await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
+        setAiScoringDone(true);
+      } else {
+        setError(res.error ?? "AI scoring failed");
+      }
+    } finally {
+      setAiScoring(false);
+    }
+  };
+
   const competitors = state?.competitors ?? [];
   const gaps = state?.gaps ?? [];
   const averages = state?.averages;
@@ -495,6 +516,9 @@ export default function CompetitorsPage() {
                 setSelectedGapIds(new Set());
               }}
               onBulkApproveGaps={() => void handleBulkApproveGaps()}
+              aiScoring={aiScoring}
+              onRunAiScoring={() => void handleRunAiScoring()}
+              aiScoringDone={aiScoringDone}
             />
           )}
 
@@ -602,6 +626,107 @@ function InsightsViewDropdown({
   );
 }
 
+// ─── AI Score helpers ────────────────────────────────────────────────────────
+
+type GapAiEvalData = NonNullable<KeywordGap['ai_eval_data']>;
+
+function AI_GAP_SCORE_CATEGORY(score: number): { icon: string; colorClass: string; label: string } {
+  if (score >= 75) return { icon: "★", colorClass: "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10", label: "High opportunity" };
+  if (score >= 55) return { icon: "◆", colorClass: "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10", label: "Good fit" };
+  if (score >= 35) return { icon: "▸", colorClass: "text-brand-action border-brand-action/25 bg-brand-action/10", label: "Moderate" };
+  return { icon: "▾", colorClass: "text-text-tertiary border-border-subtle bg-surface-elevated", label: "Low priority" };
+}
+
+function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number }) {
+  const cat = AI_GAP_SCORE_CATEGORY(score);
+  const dims = [
+    { label: "Biz Relevance", val: data.analysis.businessRelevance ?? 0 },
+    { label: "Blog Potential", val: (data.analysis as any).blogPotential ?? 0 },
+    { label: "Competitive", val: (data.analysis as any).competitiveTakeover ?? 0 },
+    { label: "Intent Quality", val: (data.analysis as any).intentQuality ?? data.analysis.intentQuality ?? 0 },
+    { label: "Traffic Potential", val: data.analysis.trafficPotential ?? 0 },
+    { label: "Trend/Growth", val: data.analysis.trendGrowth ?? 0 },
+    { label: "Audience Fit", val: (data.analysis as any).audienceFit ?? 0 },
+    { label: "Content Depth", val: data.analysis.contentDepth ?? 0 },
+  ].filter(d => d.val > 0);
+
+  return (
+    <div className="w-[340px] space-y-3 p-1">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className={`inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[13px] font-bold tabular-nums ${cat.colorClass}`}>
+            {cat.icon} {score}
+          </span>
+          <span className="text-[12px] font-semibold text-text-primary">{cat.label}</span>
+        </div>
+        <span className="rounded-full border border-border-subtle bg-surface-secondary px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-tertiary">
+          {data.category?.replace(/_/g, ' ')}
+        </span>
+      </div>
+
+      {/* Dimension bars */}
+      {dims.length > 0 && (
+        <div className="space-y-1.5">
+          {dims.map(d => (
+            <div key={d.label} className="flex items-center gap-2">
+              <span className="w-[100px] shrink-0 text-[10px] text-text-tertiary">{d.label}</span>
+              <div className="flex-1 h-1 rounded-full bg-surface-tertiary overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${d.val >= 7 ? 'bg-[#10b981]' : d.val >= 4 ? 'bg-[#f59e0b]' : 'bg-brand-coral'}`}
+                  style={{ width: `${d.val * 10}%` }}
+                />
+              </div>
+              <span className="w-4 text-right text-[10px] font-mono text-text-tertiary">{d.val}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Summary */}
+      {data.reasoning.summary && (
+        <p className="text-[12px] leading-relaxed text-text-secondary">{data.reasoning.summary}</p>
+      )}
+
+      {/* Strengths */}
+      {data.reasoning.strengths?.length > 0 && (
+        <div>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#10b981]">Strengths</p>
+          <ul className="space-y-0.5">
+            {data.reasoning.strengths.slice(0, 2).map((s, i) => (
+              <li key={i} className="text-[11px] text-text-secondary leading-snug">+ {s}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Weaknesses */}
+      {data.reasoning.weaknesses?.length > 0 && (
+        <div>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-brand-coral">Weaknesses</p>
+          <ul className="space-y-0.5">
+            {data.reasoning.weaknesses.slice(0, 2).map((w, i) => (
+              <li key={i} className="text-[11px] text-text-secondary leading-snug">- {w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Opportunities */}
+      {(data.reasoning.rankingOpportunity || data.reasoning.contentOpportunity) && (
+        <div className="space-y-1.5 rounded-[8px] bg-surface-secondary border border-border-subtle/60 p-2.5">
+          {data.reasoning.rankingOpportunity && (
+            <p className="text-[11px] text-text-secondary"><span className="font-semibold text-text-primary">Ranking: </span>{data.reasoning.rankingOpportunity}</p>
+          )}
+          {data.reasoning.contentOpportunity && (
+            <p className="text-[11px] text-text-secondary"><span className="font-semibold text-text-primary">Content: </span>{data.reasoning.contentOpportunity}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OpportunityDashboard({
   gaps,
   hasGapsInProject,
@@ -624,6 +749,9 @@ function OpportunityDashboard({
   exitGapMassSelect,
   onStartMassSelect,
   onBulkApproveGaps,
+  aiScoring,
+  onRunAiScoring,
+  aiScoringDone,
 }: {
   gaps: KeywordGap[];
   hasGapsInProject: boolean;
@@ -646,6 +774,9 @@ function OpportunityDashboard({
   exitGapMassSelect: () => void;
   onStartMassSelect: () => void;
   onBulkApproveGaps: () => void;
+  aiScoring: boolean;
+  onRunAiScoring: () => void;
+  aiScoringDone: boolean;
 }) {
   const [workspaceTab, setWorkspaceTab] = useState<OpportunityWorkspaceTab>("all");
 
@@ -714,6 +845,15 @@ function OpportunityDashboard({
         </div>
       ) : null}
 
+      {hasGapsInProject && aiScoringDone && (
+        <div className="flex items-center gap-3 rounded-[12px] border border-[#8b5cf6]/25 bg-[#8b5cf6]/10 px-4 py-3 text-[13px] text-[#8b5cf6]">
+          <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <span>AI scoring complete — scores are now visible in the AI Score column.</span>
+        </div>
+      )}
+
       {hasGapsInProject ? (
         <section className="space-y-4">
           <div className="flex flex-wrap items-end justify-between gap-4">
@@ -780,6 +920,32 @@ function OpportunityDashboard({
                   )}
                 </>
               ) : null}
+              {gaps.length > 0 && !massSelectMode && (
+                <button
+                  type="button"
+                  onClick={onRunAiScoring}
+                  disabled={aiScoring}
+                  className={`inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:scale-105 ${
+                    aiScoring
+                      ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/20 text-[#8b5cf6] animate-pulse"
+                      : "border-[#8b5cf6]/30 bg-[#8b5cf6]/10 text-[#8b5cf6] hover:bg-[#8b5cf6]/20"
+                  }`}
+                >
+                  {aiScoring ? (
+                    <>
+                      <div className="h-3 w-3 rounded-full border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] animate-spin" />
+                      <span>Scoring…</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.85}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+                      </svg>
+                      <span>AI Score</span>
+                    </>
+                  )}
+                </button>
+              )}
               <InsightsViewDropdown
                 menuRef={viewMenuRef}
                 menuOpen={viewMenuOpen}
@@ -832,7 +998,7 @@ function OpportunityDashboard({
                   <th className="px-4 py-3 text-right">Volume</th>
                   <th className="px-4 py-3 text-right">Traffic</th>
                   <th className="px-4 py-3 text-center">Weakness</th>
-                  <th className="px-4 py-3 text-center">Opportunity</th>
+                  <th className="px-4 py-3 text-center">AI Score</th>
                   <th className="px-4 py-3">Ranking page</th>
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
@@ -916,9 +1082,20 @@ function OpportunityDashboard({
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`rounded-[4px] border px-2.5 py-1 text-[12px] font-mono ${scoreColor(g.opportunity_score)}`}>
-                        {g.opportunity_score}
-                      </span>
+                      {g.ai_eval_score && g.ai_eval_data ? (
+                        <Tooltip placement="above" content={<GapAiScoreTooltip data={g.ai_eval_data} score={g.ai_eval_score} />}>
+                          {(() => {
+                            const cat = AI_GAP_SCORE_CATEGORY(g.ai_eval_score);
+                            return (
+                              <span className={`inline-flex cursor-default items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-bold tabular-nums ${cat.colorClass}`}>
+                                {cat.icon} {g.ai_eval_score}
+                              </span>
+                            );
+                          })()}
+                        </Tooltip>
+                      ) : (
+                        <span className="text-[12px] text-text-tertiary">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 max-w-[220px]">
                       <p className="text-[12px] font-bold text-brand-action truncate">{g.top_competitor_domain}</p>

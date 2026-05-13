@@ -459,6 +459,31 @@ export interface KeywordGap {
   reasoning: string;
   created_at: string;
   updated_at: string;
+  /** 0-100 Gemini strategic AI score for this competitor keyword gap. */
+  ai_eval_score?: number | null;
+  /** Full Gemini evaluation payload. */
+  ai_eval_data?: {
+    category: string;
+    analysis: {
+      businessRelevance: number;
+      intentQuality: number;
+      trafficPotential: number;
+      keywordDifficulty: number;
+      serpWeakness: number;
+      contentDepth: number;
+      trendGrowth: number;
+      blogPotential: number;
+    };
+    reasoning: {
+      summary: string;
+      strengths: string[];
+      weaknesses: string[];
+      rankingOpportunity: string;
+      contentOpportunity: string;
+    };
+  } | null;
+  /** ISO timestamp of last AI evaluation. */
+  ai_eval_at?: string | null;
 }
 
 /** Aggregated benchmark across all competitors for one project. */

@@ -12,11 +12,11 @@ export type KeywordDiscoverySourceTab = "industry" | "domain";
 export type KeywordTableSortColumn =
   | "keyword"
   | "volume"
-  | "est_traffic"
   | "kd"
   | "cpc"
   | "intent"
   | "analysis_score"
+  | "ai_eval_score"
   | "status";
 export type KeywordSortDir = "asc" | "desc";
 

@@ -127,6 +127,34 @@ export interface Keyword {
   serp_features?: KeywordSerpFeature[] | null;
   /** Mutation timestamp; bumped explicitly by app code on UPDATE. */
   updated_at?: string;
+  /**
+   * 0–100 strategic AI score produced by Gemini deep-evaluation.
+   * Null until `scoreKeywordsWithAI` has run for this keyword.
+   */
+  ai_eval_score?: number | null;
+  /** Full Gemini evaluation payload (analysis sub-scores + reasoning). */
+  ai_eval_data?: {
+    category: string;
+    analysis: {
+      businessRelevance: number;
+      intentQuality: number;
+      trafficPotential: number;
+      keywordDifficulty: number;
+      serpWeakness: number;
+      contentDepth: number;
+      trendGrowth: number;
+      conversionPotential: number;
+    };
+    reasoning: {
+      summary: string;
+      strengths: string[];
+      weaknesses: string[];
+      rankingOpportunity: string;
+      contentOpportunity: string;
+    };
+  } | null;
+  /** ISO timestamp when ai_eval_score was last computed. */
+  ai_eval_at?: string | null;
 }
 
 /**

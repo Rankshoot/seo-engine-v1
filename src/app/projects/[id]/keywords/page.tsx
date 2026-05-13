@@ -32,6 +32,7 @@ import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 import { PageTitle } from "@/components/common";
 import { toast } from "react-hot-toast";
+import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
 function regionName(code: string): string {
@@ -59,13 +60,13 @@ function calendarApproveSuffix(cal: {
 }
 
 function MonthlySearchesChart({ data }: { data: { month: string; volume: number }[] }) {
-  if (!data || data.length === 0) return <span className="text-text-tertiary">No monthly data</span>;
+  if (!data || data.length === 0) return <span className="block p-3 text-text-tertiary">No monthly data</span>;
   
   const sorted = [...data].sort((a, b) => a.month.localeCompare(b.month));
   const max = Math.max(...sorted.map(d => d.volume));
 
   return (
-    <div className="flex flex-col gap-2 p-1">
+    <div className="flex flex-col gap-2 p-3">
       <div className="text-[11px] font-semibold text-text-primary text-left">Monthly Search Trend</div>
       <div className="flex items-end gap-[2px] h-12 w-40">
         {sorted.map((d, i) => {
@@ -94,6 +95,93 @@ function MonthlySearchesChart({ data }: { data: { month: string; volume: number 
 const KD_COLOR = (kd: number) =>
   kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
 
+function AI_SCORE_CATEGORY(score: number): { icon: string; cls: string; label: string } {
+  if (score >= 75) return { icon: "★", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400", label: "High opportunity" };
+  if (score >= 55) return { icon: "◆", cls: "border-brand-action/30 bg-brand-action/10 text-brand-action", label: "Good fit" };
+  if (score >= 35) return { icon: "●", cls: "border-amber-500/30 bg-amber-500/10 text-amber-400", label: "Moderate" };
+  return { icon: "▼", cls: "border-border-subtle bg-surface-tertiary text-text-tertiary", label: "Low priority" };
+}
+
+function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
+  const cat = AI_SCORE_CATEGORY(score);
+  const dims: [keyof AiEvalData["analysis"], string][] = [
+    ["businessRelevance", "Business relevance"],
+    ["intentQuality", "Intent quality"],
+    ["trafficPotential", "Traffic potential"],
+    ["keywordDifficulty", "KD opportunity"],
+    ["serpWeakness", "SERP weakness"],
+    ["contentDepth", "Content depth"],
+    ["trendGrowth", "Trend growth"],
+    ["conversionPotential", "Conversion potential"],
+  ];
+  return (
+    <div className="w-80 p-3 space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${cat.cls}`}>
+          {cat.label}
+        </span>
+        <span className={`text-2xl font-black tabular-nums ${cat.cls.split(' ').find(c => c.startsWith('text-')) ?? ''}`}>{score}</span>
+      </div>
+      {/* Dimension bars */}
+      <div className="space-y-1.5">
+        {dims.map(([key, label]) => {
+          const val = data.analysis[key] ?? 0;
+          return (
+            <div key={key} className="flex items-center gap-2">
+              <span className="w-28 shrink-0 text-[10px] text-text-tertiary truncate">{label}</span>
+              <div className="flex-1 h-1.5 rounded-full bg-surface-tertiary overflow-hidden">
+                <div className="h-full rounded-full bg-brand-action/60" style={{ width: `${val * 10}%` }} />
+              </div>
+              <span className="w-4 text-right text-[10px] font-mono text-text-tertiary">{val}</span>
+            </div>
+          );
+        })}
+      </div>
+      {/* Reasoning */}
+      <div className="border-t border-border-subtle pt-2 space-y-2">
+        <p className="text-[11px] text-text-secondary leading-relaxed">{data.reasoning.summary}</p>
+        {data.reasoning.strengths?.length > 0 && (
+          <div>
+            <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 mb-1">Strengths</p>
+            <ul className="space-y-0.5">
+              {data.reasoning.strengths.slice(0, 2).map((s, i) => (
+                <li key={i} className="flex items-start gap-1 text-[10px] text-text-secondary">
+                  <span className="text-emerald-400 shrink-0 mt-0.5">+</span>{s}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {data.reasoning.weaknesses?.length > 0 && (
+          <div>
+            <p className="text-[9px] font-bold uppercase tracking-wider text-rose-400 mb-1">Weaknesses</p>
+            <ul className="space-y-0.5">
+              {data.reasoning.weaknesses.slice(0, 2).map((w, i) => (
+                <li key={i} className="flex items-start gap-1 text-[10px] text-text-secondary">
+                  <span className="text-rose-400 shrink-0 mt-0.5">−</span>{w}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {data.reasoning.rankingOpportunity && (
+          <p className="text-[10px] text-text-tertiary italic leading-relaxed">
+            <span className="not-italic font-semibold text-text-secondary">Ranking: </span>
+            {data.reasoning.rankingOpportunity}
+          </p>
+        )}
+        {data.reasoning.contentOpportunity && (
+          <p className="text-[10px] text-text-tertiary italic leading-relaxed">
+            <span className="not-italic font-semibold text-text-secondary">Content: </span>
+            {data.reasoning.contentOpportunity}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 type FilterTab = "all" | "ai" | KeywordStatus;
 
 type SourceTab = "industry" | "domain";
@@ -118,11 +206,11 @@ function normKeywordPhrase(s: string): string {
 type TableSortColumn =
   | "keyword"
   | "volume"
-  | "est_traffic"
   | "kd"
   | "cpc"
   | "intent"
   | "analysis_score"
+  | "ai_eval_score"
   | "status";
 
 type SortDir = "asc" | "desc";
@@ -146,8 +234,6 @@ function compareDomainRows(
       return m * a.keyword.localeCompare(b.keyword);
     case "volume":
       return m * (a.volume - b.volume);
-    case "est_traffic":
-      return m * ((a.estimated_monthly_traffic ?? 0) - (b.estimated_monthly_traffic ?? 0));
     case "kd":
       return m * (a.kd - b.kd);
     case "cpc":
@@ -173,8 +259,6 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
       return m * a.keyword.localeCompare(b.keyword);
     case "volume":
       return m * ((a.volume || 0) - (b.volume || 0));
-    case "est_traffic":
-      return m * ((a.traffic_potential ?? 0) - (b.traffic_potential ?? 0));
     case "kd":
       return m * ((a.kd || 0) - (b.kd || 0));
     case "cpc":
@@ -183,6 +267,8 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
       return m * ((a.intent || "").localeCompare(b.intent || ""));
     case "analysis_score":
       return m * ((a.keyword_analysis_score ?? 0) - (b.keyword_analysis_score ?? 0));
+    case "ai_eval_score":
+      return m * ((a.ai_eval_score ?? 0) - (b.ai_eval_score ?? 0));
     case "status":
       return m * (STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
     default:
@@ -217,6 +303,7 @@ export default function KeywordsPage() {
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
+  const [aiScoring, setAiScoring] = useState(false);
   /** Domain-tab optimistic status by normalized phrase (survives refetch/cache key mismatches). */
   const [domainPhraseStatusOverlay, setDomainPhraseStatusOverlay] = useState<Record<string, KeywordStatus>>({});
 
@@ -381,7 +468,7 @@ export default function KeywordsPage() {
 
   useEffect(() => {
     if (sourceTab !== "domain") return;
-    if (tableSort.column === "est_traffic" || tableSort.column === "intent") {
+    if (tableSort.column === "intent" || tableSort.column === "ai_eval_score") {
       dispatch(
         rememberKeywordSort({
           projectId,
@@ -985,35 +1072,14 @@ export default function KeywordsPage() {
       header: "Volume",
       align: "right",
       sortable: true,
-      tooltip: "Average monthly searches over the last 12 months.",
+      tooltip: "Average monthly searches over the last 12 months. Hover for trend chart.",
       cell: (kw: any) => (
-        <span className="text-[14px] font-mono text-text-secondary tabular-nums">
-          {kw.volume ? kw.volume.toLocaleString() : "—"}
-        </span>
+        <Tooltip placement="above" content={<MonthlySearchesChart data={kw.monthly_searches} />}>
+          <span className="text-[14px] font-mono text-text-secondary tabular-nums border-b border-dashed border-text-tertiary/40 cursor-help pb-0.5">
+            {kw.volume ? kw.volume.toLocaleString() : "—"}
+          </span>
+        </Tooltip>
       )
-    },
-    {
-      id: "est_traffic",
-      header: "Est. traffic",
-      align: "right",
-      sortable: true,
-      tooltip: "Estimated monthly visits the top result could earn for this term.",
-      cell: (kw: any) => {
-        const hasTrafficPotential = kw.traffic_potential != null && kw.traffic_potential > 0;
-        const displayValue = hasTrafficPotential 
-          ? kw.traffic_potential.toLocaleString() 
-          : kw.volume > 0 
-            ? `~${Math.round(kw.volume * 0.3).toLocaleString()}`
-            : "—";
-
-        return (
-          <Tooltip placement="above" content={<MonthlySearchesChart data={kw.monthly_searches} />}>
-            <span className="text-[14px] font-mono text-text-secondary tabular-nums border-b border-dashed border-text-tertiary/40 cursor-help pb-0.5">
-              {displayValue}
-            </span>
-          </Tooltip>
-        );
-      }
     },
     {
       id: "kd",
@@ -1085,6 +1151,29 @@ export default function KeywordsPage() {
       ) : (
         <span className="text-[13px] text-text-tertiary">—</span>
       )
+    },
+    {
+      id: "ai_eval_score",
+      header: "AI Score",
+      align: "center",
+      sortable: true,
+      tooltip: "Strategic score from Gemini AI — evaluates business relevance, rankability, content depth, and conversion potential.",
+      cell: (kw: any) => {
+        const score = kw.ai_eval_score as number | null | undefined;
+        const data = kw.ai_eval_data as AiEvalData | null | undefined;
+        if (!score || !data) {
+          return <span className="text-[13px] text-text-tertiary">—</span>;
+        }
+        const cat = AI_SCORE_CATEGORY(score);
+        return (
+          <Tooltip placement="above" content={<AiScoreTooltip data={data} score={score} />}>
+            <span className={`inline-flex items-center gap-1 rounded-[6px] border px-2 py-0.5 text-[12px] font-bold tabular-nums cursor-help ${cat.cls}`}>
+              <span>{cat.icon}</span>
+              {score}
+            </span>
+          </Tooltip>
+        );
+      }
     },
     {
       id: "status",
@@ -1185,6 +1274,38 @@ export default function KeywordsPage() {
                 </>
               )}
             </button>
+            {/* AI Score button — only shown for industry tab with keywords */}
+            {sourceTab === "industry" && keywords.length > 0 && (
+              <button
+                onClick={async () => {
+                  setAiScoring(true);
+                  const res = await scoreKeywordsWithAI(projectId);
+                  setAiScoring(false);
+                  if (res.success) {
+                    toast.success(`AI scored ${res.scored} keyword${res.scored !== 1 ? "s" : ""}${res.skipped ? ` (${res.skipped} already scored)` : ""}`);
+                    void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+                  } else {
+                    toast.error(res.error ?? "AI scoring failed");
+                  }
+                }}
+                disabled={aiScoring || discovering}
+                className="inline-flex items-center gap-2 rounded-[32px] border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-[13px] font-semibold text-violet-300 transition-all hover:bg-violet-500/20 hover:border-violet-500/50 disabled:opacity-50"
+              >
+                {aiScoring ? (
+                  <>
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-violet-400/40 border-t-violet-300" />
+                    Scoring…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                    </svg>
+                    AI Score
+                  </>
+                )}
+              </button>
+            )}
             <ProjectNavLink
               href={`/projects/${projectId}/calendar`}
               className="inline-flex items-center gap-2 rounded-[32px] bg-brand-primary px-4 py-2 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"

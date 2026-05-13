@@ -782,6 +782,8 @@ export type ContentHealthCalendarLinkRow = {
   entryId: string;
   status: string;
   blogId: string | null;
+  /** ISO-10 date string (YYYY-MM-DD) from `calendar_entries.scheduled_date`, if present. */
+  scheduledDate: string | null;
 };
 
 function snapshotAuditUrlFromContentHealthJson(raw: unknown): string | null {
@@ -806,7 +808,7 @@ export async function getContentHealthCalendarLinksByAuditUrl(projectId: string)
 
   const { data: entries, error: eErr } = await supabaseAdmin
     .from('calendar_entries')
-    .select('id, status, content_health_audit, created_at')
+    .select('id, status, content_health_audit, scheduled_date, created_at')
     .eq('project_id', projectId)
     .not('content_health_audit', 'is', null)
     .order('created_at', { ascending: false });
@@ -834,10 +836,13 @@ export async function getContentHealthCalendarLinksByAuditUrl(projectId: string)
     const url = snapshotAuditUrlFromContentHealthJson(row.content_health_audit);
     if (!url || byAuditUrl[url]) continue;
     const eid = row.id as string;
+    const rawDate = row.scheduled_date as string | null | undefined;
+    const scheduledDate = rawDate ? String(rawDate).slice(0, 10) : null;
     byAuditUrl[url] = {
       entryId: eid,
       status: (row.status as string) ?? 'scheduled',
       blogId: blogByEntry.get(eid) ?? null,
+      scheduledDate,
     };
   }
 
@@ -998,4 +1003,28 @@ function rowToRecord(row: AuditRow): PersistedBlogAudit {
     updated_at: row.updated_at ?? undefined,
     scraped_markdown: row.scraped_markdown?.trim() ? row.scraped_markdown : undefined,
   };
+}
+
+/**
+ * Fetch a single full audit record by project + URL.
+ * Used by the Discover pages modal to load full analysis on demand.
+ */
+export async function getAuditByUrl(
+  projectId: string,
+  url: string
+): Promise<{ success: true; record: PersistedBlogAudit } | { success: false; error: string }> {
+  const { project, error } = await ensureOwner(projectId);
+  if (error || !project) return { success: false, error: error ?? 'Project not found' };
+
+  const { data: row, error: qErr } = await supabaseAdmin
+    .from('blog_audits')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('url', url)
+    .maybeSingle();
+
+  if (qErr) return { success: false, error: qErr.message };
+  if (!row) return { success: false, error: 'No audit found for this URL.' };
+
+  return { success: true, record: rowToRecord(row as AuditRow) };
 }

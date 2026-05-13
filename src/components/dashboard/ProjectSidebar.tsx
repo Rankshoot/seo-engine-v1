@@ -198,7 +198,8 @@ export default function ProjectSidebar({
     badge?: string;
     badgeColor?: string;
     prefetchLabel: string;
-    children?: { label: string; href: string }[];
+    exact?: boolean;
+    children?: { label: string; href: string; exact?: boolean }[];
   };
 
   const navItems: NavLeaf[] = [
@@ -234,9 +235,9 @@ export default function ProjectSidebar({
       badgeColor: navCountsReady && liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
       prefetchLabel: "Content Health",
       children: [
-        { label: "Site audit", href: auditBase },
-        { label: "Discover pages", href: `${auditBase}/discover-pages` },
-        { label: "Analyze content", href: `${auditBase}/import` },
+        { label: "Health Report", href: auditBase, exact: true },
+        { label: "Page Explorer", href: `${auditBase}/discover-pages` },
+        { label: "Content Analyzer", href: `${auditBase}/import` },
       ],
     },
     {
@@ -250,6 +251,7 @@ export default function ProjectSidebar({
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
+      exact: true,
       badge: navCountsReady && liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
       prefetchLabel: "Blogs",
     },
@@ -262,11 +264,11 @@ export default function ProjectSidebar({
     },
   ];
 
-  const isActive = (href: string) =>
-    href === base ? pathname === base : pathname.startsWith(href);
+  const isActive = (href: string, exact?: boolean) =>
+    exact ? pathname === href : href === base ? pathname === base : pathname.startsWith(href);
 
   const groupActive = (item: NavLeaf) =>
-    item.children?.some(c => isActive(c.href)) || isActive(item.href);
+    item.children?.some(c => c.exact ? pathname === c.href : isActive(c.href)) || isActive(item.href, item.exact);
 
   return (
     <aside 
@@ -410,7 +412,7 @@ export default function ProjectSidebar({
         </p>
         <ul className="space-y-1.5 mb-6">
           {navItems.map((item) => {
-            const active = item.children ? groupActive(item) : isActive(item.href);
+            const active = item.children ? groupActive(item) : isActive(item.href, item.exact);
             return (
               <li key={item.label}>
                 <ProjectNavLink
@@ -456,7 +458,7 @@ export default function ProjectSidebar({
                 {!isCollapsed && item.children && (
                   <ul className="mt-1.5 ml-4 space-y-0.5 overflow-hidden">
                     {item.children.map(sub => {
-                      const subActive = isActive(sub.href);
+                      const subActive = sub.exact ? pathname === sub.href : isActive(sub.href);
                       return (
                         <li key={sub.href}>
                           <ProjectNavLink

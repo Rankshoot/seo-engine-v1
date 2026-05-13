@@ -4,8 +4,11 @@ import { useParams, useRouter } from "next/navigation";
 import { useState, useRef, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
-import { useAppDispatch } from "@/lib/redux/hooks";
-import { contentHealthAuditMarkStale } from "@/lib/redux/content-health-audit-slice";
+import { useAppDispatch, useAppSelector, selectUploadHistory } from "@/lib/redux/hooks";
+import {
+  contentHealthAuditMarkStale,
+  analyzePageUploadHistoryAdd,
+} from "@/lib/redux/content-health-audit-slice";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { importUploadedArticle } from "@/app/actions/import-content-actions";
 import {
@@ -50,7 +53,8 @@ function scrapeDownloadFilename(url: string): string {
   }
 }
 
-/** Markdown from hybrid reader: view, copy, download — matches DB `blog_audits.scraped_markdown`. */
+/** Markdown from hybrid reader: view, copy, download — matches DB `blog_audits.scraped_markdown`.
+ *  Only rendered when developer mode is active (?d in URL or NEXT_PUBLIC_DEVELOPER_TOOLS=true). */
 function RawScrapePanel({
   url,
   markdown,
@@ -142,44 +146,6 @@ function RawScrapePanel({
   );
 }
 
-function DeveloperModeToggle({
-  developerMode,
-  onChange,
-  forcedByEnv,
-}: {
-  developerMode: boolean;
-  onChange: (v: boolean) => void;
-  forcedByEnv: boolean;
-}) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-amber-500/20 bg-amber-500/6 px-3 py-2.5">
-      <div className="min-w-0">
-        <p className="text-[12px] font-semibold text-text-primary">Developer mode</p>
-        <p className="text-[11px] text-text-tertiary leading-snug mt-0.5">
-          {forcedByEnv ? (
-            <>Enabled for this deployment via <span className="font-mono">NEXT_PUBLIC_DEVELOPER_TOOLS</span>.</>
-          ) : (
-            <>
-              Shows hybrid-reader raw scrape after analyze and inside expanded audits. Open this page with{" "}
-              <span className="font-mono">?dev=1</span> once to turn it on and save the choice in this browser.
-            </>
-          )}
-        </p>
-      </div>
-      <label className="inline-flex items-center gap-2 shrink-0 select-none cursor-pointer">
-        <span className="text-[11px] font-medium text-text-secondary">{developerMode ? "On" : "Off"}</span>
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-border-subtle text-brand-primary focus:ring-brand-action/40"
-          checked={developerMode}
-          disabled={forcedByEnv}
-          onChange={e => onChange(e.target.checked)}
-        />
-      </label>
-    </div>
-  );
-}
-
 function fmtWhen(iso?: string) {
   if (!iso) return "";
   try {
@@ -245,8 +211,6 @@ function AnalyzeAuditActions({
   rescheduleSaving: boolean;
 }) {
   const meta = record.analysis.analyze_page_meta;
-  const scheduled = Boolean(meta?.calendar_scheduled);
-  const scheduledDate = meta?.calendar_scheduled_date;
   const focusOk = extractCalendarFocusKeyword(record).length >= 2;
   const blogId = link?.blogId ?? null;
   const effectiveBlogId = blogId ?? repairSessionBlogId ?? null;
@@ -255,143 +219,102 @@ function AnalyzeAuditActions({
   const isGenerating = status === "generating";
   const isTerminal = TERMINAL_CAL_STATUSES.has(status);
 
+  // Treat as "on calendar" if the audit meta flag OR a live calendar link exists.
+  const scheduled = Boolean(meta?.calendar_scheduled) || Boolean(link?.entryId);
+  // Prefer the live calendar link date (authoritative) over the stale audit meta stamp.
+  const scheduledDate = link?.scheduledDate ?? meta?.calendar_scheduled_date ?? null;
+
   const showSchedule = !scheduled && focusOk;
   const showGenerate = Boolean(
     scheduled && entryId && !effectiveBlogId && !isGenerating && !isTerminal
   );
   const showViewBlog = Boolean(effectiveBlogId);
   const pageBroken = record.analysis.page_status === "broken";
-  /** Skip calendar: same repair+SEO pipeline as Site audit, opens blog viewer when done. */
   const showEnhancedVersion = !pageBroken && !effectiveBlogId && !showGenerate;
   const allowRescheduleDate = Boolean(
     scheduled && scheduledDate && entryId && !isGenerating && !generateBusy && !enhanceBusy
   );
 
-  const btn =
+  const btnBase =
     variant === "compact"
       ? "inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[11px] font-semibold transition-opacity disabled:opacity-50"
-      : "inline-flex h-9 items-center justify-center gap-2 rounded-full px-4 text-[13px] font-semibold transition-opacity disabled:opacity-50";
+      : "inline-flex h-9 items-center justify-center gap-1.5 rounded-full px-4 text-[13px] font-semibold transition-opacity disabled:opacity-50";
+
+  const scheduleMsgOk =
+    !!scheduleMsg &&
+    (scheduleMsg.startsWith("Scheduled") ||
+      scheduleMsg.startsWith("On calendar") ||
+      scheduleMsg.startsWith("Blog ready"));
 
   return (
     <div
       className="flex flex-wrap items-center gap-2"
-      onClick={e => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
+      onClick={e => { e.preventDefault(); e.stopPropagation(); }}
       onKeyDown={e => e.stopPropagation()}
       role="presentation"
     >
+      {/* ── calendar info message on the LEFT ─────────────────────────── */}
+      {scheduleMsg && (
+        <span className={`shrink-0 text-[11px] font-medium leading-snug max-w-[200px] ${scheduleMsgOk ? "text-emerald-400" : "text-rose-400"}`}>
+          {scheduleMsg}
+        </span>
+      )}
+
+      {/* ── scheduled date chip (replaces Schedule button when on calendar) ── */}
       {scheduled && scheduledDate && (
-        <div
-          className={[
-            "group/dt inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 sm:px-2.5",
-            variant === "compact" ? "max-w-full flex-wrap" : "",
-          ].join(" ")}
-        >
-          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 shrink-0">
-            <svg className="w-2.5 h-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
-            </svg>
-            <span className="tabular-nums">{fmtScheduleDay(scheduledDate)}</span>
-          </span>
+        <div className={["group/dt inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1", variant === "compact" ? "max-w-full flex-wrap" : ""].join(" ")}>
+          <svg className="w-2.5 h-2.5 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2" /><path strokeLinecap="round" d="M16 2v4M8 2v4M3 10h18" /></svg>
+          <span className="text-[10px] font-bold text-emerald-400 tabular-nums">{fmtScheduleDay(scheduledDate)}</span>
           {allowRescheduleDate && (
             <span className="inline-flex opacity-100 sm:opacity-0 sm:group-hover/dt:opacity-100 sm:focus-within:opacity-100 transition-opacity">
-              <CalendarDatePicker
-                open={datePickerOpen}
-                onOpenChange={onDatePickerOpenChange}
-                currentDate={normalizeCalendarDay(scheduledDate)}
-                onConfirm={onRescheduleConfirm}
-                saving={rescheduleSaving}
-                scheduledDates={scheduledDatesSet}
-                iconOnly
-              />
+              <CalendarDatePicker open={datePickerOpen} onOpenChange={onDatePickerOpenChange} currentDate={normalizeCalendarDay(scheduledDate)} onConfirm={onRescheduleConfirm} saving={rescheduleSaving} scheduledDates={scheduledDatesSet} iconOnly />
             </span>
           )}
         </div>
       )}
+
+      {/* ── Schedule (secondary outline) — only when NOT yet on calendar ── */}
       {showSchedule && (
-        <button
-          type="button"
-          disabled={scheduleBusy || enhanceBusy}
-          onClick={onSchedule}
-          className={`${btn} bg-brand-primary text-brand-on-primary hover:opacity-90`}
-        >
-          {scheduleBusy ? (
-            <>
-              <Spinner size={14} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Scheduling…
-            </>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                <rect x="3" y="4" width="18" height="18" rx="2" />
-                <path d="M16 2v4M8 2v4M3 10h18" />
-              </svg>
-              Schedule
-            </>
-          )}
+        <button type="button" disabled={scheduleBusy || enhanceBusy} onClick={onSchedule}
+          className={`${btnBase} border border-border-strong bg-surface-elevated text-text-secondary hover:text-text-primary`}>
+          {scheduleBusy
+            ? <><Spinner size={13} className="border-text-secondary/30 border-t-text-secondary" /> Scheduling…</>
+            : <><svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>Schedule</>}
         </button>
       )}
+
+      {/* ── Enhance (primary) — skip-calendar repair+SEO pipeline ─────── */}
       {showEnhancedVersion && (
-        <button
-          type="button"
-          disabled={enhanceBusy || scheduleBusy || generateBusy}
-          onClick={onGenerateEnhanced}
-          title="Re-scrape the live article, fix every issue from this audit, and produce an SEO-ready version (schema, structure, internal links). Opens in the blog viewer."
-          className={`${btn} border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15`}
-        >
-          {enhanceBusy ? (
-            <>
-              <Spinner size={14} className="border-emerald-400/30 border-t-emerald-400" /> Generating…
-            </>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-              </svg>
-              {variant === "compact" ? "Enhanced" : "Generate enhanced version"}
-            </>
-          )}
+        <button type="button" disabled={enhanceBusy || scheduleBusy || generateBusy} onClick={onGenerateEnhanced}
+          title="Re-scrape the live article, fix every audit issue, produce an SEO-ready version."
+          className={`${btnBase} bg-brand-primary text-brand-on-primary hover:opacity-90`}>
+          {enhanceBusy
+            ? <><Spinner size={13} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Generating…</>
+            : <><svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" /></svg>Enhance</>}
         </button>
       )}
+
       {!focusOk && !scheduled && (
         <span className="text-[10px] text-text-tertiary max-w-[140px] leading-tight">Add a clearer keyword to schedule.</span>
       )}
+
+      {/* ── Generate blog (primary) — after calendar entry exists ──────── */}
       {showGenerate && (
-        <button
-          type="button"
-          disabled={generateBusy || isGenerating || enhanceBusy}
-          onClick={onGenerate}
-          className={`${btn} bg-text-primary text-surface-primary hover:opacity-90`}
-        >
-          {generateBusy || isGenerating ? (
-            <>
-              <Spinner size={14} className="border-surface-primary/30 border-t-surface-primary" /> Generating…
-            </>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-              </svg>
-              Generate
-            </>
-          )}
+        <button type="button" disabled={generateBusy || isGenerating || enhanceBusy} onClick={onGenerate}
+          className={`${btnBase} bg-brand-primary text-brand-on-primary hover:opacity-90`}>
+          {generateBusy || isGenerating
+            ? <><Spinner size={13} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Generating…</>
+            : <><svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" /></svg>Generate</>}
         </button>
       )}
+
+      {/* ── View blog ─────────────────────────────────────────────────── */}
       {showViewBlog && effectiveBlogId && (
-        <ProjectNavLink
-          href={`/projects/${projectId}/blogs/${effectiveBlogId}`}
-          className={`${btn} border border-emerald-500/35 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15`}
-        >
+        <ProjectNavLink href={`/projects/${projectId}/blogs/${effectiveBlogId}`}
+          className={`${btnBase} border border-emerald-500/35 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15`}>
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
           View blog
         </ProjectNavLink>
-      )}
-      {scheduleMsg && (
-        <span
-          className={`w-full sm:w-auto text-[11px] font-medium ${scheduleMsg.startsWith("Scheduled") || scheduleMsg.startsWith("On calendar") || scheduleMsg.startsWith("Blog ready") ? "text-emerald-400" : "text-rose-400"}`}
-        >
-          {scheduleMsg}
-        </span>
       )}
     </div>
   );
@@ -726,8 +649,10 @@ export default function AuditImportPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
-  const { developerMode, setDeveloperMode, forcedByEnv } = useDeveloperMode();
+  const { developerMode } = useDeveloperMode();
   const [tab, setTab] = useState<AnalyzeTab>("url");
+
+  const uploadHistory = useAppSelector(s => selectUploadHistory(s, projectId ?? ""));
 
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadErr, setUploadErr] = useState("");
@@ -797,7 +722,19 @@ export default function AuditImportPage() {
     try {
       const res = await importUploadedArticle(projectId, fd);
       if (res.trace?.length) console.log("[import-content] trace", res.trace);
-      if (res.success && res.blogId) { router.push(`/projects/${projectId}/blogs/${res.blogId}`); return; }
+      if (res.success && res.blogId) {
+        dispatch(analyzePageUploadHistoryAdd({
+          projectId,
+          entry: {
+            blogId: res.blogId,
+            title: (res as { title?: string }).title ?? (String(fd.get("pasted_text") ?? "").split("\n")[0].slice(0, 80) || "Uploaded article"),
+            keyword: (res as { keyword?: string }).keyword ?? "",
+            uploadedAt: new Date().toISOString(),
+          },
+        }));
+        router.push(`/projects/${projectId}/blogs/${res.blogId}`);
+        return;
+      }
       setUploadErr(res.error ?? "Import failed.");
     } catch (ex) { setUploadErr(ex instanceof Error ? ex.message : "Import failed."); }
     finally { setUploadBusy(false); }
@@ -995,7 +932,7 @@ export default function AuditImportPage() {
 
   return (
     <CHPageShell
-      title="Analyze content"
+      title="Content Analyzer"
       subtitle="Upload a draft to open it in the blog workspace, or analyze any public article URL through the full Content Health pipeline and optionally schedule the inferred keyword."
       actions={tabSwitcher}
     >
@@ -1040,6 +977,53 @@ export default function AuditImportPage() {
           </button>
           {uploadErr && <ErrorBanner message={uploadErr} />}
         </form>
+
+        {/* ── Upload history ──────────────────────────────────────────── */}
+        <div className="mt-6 space-y-3">
+          <div className="flex items-center gap-2">
+            <p className="text-[13px] font-semibold text-text-primary">
+              Recent uploads
+            </p>
+            <span className="text-[12px] font-normal text-text-tertiary">
+              ({uploadHistory.length} saved)
+            </span>
+          </div>
+          {uploadHistory.length === 0 ? (
+            <p className="text-[13px] text-text-tertiary py-4">
+              No uploads yet. Import an article above — it will appear here.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {uploadHistory.map(entry => (
+                <div
+                  key={entry.blogId}
+                  className="flex items-center justify-between gap-3 rounded-[12px] border border-border-subtle bg-surface-elevated px-4 py-3 hover:border-border-strong transition-colors"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-medium text-text-primary truncate">{entry.title}</p>
+                    <div className="flex items-center gap-3 mt-0.5">
+                      {entry.keyword && (
+                        <span className="text-[11px] text-text-tertiary">
+                          <span className="text-text-secondary font-medium">KW:</span> {entry.keyword}
+                        </span>
+                      )}
+                      <span className="text-[11px] text-text-tertiary/60">
+                        {new Date(entry.uploadedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                  </div>
+                  <ProjectNavLink
+                    href={`/projects/${projectId}/blogs/${entry.blogId}`}
+                    className="shrink-0 inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-secondary px-3 text-[11px] font-semibold text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"/><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
+                    Open
+                  </ProjectNavLink>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── url tab ────────────────────────────────────────────────────── */}
@@ -1047,12 +1031,6 @@ export default function AuditImportPage() {
         <p className="text-[14px] text-text-secondary leading-relaxed">
           Paste any public article URL. We scrape the live page, attach vendor signals, run Gemini diagnosis, and save the result to your project.
         </p>
-
-        <DeveloperModeToggle
-          developerMode={developerMode}
-          onChange={setDeveloperMode}
-          forcedByEnv={forcedByEnv}
-        />
 
         {/* form */}
         <form

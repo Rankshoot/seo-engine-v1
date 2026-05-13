@@ -51,6 +51,7 @@ type Tab = "issues" | "checklist" | "more";
 export interface AuditDetailModalProps {
   open: boolean;
   row: PersistedBlogAudit | null;
+  loading?: boolean;
   projectId: string;
   onClose: () => void;
   onScheduleToCalendar: () => Promise<void>;
@@ -61,6 +62,7 @@ export interface AuditDetailModalProps {
 export function AuditDetailModal({
   open,
   row,
+  loading = false,
   projectId,
   onClose,
   onScheduleToCalendar,
@@ -108,7 +110,66 @@ export function AuditDetailModal({
     return out;
   }, [row, grouped]);
 
-  if (!open || !row) return null;
+  if (!open) return null;
+
+  if (loading || !row) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Loading audit details"
+        className="fixed inset-0 z-80 flex items-start justify-center overflow-y-auto bg-surface-primary/85 p-3 backdrop-blur-sm sm:p-6 animate-fade-in"
+        onClick={onClose}
+      >
+        <div
+          className="relative my-4 flex w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-secondary shadow-2xl shadow-black/60 animate-scale-in"
+          style={{ maxHeight: "calc(100vh - 3rem)" }}
+          onClick={e => e.stopPropagation()}
+        >
+          <header className="flex items-start justify-between gap-3 border-b border-border-subtle bg-surface-secondary/95 p-5">
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="h-3 w-32 rounded-full bg-surface-elevated animate-pulse" />
+              <div className="h-4 w-64 rounded-full bg-surface-elevated animate-pulse" />
+              <div className="h-7 w-80 rounded-lg bg-surface-elevated animate-pulse" />
+              <div className="flex gap-2">
+                <div className="h-5 w-20 rounded-full bg-surface-elevated animate-pulse" />
+                <div className="h-5 w-12 rounded-full bg-surface-elevated animate-pulse" />
+              </div>
+            </div>
+            <button type="button" aria-label="Close" onClick={onClose}
+              className="shrink-0 rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary shadow-sm transition-all hover:border-rose-400/35 hover:bg-rose-500/10 hover:text-rose-300">
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </header>
+          <div className="p-5 space-y-4">
+            <div className="rounded-xl border border-border-subtle bg-surface-tertiary/40 p-4 space-y-2">
+              <div className="h-3 w-16 rounded-full bg-surface-elevated animate-pulse" />
+              <div className="h-4 w-full rounded-full bg-surface-elevated animate-pulse" />
+              <div className="h-4 w-3/4 rounded-full bg-surface-elevated animate-pulse" />
+            </div>
+            <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-secondary/50">
+              <div className="flex gap-1 border-b border-border-subtle bg-surface-tertiary/50 p-1.5">
+                {[80, 96, 72].map((w, i) => (
+                  <div key={i} className="h-7 rounded-lg bg-surface-elevated animate-pulse" style={{ width: w }} />
+                ))}
+              </div>
+              <div className="p-4 space-y-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-16 rounded-xl border border-border-subtle bg-surface-elevated/80 animate-pulse" />
+                ))}
+              </div>
+            </div>
+          </div>
+          <footer className="flex items-center justify-end gap-3 border-t border-border-subtle bg-surface-secondary/95 p-4">
+            <div className="h-9 w-16 rounded-xl bg-surface-elevated animate-pulse" />
+            <div className="h-9 w-36 rounded-xl bg-surface-elevated animate-pulse" />
+          </footer>
+        </div>
+      </div>
+    );
+  }
 
   const a = row.analysis;
   const crit = criticalityFromScore(row.health_score, a.page_status);

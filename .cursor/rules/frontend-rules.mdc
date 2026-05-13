@@ -1,0 +1,138 @@
+---
+alwaysApply: true
+---
+
+# FRONTEND & UI RULES — SERPCRAFT
+
+--------------------------------------------------
+UI PRINCIPLES
+--------------------------------------------------
+
+- Premium SaaS aesthetic
+- Minimal
+- Clean
+- Professional
+- Fast
+- Humanized
+
+Inspired by:
+- Linear
+- Notion
+- Vercel
+- Stripe
+- Perplexity
+
+--------------------------------------------------
+PAGE UX RULES
+--------------------------------------------------
+
+- Navigation must feel instant.
+- Use optimistic UI where possible.
+- Use smooth transitions.
+- Never block rendering.
+
+--------------------------------------------------
+SKELETON RULES
+--------------------------------------------------
+
+Every page must have:
+- loading skeleton
+- empty state
+- error state
+
+Skeletons must visually match final UI.
+
+--------------------------------------------------
+TABLE DESIGN RULES
+--------------------------------------------------
+
+- Tables should feel lightweight.
+- Sticky headers when useful.
+- Smooth hover states.
+- Consistent row height.
+- Compact but readable.
+
+--------------------------------------------------
+AI UI RULES
+--------------------------------------------------
+
+AI components should:
+- feel conversational
+- use assistant-style cards
+- include typing/loading animations
+- provide actionable outputs
+
+--------------------------------------------------
+MODAL RULES
+--------------------------------------------------
+
+- Reuse modal components.
+- Smooth open/close transitions.
+- Keep forms simple.
+- Avoid nested modals.
+
+--------------------------------------------------
+TYPOGRAPHY RULES
+--------------------------------------------------
+
+- Strong visual hierarchy
+- Clear spacing
+- Minimal text clutter
+
+--------------------------------------------------
+SPACING RULES
+--------------------------------------------------
+
+Use consistent spacing scale.
+
+Avoid:
+- cramped layouts
+- excessive padding
+- inconsistent gaps
+
+--------------------------------------------------
+COLOR RULES
+--------------------------------------------------
+
+- Use existing dark theme.
+- Use accent colors sparingly.
+- Maintain strong contrast.
+
+--------------------------------------------------
+RESPONSIVENESS RULES
+--------------------------------------------------
+
+- Every component must work on:
+  - desktop
+  - tablet
+  - mobile
+
+--------------------------------------------------
+ANIMATION RULES
+--------------------------------------------------
+
+Use subtle animations only:
+- fade
+- shimmer
+- hover transitions
+
+Avoid:
+- excessive motion
+- flashy effects
+
+--------------------------------------------------
+COMPONENT REUSE RULES
+--------------------------------------------------
+
+Before creating a component:
+1. Search existing components
+2. Reuse if possible
+3. Extend instead of duplicate
+
+--------------------------------------------------
+IMPORTANT
+--------------------------------------------------
+
+- Match design language of existing pages.
+- New pages/components must feel native to the app.
+- Keep UI production-ready.

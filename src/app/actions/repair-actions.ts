@@ -27,6 +27,7 @@ import { getBusinessBrief } from '@/app/actions/brief-actions';
 import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import type { Project } from '@/lib/types';
 import { sanitizeBlogContent } from '@/lib/blog-content';
+import type { BlogContentAnalysis } from '@/app/actions/blog-actions';
 
 function titleNeedsRepair(analysis: BlogAuditAnalysis): boolean {
   return analysis.issues.some(i =>
@@ -255,6 +256,163 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
     return {
       success: false as const,
       error: `Repair failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
+/**
+ * Generate an enhanced version of a blog directly from its stored content +
+ * a BlogContentAnalysis object (no audit URL / blog_audits row required).
+ *
+ * Used by the "Analyse content" modal in the blog viewer right panel.
+ */
+export async function repairBlogFromContent(
+  blogId: string,
+  analysis: BlogContentAnalysis,
+) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated' };
+
+  // 1. Load the blog + verify ownership through the project.
+  const { data: blogRow, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, project_id, title, content, target_keyword, meta_description, article_type, source_url')
+    .eq('id', blogId)
+    .single();
+
+  if (bErr || !blogRow) {
+    return { success: false as const, error: 'Blog not found.' };
+  }
+
+  const { data: projectRow, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('*')
+    .eq('id', blogRow.project_id)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !projectRow) {
+    return { success: false as const, error: 'Project not found or unauthorized.' };
+  }
+  const project = projectRow as Project;
+
+  // 2. Load business brief for voice/internal-link context.
+  const briefRes = await getBusinessBrief(blogRow.project_id);
+  const brief = briefRes.success ? briefRes.brief : null;
+
+  const fromBrief = (brief?.internal_link_candidates ?? []).map(c => c.url);
+  const fromBriefBlogs = brief?.blog_urls ?? [];
+  const internalLinkPool = Array.from(new Set([...fromBrief, ...fromBriefBlogs])).filter(Boolean);
+
+  // 3. Create a placeholder calendar entry (blogs.entry_id is NOT NULL).
+  const today = new Date().toISOString().slice(0, 10);
+  const focusKw = blogRow.target_keyword || blogRow.title || 'repair';
+  const repairTitle = `Enhanced: ${blogRow.title || blogRow.id}`.slice(0, 240);
+
+  const { data: entryRow, error: entryErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .insert({
+      project_id: blogRow.project_id,
+      keyword_id: null,
+      scheduled_date: today,
+      title: repairTitle,
+      article_type: 'Repair',
+      slug: `repair-${today}-${Date.now().toString(36)}`,
+      focus_keyword: focusKw,
+      secondary_keywords: [],
+      status: 'generating',
+    })
+    .select()
+    .single();
+
+  if (entryErr || !entryRow) {
+    return {
+      success: false as const,
+      error: entryErr?.message ?? 'Failed to create calendar entry.',
+    };
+  }
+
+  try {
+    // 4. Map BlogContentAnalysis issues → the shape repairBlogPost expects.
+    const mappedIssues = analysis.issues.map(i => ({
+      label: i.label,
+      detail: i.detail,
+      fix: i.fix,
+      severity: i.severity,
+      why_it_matters: i.detail,
+    }));
+
+    const repaired = await repairBlogPost({
+      sourceUrl: `blog://${blogId}`,
+      originalTitle: blogRow.title || '',
+      originalMarkdown: blogRow.content || '',
+      issues: mappedIssues,
+      contentGaps: analysis.content_gaps ?? [],
+      internalLinkPool,
+      primaryKeyword: focusKw,
+      secondaryKeywords: [],
+      brief,
+      project,
+      wordCount: 2200,
+    });
+
+    const repairNotes = [
+      ...analysis.quick_wins.slice(0, 4).map(w => `Done: ${w}`),
+      'Still to do: none — re-run Content Analysis after updating your live page to verify fixes.',
+    ].slice(0, 10);
+
+    const sanitized = await sanitizeBlogContent(repaired.content, {
+      ownDomain: project.domain ?? '',
+    });
+
+    // 5. Persist the enhanced blog.
+    const { data: newBlog, error: blogErr } = await supabaseAdmin
+      .from('blogs')
+      .insert({
+        entry_id: entryRow.id,
+        project_id: blogRow.project_id,
+        title: repaired.title || blogRow.title,
+        content: sanitized.content,
+        meta_description: repaired.meta_description || blogRow.meta_description || '',
+        word_count: sanitized.content.split(/\s+/).filter(Boolean).length,
+        target_keyword: focusKw,
+        article_type: 'Repair',
+        slug: repaired.slug,
+        status: 'generated',
+        research_sources: repaired.research_sources,
+        external_links: sanitized.externalLinks.slice(0, 10),
+        internal_links: sanitized.internalLinks.slice(0, 12),
+        source_url: blogRow.source_url || `blog://${blogId}`,
+        repair_notes: repairNotes,
+      })
+      .select()
+      .single();
+
+    if (blogErr || !newBlog) {
+      await supabaseAdmin.from('calendar_entries').delete().eq('id', entryRow.id);
+      return {
+        success: false as const,
+        error: blogErr?.message ?? 'Failed to persist enhanced blog.',
+      };
+    }
+
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'generated' })
+      .eq('id', entryRow.id);
+
+    return {
+      success: true as const,
+      data: { blogId: newBlog.id, entryId: entryRow.id },
+    };
+  } catch (e) {
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'error' })
+      .eq('id', entryRow.id);
+    return {
+      success: false as const,
+      error: `Enhancement failed: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }

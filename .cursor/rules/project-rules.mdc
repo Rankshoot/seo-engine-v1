@@ -1,0 +1,254 @@
+---
+alwaysApply: true
+---
+
+# PROJECT RULES — SERPCRAFT
+
+You are working inside a production-grade AI SEO Automation SaaS.
+
+Tech Stack:
+- Next.js App Router
+- TypeScript
+- Node.js
+- Supabase
+- Redux Toolkit
+- TanStack Query
+- TailwindCSS
+- shadcn/ui
+
+--------------------------------------------------
+CORE PRINCIPLES
+--------------------------------------------------
+
+- NEVER hallucinate APIs, fields, or folders.
+- ALWAYS inspect existing code before modifying.
+- ALWAYS reuse existing components/services/hooks before creating new ones.
+- NEVER duplicate logic.
+- ALWAYS maintain backward compatibility.
+- NEVER break existing features.
+- ALWAYS follow existing architecture and design system.
+- ALWAYS keep code modular and reusable.
+
+--------------------------------------------------
+API RULES
+--------------------------------------------------
+
+- ALL frontend requests MUST go through `/api/v1/*`
+- NEVER directly call external APIs from components.
+- NEVER duplicate API calls.
+- ALWAYS use centralized service layer.
+
+Structure:
+
+src/
+  services/
+    api/
+    ahrefs/
+    dataforseo/
+    ai/
+
+--------------------------------------------------
+DATA SOURCE RULES
+--------------------------------------------------
+
+Primary source:
+- Ahrefs
+
+Fallback source:
+- DataForSEO
+
+Logic:
+- If AHREFS_API_KEY exists → use Ahrefs
+- Else → use DataForSEO
+
+NEVER call both simultaneously unless explicitly required.
+
+--------------------------------------------------
+STATE MANAGEMENT RULES
+--------------------------------------------------
+
+Use:
+- Redux ONLY for:
+  - UI state
+  - selected project
+  - filters
+  - modal state
+  - AI assistant state
+
+Use:
+- TanStack Query ONLY for:
+  - API/server data
+  - caching
+  - async fetching
+
+NEVER store API response data in Redux.
+
+--------------------------------------------------
+CACHING RULES
+--------------------------------------------------
+
+Use TanStack Query for ALL server data.
+
+Default config:
+- staleTime: 30 minutes
+- gcTime: 1 hour
+- refetchOnWindowFocus: false
+- refetchOnMount: false
+
+ALWAYS reuse query keys.
+
+GOOD:
+["keywords", projectId]
+
+BAD:
+["keywords", projectId, limit]
+
+Avoid duplicate fetches at all costs because APIs are expensive.
+
+--------------------------------------------------
+NAVIGATION RULES
+--------------------------------------------------
+
+- Pages must open instantly.
+- NEVER block page rendering with await in layouts.
+- ALWAYS show skeleton loaders while fetching.
+- Use non-blocking UI rendering.
+
+--------------------------------------------------
+COMPONENT RULES
+--------------------------------------------------
+
+- ALWAYS create reusable components.
+- NEVER duplicate table implementations.
+- NEVER duplicate cards/modals/forms.
+- Shared components go inside:
+
+src/components/common/
+
+--------------------------------------------------
+TABLE RULES
+--------------------------------------------------
+
+Use one reusable DataTable component.
+
+Structure:
+components/common/DataTable/
+
+Support:
+- sorting
+- pagination
+- loading state
+- empty state
+- actions
+- row selection
+
+--------------------------------------------------
+FORM RULES
+--------------------------------------------------
+
+- Reuse modal forms.
+- Edit/Create should share same form component.
+- Use react-hook-form + zod validation.
+
+--------------------------------------------------
+CODE QUALITY RULES
+--------------------------------------------------
+
+- Keep files small and modular.
+- Avoid large components (>300 lines).
+- Extract hooks/services/helpers.
+- ALWAYS type everything properly.
+- NEVER use `any`.
+- NEVER hardcode values.
+- Use enums/constants.
+
+--------------------------------------------------
+ENUM RULES
+--------------------------------------------------
+
+Create shared enums:
+
+src/constants/enums/
+
+Examples:
+- KeywordStatus
+- KeywordCategory
+- ContentType
+- AIActionType
+
+NEVER duplicate strings across files.
+
+--------------------------------------------------
+DESIGN RULES
+--------------------------------------------------
+
+- Maintain consistent spacing/colors/typography.
+- Follow existing dark theme.
+- New UI must visually match existing pages.
+- Keep premium SaaS look.
+- Use subtle animations only.
+- Avoid clutter.
+
+--------------------------------------------------
+LOADING RULES
+--------------------------------------------------
+
+- EVERY async page/component MUST have:
+  - skeleton
+  - empty state
+  - error state
+
+NEVER show blank screens.
+
+--------------------------------------------------
+AI ASSISTANT RULES
+--------------------------------------------------
+
+- AI assistant must be context-aware.
+- Behavior changes per page.
+- Reuse existing context manager.
+- Never hardcode prompts in components.
+- Keep prompts modular.
+
+--------------------------------------------------
+PERFORMANCE RULES
+--------------------------------------------------
+
+- Minimize re-renders.
+- Use memoization where useful.
+- Avoid unnecessary useEffect.
+- Prefer server-safe patterns.
+- Optimize expensive computations.
+
+--------------------------------------------------
+FILE STRUCTURE RULES
+--------------------------------------------------
+
+Follow:
+
+src/
+  app/
+  components/
+    common/
+    dashboard/
+    ai/
+  hooks/
+  services/
+  store/
+  constants/
+  types/
+  utils/
+
+--------------------------------------------------
+IMPORTANT
+--------------------------------------------------
+
+Before changing code:
+1. Inspect existing implementation
+2. Reuse existing patterns
+3. Avoid duplication
+4. Maintain compatibility
+5. Preserve functionality
+
+NEVER generate temporary patch scripts.
+Modify files directly using proper refactoring.

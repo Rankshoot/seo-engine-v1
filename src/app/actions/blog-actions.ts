@@ -1452,3 +1452,116 @@ export async function getCalendarWithBlogs(projectId: string) {
 
   return { success: true, data: combined };
 }
+
+// ─── Blog content analysis ────────────────────────────────────────────────
+
+export type BlogContentIssue = {
+  label: string;
+  detail: string;
+  fix: string;
+  severity: "high" | "medium" | "low";
+  category: "technical" | "seo" | "content" | "ux";
+};
+
+export type BlogContentRubricRow = {
+  id: string;
+  label: string;
+  detail: string;
+  status: "pass" | "warn" | "fail";
+};
+
+export type BlogContentAnalysis = {
+  summary: string;
+  plain_language_verdict: string;
+  conclusion: {
+    verdict: "ready_to_publish" | "needs_minor_fixes" | "needs_major_work";
+    summary: string;
+  };
+  issues: BlogContentIssue[];
+  quality_rubric: BlogContentRubricRow[];
+  content_gaps: string[];
+  quick_wins: string[];
+};
+
+/**
+ * Analyze a blog post's content with Gemini.
+ * Content-only diagnosis — no URL scraping, no keyword demand data.
+ */
+export async function analyzeBlogContent(
+  blogId: string
+): Promise<{ success: true; analysis: BlogContentAnalysis } | { success: false; error: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: "Not authenticated" };
+
+  const { data: blog, error: bErr } = await supabaseAdmin
+    .from("blogs")
+    .select("id, project_id, title, content, target_keyword, meta_description")
+    .eq("id", blogId)
+    .single();
+
+  if (bErr || !blog) return { success: false, error: "Blog not found" };
+
+  // Ownership check
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from("projects")
+    .select("id")
+    .eq("id", blog.project_id)
+    .eq("user_id", user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: "Unauthorized" };
+
+  const contentPreview = (blog.content ?? "").slice(0, 12_000);
+
+  const prompt = `You are a senior SEO and content strategist performing a thorough, one-pass audit of a blog post. Your job is to find ALL genuine issues in a single pass so nothing needs to be re-discovered later. Do not invent issues that aren't truly present — only report real problems.
+
+BLOG TITLE: ${blog.title ?? "(no title)"}
+TARGET KEYWORD: ${blog.target_keyword ?? "(unknown)"}
+META DESCRIPTION: ${blog.meta_description ?? "(none)"}
+
+CONTENT (first 12,000 chars):
+${contentPreview}
+
+Return ONLY valid JSON in this exact shape — no markdown fences, no commentary:
+{
+  "summary": "2-3 sentence description of what this article is about",
+  "plain_language_verdict": "1-2 sentence plain-English summary of the most impactful problem (or that the content is solid if no real issues)",
+  "conclusion": {
+    "verdict": "ready_to_publish|needs_minor_fixes|needs_major_work",
+    "summary": "1-2 sentence plain-English conclusion for a non-technical user — tell them clearly if it's safe to post, needs a few tweaks, or requires significant work, and why"
+  },
+  "issues": [
+    {
+      "label": "short issue name",
+      "detail": "what exactly is wrong and why it matters for rankings or readers",
+      "fix": "specific, actionable fix in plain language — enough detail to act on immediately",
+      "severity": "high|medium|low",
+      "category": "technical|seo|content|ux"
+    }
+  ],
+  "quality_rubric": [
+    { "id": "unique_id", "label": "rubric item label", "detail": "why pass/warn/fail", "status": "pass|warn|fail" }
+  ],
+  "content_gaps": ["topic or angle this article should cover but doesn't"],
+  "quick_wins": ["one small specific change that would immediately improve this article"]
+}
+
+Rules — read carefully:
+- COMPLETENESS: Surface every genuine issue in this single pass. If the content is already strong, say so — do not inflate the issue list.
+- VERDICT MAPPING: "ready_to_publish" = no high-severity issues, maybe 1-2 minor; "needs_minor_fixes" = 1-3 medium issues fixable in <30 min; "needs_major_work" = any high-severity issue or structural problem.
+- Return 0-8 issues ordered by impact (highest first). Zero issues is valid for high-quality content.
+- Include 6-8 quality_rubric rows covering: E-E-A-T signals, keyword placement, heading structure, meta description, internal linking, readability, answer-first structure, call to action.
+- Include 0-5 content_gaps (only real missing topics, not padding).
+- Include 1-4 quick_wins.
+- Be specific. Reference actual text from the article when relevant.
+- Do NOT fabricate keyword volume data. Focus purely on content quality.`;
+
+  try {
+    const raw = await geminiGenerate(prompt, 2);
+    const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+    const parsed = JSON.parse(cleaned) as BlogContentAnalysis;
+    return { success: true, analysis: parsed };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : "Analysis failed" };
+  }
+}

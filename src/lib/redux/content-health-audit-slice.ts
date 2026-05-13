@@ -3,6 +3,13 @@ import type { AuditCoverage, PersistedBlogAudit } from "@/app/actions/audit-acti
 
 export type ContentHealthSeverityFilter = "all" | "high" | "medium" | "low";
 
+export type UploadHistoryEntry = {
+  blogId: string;
+  title: string;
+  keyword: string;
+  uploadedAt: string;
+};
+
 export type ProjectContentHealthAuditState = {
   rows: PersistedBlogAudit[];
   coverage: AuditCoverage | null;
@@ -15,6 +22,8 @@ export type ProjectContentHealthAuditState = {
   error: string | null;
   /** True when another flow (import, discover, AI tools) may have changed server audits — refetch in background on next visit. */
   stale: boolean;
+  /** Recent uploads from the "Upload article" tab, newest first. */
+  uploadHistory: UploadHistoryEntry[];
 };
 
 export type ContentHealthAuditState = {
@@ -34,12 +43,14 @@ const defaultProjectState = (): ProjectContentHealthAuditState => ({
   filter: "all",
   error: null,
   stale: false,
+  uploadHistory: [],
 });
 
 function ensureProject(state: ContentHealthAuditState, projectId: string): ProjectContentHealthAuditState {
   state.projects[projectId] ??= defaultProjectState();
   const p = state.projects[projectId];
   if (typeof p.stale !== "boolean") p.stale = false;
+  if (!Array.isArray(p.uploadHistory)) p.uploadHistory = [];
   return p;
 }
 
@@ -111,6 +122,18 @@ export const contentHealthAuditSlice = createSlice({
       p.error = action.payload.error;
       p.stale = false;
     },
+
+    analyzePageUploadHistoryAdd(
+      state,
+      action: PayloadAction<{ projectId: string; entry: UploadHistoryEntry }>
+    ) {
+      const p = ensureProject(state, action.payload.projectId);
+      // Dedupe by blogId, keep newest first, cap at 20
+      p.uploadHistory = [
+        action.payload.entry,
+        ...p.uploadHistory.filter(e => e.blogId !== action.payload.entry.blogId),
+      ].slice(0, 20);
+    },
   },
 });
 
@@ -121,4 +144,5 @@ export const {
   contentHealthAuditLoadStarted,
   contentHealthAuditLoadSuccess,
   contentHealthAuditLoadFailed,
+  analyzePageUploadHistoryAdd,
 } = contentHealthAuditSlice.actions;

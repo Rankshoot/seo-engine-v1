@@ -64,6 +64,10 @@ export function selectContentHealthAuditWorkspace(state: RootState, projectId: s
   return state.contentHealthAudit.projects[projectId] ?? null;
 }
 
+export function selectUploadHistory(state: RootState, projectId: string) {
+  return state.contentHealthAudit.projects[projectId]?.uploadHistory ?? [];
+}
+
 export type ChatMsgToolCall = {
   id: string;
   params: Record<string, unknown>;

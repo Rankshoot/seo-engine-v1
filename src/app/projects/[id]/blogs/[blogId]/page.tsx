@@ -23,6 +23,8 @@ import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-co
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { rangeSelectionToMarkdown } from "@/lib/editor-selection-markdown";
+import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
+import { calendarApi } from "@/frontend/api/calendar";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
 
@@ -358,6 +360,309 @@ function BlogEditAiFixOverlay({
   );
 }
 
+// ─── Blog Content Analysis Modal ─────────────────────────────────────────
+
+const ISSUE_SEVERITY_COLORS: Record<"high" | "medium" | "low", string> = {
+  high: "border-rose-500/30 bg-rose-500/10 text-rose-400",
+  medium: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+  low: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+};
+const ISSUE_CATEGORY_META: Record<string, { label: string; icon: string; color: string }> = {
+  technical: { label: "Technical", icon: "⚙️", color: "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" },
+  seo:       { label: "SEO",       icon: "🎯", color: "text-blue-400 bg-blue-500/10 border-blue-500/30" },
+  content:   { label: "Content",   icon: "📝", color: "text-violet-400 bg-violet-500/10 border-violet-500/30" },
+  ux:        { label: "Reader UX", icon: "👁",  color: "text-pink-400 bg-pink-500/10 border-pink-500/30" },
+};
+const RUBRIC_STATUS_META: Record<string, { label: string; cls: string }> = {
+  pass: { label: "Pass", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" },
+  warn: { label: "Warn", cls: "border-amber-500/40 bg-amber-500/10 text-amber-400" },
+  fail: { label: "Fail", cls: "border-rose-500/40 bg-rose-500/10 text-rose-400" },
+};
+
+const CONCLUSION_META = {
+  ready_to_publish: {
+    label: "Ready to publish",
+    icon: "✓",
+    cls: "border-emerald-500/30 bg-emerald-500/8 text-emerald-400",
+    dot: "bg-emerald-400",
+  },
+  needs_minor_fixes: {
+    label: "Needs minor fixes",
+    icon: "⚠",
+    cls: "border-amber-500/30 bg-amber-500/8 text-amber-400",
+    dot: "bg-amber-400",
+  },
+  needs_major_work: {
+    label: "Needs major work",
+    icon: "✕",
+    cls: "border-rose-500/30 bg-rose-500/8 text-rose-400",
+    dot: "bg-rose-400",
+  },
+} as const;
+
+function BlogContentAnalysisModal({
+  open,
+  analysis,
+  loading,
+  error,
+  isStale,
+  onClose,
+  onReanalyse,
+  onGenerateEnhanced,
+  onSchedule,
+  reanalysing,
+  enhancing,
+  scheduling,
+}: {
+  open: boolean;
+  analysis: BlogContentAnalysis | null;
+  loading: boolean;
+  error: string;
+  isStale: boolean;
+  onClose: () => void;
+  onReanalyse: () => void;
+  onGenerateEnhanced: () => void;
+  onSchedule: () => void;
+  reanalysing: boolean;
+  enhancing: boolean;
+  scheduling: boolean;
+}) {
+  const [tab, setTab] = useState<"issues" | "rubric" | "gaps">("issues");
+
+  useEffect(() => { if (open) setTab("issues"); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [open, onClose]);
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
+
+  if (!open) return null;
+
+  const busy = loading || reanalysing;
+  const conclusion = analysis?.conclusion;
+  const conclusionMeta = conclusion ? CONCLUSION_META[conclusion.verdict] : null;
+
+  return (
+    <div
+      role="dialog" aria-modal="true"
+      className="fixed inset-0 z-80 flex items-start justify-center overflow-y-auto bg-surface-primary/85 p-3 backdrop-blur-sm sm:p-6 animate-fade-in"
+      onClick={onClose}
+    >
+      <div
+        className="relative my-4 flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-secondary shadow-2xl shadow-black/60 animate-scale-in"
+        style={{ maxHeight: "calc(100vh - 3rem)" }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <header className="flex items-start justify-between gap-3 border-b border-border-subtle bg-surface-secondary/95 p-5 backdrop-blur">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-text-tertiary">Content analysis · AI diagnosis</p>
+            <h2 className="mt-1 text-xl font-bold text-text-primary">Content Health Report</h2>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Re-analyse button — only show when we have results */}
+            {(analysis || error) && (
+              <button type="button" onClick={onReanalyse} disabled={busy}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-semibold transition-all disabled:opacity-40 ${
+                  isStale
+                    ? "border-amber-500/40 bg-amber-500/8 text-amber-400 hover:bg-amber-500/15"
+                    : "border-border-subtle bg-surface-elevated text-text-secondary hover:text-text-primary hover:border-border-strong"
+                }`}
+              >
+                <svg className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+                {busy ? "Analysing…" : isStale ? "Content changed — re-analyse" : "Re-analyse"}
+              </button>
+            )}
+            <button type="button" onClick={onClose}
+              className="rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary shadow-sm transition-all hover:border-rose-400/35 hover:bg-rose-500/10 hover:text-rose-300">
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        {/* Body */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {busy && (
+            <div className="flex flex-col items-center justify-center gap-4 py-20">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-border-subtle border-t-brand-action" />
+              <p className="text-[13px] text-text-tertiary">Analysing content with Gemini…</p>
+            </div>
+          )}
+          {error && !busy && (
+            <div className="m-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-[13px] text-rose-400">
+              {error}
+            </div>
+          )}
+          {analysis && !busy && (
+            <>
+              {/* Conclusion banner — top of modal */}
+              {conclusionMeta && conclusion && (
+                <div className={`mx-5 mt-5 rounded-xl border p-4 ${conclusionMeta.cls}`}>
+                  <div className="flex items-center gap-2.5">
+                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-black ${conclusionMeta.cls}`}>
+                      {conclusionMeta.icon}
+                    </span>
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wider opacity-70 mb-0.5">Conclusion</p>
+                      <p className="text-[14px] font-bold leading-snug">{conclusionMeta.label}</p>
+                    </div>
+                  </div>
+                  <p className="mt-2.5 text-[13px] leading-relaxed opacity-90">{conclusion.summary}</p>
+                </div>
+              )}
+
+              {/* Verdict */}
+              <div className="mx-5 mt-3 rounded-xl border border-border-subtle bg-surface-tertiary/40 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-text-tertiary mb-1">Diagnosis</p>
+                <p className="text-sm text-text-primary leading-relaxed">{analysis.plain_language_verdict}</p>
+              </div>
+
+              {/* Quick wins */}
+              {analysis.quick_wins?.length > 0 && (
+                <div className="mx-5 mt-3 mb-1 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 mb-2">Quick wins</p>
+                  <ul className="space-y-1">
+                    {analysis.quick_wins.map((w, i) => (
+                      <li key={i} className="flex items-start gap-2 text-[12px] text-text-secondary">
+                        <svg className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Tabs */}
+              <div className="px-5 py-3">
+                <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-secondary/50">
+                  <div className="flex flex-wrap gap-1 border-b border-border-subtle bg-surface-tertiary/50 p-1.5">
+                    {([
+                      ["issues", "Issues & fixes", analysis.issues.length],
+                      ["rubric", "Quality checklist", analysis.quality_rubric?.length ?? 0],
+                      ["gaps", "Content gaps", analysis.content_gaps?.length ?? 0],
+                    ] as const).map(([key, label, count]) => (
+                      <button key={key} type="button" onClick={() => setTab(key)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${tab === key
+                          ? "bg-brand-action text-brand-on-primary shadow-md"
+                          : "text-text-tertiary hover:bg-surface-elevated hover:text-text-secondary"}`}>
+                        {label}
+                        <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${tab === key ? "bg-white/20 text-white" : "bg-surface-elevated text-text-tertiary"}`}>
+                          {count}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="p-4">
+                    {tab === "issues" && (
+                      <ul className="max-h-[min(48vh,460px)] space-y-2 overflow-y-auto pr-1">
+                        {analysis.issues.length === 0 ? (
+                          <li className="flex items-center gap-2 py-4 text-sm text-emerald-400">
+                            <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
+                            No genuine issues found — this content is in great shape.
+                          </li>
+                        ) : analysis.issues.map((issue, n) => {
+                          const cat = ISSUE_CATEGORY_META[issue.category] ?? ISSUE_CATEGORY_META.content;
+                          return (
+                            <li key={n} className="grid grid-cols-[auto_1fr] gap-3 rounded-xl border border-border-subtle bg-surface-elevated/80 p-3 shadow-sm">
+                              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-action/15 text-xs font-black text-brand-action">{n + 1}</span>
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase ${ISSUE_SEVERITY_COLORS[issue.severity]}`}>{issue.severity}</span>
+                                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase ${cat.color}`}>{cat.icon} {cat.label}</span>
+                                  <span className="text-xs font-bold text-text-primary">{issue.label}</span>
+                                </div>
+                                {issue.detail && <p className="mt-1.5 text-[12px] text-text-secondary leading-relaxed">{issue.detail}</p>}
+                                {issue.fix && (
+                                  <p className="mt-1.5 text-[12px] text-emerald-400 leading-relaxed">
+                                    <span className="font-bold text-text-secondary">Fix · </span>{issue.fix}
+                                  </p>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    {tab === "rubric" && (
+                      <ul className="max-h-[min(48vh,460px)] space-y-2 overflow-y-auto">
+                        {!(analysis.quality_rubric?.length) ? (
+                          <li className="text-sm text-text-tertiary">No rubric data.</li>
+                        ) : analysis.quality_rubric.map((row, i) => {
+                          const meta = RUBRIC_STATUS_META[row.status] ?? RUBRIC_STATUS_META.warn;
+                          return (
+                            <li key={row.id} className="flex gap-3 rounded-xl border border-border-subtle bg-surface-elevated/80 px-3 py-2.5">
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface-tertiary text-[11px] font-bold text-text-tertiary">{i + 1}</span>
+                              <div className="min-w-0 flex-1">
+                                <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${meta.cls}`}>{meta.label}</span>
+                                <p className="mt-1 text-[13px] font-medium text-text-primary">{row.label}</p>
+                                <p className="text-[12px] text-text-tertiary leading-relaxed">{row.detail}</p>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    {tab === "gaps" && (
+                      <div className="max-h-[min(48vh,460px)] overflow-y-auto space-y-4">
+                        {analysis.content_gaps?.length ? (
+                          <>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-text-tertiary">Missing topics / angles</p>
+                            <ol className="list-decimal space-y-1.5 pl-5 text-[13px] text-text-secondary">
+                              {analysis.content_gaps.map((g, i) => <li key={i} className="leading-relaxed">{g}</li>)}
+                            </ol>
+                          </>
+                        ) : (
+                          <p className="text-sm text-text-tertiary">No content gaps identified.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-surface-secondary/95 p-4 backdrop-blur">
+          <p className="text-[11px] text-text-tertiary max-w-xs leading-relaxed">
+            "Generate enhanced" rewrites applying <strong className="text-text-secondary">all</strong> issues above at once. "Schedule" queues the keyword for later.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={onClose}
+              className="rounded-xl border border-border-strong bg-surface-elevated px-4 py-2.5 text-xs font-bold text-text-secondary shadow-sm transition-all hover:border-text-tertiary hover:text-text-primary">
+              Close
+            </button>
+            <button type="button" onClick={onSchedule} disabled={scheduling || busy || !analysis}
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border-strong bg-surface-elevated px-4 py-2.5 text-xs font-bold text-text-secondary shadow-sm transition-all hover:border-text-tertiary hover:text-text-primary disabled:opacity-50">
+              {scheduling ? "Scheduling…" : (
+                <><svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Schedule</>
+              )}
+            </button>
+            <button type="button" onClick={onGenerateEnhanced} disabled={enhancing || busy || !analysis}
+              className="inline-flex min-w-[168px] items-center justify-center gap-1.5 rounded-xl bg-brand-primary px-5 py-2.5 text-xs font-bold text-brand-on-primary shadow-lg shadow-brand-primary/30 transition-all hover:opacity-90 disabled:opacity-50">
+              {enhancing ? "Generating…" : (
+                <><svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z"/></svg>Generate enhanced</>
+              )}
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 export default function BlogViewerPage() {
   const { id: projectId, blogId } = useParams<{ id: string; blogId: string }>();
   const queryClient = useQueryClient();
@@ -391,6 +696,21 @@ export default function BlogViewerPage() {
   const [editingImage, setEditingImage] = useState<HTMLImageElement | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState(false);
   const [addingToArticles, setAddingToArticles] = useState(false);
+
+  // ── Content analysis ────────────────────────────────────────────────────
+  const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisReanalysing, setAnalysisReanalysing] = useState(false);
+  const [analysisError, setAnalysisError] = useState("");
+  const [contentAnalysis, setContentAnalysis] = useState<BlogContentAnalysis | null>(null);
+  /** updated_at of the blog at the time analysis was last run — used to detect stale analysis */
+  const [analysisSnapshotAt, setAnalysisSnapshotAt] = useState<string | null>(null);
+  const [analysisEnhancing, setAnalysisEnhancing] = useState(false);
+  const [analysisScheduling, setAnalysisScheduling] = useState(false);
+
+  const analysisIsStale = Boolean(
+    contentAnalysis && analysisSnapshotAt && blog && blog.updated_at !== analysisSnapshotAt
+  );
 
   const ownSiteHost = useMemo(
     () => (project?.domain?.trim() ? normalizeSiteHost(project.domain) : null),
@@ -488,6 +808,74 @@ export default function BlogViewerPage() {
       setLoading(false);
     });
   }, [blogId, projectId]);
+
+  const runAnalysis = async (opts?: { reanalyse?: boolean }) => {
+    if (opts?.reanalyse) {
+      setAnalysisReanalysing(true);
+      setContentAnalysis(null);
+    } else {
+      setAnalysisLoading(true);
+    }
+    setAnalysisError("");
+    const res = await analyzeBlogContent(blogId);
+    setAnalysisLoading(false);
+    setAnalysisReanalysing(false);
+    if (res.success) {
+      setContentAnalysis(res.analysis);
+      setAnalysisSnapshotAt(blog?.updated_at ?? null);
+    } else {
+      setAnalysisError(res.error);
+    }
+  };
+
+  const openAnalysisModal = async () => {
+    setAnalysisModalOpen(true);
+    if (contentAnalysis && !analysisIsStale) return; // already have fresh data
+    await runAnalysis();
+  };
+
+  const handleAnalysisEnhanced = async () => {
+    if (!blog || !contentAnalysis) return;
+    setAnalysisEnhancing(true);
+    try {
+      const { repairBlogFromContent } = await import("@/app/actions/repair-actions");
+      const res = await repairBlogFromContent(blog.id, contentAnalysis);
+      if (res.success && res.data.blogId) {
+        toast.success("Enhanced version ready — opening.");
+        window.location.href = `/projects/${projectId}/blogs/${res.data.blogId}`;
+      } else {
+        toast.error(!res.success ? res.error : "Could not generate enhanced version.");
+      }
+    } catch (ex) {
+      toast.error(ex instanceof Error ? ex.message : "Could not generate enhanced version.");
+    } finally {
+      setAnalysisEnhancing(false);
+    }
+  };
+
+  const handleAnalysisSchedule = async () => {
+    if (!blog) return;
+    setAnalysisScheduling(true);
+    try {
+      const keyword = blog.target_keyword || blog.title;
+      const res = await calendarApi.addCustomKeyword(projectId, {
+        keyword,
+        title: blog.title,
+        writerNotes: `Content analysis repair for: ${blog.title}`,
+      });
+      if (res.success) {
+        toast.success(`"${keyword}" added to calendar for ${res.scheduled_date ?? "next available date"}.`);
+        setAnalysisModalOpen(false);
+        await queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+      } else {
+        toast.error(res.error ?? "Could not add to calendar.");
+      }
+    } catch (ex) {
+      toast.error(ex instanceof Error ? ex.message : "Could not schedule.");
+    } finally {
+      setAnalysisScheduling(false);
+    }
+  };
 
   const handleAddToArticles = async () => {
     if (!blogId?.trim() || !blog) return;
@@ -697,10 +1085,18 @@ export default function BlogViewerPage() {
   const statusInfo      = BLOG_STATUSES.find(s => s.value === blogStatus)!;
   const sidebarMuted    = editMode || savingContent || scoreRefreshing;
   const isInstantArticle = Boolean(blog.article_type?.startsWith("Instant ·"));
+  const isImport = blog.article_type === "Import";
+  const isRepair = blog.article_type === "Repair";
   const historyParentHref = isInstantArticle
     ? `/projects/${projectId}/content-generator/history`
+    : (isImport || isRepair)
+    ? `/projects/${projectId}/audit/import`
     : `/projects/${projectId}/blogs`;
-  const historyParentLabel = isInstantArticle ? "Content history" : "Blogs";
+  const historyParentLabel = isInstantArticle
+    ? "Content history"
+    : (isImport || isRepair)
+    ? "Content Analyzer"
+    : "Blogs";
 
   return (
     <div className="flex flex-col h-full overflow-hidden gap-3">
@@ -852,6 +1248,39 @@ export default function BlogViewerPage() {
         <div className="w-[288px] shrink-0 rounded-[10px] border border-border-subtle bg-surface-secondary overflow-hidden">
           <div className="h-full overflow-y-auto blog-sidebar-scroll">
 
+            {/* ── Content Analysis button ───────────────────────────── */}
+            <div className="px-4 pt-4 pb-3">
+              <button
+                type="button"
+                onClick={() => void openAnalysisModal()}
+                disabled={editMode || savingContent}
+                className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 ${
+                  analysisIsStale
+                    ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
+                    : contentAnalysis
+                    ? "bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
+                    : "bg-brand-action text-brand-on-primary hover:opacity-90 shadow-md shadow-brand-action/20"
+                }`}
+              >
+                {/* AI sparkle icon */}
+                <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                </svg>
+                {analysisIsStale ? "Content changed — re-analyse" : contentAnalysis ? "View analysis" : "Analyse content"}
+              </button>
+              {contentAnalysis && !analysisIsStale && (
+                <div className="mt-1.5 flex items-center justify-center gap-2 text-[10px] text-text-tertiary">
+                  {contentAnalysis.conclusion && (
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold text-[9px] uppercase ${CONCLUSION_META[contentAnalysis.conclusion.verdict].cls}`}>
+                      {CONCLUSION_META[contentAnalysis.conclusion.verdict].label}
+                    </span>
+                  )}
+                  <span>{contentAnalysis.issues.length} issues</span>
+                </div>
+              )}
+            </div>
+            <div className="h-px mx-4 bg-border-subtle opacity-60" />
+
             {/* SEO Score — borderless embed, blends into panel bg */}
             <div className={`transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>
               <SEOScorePanel
@@ -881,33 +1310,34 @@ export default function BlogViewerPage() {
             <Divider />
             <div className="px-4 pt-3.5 pb-1">
 
-              {/* Status */}
-              <div className="mb-3.5">
-                <div className="flex items-center justify-between mb-1.5">
-                  <SLabel>Status</SLabel>
-                  {savingStatus && <SpinIcon className="w-3 h-3" />}
+              {/* Status — only shown in edit mode */}
+              {editMode && (
+                <div className="mb-3.5">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <SLabel>Status</SLabel>
+                    {savingStatus && <SpinIcon className="w-3 h-3" />}
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={blogStatus}
+                      onChange={e => handleStatusChange(e.target.value as BlogStatus)}
+                      disabled={savingStatus}
+                      className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
+                      style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
+                    >
+                      {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                    <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                    </svg>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusInfo.color }} />
+                    <p className="text-[10px] text-text-tertiary">{statusInfo.hint}</p>
+                  </div>
+                  {statusError && <p className="mt-1 text-[10px] text-rose-500">{statusError}</p>}
                 </div>
-                <div className="relative">
-                  <select
-                    value={blogStatus}
-                    onChange={e => handleStatusChange(e.target.value as BlogStatus)}
-                    disabled={savingStatus}
-                    className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
-                    style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
-                  >
-                    {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
-                  {/* Custom chevron */}
-                  <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                  </svg>
-                </div>
-                <div className="flex items-center gap-1.5 mt-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusInfo.color }} />
-                  <p className="text-[10px] text-text-tertiary">{statusInfo.hint}</p>
-                </div>
-                {statusError && <p className="mt-1 text-[10px] text-rose-500">{statusError}</p>}
-              </div>
+              )}
 
               {/* Target keyword */}
               <div className="mb-3.5">
@@ -1016,25 +1446,29 @@ export default function BlogViewerPage() {
               </div>
             </div>
 
-            {/* ── Generate ───────────────────────────────────────────── */}
-            <Divider />
-            <div className="px-4 py-4">
-              <SLabel>Generate</SLabel>
-              <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
-                {blog.entry_id
-                  ? "Runs full research + generation with Gemini AI"
-                  : "Not available for imported drafts — create a scheduled post from Calendar to run full generation."}
-              </p>
-              <button
-                onClick={handleRegenerate}
-                disabled={regenerating || !blog.entry_id}
-                className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
-                style={{ background: V.txt, color: V.bg }}
-              >
-                {regenerating ? <><SpinIcon />&nbsp;Generating…</> : "Generate blog"}
-              </button>
-              {editError && <p className="mt-2 text-[11px] text-brand-coral">{editError}</p>}
-            </div>
+            {/* ── Generate — hidden for imported/repaired content ──────── */}
+            {!isImport && !isRepair && (
+              <>
+                <Divider />
+                <div className="px-4 py-4">
+                  <SLabel>Generate</SLabel>
+                  <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
+                    {blog.entry_id
+                      ? "Runs full research + generation with Gemini AI"
+                      : "Not available for imported drafts — create a scheduled post from Calendar to run full generation."}
+                  </p>
+                  <button
+                    onClick={handleRegenerate}
+                    disabled={regenerating || !blog.entry_id}
+                    className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
+                    style={{ background: V.txt, color: V.bg }}
+                  >
+                    {regenerating ? <><SpinIcon />&nbsp;Generating…</> : "Generate blog"}
+                  </button>
+                  {editError && <p className="mt-2 text-[11px] text-brand-coral">{editError}</p>}
+                </div>
+              </>
+            )}
 
           </div>
         </div>
@@ -1066,6 +1500,21 @@ export default function BlogViewerPage() {
         className="hidden"
         accept="image/*"
         onChange={handleImageFileChange}
+      />
+
+      <BlogContentAnalysisModal
+        open={analysisModalOpen}
+        analysis={contentAnalysis}
+        loading={analysisLoading}
+        error={analysisError}
+        isStale={analysisIsStale}
+        onClose={() => setAnalysisModalOpen(false)}
+        onReanalyse={() => void runAnalysis({ reanalyse: true })}
+        onGenerateEnhanced={() => void handleAnalysisEnhanced()}
+        onSchedule={() => void handleAnalysisSchedule()}
+        reanalysing={analysisReanalysing}
+        enhancing={analysisEnhancing}
+        scheduling={analysisScheduling}
       />
 
       <BlogAiRewriterModal

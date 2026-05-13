@@ -213,7 +213,7 @@ export default function ContentHealthPage() {
             className="inline-flex h-9 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary hover:border-brand-action/30 hover:text-text-primary transition-all"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" /></svg>
-            Analyze content
+            Content Analyzer
           </ProjectNavLink>
           <ProjectNavLink
             href={`/projects/${projectId}/audit/discover-pages`}

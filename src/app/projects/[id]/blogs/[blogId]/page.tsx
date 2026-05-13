@@ -701,7 +701,6 @@ export default function BlogViewerPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingImage, setEditingImage] = useState<HTMLImageElement | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState(false);
-  const [addingToArticles, setAddingToArticles] = useState(false);
 
   // ── Content analysis ────────────────────────────────────────────────────
   const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
@@ -720,6 +719,32 @@ export default function BlogViewerPage() {
   const [scheduling, setScheduling] = useState(false);
   const [scheduleVersion, setScheduleVersion] = useState(0);
 
+  // ── Before / After comparison ───────────────────────────────────────────
+  // When the user clicks "Generate enhanced" in the analysis modal, we keep
+  // them on this page and load the freshly-generated blog into `enhancedBlog`.
+  // The toolbar then exposes a Before / After pill so the original (Before)
+  // and enhanced (After) versions can be compared side-by-side, without
+  // adding the enhanced row to the calendar (entry_id stays null on the
+  // server — see `repairBlogFromContent`).
+  const [enhancedBlog, setEnhancedBlog] = useState<Blog | null>(null);
+  const [compareView, setCompareView] = useState<"before" | "after">("before");
+  const isAfterView = compareView === "after" && enhancedBlog !== null;
+  const displayBlog: Blog | null = isAfterView ? enhancedBlog : blog;
+
+  /** Updates the currently-displayed blog (Before → `blog`, After → `enhancedBlog`). */
+  const updateDisplayBlog = useCallback(
+    (next: Blog | ((prev: Blog) => Blog)) => {
+      const apply = (prev: Blog): Blog =>
+        typeof next === "function" ? (next as (b: Blog) => Blog)(prev) : next;
+      if (isAfterView) {
+        setEnhancedBlog(prev => (prev ? apply(prev) : prev));
+      } else {
+        setBlog(prev => (prev ? apply(prev) : prev));
+      }
+    },
+    [isAfterView]
+  );
+
   const analysisIsStale = Boolean(
     contentAnalysis && analysisSnapshotAt && blog && blog.updated_at !== analysisSnapshotAt
   );
@@ -732,11 +757,11 @@ export default function BlogViewerPage() {
   const { externalLinks, internalLinks } = useMemo(
     () =>
       reclassifyBlogLinkSidebarLists(
-        blog?.external_links ?? [],
-        blog?.internal_links ?? [],
+        displayBlog?.external_links ?? [],
+        displayBlog?.internal_links ?? [],
         project?.domain
       ),
-    [blog?.external_links, blog?.internal_links, project?.domain]
+    [displayBlog?.external_links, displayBlog?.internal_links, project?.domain]
   );
 
   const handleImageUpload = (img: HTMLImageElement) => {
@@ -764,10 +789,10 @@ export default function BlogViewerPage() {
   };
 
   const handleImageRegenerate = async (img: HTMLImageElement) => {
-    if (!blog) return;
+    if (!displayBlog) return;
     setRegeneratingImage(true);
     try {
-      const res = await blogsApi.regenerateImage(blog.id, {
+      const res = await blogsApi.regenerateImage(displayBlog.id, {
         imageAlt: img.alt,
         contextBefore: "", // We could extract context from DOM if needed
         contextAfter: "",
@@ -811,12 +836,19 @@ export default function BlogViewerPage() {
   useEffect(() => {
     setLoading(true);
     setBlog(null);
+    setEnhancedBlog(null);
+    setCompareView("before");
+    // Fetch the original blog + project up front; the enhanced version (if
+    // any) is fetched in parallel so the Before / After toggle can re-appear
+    // after a hard reload or history navigation.
     Promise.all([
       blogsApi.getById(blogId),
       projectsApi.get(projectId),
-    ]).then(([blogRes, projRes]) => {
+      blogsApi.getEnhanced(blogId),
+    ]).then(([blogRes, projRes, enhancedRes]) => {
       if (blogRes.success && blogRes.data) setBlog(blogRes.data);
       if (projRes.success && projRes.data) setProject(projRes.data);
+      if (enhancedRes.success && enhancedRes.data) setEnhancedBlog(enhancedRes.data);
       setLoading(false);
     });
   }, [blogId, projectId]);
@@ -852,13 +884,28 @@ export default function BlogViewerPage() {
     try {
       const { repairBlogFromContent } = await import("@/app/actions/repair-actions");
       const res = await repairBlogFromContent(blog.id, contentAnalysis);
-      if (res.success && res.data.blogId) {
+      if (!res.success || !res.data.blogId) {
         toast.success("Enhanced version ready — opening.");
         const q = fromAnalyzeContentPage ? `?from=${BLOG_VIEW_FROM_ANALYZE_CONTENT}` : "";
         window.location.href = `/projects/${projectId}/blogs/${res.data.blogId}${q}`;
       } else {
         toast.error(!res.success ? res.error : "Could not generate enhanced version.");
+        return;
       }
+      // Pull the freshly-generated blog and surface it in the After view —
+      // we deliberately stay on this page so the user can A/B compare.
+      const enhancedRes = await blogsApi.getById(res.data.blogId);
+      if (!enhancedRes.success || !enhancedRes.data) {
+        toast.error(enhancedRes.error || "Enhanced blog generated but could not be loaded.");
+        return;
+      }
+      setEnhancedBlog(enhancedRes.data);
+      setCompareView("after");
+      setAnalysisModalOpen(false);
+      toast.success("Enhanced version ready — viewing After.");
+      // Articles + project stats may have shifted because a new blog row exists.
+      void queryClient.invalidateQueries({ queryKey: qk.articlesLibrary(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     } catch (ex) {
       toast.error(ex instanceof Error ? ex.message : "Could not generate enhanced version.");
     } finally {
@@ -973,21 +1020,21 @@ export default function BlogViewerPage() {
   };
 
   const handleDownload = async (format: ExportFormat) => {
-    if (!blog) return;
+    if (!displayBlog) return;
     setDownloading(format);
     const projectMeta = project
       ? { domain: project.domain ?? undefined, company: project.company ?? undefined }
       : undefined;
     try {
       let blob: Blob;
-      if (format === "markdown") blob = exportToMarkdown(blog, projectMeta);
-      else if (format === "html") blob = exportToHTML(blog, projectMeta);
-      else if (format === "txt") blob = exportToText(blog);
-      else blob = await exportToDocx(blog);
+      if (format === "markdown") blob = exportToMarkdown(displayBlog, projectMeta);
+      else if (format === "html") blob = exportToHTML(displayBlog, projectMeta);
+      else if (format === "txt") blob = exportToText(displayBlog);
+      else blob = await exportToDocx(displayBlog);
       // `triggerBlogDownload` enforces the right extension + MIME type and
       // runs the title/slug through `safeFilename` so the OS save dialog
       // doesn't choke on slashes or punctuation.
-      triggerBlogDownload(blob, blog, format);
+      triggerBlogDownload(blob, displayBlog, format);
     } catch (e) {
       console.error("[blog] download failed", e);
     } finally {
@@ -996,6 +1043,8 @@ export default function BlogViewerPage() {
   };
 
   const handleRegenerate = async () => {
+    // Calendar regeneration only makes sense for the original (Before) blog —
+    // enhanced rows have entry_id=null on purpose.
     if (!blog) return;
     if (!blog.entry_id) {
       setEditError("Imported articles are not on the calendar. Schedule a keyword on Calendar to run full AI generation.");
@@ -1020,14 +1069,14 @@ export default function BlogViewerPage() {
   };
 
   const handleCopy = async () => {
-    if (!blog) return;
-    await navigator.clipboard.writeText(blog.content);
+    if (!displayBlog) return;
+    await navigator.clipboard.writeText(displayBlog.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const startEditing  = () => {
-    if (!blog) return;
+    if (!displayBlog) return;
     setEditError("");
     setActiveView("preview");
     setEditSessionKey(k => k + 1);
@@ -1042,7 +1091,7 @@ export default function BlogViewerPage() {
 
   const handleAiRewriterInsert = (rewritten: string) => {
     const snap = selectionSnapshotRef.current;
-    if (!blog || !snap?.range) {
+    if (!displayBlog || !snap?.range) {
       setEditError("Couldn't apply rewrite — select text again.");
       setAiRewriter({ open: false, text: "" });
       return;
@@ -1055,7 +1104,7 @@ export default function BlogViewerPage() {
         return;
       }
       range.deleteContents();
-      const frag = markdownAiSnippetToDocumentFragment(rewritten.trim(), blog, document, ownSiteHost);
+      const frag = markdownAiSnippetToDocumentFragment(rewritten.trim(), displayBlog, document, ownSiteHost);
       range.insertNode(frag);
       const end = frag.lastChild;
       if (end) {
@@ -1074,7 +1123,7 @@ export default function BlogViewerPage() {
   };
 
   const saveEditing = async () => {
-    if (!blog) return;
+    if (!displayBlog) return;
     setSavingContent(true);
     setEditError("");
     const html = editorRef.current?.innerHTML ?? "";
@@ -1094,13 +1143,13 @@ export default function BlogViewerPage() {
     });
 
     const bodyMd = td.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
-    const title = titleEditorRef.current?.textContent?.trim() || blog.title;
+    const title = titleEditorRef.current?.textContent?.trim() || displayBlog.title;
     const metaDescription = descEditorRef.current?.textContent?.replace(/\s+/g, " ").trim() || "";
     const md = `# ${title}\n\n${bodyMd}`.replace(/\n{3,}/g, "\n\n").trim();
-    const res = await blogsApi.updateContent(blog.id, { content: md, title, metaDescription });
+    const res = await blogsApi.updateContent(displayBlog.id, { content: md, title, metaDescription });
     if (res.success && res.data) {
       setScoreRefreshing(true);
-      setBlog(res.data); setEditMode(false); setActiveView("preview");
+      updateDisplayBlog(res.data); setEditMode(false); setActiveView("preview");
       setScoreVersion(v => v + 1);
       window.setTimeout(() => setScoreRefreshing(false), 450);
     } else {
@@ -1110,21 +1159,21 @@ export default function BlogViewerPage() {
   };
 
   const handleStatusChange = async (status: BlogStatus) => {
-    if (!blog || blog.status === status) return;
-    const prev = blog;
+    if (!displayBlog || displayBlog.status === status) return;
+    const prev = displayBlog;
     setSavingStatus(true); setStatusError("");
-    setBlog({ ...blog, status });
-    const res = await blogsApi.updateStatus(blog.id, status);
-    if (res.success && res.data) setBlog(res.data);
-    else { setBlog(prev); setStatusError(res.error ?? "Could not update status"); }
+    updateDisplayBlog({ ...displayBlog, status });
+    const res = await blogsApi.updateStatus(displayBlog.id, status);
+    if (res.success && res.data) updateDisplayBlog(res.data);
+    else { updateDisplayBlog(prev); setStatusError(res.error ?? "Could not update status"); }
     setSavingStatus(false);
   };
 
   const handleSeoFix = async (key: BlogSeoIssueKey) => {
-    if (!blog || fixingIssue || editMode) return;
+    if (!displayBlog || fixingIssue || editMode) return;
     setFixingIssue(key); setFixError(""); setScoreRefreshing(true);
-    const res = await blogsApi.fixSeo(blog.id, key);
-    if (res.success && res.data) { setBlog(res.data); setScoreVersion(v => v + 1); }
+    const res = await blogsApi.fixSeo(displayBlog.id, key);
+    if (res.success && res.data) { updateDisplayBlog(res.data); setScoreVersion(v => v + 1); }
     else setFixError(res.error ?? "AI fix failed. Try again.");
     setFixingIssue(null);
     window.setTimeout(() => setScoreRefreshing(false), 450);
@@ -1152,8 +1201,13 @@ export default function BlogViewerPage() {
     );
   }
 
-  const researchSources = blog.research_sources ?? 0;
-  const blogStatus      = asBlogStatus(blog.status);
+  // Resolved non-null view target — Before defaults to `blog`, After swaps in
+  // the freshly-generated enhancedBlog. All content + sidebar rendering keys
+  // off `currentBlog` so toggling the pill flips the entire view.
+  const currentBlog: Blog = isAfterView && enhancedBlog ? enhancedBlog : blog;
+
+  const researchSources = currentBlog.research_sources ?? 0;
+  const blogStatus      = asBlogStatus(currentBlog.status);
   const statusInfo      = BLOG_STATUSES.find(s => s.value === blogStatus)!;
   const sidebarMuted    = editMode || savingContent || scoreRefreshing;
   const isInstantArticle = Boolean(blog.article_type?.startsWith("Instant ·"));
@@ -1197,37 +1251,25 @@ export default function BlogViewerPage() {
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-2">
-          {researchSources > 0 && (
-            <Pill color={V.txtMute} border={V.borderS}>
-              <ResearchIcon /> Researched: {researchSources} live sources
-            </Pill>
-          )}
-          {researchSources > 0 && externalLinks.length > 0 && (
-            <Pill color={V.action} border={`${BRAND.actionBlue}44`} bg={`${BRAND.actionBlue}0d`}>
-              <ExternalLinkIcon /> {externalLinks.length} external links
-            </Pill>
-          )}
-          {researchSources > 0 && internalLinks.length > 0 && (
-            <Pill color={V.coral} border={`${BRAND.coral}44`} bg={`${BRAND.coral}0d`}>
-              <LinkIcon /> {internalLinks.length} internal links
-            </Pill>
-          )}
-          <button
-            type="button"
-            onClick={() => void handleAddToArticles()}
-            disabled={
-              editMode || savingContent || addingToArticles || Boolean(blog.in_articles_library)
-            }
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium border border-border-subtle transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-              blog.in_articles_library
-                ? "text-text-tertiary"
-                : "text-text-secondary enabled:hover:bg-surface-hover enabled:hover:text-text-primary"
-            }`}
-          >
-            {addingToArticles ? "Adding…" : blog.in_articles_library ? "In Articles" : "Add this article"}
-          </button>
-        </div>
+        {(researchSources > 0 || externalLinks.length > 0 || internalLinks.length > 0) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {researchSources > 0 && (
+              <Pill color={V.txtMute} border={V.borderS}>
+                <ResearchIcon /> Researched: {researchSources} live sources
+              </Pill>
+            )}
+            {researchSources > 0 && externalLinks.length > 0 && (
+              <Pill color={V.action} border={`${BRAND.actionBlue}44`} bg={`${BRAND.actionBlue}0d`}>
+                <ExternalLinkIcon /> {externalLinks.length} external links
+              </Pill>
+            )}
+            {researchSources > 0 && internalLinks.length > 0 && (
+              <Pill color={V.coral} border={`${BRAND.coral}44`} bg={`${BRAND.coral}0d`}>
+                <LinkIcon /> {internalLinks.length} internal links
+              </Pill>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Panels ──────────────────────────────────────────────────────── */}
@@ -1286,11 +1328,11 @@ export default function BlogViewerPage() {
 
           {editMode ? (
             <div>
-              <ArticleMetaRow blog={blog} />
+              <ArticleMetaRow blog={currentBlog} />
               <article className="mx-auto max-w-[860px] px-8 py-12">
                 <MemoizedVisualBlogEditors
-                  key={editSessionKey}
-                  blog={blog}
+                  key={`${currentBlog.id}-${editSessionKey}`}
+                  blog={currentBlog}
                   ownSiteHost={ownSiteHost}
                   titleRef={titleEditorRef}
                   descRef={descEditorRef}
@@ -1305,11 +1347,11 @@ export default function BlogViewerPage() {
               </p>
             </div>
           ) : activeView === "preview" ? (
-            <EditorialPreview blog={blog} ownSiteHost={ownSiteHost} />
+            <EditorialPreview blog={currentBlog} ownSiteHost={ownSiteHost} />
           ) : (
             <div className="p-8">
               <pre className="text-[13px] whitespace-pre-wrap leading-relaxed overflow-x-auto text-text-secondary" style={{ fontFamily: "CohereMono, monospace" }}>
-                {blog.content}
+                {currentBlog.content}
               </pre>
             </div>
           )}
@@ -1320,10 +1362,31 @@ export default function BlogViewerPage() {
         <div className="w-[288px] shrink-0 rounded-[10px] border border-border-subtle bg-surface-secondary overflow-hidden">
           <div className="h-full overflow-y-auto blog-sidebar-scroll">
 
+            {/* ── Before / After comparison ─────────────────────────── */}
+            {enhancedBlog && (
+              <div className="px-4 pt-4 pb-2">
+                <div className="flex w-full items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-primary/40">
+                  {(["before", "after"] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => !editMode && setCompareView(v)}
+                      disabled={editMode}
+                      className="flex-1 px-4 py-1.5 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                      style={compareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                      title={v === "before" ? "Original draft" : "AI-enhanced rewrite"}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* ── Content Analysis (Analyze content page entry only) ───── */}
             {fromAnalyzeContentPage && (
               <>
-                <div className="px-4 pt-4 pb-3">
+                <div className={`px-4 pb-3 ${enhancedBlog ? "pt-2" : "pt-4"}`}>
                   <button
                     type="button"
                     onClick={() => void openAnalysisModal()}
@@ -1359,8 +1422,8 @@ export default function BlogViewerPage() {
             {/* SEO Score — borderless embed, blends into panel bg */}
             <div className={`transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>
               <SEOScorePanel
-                key={`${blog.id}-${blog.updated_at}-${scoreVersion}`}
-                blog={blog}
+                key={`${currentBlog.id}-${currentBlog.updated_at}-${scoreVersion}`}
+                blog={currentBlog}
                 projectDomain={project?.domain}
                 fixingIssue={fixingIssue}
                 onFixIssue={check => handleSeoFix(check.key)}
@@ -1417,19 +1480,19 @@ export default function BlogViewerPage() {
               {/* Target keyword */}
               <div className="mb-3.5">
                 <SLabel>Target Keyword</SLabel>
-                <p className="text-[13px] font-semibold text-text-primary leading-snug">{blog.target_keyword}</p>
+                <p className="text-[13px] font-semibold text-text-primary leading-snug">{currentBlog.target_keyword}</p>
               </div>
 
               {/* Type + Slug side by side */}
               <div className="grid grid-cols-2 gap-4 mb-3.5">
                 <div>
                   <SLabel>Type</SLabel>
-                  <p className="text-[12px] font-medium text-text-primary">{blog.article_type}</p>
+                  <p className="text-[12px] font-medium text-text-primary">{currentBlog.article_type}</p>
                 </div>
                 <div className="min-w-0">
                   <SLabel>Slug</SLabel>
                   <p className="text-[11px] break-all text-text-tertiary leading-snug" style={{ fontFamily: "CohereMono, monospace" }}>
-                    /{blog.slug}
+                    /{currentBlog.slug}
                   </p>
                 </div>
               </div>
@@ -1444,14 +1507,14 @@ export default function BlogViewerPage() {
                 <span
                   className="text-[9px] font-semibold tabular-nums rounded-full px-1.5 py-0.5"
                   style={{
-                    background: blog.meta_description.length >= 140 && blog.meta_description.length <= 165 ? "#16a34a18" : "#b91c1c14",
-                    color: blog.meta_description.length >= 140 && blog.meta_description.length <= 165 ? "#16a34a" : "#b91c1c",
+                    background: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a18" : "#b91c1c14",
+                    color: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a" : "#b91c1c",
                   }}
                 >
-                  {blog.meta_description.length}/160
+                  {currentBlog.meta_description.length}/160
                 </span>
               </div>
-              <p className="text-[11px] text-text-tertiary leading-relaxed">{blog.meta_description}</p>
+              <p className="text-[11px] text-text-tertiary leading-relaxed">{currentBlog.meta_description}</p>
             </div>
 
             {/* ── Links ────────────────────────────────────────────────── */}
@@ -1586,13 +1649,15 @@ export default function BlogViewerPage() {
                 <div className="px-4 py-4">
                   <SLabel>Generate</SLabel>
                   <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
-                    {blog.entry_id
+                    {isAfterView
+                      ? "Calendar regeneration runs against the original draft. Switch to Before to use it."
+                      : blog.entry_id
                       ? "Runs full research + generation with Gemini AI"
                       : "Not available for imported drafts — create a scheduled post from Calendar to run full generation."}
                   </p>
                   <button
                     onClick={handleRegenerate}
-                    disabled={regenerating || !blog.entry_id}
+                    disabled={regenerating || !blog.entry_id || isAfterView}
                     className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
                     style={{ background: V.txt, color: V.bg }}
                   >
@@ -1652,12 +1717,12 @@ export default function BlogViewerPage() {
 
       <BlogAiRewriterModal
         open={aiRewriter.open}
-        blogId={blog.id}
+        blogId={currentBlog.id}
         selectedText={aiRewriter.text}
         renderMarkdownSnippet={md => (
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            components={buildMarkdownComponents(internalSetForBlog(blog), ownSiteHost)}
+            components={buildMarkdownComponents(internalSetForBlog(currentBlog), ownSiteHost)}
             urlTransform={markdownUrlTransform}
           >
             {md}

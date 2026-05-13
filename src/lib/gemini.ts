@@ -7,7 +7,7 @@ import {
   parseFunnelStageLabel,
   type FunnelStage,
 } from '@/lib/keyword-funnel';
-import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
+import { countWordsInMarkdown, stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
@@ -1094,6 +1094,7 @@ export interface RepairBlogInput {
     fix: string;
     severity: 'low' | 'medium' | 'high';
     why_it_matters?: string;
+    category?: string;
   }>;
   contentGaps: string[];
   /** URLs on the user's own site we can link to. Must be verbatim — LLM won't invent. */
@@ -1107,6 +1108,18 @@ export interface RepairBlogInput {
   project: Project;
   /** Target word count for the rewrite. */
   wordCount?: number;
+  /**
+   * Full in-app "Content Analysis" payload — enables a stronger SEO enhancement pass
+   * (issues + rubric + quick wins + verdict), not only minimal surgical edits.
+   */
+  contentAnalysisBundle?: {
+    summary: string;
+    plain_language_verdict: string;
+    conclusion_verdict: string;
+    conclusion_summary: string;
+    quick_wins: string[];
+    quality_rubric: Array<{ label: string; detail: string; status: 'pass' | 'warn' | 'fail' }>;
+  };
 }
 
 export interface RepairedBlog extends GeneratedBlog {
@@ -1124,7 +1137,13 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
     secondaryKeywords,
     brief,
     project,
+    contentAnalysisBundle,
   } = input;
+
+  const targetWords = Math.min(
+    4500,
+    Math.max(1400, input.wordCount ?? countWordsInMarkdown(originalMarkdown) + 250),
+  );
 
   const originalTitle =
     input.originalTitle?.trim() ||
@@ -1139,16 +1158,36 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
 
   const issueBlock = issues.length
     ? issues
-        .map(
-          (i, idx) =>
-            `${idx + 1}. [${i.severity.toUpperCase()}] ${i.label}\n   What's wrong: ${i.detail}\n   Fix: ${i.fix}`
-        )
+        .map((i, idx) => {
+          const cat = i.category ? ` · ${i.category.toUpperCase()}` : '';
+          const wim = i.why_it_matters ? `\n   Why it matters: ${i.why_it_matters}` : '';
+          return `${idx + 1}. [${i.severity.toUpperCase()}${cat}] ${i.label}\n   What's wrong: ${i.detail}${wim}\n   Fix: ${i.fix}`;
+        })
         .join('\n')
     : '(no explicit issues — focus on depth, clarity, and answer-first intro)';
 
   const gapsBlock = contentGaps.length
     ? contentGaps.map(g => `- ${g}`).join('\n')
     : '(the LLM did not flag explicit content gaps)';
+
+  const rubricNeedsWork =
+    contentAnalysisBundle?.quality_rubric?.filter(r => r.status === 'fail' || r.status === 'warn') ?? [];
+  const rubricBlock = rubricNeedsWork.length
+    ? rubricNeedsWork
+        .map(
+          (r, idx) =>
+            `${idx + 1}. [${r.status.toUpperCase()}] ${r.label}\n   ${r.detail}`,
+        )
+        .join('\n')
+    : '';
+
+  const analysisOverview = contentAnalysisBundle
+    ? `EDITORIAL VERDICT (${contentAnalysisBundle.conclusion_verdict}): ${contentAnalysisBundle.conclusion_summary}
+
+Article summary (stay on this topic): ${contentAnalysisBundle.summary}
+
+Key diagnosis: ${contentAnalysisBundle.plain_language_verdict}`
+    : '';
 
   const linkPool = internalLinkPool
     .filter(u => u !== sourceUrl)
@@ -1161,18 +1200,38 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
     ? `Company voice (for tone ONLY — do not hijack the topic): ${brief.summary} · Products: ${brief.products.slice(0, 3).join(', ') || 'n/a'}`
     : '';
 
+  const fullBundle = Boolean(contentAnalysisBundle);
   // Truncate the original — we want the LLM to see structure + flavor, not
-  // reproduce word-for-word.
-  const originalHead = originalMarkdown.slice(0, 10_000);
+  // reproduce word-for-word. Content-analysis enhancement uses a larger window.
+  const originalBudget = fullBundle ? 20_000 : 10_000;
+  const originalHead = originalMarkdown.slice(0, originalBudget);
 
-  const prompt = `You are a senior SEO + content editor. Repair an existing public blog post by making the smallest useful changes needed to address the audit issues below. This is NOT a net-new article generation task.
+  const modeIntro = fullBundle
+    ? `You are a senior SEO editor. The user clicked "Generate enhanced" after a full content-quality analysis. Your job is to produce a **strong, search-ready** version of the SAME article: same core topic, same audience, same primary keyword intent — but comprehensively upgraded for clarity, depth, E-E-A-T, on-page SEO, and reader UX.
 
-IMPORTANT RULES:
+This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong existing paragraphs where they already work; rewrite or expand anywhere needed to satisfy **every** requirement block below (all audit issues, all rubric rows that are not pass, all quick wins, all content gaps).`
+    : `You are a senior SEO + content editor. Repair an existing public blog post by making the smallest useful changes needed to address the audit issues below. This is NOT a net-new article generation task.`;
+
+  const modeRules = fullBundle
+    ? `IMPORTANT RULES (FULL ENHANCEMENT):
+- Keep the same topic, angle, and reader promise as the original. Do NOT pivot industry, product, or audience.
+- Target PRIMARY KEYWORD naturally in the H1 (if TITLE_NEEDS_REPAIR), first ~120 words, at least one H2, and sporadically in body — never keyword stuffing.
+- Aim for roughly ${targetWords} words (±15%). If the draft was thin, add substantive sections; if long, tighten fluff without losing coverage of gaps/issues.
+- Output valid Markdown only. No HTML.
+- Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
+- Start with one H1 (# Title).
+- Immediately under the H1, write one "answer-first" paragraph in ≤80 words that states the direct takeaway (optimized for AI Overviews / featured snippets).
+- Use clear modular H2/H3 hierarchy (RAG-friendly). Merge redundant headings; fix weak single-sentence sections.
+- Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and long-tail phrasing.
+- Include **at least 3 and at most 8** credible external citations as markdown links in the body. Use Google Search for REAL, specific, deep-linked sources (reports, standards docs, regulator pages, vendor docs). No Wikipedia. No bare root domains.
+- Use **at least 2** INTERNAL LINK POOL URLs verbatim in contextually relevant sentences.
+- Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
+- If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
+- Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.`
+    : `IMPORTANT RULES (REPAIR):
 - This is a REPAIR of an existing page — the topic must stay the same. Do NOT pivot to a different product, industry, or audience.
 - Target the same primary keyword unless the audit explicitly says the keyword is dead; then re-target to the closest secondary keyword listed.
 - Preserve every section, claim, example, and phrasing that is already correct. Only rewrite the parts connected to the listed audit issues or missing subtopics.
-- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
-- Do not change the meta description unless META_NEEDS_REPAIR is true. If false and you cannot see the original meta description, return a neutral summary that matches the original page, not a new angle.
 - Output must be valid Markdown. No HTML.
 - Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
 - Start with an H1 (# Title).
@@ -1180,7 +1239,26 @@ IMPORTANT RULES:
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
 - Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
 - Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com". Link to the exact report or article. No Wikipedia.
-- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
+- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.`;
+
+  const titleMetaBlock = `- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
+- Do not change the meta description unless META_NEEDS_REPAIR is true. If false, keep the same marketing angle as the original page (do not invent a new pitch).`;
+
+  const rubricSection =
+    fullBundle && rubricBlock
+      ? `QUALITY RUBRIC — STILL NEEDS WORK (address each; if an item is marginal, strengthen it anyway):\n${rubricBlock}\n\n`
+      : '';
+
+  const quickWinsSection =
+    fullBundle && contentAnalysisBundle?.quick_wins?.length
+      ? `QUICK WINS (implement each):\n- ${contentAnalysisBundle.quick_wins.join('\n- ')}\n\n`
+      : '';
+
+  const prompt = `${modeIntro}
+
+${titleMetaBlock}
+
+${modeRules}
 
 SOURCE URL (the live page being repaired): ${sourceUrl}
 ORIGINAL TITLE/H1: ${originalTitle || '(unknown)'}
@@ -1188,21 +1266,22 @@ TITLE_NEEDS_REPAIR: ${titleNeedsRepair ? 'true' : 'false'}
 META_NEEDS_REPAIR: ${metaNeedsRepair ? 'true' : 'false'}
 PRIMARY KEYWORD: ${primaryKeyword || '(infer from title)'}
 SECONDARY KEYWORDS: ${secondaryKeywords.join(', ') || '(none)'}
+TARGET LENGTH: ~${targetWords} words (${fullBundle ? 'full enhancement' : 'repair'} mode)
 ${briefLine}
 
 AUDIENCE: ${project.target_audience}
 REGION: ${project.target_region}
 
-AUDIT ISSUES TO FIX:
+${analysisOverview ? `${analysisOverview}\n\n` : ''}AUDIT ISSUES TO FIX (address every row):
 ${issueBlock}
 
-MISSING SUBTOPICS TO COVER:
+${rubricSection}${quickWinsSection}MISSING SUBTOPICS TO COVER:
 ${gapsBlock}
 
 INTERNAL LINK POOL (you MUST use at least 2 of these, verbatim):
 ${linkPoolBlock}
 
-ORIGINAL PAGE (first ~10k chars of markdown, for reference — do not copy, rewrite):
+ORIGINAL PAGE (first ~${Math.round(originalBudget / 1000)}k chars of markdown, for reference — do not copy verbatim; rewrite):
 ---
 ${originalHead}
 ---

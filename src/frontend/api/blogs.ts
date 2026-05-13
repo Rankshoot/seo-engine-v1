@@ -7,6 +7,15 @@ export const blogsApi = {
     return apiGet(V1Routes.blog(blogId));
   },
 
+  /**
+   * Returns the latest "Enhanced" version of this blog, or `data: null` when
+   * none exists. Used by the blog viewer to restore the Before / After toggle
+   * after a hard reload / history navigation.
+   */
+  getEnhanced(blogId: string): Promise<{ success: boolean; error?: string; data: Blog | null }> {
+    return apiGet(V1Routes.blogEnhanced(blogId));
+  },
+
   addToArticlesLibrary(
     blogId: string
   ): Promise<

@@ -6,6 +6,7 @@ import type { PersistedBlogAudit } from "@/app/actions/audit-actions";
 import type { IssueCategory, QualityRubricRow } from "@/lib/content-audit";
 import { criticalityFromScore } from "@/lib/audit-criticality";
 import { extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
+import { Dialog, Button } from "@/components/common";
 
 const SEVERITY_COLORS: Record<"high" | "medium" | "low", string> = {
   high: "border-rose-500/30 bg-rose-500/10 text-rose-400",
@@ -75,24 +76,6 @@ export function AuditDetailModal({
     if (open) setTab("issues");
   }, [open, row?.url]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
-
   const grouped = useMemo(() => (row ? groupIssuesByCategory(row.analysis.issues) : {}), [row]);
 
   const flatNumberedIssues = useMemo(() => {
@@ -110,21 +93,12 @@ export function AuditDetailModal({
     return out;
   }, [row, grouped]);
 
-  if (!open) return null;
-
   if (loading || !row) {
     return (
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Loading audit details"
-        className="fixed inset-0 z-80 flex items-start justify-center overflow-y-auto bg-surface-primary/85 p-3 backdrop-blur-sm sm:p-6 animate-fade-in"
-        onClick={onClose}
-      >
+      <Dialog open={open} onClose={onClose} size="xl" unstyled>
         <div
-          className="relative my-4 flex w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-secondary shadow-2xl shadow-black/60 animate-scale-in"
+          className="my-4 flex w-full flex-col overflow-hidden rounded-card border border-border-default bg-surface-secondary shadow-(--shadow-xl) animate-[scale-in_0.18s_var(--ease-out)_forwards]"
           style={{ maxHeight: "calc(100vh - 3rem)" }}
-          onClick={e => e.stopPropagation()}
         >
           <header className="flex items-start justify-between gap-3 border-b border-border-subtle bg-surface-secondary/95 p-5">
             <div className="min-w-0 flex-1 space-y-3">
@@ -136,12 +110,11 @@ export function AuditDetailModal({
                 <div className="h-5 w-12 rounded-full bg-surface-elevated animate-pulse" />
               </div>
             </div>
-            <button type="button" aria-label="Close" onClick={onClose}
-              className="shrink-0 rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary shadow-sm transition-all hover:border-rose-400/35 hover:bg-rose-500/10 hover:text-rose-300">
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <Button variant="ghost" size="sm" aria-label="Close" onClick={onClose} className="px-2">
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
               </svg>
-            </button>
+            </Button>
           </header>
           <div className="p-5 space-y-4">
             <div className="rounded-xl border border-border-subtle bg-surface-tertiary/40 p-4 space-y-2">
@@ -167,7 +140,7 @@ export function AuditDetailModal({
             <div className="h-9 w-36 rounded-xl bg-surface-elevated animate-pulse" />
           </footer>
         </div>
-      </div>
+      </Dialog>
     );
   }
 
@@ -176,17 +149,10 @@ export function AuditDetailModal({
   const focus = extractCalendarFocusKeyword(row);
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Content health: ${row.title || row.url}`}
-      className="fixed inset-0 z-80 flex items-start justify-center overflow-y-auto bg-surface-primary/85 p-3 backdrop-blur-sm sm:p-6 animate-fade-in"
-      onClick={onClose}
-    >
+    <Dialog open={open} onClose={onClose} size="xl" unstyled>
       <div
-        className="relative my-4 flex w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-secondary shadow-2xl shadow-black/60 animate-scale-in"
+        className="my-4 flex w-full flex-col overflow-hidden rounded-card border border-border-default bg-surface-secondary shadow-(--shadow-xl) animate-[scale-in_0.18s_var(--ease-out)_forwards]"
         style={{ maxHeight: "calc(100vh - 3rem)" }}
-        onClick={e => e.stopPropagation()}
       >
         <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border-subtle bg-surface-secondary/95 p-5 backdrop-blur">
           <div className="min-w-0 flex-1">
@@ -212,16 +178,11 @@ export function AuditDetailModal({
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="shrink-0 rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary shadow-sm transition-all hover:border-rose-400/35 hover:bg-rose-500/10 hover:text-rose-300 hover:shadow-md"
-          >
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <Button variant="ghost" size="sm" aria-label="Close" onClick={onClose} className="px-2">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
             </svg>
-          </button>
+          </Button>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -420,33 +381,31 @@ export function AuditDetailModal({
             Scheduling places this audit (keyword + fixes) on the next open calendar day. Generation applies those fixes surgically — not a full rewrite unless the issues require it.
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-xl border border-border-strong bg-surface-elevated px-4 py-2.5 text-xs font-bold text-text-secondary shadow-sm transition-all hover:border-text-tertiary hover:bg-surface-hover hover:text-text-primary"
-            >
+            <Button variant="secondary" size="sm" onClick={onClose}>
               Close
-            </button>
+            </Button>
             {onCalendar ? (
               <ProjectNavLink
                 href={`/projects/${projectId}/calendar`}
-                className="inline-flex items-center justify-center rounded-xl border border-accent-400/50 bg-gradient-to-r from-accent-500/25 to-cyan-500/20 px-5 py-2.5 text-xs font-bold text-accent-300 shadow-md shadow-accent-500/10 transition-all hover:border-accent-300/60 hover:from-accent-500/35 hover:to-cyan-500/30"
+                className="inline-flex h-8 items-center justify-center rounded-md bg-emerald-500/20 px-3.5 text-[13px] font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/30"
               >
                 Open calendar
               </ProjectNavLink>
             ) : (
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                size="sm"
+                loading={scheduleBusy}
                 disabled={scheduleBusy}
                 onClick={() => void onScheduleToCalendar()}
-                className="inline-flex min-w-[148px] items-center justify-center rounded-xl bg-gradient-to-r from-brand-primary via-brand-action to-violet-600 px-5 py-2.5 text-xs font-bold text-brand-on-primary shadow-lg shadow-brand-primary/30 ring-1 ring-white/15 transition-all hover:opacity-95 hover:shadow-brand-primary/40 disabled:cursor-not-allowed disabled:opacity-50"
+                className="min-w-[148px]"
               >
                 {scheduleBusy ? "Scheduling…" : "Schedule repair"}
-              </button>
+              </Button>
             )}
           </div>
         </footer>
       </div>
-    </div>
+    </Dialog>
   );
 }

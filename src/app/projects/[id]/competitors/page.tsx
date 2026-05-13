@@ -13,6 +13,7 @@ import type { Competitor, GapType, KeywordGap, KeywordStatus } from "@/lib/types
 import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
+import { PageTitle, EmptyState } from "@/components/common";
 
 function logoUrlCandidates(host: string): string[] {
   if (!host) return [];
@@ -386,9 +387,7 @@ export default function CompetitorsPage() {
       {/* ── HEADER ─────────────────────────────────────────────────────────── */}
       <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-            Competitor insights
-          </h1>
+          <PageTitle>Competitor insights</PageTitle>
           <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
             Benchmark the competitors winning your SERPs, diff their keyword coverage against yours, and
             publish the opportunities with one click.
@@ -796,13 +795,21 @@ function OpportunityDashboard({
       ) : null}
 
       {displayedGaps.length === 0 ? (
-        <div className="rounded-[16px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center text-[14px] text-text-tertiary">
-          {!hasGapsInProject
-            ? "No opportunities yet. Run or re-run a benchmark from the button above."
-            : workspaceTab !== "all"
-              ? "No opportunities match this tab."
-              : "No opportunities match this view."}
-        </div>
+        <EmptyState
+          variant="card"
+          title={
+            !hasGapsInProject
+              ? "No opportunities yet"
+              : workspaceTab !== "all"
+                ? "No opportunities match this tab"
+                : "No opportunities match this view"
+          }
+          body={
+            !hasGapsInProject
+              ? "Run or re-run a benchmark from the button above."
+              : undefined
+          }
+        />
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
           <div className="overflow-x-auto overflow-y-visible">

@@ -28,6 +28,7 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordModal";
+import { PageTitle } from "@/components/common";
 import { toast } from "react-hot-toast";
 
 type CalendarResponse = Awaited<ReturnType<typeof calendarApi.entries>>;
@@ -338,9 +339,7 @@ export default function CalendarPage() {
       {/* ── HEADER ──────────────────────────────────────────────────────── */}
       <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-            Content Calendar
-          </h1>
+          <PageTitle>Content Calendar</PageTitle>
           <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
             Schedule approved keywords to publish dates and track blog generation.
           </p>

@@ -11,6 +11,7 @@ import { BlogStatus } from "@/lib/types";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { TableSkeleton } from "@/components/Skeleton";
+import { PageTitle, EmptyState } from "@/components/common";
 
 const BLOG_STATUSES: Array<{ value: BlogStatus; label: string }> = [
   { value: "generated", label: "Generated" },
@@ -83,9 +84,7 @@ export default function ContentGeneratorHistoryPage() {
     <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
       <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-            Content history
-          </h1>
+          <PageTitle>Content history</PageTitle>
           <p className="mt-3 text-[15px] text-text-tertiary max-w-[520px]">
             Instant articles you generate from this project. Open a row to edit, export, add to the Articles library, or run SEO fixes
             — same workflow as calendar blogs.
@@ -117,18 +116,18 @@ export default function ContentGeneratorHistoryPage() {
           <TableSkeleton rows={8} columns={8} />
         </div>
       ) : rows.length === 0 ? (
-        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
-          <p className="text-[15px] font-medium text-text-secondary">No instant articles yet</p>
-          <p className="mt-1 text-[13px] text-text-tertiary max-w-md mx-auto">
-            Generate one from Instant Article. Finished drafts appear here automatically.
-          </p>
-          <ProjectNavLink
-            href={`/projects/${projectId}/content-generator/instant`}
-            className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-          >
-            Instant article
-          </ProjectNavLink>
-        </div>
+        <EmptyState
+          title="No instant articles yet"
+          body="Generate one from Instant Article. Finished drafts appear here automatically."
+          action={
+            <ProjectNavLink
+              href={`/projects/${projectId}/content-generator/instant`}
+              className="inline-flex h-10 items-center justify-center rounded-full bg-brand-primary px-5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+            >
+              Instant article
+            </ProjectNavLink>
+          }
+        />
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <div className="overflow-x-auto">

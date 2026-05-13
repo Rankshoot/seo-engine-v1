@@ -11,6 +11,7 @@ import { BlogStatus, type ArticleLibraryEntry } from "@/lib/types";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { TableSkeleton } from "@/components/Skeleton";
+import { PageTitle, EmptyState } from "@/components/common";
 
 const BLOG_STATUSES: Array<{ value: BlogStatus; label: string }> = [
   { value: "generated", label: "Generated" },
@@ -81,9 +82,7 @@ export default function ArticlesPage() {
     <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
       <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-            Articles
-          </h1>
+          <PageTitle>Articles</PageTitle>
           <p className="mt-3 text-[15px] text-text-tertiary max-w-[520px]">
             Articles you add from the content viewer appear here. Open any row to preview, edit, export, and run SEO fixes — same
             experience as calendar blogs.
@@ -109,19 +108,22 @@ export default function ArticlesPage() {
           <TableSkeleton rows={8} columns={7} />
         </div>
       ) : rows.length === 0 ? (
-        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
-          <p className="text-[15px] font-medium text-text-secondary">No saved articles yet</p>
-          <p className="mt-1 text-[13px] text-text-tertiary max-w-md mx-auto">
-            When you finish generating an article, open it and choose &quot;Add this article&quot; next to the link summary. It will
-            show up in this table.
-          </p>
-          <ProjectNavLink
-            href={`/projects/${projectId}/content-generator/instant`}
-            className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-          >
-            Instant article
-          </ProjectNavLink>
-        </div>
+        <EmptyState
+          title="No saved articles yet"
+          body={
+            <>
+              When you finish generating an article, open it and choose &quot;Add this article&quot; next to the link summary. It will show up in this table.
+            </>
+          }
+          action={
+            <ProjectNavLink
+              href={`/projects/${projectId}/content-generator/instant`}
+              className="inline-flex h-10 items-center justify-center rounded-full bg-brand-primary px-5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+            >
+              Instant article
+            </ProjectNavLink>
+          }
+        />
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <div className="overflow-x-auto">

@@ -2,6 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
+import { PageTitle } from "@/components/common";
 
 function ClockIcon({ className }: { className?: string }) {
   return (
@@ -45,9 +46,7 @@ export default function ContentGeneratorPage() {
             Content generation
           </span>
         </div>
-        <h1 className="font-display text-[40px] font-normal leading-none tracking-[-0.8px] text-text-primary sm:text-[48px] sm:tracking-[-0.96px]">
-          Start your article journey
-        </h1>
+        <PageTitle>Start your article journey</PageTitle>
         <p className="mt-3 max-w-2xl text-[16px] leading-relaxed text-text-tertiary">
           Select the writing mode that best fits your needs and time constraints.
         </p>

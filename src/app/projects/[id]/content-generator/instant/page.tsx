@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
+import { PageTitle } from "@/components/common";
 import { useProject, qk } from "@/lib/query";
 import { useQueryClient } from "@tanstack/react-query";
 import { TARGET_REGIONS } from "@/lib/types";
@@ -679,9 +680,7 @@ export default function InstantArticlePage() {
 
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0 max-w-3xl">
-            <h1 className="font-display text-[40px] font-normal leading-none tracking-[-0.8px] text-text-primary sm:text-[48px] sm:tracking-[-0.96px]">
-              {heroTitle}
-            </h1>
+            <PageTitle>{heroTitle}</PageTitle>
             <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
           </div>
         </div>

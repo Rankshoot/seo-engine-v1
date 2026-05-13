@@ -30,6 +30,7 @@ import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
+import { PageTitle } from "@/components/common";
 import { toast } from "react-hot-toast";
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
@@ -1133,9 +1134,7 @@ export default function KeywordsPage() {
 
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div>
-            <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-              {project?.name ?? "…"}
-            </h1>
+            <PageTitle>{project?.name ?? "…"}</PageTitle>
             {project?.company && project.company !== project.name ? (
               <p className="mt-3 text-[16px] text-text-tertiary">{project.company}</p>
             ) : null}

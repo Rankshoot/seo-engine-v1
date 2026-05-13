@@ -11,6 +11,7 @@ import { BlogStatus, WORD_COUNT_OPTIONS, type CalendarEntryWithBlog } from "@/li
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { TableSkeleton } from "@/components/Skeleton";
+import { PageTitle, EmptyState } from "@/components/common";
 
 type CalendarWithBlogsResponse = Awaited<ReturnType<typeof calendarApi.withBlogs>>;
 
@@ -153,9 +154,7 @@ export default function BlogsPage() {
     <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
       <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-            Blog Generator
-          </h1>
+          <PageTitle>Blog Generator</PageTitle>
           <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
             Generate and export blogs from your content calendar. Titles update here and on the calendar when generation completes.
           </p>
@@ -180,16 +179,18 @@ export default function BlogsPage() {
           <TableSkeleton rows={8} columns={7} />
         </div>
       ) : entries.length === 0 ? (
-        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
-          <p className="text-[15px] font-medium text-text-secondary">No scheduled entries yet</p>
-          <p className="mt-1 text-[13px] text-text-tertiary">Schedule keywords on the content calendar first.</p>
-          <ProjectNavLink
-            href={`/projects/${projectId}/calendar`}
-            className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-          >
-            Open calendar
-          </ProjectNavLink>
-        </div>
+        <EmptyState
+          title="No scheduled entries yet"
+          body="Schedule keywords on the content calendar first."
+          action={
+            <ProjectNavLink
+              href={`/projects/${projectId}/calendar`}
+              className="inline-flex h-10 items-center justify-center rounded-full bg-brand-primary px-5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+            >
+              Open calendar
+            </ProjectNavLink>
+          }
+        />
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <div className="overflow-x-auto">

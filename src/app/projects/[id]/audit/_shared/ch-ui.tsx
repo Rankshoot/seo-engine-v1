@@ -2,11 +2,21 @@
 
 /**
  * Shared UI primitives for all Content Health pages.
- * Import from here to keep the three pages visually identical.
+ *
+ * As of Phase 20 the page-shell / stat-tile / empty-state / spinner helpers
+ * here are thin wrappers over the global design system in
+ * `@/components/common`. The exported names are kept identical so the three
+ * Content Health pages don't need to change. Audit-specific items (chips,
+ * score ring, severity tokens) stay local because their look is intentional.
  */
 
 import type { ReactNode } from "react";
-import { ProjectNavLink } from "@/components/ProjectNavLink";
+import {
+  PageShell as CommonPageShell,
+  EmptyState as CommonEmptyState,
+  StatCard,
+  Spinner as CommonSpinner,
+} from "@/components/common";
 
 // ─── Colour / token helpers ────────────────────────────────────────────────
 
@@ -148,14 +158,13 @@ export function StatTile({
   icon?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-[16px] border border-border-subtle bg-surface-elevated p-5">
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-text-tertiary">{label}</p>
-        {icon ? <span className="text-text-tertiary/50">{icon}</span> : null}
-      </div>
-      <p className={`font-mono text-[30px] font-bold tabular-nums leading-none ${valueClass}`}>{value}</p>
-      {sub ? <p className="text-[12px] text-text-tertiary">{sub}</p> : null}
-    </div>
+    <StatCard
+      label={label}
+      value={value}
+      sub={sub}
+      icon={icon}
+      valueClassName={valueClass}
+    />
   );
 }
 
@@ -177,31 +186,15 @@ export function CHPageShell({
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-8 pb-20">
-      <div className="pt-6 pb-6 border-b border-border-subtle">
-        {backHref && (
-          <ProjectNavLink
-            href={backHref}
-            className="inline-flex items-center gap-1.5 text-[12px] font-medium text-text-tertiary hover:text-text-primary transition-colors mb-4"
-          >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m15 18-6-6 6-6" />
-            </svg>
-            {backLabel}
-          </ProjectNavLink>
-        )}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="text-[36px] sm:text-[42px] font-normal tracking-[-0.84px] leading-none text-text-primary font-display">
-              {title}
-            </h1>
-            {subtitle && <p className="mt-3 text-[14px] text-text-tertiary leading-relaxed max-w-[600px]">{subtitle}</p>}
-          </div>
-          {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}
-        </div>
-      </div>
+    <CommonPageShell
+      title={title}
+      subtitle={subtitle}
+      backHref={backHref}
+      backLabel={backLabel}
+      actions={actions}
+    >
       {children}
-    </div>
+    </CommonPageShell>
   );
 }
 
@@ -218,16 +211,7 @@ export function CHEmptyState({
   body: ReactNode;
   action?: ReactNode;
 }) {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-[20px] border border-dashed border-border-strong bg-surface-secondary/60 py-24 text-center px-6">
-      <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-[16px] border border-border-subtle bg-surface-elevated text-text-tertiary">
-        {icon}
-      </div>
-      <h3 className="mb-2 text-[20px] font-medium tracking-tight text-text-primary font-display">{title}</h3>
-      <p className="mb-7 text-[14px] text-text-tertiary max-w-sm leading-relaxed">{body}</p>
-      {action}
-    </div>
-  );
+  return <CommonEmptyState icon={icon} title={title} body={body} action={action} variant="page" />;
 }
 
 // ─── Skeleton rows ─────────────────────────────────────────────────────────
@@ -301,10 +285,5 @@ export function CHFilterTabs<T extends string>({
 // ─── Spinner ───────────────────────────────────────────────────────────────
 
 export function Spinner({ size = 16, className = "" }: { size?: number; className?: string }) {
-  return (
-    <div
-      className={`animate-spin rounded-full border-2 border-current/25 border-t-current ${className}`}
-      style={{ width: size, height: size }}
-    />
-  );
+  return <CommonSpinner size={size} className={className} />;
 }

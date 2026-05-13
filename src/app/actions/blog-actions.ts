@@ -337,6 +337,72 @@ export async function getBlogById(blogId: string) {
   return { success: true, data: { ...data, content: sanitizeBlogMarkdown(data.content ?? '') } as Blog };
 }
 
+/**
+ * Look up the most recent "enhanced" version of a blog — i.e. a Repair-type
+ * blog whose `source_url` points back at the original (`blog://<id>`).
+ *
+ * Used by the blog viewer to restore the Before / After comparison toggle
+ * when a user re-opens a blog they previously enhanced via Content Health
+ * → Analyse content → Generate enhanced. Returns `data: null` (with
+ * `success: true`) when no enhanced version exists for this blog.
+ */
+export async function getEnhancedBlogForOriginal(originalBlogId: string) {
+  const user = await currentUser();
+  if (!user) {
+    return { success: false as const, error: 'Not authenticated', data: null };
+  }
+
+  // 1. Confirm the caller owns the original blog (prevents IDOR — we use
+  //    the source_url marker, which is otherwise scoped only by project).
+  const { data: original, error: oErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, project_id')
+    .eq('id', originalBlogId)
+    .maybeSingle();
+
+  if (oErr || !original) {
+    return { success: false as const, error: 'Blog not found', data: null };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', original.project_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) {
+    return { success: false as const, error: 'Not authorized', data: null };
+  }
+
+  // 2. The enhanced row is inserted with `source_url = "blog://<originalId>"`
+  //    (see `repairBlogFromContent` in `repair-actions.ts`). Pull the most
+  //    recent one — there should usually only be one, but if the user
+  //    re-enhances we want the freshest copy.
+  const sourceMarker = `blog://${originalBlogId}`;
+  const { data: enhanced, error: eErr } = await supabaseAdmin
+    .from('blogs')
+    .select('*')
+    .eq('project_id', original.project_id)
+    .eq('article_type', 'Repair')
+    .eq('source_url', sourceMarker)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (eErr) {
+    return { success: false as const, error: eErr.message, data: null };
+  }
+  if (!enhanced) {
+    return { success: true as const, data: null };
+  }
+
+  return {
+    success: true as const,
+    data: { ...enhanced, content: sanitizeBlogMarkdown(enhanced.content ?? '') } as Blog,
+  };
+}
+
 export async function getArticlesLibraryForProject(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false as const, error: 'Not authenticated', data: [] as ArticleLibraryEntry[] };

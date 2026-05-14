@@ -843,7 +843,29 @@ function OpportunityDashboard({
     return { all, ai, pending, approved, rejected };
   }, [gaps, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords]);
 
-  const displayedGaps = useMemo(() => {
+  const PAGE_SIZE = 20;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+
+  // Reset visible count whenever the tab or sort changes so the user always
+  // sees the top of the new list.
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [workspaceTab, sortCol, sortDir]);
+
+  const loadMore = () => {
+    const el = tableScrollRef.current;
+    const scrollBefore = el?.scrollTop ?? 0;
+    setVisibleCount(c => c + PAGE_SIZE);
+    // After React re-renders with more rows, nudge the scroll to reveal them.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!el) return;
+        const rowHeight = 52; // approximate px per row
+        el.scrollTo({ top: scrollBefore + rowHeight * PAGE_SIZE * 0.35, behavior: "smooth" });
+      });
+    });
+  };
+
+  const allFilteredGaps = useMemo(() => {
     const filtered = gaps.filter(g => {
       if (workspaceTab === "all") return true;
       if (workspaceTab === "ai") return aiGapKeywordSet.has(g.keyword.toLowerCase());
@@ -852,6 +874,14 @@ function OpportunityDashboard({
     });
     return [...filtered].sort((a, b) => compareGaps(a, b, sortCol, sortDir));
   }, [gaps, workspaceTab, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords, sortCol, sortDir]);
+
+  const displayedGaps = useMemo(
+    () => allFilteredGaps.slice(0, visibleCount),
+    [allFilteredGaps, visibleCount]
+  );
+
+  const hasMore = visibleCount < allFilteredGaps.length;
+  const remaining = allFilteredGaps.length - visibleCount;
 
   const OPPORTUNITY_TAB_ITEMS: Array<{ id: OpportunityWorkspaceTab; label: string; count: number }> = [
     { id: "all", label: "All", count: workspaceCounts.all },
@@ -1023,10 +1053,10 @@ function OpportunityDashboard({
           }
         />
       ) : (
-        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-          <div className="overflow-x-auto overflow-y-visible">
+        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden flex flex-col" style={{ height: "560px" }}>
+          <div ref={tableScrollRef} className="overflow-x-auto overflow-y-auto flex-1 min-h-0">
             <table className="w-full min-w-[980px] text-left">
-              <thead className="bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+              <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
                   <th
                     scope="col"
@@ -1221,6 +1251,30 @@ function OpportunityDashboard({
               </tbody>
             </table>
           </div>
+          {/* Load more footer — fixed inside the container, never grows it */}
+          {hasMore && (
+            <div className="shrink-0 border-t border-border-subtle bg-surface-secondary px-4 py-2.5 flex items-center justify-between gap-4">
+              <span className="text-[12px] text-text-tertiary">
+                Showing <span className="font-semibold text-text-secondary">{displayedGaps.length}</span> of{" "}
+                <span className="font-semibold text-text-secondary">{allFilteredGaps.length}</span> keywords
+              </span>
+              <button
+                type="button"
+                onClick={loadMore}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 py-1.5 text-[12px] font-medium text-text-secondary shadow-sm transition-colors hover:border-border-strong hover:text-text-primary"
+              >
+                Load {Math.min(remaining, PAGE_SIZE)} more
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </div>
+          )}
+          {!hasMore && allFilteredGaps.length > PAGE_SIZE && (
+            <div className="shrink-0 border-t border-border-subtle bg-surface-secondary px-4 py-2.5 text-center text-[12px] text-text-tertiary">
+              All {allFilteredGaps.length} keywords shown
+            </div>
+          )}
         </div>
       )}
     </div>

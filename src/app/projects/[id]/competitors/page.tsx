@@ -727,6 +727,31 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
   );
 }
 
+type GapSortColumn = "keyword" | "gap_type" | "volume" | "competitor_weakness" | "ai_eval_score" | "action";
+type SortDir = "asc" | "desc";
+
+function defaultGapSortDir(col: GapSortColumn): SortDir {
+  return col === "keyword" || col === "gap_type" ? "asc" : "desc";
+}
+
+function compareGaps(a: KeywordGap, b: KeywordGap, col: GapSortColumn, dir: SortDir): number {
+  const m = dir === "asc" ? 1 : -1;
+  switch (col) {
+    case "keyword":
+      return m * a.keyword.localeCompare(b.keyword);
+    case "gap_type":
+      return m * a.gap_type.localeCompare(b.gap_type);
+    case "volume":
+      return m * ((a.volume || 0) - (b.volume || 0));
+    case "competitor_weakness":
+      return m * ((a.competitor_weakness || 0) - (b.competitor_weakness || 0));
+    case "ai_eval_score":
+      return m * ((a.ai_eval_score ?? 0) - (b.ai_eval_score ?? 0));
+    default:
+      return 0;
+  }
+}
+
 function OpportunityDashboard({
   gaps,
   hasGapsInProject,
@@ -779,6 +804,26 @@ function OpportunityDashboard({
   aiScoringDone: boolean;
 }) {
   const [workspaceTab, setWorkspaceTab] = useState<OpportunityWorkspaceTab>("all");
+  const [sortCol, setSortCol] = useState<GapSortColumn>("volume");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const toggleSort = (col: GapSortColumn) => {
+    if (sortCol === col) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortCol(col);
+      setSortDir(defaultGapSortDir(col));
+    }
+  };
+
+  const sortMark = (col: GapSortColumn) =>
+    sortCol !== col ? (
+      <span className="ml-0.5 text-[11px] font-normal normal-case tracking-normal text-text-tertiary/40" aria-hidden>↕</span>
+    ) : (
+      <span className="ml-0.5 text-brand-action" aria-hidden>{sortDir === "asc" ? "↑" : "↓"}</span>
+    );
+
+  const thBtn = "group inline-flex items-center gap-0.5 rounded-[6px] px-1 py-0.5 -mx-1 text-left uppercase tracking-widest hover:bg-surface-hover/80 hover:text-text-secondary transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40 cursor-pointer";
 
   const workspaceCounts = useMemo(() => {
     let all = 0;
@@ -799,13 +844,14 @@ function OpportunityDashboard({
   }, [gaps, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords]);
 
   const displayedGaps = useMemo(() => {
-    return gaps.filter(g => {
+    const filtered = gaps.filter(g => {
       if (workspaceTab === "all") return true;
       if (workspaceTab === "ai") return aiGapKeywordSet.has(g.keyword.toLowerCase());
       const st = gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords);
       return st === workspaceTab;
     });
-  }, [gaps, workspaceTab, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords]);
+    return [...filtered].sort((a, b) => compareGaps(a, b, sortCol, sortDir));
+  }, [gaps, workspaceTab, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords, sortCol, sortDir]);
 
   const OPPORTUNITY_TAB_ITEMS: Array<{ id: OpportunityWorkspaceTab; label: string; count: number }> = [
     { id: "all", label: "All", count: workspaceCounts.all },
@@ -993,13 +1039,64 @@ function OpportunityDashboard({
                       aria-hidden
                     />
                   </th>
-                  <th className="px-4 py-3">Keyword</th>
-                  <th className="px-4 py-3 text-center">Gap</th>
-                  <th className="px-4 py-3 text-right">Volume</th>
-                  <th className="px-4 py-3 text-right">Traffic</th>
-                  <th className="px-4 py-3 text-center">Weakness</th>
-                  <th className="px-4 py-3 text-center">AI Score</th>
-                  <th className="px-4 py-3">Ranking page</th>
+                  <th className="px-4 py-3">
+                    <div className="flex items-center gap-1">
+                      <button type="button" className={thBtn} onClick={() => toggleSort("keyword")}>
+                        Keyword{sortMark("keyword")}
+                      </button>
+                      <Tooltip placement="above" content="Search query that competitors rank for in your niche.">
+                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <button type="button" className={thBtn} onClick={() => toggleSort("gap_type")}>
+                        Gap{sortMark("gap_type")}
+                      </button>
+                      <Tooltip placement="above" content="Missing = no content yet. Weak = you have content but it underperforms. Untapped = neither you nor competitors dominate.">
+                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-3 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <button type="button" className={thBtn} onClick={() => toggleSort("volume")}>
+                        Volume{sortMark("volume")}
+                      </button>
+                      <Tooltip placement="above" content="Monthly search volume from DataForSEO. Higher = more traffic opportunity.">
+                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <button type="button" className={thBtn} onClick={() => toggleSort("competitor_weakness")}>
+                        Weakness{sortMark("competitor_weakness")}
+                      </button>
+                      <Tooltip placement="above" content="How weak the competitor's ranking page is. Higher = easier to beat them.">
+                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <button type="button" className={thBtn} onClick={() => toggleSort("ai_eval_score")}>
+                        AI Score{sortMark("ai_eval_score")}
+                      </button>
+                      <Tooltip placement="above" content="Gemini AI score (0–100) evaluating business relevance, blog potential, competitive takeover opportunity, and audience fit for this keyword gap.">
+                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-3">
+                    <div className="flex items-center gap-1">
+                      <span className="uppercase tracking-widest text-[12px] font-bold">Ranking page</span>
+                      <Tooltip placement="above" content="The competitor's URL currently ranking for this keyword.">
+                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
+                      </Tooltip>
+                    </div>
+                  </th>
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
@@ -1066,9 +1163,6 @@ function OpportunityDashboard({
                     </td>
                     <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
                       {g.volume > 0 ? g.volume.toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
-                      {formatMonthlyTraffic(g.volume)}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-2">

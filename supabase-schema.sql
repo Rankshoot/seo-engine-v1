@@ -193,8 +193,24 @@ CREATE TABLE IF NOT EXISTS blogs (
   in_articles_library BOOLEAN NOT NULL DEFAULT false,
   source_url TEXT DEFAULT '',
   repair_notes TEXT[] DEFAULT '{}',
+  deep_analysis JSONB,
+  deep_analysis_score INTEGER,
+  deep_analysis_updated_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Cached SERP competitor comparison for View Blog → Deep Analysis.
+CREATE TABLE IF NOT EXISTS blog_deep_analyses (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  blog_id UUID NOT NULL REFERENCES blogs(id) ON DELETE CASCADE,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  target_keyword TEXT NOT NULL DEFAULT '',
+  analysis JSONB NOT NULL DEFAULT jsonb_build_object(),
+  trace JSONB NOT NULL DEFAULT jsonb_build_array(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(blog_id)
 );
 
 -- ============================================================
@@ -290,6 +306,7 @@ CREATE INDEX IF NOT EXISTS idx_calendar_project_id ON calendar_entries(project_i
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_entries(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_blogs_entry_id ON blogs(entry_id);
 CREATE INDEX IF NOT EXISTS idx_blogs_project_id ON blogs(project_id);
+CREATE INDEX IF NOT EXISTS idx_blog_deep_analyses_project_id ON blog_deep_analyses(project_id);
 CREATE INDEX IF NOT EXISTS idx_competitors_project_id ON competitors(project_id);
 CREATE INDEX IF NOT EXISTS idx_competitor_keywords_project_id ON competitor_keywords(project_id);
 CREATE INDEX IF NOT EXISTS idx_competitor_keywords_competitor_id ON competitor_keywords(competitor_id);

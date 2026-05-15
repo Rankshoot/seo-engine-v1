@@ -22,6 +22,8 @@ import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlog
 import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import { BlogDeepAnalysisModal } from "@/components/BlogDeepAnalysisModal";
+import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
 import { rangeSelectionToMarkdown } from "@/lib/editor-selection-markdown";
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -713,6 +715,15 @@ export default function BlogViewerPage() {
   const [analysisEnhancing, setAnalysisEnhancing] = useState(false);
   const [analysisScheduling, setAnalysisScheduling] = useState(false);
 
+  // ── Deep Analysis (SERP competitors) ───────────────────────────────────
+  const [deepModalOpen, setDeepModalOpen] = useState(false);
+  const [deepLoading, setDeepLoading] = useState(false);
+  const [deepRunningAgain, setDeepRunningAgain] = useState(false);
+  const [deepStage, setDeepStage] = useState(0);
+  const [deepError, setDeepError] = useState("");
+  const [deepAnalysis, setDeepAnalysis] = useState<BlogDeepAnalysisResult | null>(null);
+  const [, setAddingToArticles] = useState(false);
+
   // ── Schedule-on-calendar (Instant Articles) ────────────────────────────
   const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([]);
   const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
@@ -851,6 +862,9 @@ export default function BlogViewerPage() {
       if (enhancedRes.success && enhancedRes.data) setEnhancedBlog(enhancedRes.data);
       setLoading(false);
     });
+    void blogsApi.getDeepAnalysis(blogId).then(cached => {
+      if (cached.cached && cached.data) setDeepAnalysis(cached.data);
+    });
   }, [blogId, projectId]);
 
   const runAnalysis = async (opts?: { reanalyse?: boolean }) => {
@@ -878,17 +892,78 @@ export default function BlogViewerPage() {
     await runAnalysis();
   };
 
+  const runDeepAnalysis = useCallback(
+    async (opts?: { force?: boolean }) => {
+      const force = Boolean(opts?.force);
+      if (force) {
+        setDeepRunningAgain(true);
+        setDeepAnalysis(null);
+      } else {
+        setDeepLoading(true);
+      }
+      setDeepError("");
+      setDeepStage(0);
+
+      const stageTimer = window.setInterval(() => {
+        setDeepStage(s => Math.min(s + 1, 3));
+      }, 14_000);
+
+      try {
+        const res = await blogsApi.runDeepAnalysis(blogId, { force });
+        if (res.success) {
+          setDeepAnalysis(res.data);
+          if (res.trace) console.log("[deep-analysis] trace:", res.trace);
+          const at = "updatedAt" in res && res.updatedAt ? res.updatedAt : new Date().toISOString();
+          const score = res.data.deepAnalysisScore;
+          setBlog(prev =>
+            prev && prev.id === blogId
+              ? { ...prev, deep_analysis_score: score, deep_analysis_updated_at: at }
+              : prev
+          );
+          setEnhancedBlog(prev =>
+            prev && prev.id === blogId
+              ? { ...prev, deep_analysis_score: score, deep_analysis_updated_at: at }
+              : prev
+          );
+        } else {
+          setDeepError(res.error);
+        }
+      } catch (e: unknown) {
+        setDeepError(e instanceof Error ? e.message : "Deep analysis failed");
+      } finally {
+        window.clearInterval(stageTimer);
+        setDeepLoading(false);
+        setDeepRunningAgain(false);
+        setDeepStage(3);
+      }
+    },
+    [blogId]
+  );
+
+  const openDeepAnalysisModal = useCallback(async () => {
+    setDeepModalOpen(true);
+    setDeepError("");
+    if (deepAnalysis && !deepRunningAgain && !deepLoading) return;
+
+    try {
+      const cached = await blogsApi.getDeepAnalysis(blogId);
+      if (cached.cached && cached.data) {
+        setDeepAnalysis(cached.data);
+        return;
+      }
+    } catch {
+      /* run fresh below */
+    }
+    await runDeepAnalysis();
+  }, [blogId, deepAnalysis, deepLoading, deepRunningAgain, runDeepAnalysis]);
+
   const handleAnalysisEnhanced = async () => {
     if (!blog || !contentAnalysis) return;
     setAnalysisEnhancing(true);
     try {
       const { repairBlogFromContent } = await import("@/app/actions/repair-actions");
       const res = await repairBlogFromContent(blog.id, contentAnalysis);
-      if (!res.success || !res.data.blogId) {
-        toast.success("Enhanced version ready — opening.");
-        const q = fromAnalyzeContentPage ? `?from=${BLOG_VIEW_FROM_ANALYZE_CONTENT}` : "";
-        window.location.href = `/projects/${projectId}/blogs/${res.data.blogId}${q}`;
-      } else {
+      if (!res.success || !res.data?.blogId) {
         toast.error(!res.success ? res.error : "Could not generate enhanced version.");
         return;
       }
@@ -1206,6 +1281,14 @@ export default function BlogViewerPage() {
   // off `currentBlog` so toggling the pill flips the entire view.
   const currentBlog: Blog = isAfterView && enhancedBlog ? enhancedBlog : blog;
 
+  const hasSavedDeepAnalysis =
+    Boolean(deepAnalysis) ||
+    (typeof currentBlog.deep_analysis_score === "number" && currentBlog.deep_analysis_score >= 0);
+
+  const deepScoreDisplay =
+    deepAnalysis?.deepAnalysisScore ??
+    (typeof currentBlog.deep_analysis_score === "number" ? currentBlog.deep_analysis_score : null);
+
   const researchSources = currentBlog.research_sources ?? 0;
   const blogStatus      = asBlogStatus(currentBlog.status);
   const statusInfo      = BLOG_STATUSES.find(s => s.value === blogStatus)!;
@@ -1418,6 +1501,28 @@ export default function BlogViewerPage() {
                 <div className="h-px mx-4 bg-border-subtle opacity-60" />
               </>
             )}
+
+            {/* Deep Analysis — SERP competitor gap vs our blog */}
+            <div className={`px-4 pb-3 ${fromAnalyzeContentPage ? "pt-2" : "pt-4"} ${sidebarMuted ? "opacity-25 pointer-events-none" : ""}`}>
+              <button
+                type="button"
+                onClick={() => void openDeepAnalysisModal()}
+                disabled={editMode || savingContent || !displayBlog?.target_keyword?.trim()}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
+                title={!displayBlog?.target_keyword?.trim() ? "Add a target keyword to run deep analysis" : undefined}
+              >
+                <svg className="h-4 w-4 shrink-0 text-brand-action" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+                </svg>
+                {hasSavedDeepAnalysis ? "View Deep Analysis" : "Deep Analysis"}
+              </button>
+              {deepScoreDisplay != null && (
+                <p className="mt-1.5 text-center text-[10px] text-text-tertiary">
+                  Score <span className="font-semibold text-text-secondary">{deepScoreDisplay}/100</span>
+                </p>
+              )}
+            </div>
+            <div className="h-px mx-4 bg-border-subtle opacity-60" />
 
             {/* SEO Score — borderless embed, blends into panel bg */}
             <div className={`transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>
@@ -1713,6 +1818,17 @@ export default function BlogViewerPage() {
         reanalysing={analysisReanalysing}
         enhancing={analysisEnhancing}
         scheduling={analysisScheduling}
+      />
+
+      <BlogDeepAnalysisModal
+        open={deepModalOpen}
+        analysis={deepAnalysis}
+        loading={deepLoading}
+        loadingStage={deepStage}
+        error={deepError}
+        onClose={() => setDeepModalOpen(false)}
+        onRunAgain={() => void runDeepAnalysis({ force: true })}
+        runningAgain={deepRunningAgain}
       />
 
       <BlogAiRewriterModal

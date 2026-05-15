@@ -312,6 +312,15 @@ export interface Blog {
   source_url?: string;
   /** Bullet list of changes the LLM made during repair (only set when article_type === 'Repair'). */
   repair_notes?: string[];
+  /**
+   * Full cached SERP deep analysis JSON when `blog_deep_analyses` is unavailable
+   * (fallback on the blog row). Shape matches `BlogDeepAnalysisResult` from `blog-deep-analysis.ts`.
+   */
+  deep_analysis?: unknown | null;
+  /** Latest saved SERP deep analysis score (0–100); set when Deep Analysis completes. */
+  deep_analysis_score?: number | null;
+  /** When `deep_analysis_score` was last written from Deep Analysis. */
+  deep_analysis_updated_at?: string | null;
   created_at: string;
   updated_at: string;
 }

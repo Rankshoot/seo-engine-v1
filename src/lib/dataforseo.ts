@@ -597,6 +597,110 @@ interface DfsSerpItem {
   domain?: string | null;
 }
 
+const SERP_BOILERPLATE_HOSTS = new Set([
+  'google.com',
+  'youtube.com',
+  'facebook.com',
+  'instagram.com',
+  'linkedin.com',
+  'wikipedia.org',
+  'en.wikipedia.org',
+  'twitter.com',
+  'x.com',
+  'pinterest.com',
+  'tiktok.com',
+  'reddit.com',
+  'quora.com',
+  'amazon.com',
+  'bing.com',
+  'duckduckgo.com',
+]);
+
+function serpHostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Live Google organic SERP for one keyword — top N URLs (DataForSEO advanced).
+ */
+export async function fetchGoogleOrganicSerpTopUrls(
+  keyword: string,
+  opts: {
+    locationCode?: number;
+    languageCode?: string;
+    limit?: number;
+    excludeHosts?: string[];
+    trace?: DataForSEOTraceEntry[];
+  } = {}
+): Promise<{ urls: DiscoveredSerpResult[]; trace: DataForSEOTraceEntry[] }> {
+  const trace = opts.trace ?? [];
+  const clean = (keyword || '').trim();
+  const limit = Math.max(1, Math.min(opts.limit ?? 5, 10));
+  const locationCode = opts.locationCode ?? 2840;
+  const languageCode = (opts.languageCode ?? 'en').toLowerCase();
+  const exclude = new Set((opts.excludeHosts ?? []).map(h => h.replace(/^www\./, '').toLowerCase()));
+
+  if (!clean) {
+    return { urls: [], trace };
+  }
+
+  const auth = getAuthHeader();
+  if (!auth) {
+    trace.push({
+      label: 'serp/google/organic/live/advanced',
+      url: 'https://api.dataforseo.com/v3/serp/google/organic/live/advanced',
+      requestBody: null,
+      httpStatus: 0,
+      ok: false,
+      rawText: '',
+      parsed: null,
+      fetchError: 'DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD missing',
+    });
+    return { urls: [], trace };
+  }
+
+  const body = [
+    {
+      keyword: clean,
+      location_code: locationCode,
+      language_code: languageCode,
+      device: 'desktop',
+      os: 'windows',
+      depth: 10,
+    },
+  ];
+
+  const parsed = (await dfsPost('serp/google/organic/live/advanced', body, auth, trace)) as {
+    tasks?: Array<{ result?: Array<{ items?: DfsSerpItem[] }> }>;
+  } | null;
+
+  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
+  const rows: DiscoveredSerpResult[] = [];
+  for (const it of items) {
+    const t = (it.type ?? '').toLowerCase();
+    if (t !== 'organic' && t !== 'featured_snippet') continue;
+    const url = (it.url ?? '').toString();
+    if (!url) continue;
+    const host = serpHostFromUrl(url);
+    if (!host || SERP_BOILERPLATE_HOSTS.has(host)) continue;
+    if (exclude.has(host)) continue;
+    rows.push({
+      position: Number(it.rank_absolute ?? 0) || rows.length + 1,
+      title: (it.title ?? '').toString(),
+      url,
+      domain: (it.domain ?? extractDomainFromUrl(url)).toString(),
+      type: t,
+    });
+    if (rows.length >= limit) break;
+  }
+
+  return { urls: rows, trace };
+}
+
 /**
  * Fetch live Google organic SERPs for N keywords. Previously this ran
  * sequentially (≈1 req/s × 100 keywords ≈ 1.5 minutes). We now fan out with a

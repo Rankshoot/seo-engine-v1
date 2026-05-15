@@ -1,3 +1,4 @@
+import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
 import type { Blog, BlogSeoIssueKey, BlogStatus } from "@/lib/types";
 import { apiGet, apiPatch, apiPost } from "./http";
 import { V1Routes } from "./routes";
@@ -71,5 +72,30 @@ export const blogsApi = {
     body: { imageAlt: string; contextBefore: string; contextAfter: string }
   ): Promise<{ success: boolean; error?: string; data?: { url: string; alt: string } }> {
     return apiPost(V1Routes.blog(blogId) + "/image", body);
+  },
+
+  getDeepAnalysis(blogId: string): Promise<{
+    success: boolean;
+    cached: boolean;
+    data: BlogDeepAnalysisResult | null;
+    updatedAt: string | null;
+    targetKeyword: string | null;
+  }> {
+    return apiGet(V1Routes.blogDeepAnalysis(blogId));
+  },
+
+  runDeepAnalysis(
+    blogId: string,
+    body: { force?: boolean } = {}
+  ): Promise<
+    | {
+        success: true;
+        data: BlogDeepAnalysisResult;
+        updatedAt: string;
+        trace?: Array<{ stage: string; ok: boolean; detail?: string }>;
+      }
+    | { success: false; error: string }
+  > {
+    return apiPost(V1Routes.blogDeepAnalysis(blogId), body);
   },
 };

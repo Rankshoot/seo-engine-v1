@@ -724,7 +724,6 @@ export default function BlogViewerPage() {
   const [deepStage, setDeepStage] = useState(0);
   const [deepError, setDeepError] = useState("");
   const [deepAnalysis, setDeepAnalysis] = useState<BlogDeepAnalysisResult | null>(null);
-  const [, setAddingToArticles] = useState(false);
 
   // ── Schedule-on-calendar (Instant Articles) ────────────────────────────
   const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([]);

@@ -15,7 +15,13 @@ export const competitorsApi = {
     projectId: string,
     keyword: string
   ): Promise<
-    | { success: true; entryId: string; keywordId: string }
+    | {
+        success: true;
+        entryId: string;
+        keywordId: string;
+        scheduledDate?: string;
+        alreadyOnCalendar?: true;
+      }
     | { success: false; error: string }
   > {
     return apiPost(V1Routes.competitorsBlogFromOpportunity(projectId), { keyword });

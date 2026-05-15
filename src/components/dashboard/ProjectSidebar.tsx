@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
@@ -14,6 +14,8 @@ import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
 import { projectsApi } from "@/frontend/api/projects";
 import { briefApi } from "@/frontend/api/brief";
 import { calendarApi } from "@/frontend/api/calendar";
+import { articlesApi } from "@/frontend/api/articles";
+import { contentGeneratorApi } from "@/frontend/api/content-generator";
 import { auditsApi } from "@/frontend/api/audits";
 import { competitorsApi } from "@/frontend/api/competitors";
 
@@ -32,16 +34,42 @@ const Icon = {
   chevronRight: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
   chevronLeft: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
   check: <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>,
+  plus: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8m-4-4h8"/></svg>,
   ai: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9.8 15.9 9 18.8l-.8-2.9a4.5 4.5 0 0 0-3.1-3.1L2.3 12l2.8-.8a4.5 4.5 0 0 0 3.1-3.1L9 5.3l.8 2.8a4.5 4.5 0 0 0 3.1 3.1l2.8.8-2.8.8a4.5 4.5 0 0 0-3.1 3.1Z"/><path d="M19 2v4"/><path d="M21 4h-4"/><path d="M19 18v4"/><path d="M21 20h-4"/></svg>,
+  /** Document + pen — content generation */
+  contentGen: (
+    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10.4 12.6a2 2 0 1 1 3 3L8 21l-4 1 1-4Z" />
+    </svg>
+  ),
+  /** Stacked pages — saved articles library */
+  articles: (
+    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8.5 3H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h1" strokeOpacity={0.35} />
+      <path d="M9 3h8.5L19 6.5V19a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+      <path d="M9 9h6" />
+      <path d="M9 13h6" />
+      <path d="M9 17h4" />
+    </svg>
+  ),
 };
 
 interface ProjectSidebarProps {
   project: Project;
-  stats?: { approvedKeywords: number; calendarEntries: number; blogsGenerated: number; auditPending?: number };
+  stats?: {
+    approvedKeywords: number;
+    calendarEntries: number;
+    blogsGenerated: number;
+    articlesInLibrary?: number;
+    auditPending?: number;
+  };
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
   onOpenAI?: () => void;
+  onNewProject?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -51,6 +79,7 @@ export default function ProjectSidebar({
   isCollapsed,
   setIsCollapsed,
   onOpenAI,
+  onNewProject,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -67,6 +96,7 @@ export default function ProjectSidebar({
         approvedKeywords: statsResponse.data.approvedKeywords,
         calendarEntries: statsResponse.data.calendarEntries,
         blogsGenerated: statsResponse.data.blogsGenerated,
+        articlesInLibrary: statsResponse.data.articlesInLibrary,
         auditPending: statsResponse.data.auditPending,
       };
     }
@@ -77,6 +107,7 @@ export default function ProjectSidebar({
     statsResponse?.data?.approvedKeywords,
     statsResponse?.data?.calendarEntries,
     statsResponse?.data?.blogsGenerated,
+    statsResponse?.data?.articlesInLibrary,
     statsResponse?.data?.auditPending,
   ]);
   const liveStats = useAppSelector(state => selectProjectStats(state, project.id, serverStats));
@@ -113,12 +144,27 @@ export default function ProjectSidebar({
       case "Blogs":
         safePrefetch(qk.calendarWithBlogs(id), () => calendarApi.withBlogs(id));
         break;
+      case "Articles":
+        safePrefetch(qk.articlesLibrary(id), () => articlesApi.library(id));
+        break;
       case "Competitors":
         safePrefetch(qk.competitors(id), () => competitorsApi.benchmark(id));
         break;
       case "Content Health":
         safePrefetch(qk.audits(id), () => auditsApi.list(id));
         break;
+      case "Content Generator": {
+        const kwo = keywordsListQueryOptions(id);
+        safePrefetch(kwo.queryKey, kwo.queryFn);
+        safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
+        safePrefetch(qk.brief(id), () => briefApi.get(id));
+        safePrefetch(qk.contentGeneratorHistory(id), () => contentGeneratorApi.history(id));
+        // Phase 5 — Content Studio (ebooks, whitepapers, LinkedIn) reads
+        // from a unified history endpoint. Prefetching it here means
+        // navigating between sub-tabs feels instant.
+        safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
+        break;
+      }
       default:
         // Overview — project + calendar data from shared React Query keys.
         break;
@@ -144,45 +190,92 @@ export default function ProjectSidebar({
     serverStats?.approvedKeywords,
     serverStats?.calendarEntries,
     serverStats?.blogsGenerated,
+    serverStats?.articlesInLibrary,
     serverStats?.auditPending,
   ]);
 
-  const navItems = [
-    { icon: Icon.grid, label: "Overview", href: base },
+  const auditBase = `${base}/audit`;
+  type NavLeaf = {
+    icon: ReactNode;
+    label: string;
+    href: string;
+    badge?: string;
+    badgeColor?: string;
+    prefetchLabel: string;
+    exact?: boolean;
+    children?: { label: string; href: string; exact?: boolean }[];
+  };
+
+  const navItems: NavLeaf[] = [
+    { icon: Icon.grid, label: "Overview", href: base, prefetchLabel: "Overview" },
     {
       icon: Icon.search,
       label: "Keywords",
       href: `${base}/keywords`,
       badge: navCountsReady && liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
+      prefetchLabel: "Keywords",
+    },
+    {
+      icon: Icon.contentGen,
+      label: "Content Generator",
+      href: `${base}/content-generator`,
+      prefetchLabel: "Content Generator",
+      children: [
+        { label: "Instant article", href: `${base}/content-generator/instant` },
+        { label: "Ebooks", href: `${base}/content-generator/ebooks` },
+        { label: "Whitepapers", href: `${base}/content-generator/whitepapers` },
+        { label: "LinkedIn posts", href: `${base}/content-generator/linkedin` },
+        { label: "Content history", href: `${base}/content-generator/history` },
+      ],
     },
     {
       icon: Icon.target,
       label: "Competitors",
       href: `${base}/competitors`,
+      prefetchLabel: "Competitors",
     },
     {
       icon: Icon.audit,
       label: "Content Health",
-      href: `${base}/audit`,
+      href: auditBase,
       badge: navCountsReady && liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
       badgeColor: navCountsReady && liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
+      prefetchLabel: "Content Health",
+      children: [
+        { label: "Health Report", href: auditBase, exact: true },
+        { label: "Page Explorer", href: `${auditBase}/discover-pages` },
+        { label: "Content Analyzer", href: `${auditBase}/import` },
+      ],
     },
     {
       icon: Icon.calendar,
       label: "Calendar",
       href: `${base}/calendar`,
       badge: navCountsReady && liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
+      prefetchLabel: "Calendar",
     },
     {
       icon: Icon.fileText,
       label: "Blogs",
       href: `${base}/blogs`,
+      exact: true,
       badge: navCountsReady && liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
+      prefetchLabel: "Blogs",
+    },
+    {
+      icon: Icon.articles,
+      label: "Articles",
+      href: `${base}/articles`,
+      badge: navCountsReady && liveStats?.articlesInLibrary ? `${liveStats.articlesInLibrary}` : undefined,
+      prefetchLabel: "Articles",
     },
   ];
 
-  const isActive = (href: string) =>
-    href === base ? pathname === base : pathname.startsWith(href);
+  const isActive = (href: string, exact?: boolean) =>
+    exact ? pathname === href : href === base ? pathname === base : pathname.startsWith(href);
+
+  const groupActive = (item: NavLeaf) =>
+    item.children?.some(c => c.exact ? pathname === c.href : isActive(c.href)) || isActive(item.href, item.exact);
 
   return (
     <aside 
@@ -282,13 +375,36 @@ export default function ProjectSidebar({
                   </button>
                 ))}
               </div>
-              <div className="px-3 pt-2 mt-2 border-t border-border-subtle">
+              <div className="px-3 pt-2 pb-1 mt-2 border-t border-border-subtle space-y-1.5">
+                {onNewProject ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDropdownOpen(false);
+                      onNewProject();
+                    }}
+                    className="flex w-full cursor-pointer items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                  >
+                    {Icon.plus}
+                    New project
+                  </button>
+                ) : (
+                  <ProjectNavLink
+                    href="/projects?new=1"
+                    onClick={() => setIsDropdownOpen(false)}
+                  className="flex items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px]  font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
+                  >
+                    {Icon.plus}
+                    New project
+                  </ProjectNavLink>
+                )}
                 <ProjectNavLink
                   href="/projects"
                   onClick={() => setIsDropdownOpen(false)}
-                  className="flex items-center gap-2 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors py-1"
+                  className="flex items-center gap-2 rounded-[8px] px-2 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
                 >
-                  {Icon.grid} View all projects
+                  {Icon.grid}
+                  View all projects
                 </ProjectNavLink>
               </div>
             </div>
@@ -303,12 +419,12 @@ export default function ProjectSidebar({
         </p>
         <ul className="space-y-1.5 mb-6">
           {navItems.map((item) => {
-            const active = isActive(item.href);
+            const active = item.children ? groupActive(item) : isActive(item.href, item.exact);
             return (
               <li key={item.label}>
                 <ProjectNavLink
                   href={item.href}
-                  onClick={() => prefetchFor(item.label)}
+                  onClick={() => prefetchFor(item.prefetchLabel)}
                   className={`flex items-center rounded-[8px] text-[14px] font-medium transition-all duration-300 ease-in-out group relative
                     ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
                     ${active
@@ -318,11 +434,11 @@ export default function ProjectSidebar({
                   <span className={`shrink-0 transition-colors duration-300 ${active ? "text-brand-action" : "text-text-tertiary group-hover:text-text-primary"}`}>
                     {item.icon}
                   </span>
-                  
+
                   <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden flex-1 ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
                     {item.label}
                   </span>
-                  
+
                   <span className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[100px] opacity-100 ml-2"}`}>
                     {item.badge && (
                       <span className={`text-[10px] font-medium px-2 py-0.5 rounded-[4px] border ${item.badgeColor || "bg-surface-tertiary text-text-secondary border-border-subtle"}`}>
@@ -331,16 +447,50 @@ export default function ProjectSidebar({
                     )}
                   </span>
 
-                  {/* Tooltip for collapsed state */}
                   {isCollapsed && (
                     <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
                       {item.label}
+                      {item.children && (
+                        <span className="block text-[10px] text-text-tertiary mt-1">
+                          {item.children.map(c => c.label).join(" · ")}
+                        </span>
+                      )}
                       {navCountsReady && item.badge && (
                         <span className="ml-2 text-text-tertiary">({item.badge})</span>
                       )}
                     </div>
                   )}
                 </ProjectNavLink>
+
+                {!isCollapsed && item.children && (
+                  <ul className="mt-1.5 ml-4 space-y-0.5 overflow-hidden">
+                    {item.children.map(sub => {
+                      const subActive = sub.exact ? pathname === sub.href : isActive(sub.href);
+                      return (
+                        <li key={sub.href}>
+                          <ProjectNavLink
+                            href={sub.href}
+                            onClick={() => prefetchFor(item.prefetchLabel)}
+                            className={`group flex items-center gap-2.5 rounded-[8px] px-3 py-2 text-[13px] font-medium transition-all duration-150
+                              ${subActive
+                                ? "bg-brand-action/10 text-brand-action"
+                                : "text-text-tertiary hover:text-text-primary hover:bg-surface-hover"
+                              }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 transition-all duration-150 ${
+                                subActive
+                                  ? "bg-brand-action scale-125"
+                                  : "bg-text-tertiary/40 group-hover:bg-text-tertiary"
+                              }`}
+                            />
+                            {sub.label}
+                          </ProjectNavLink>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </li>
             );
           })}

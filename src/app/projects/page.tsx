@@ -1,21 +1,19 @@
 import { redirect } from "next/navigation";
 import { currentUser } from "@clerk/nextjs/server";
-import Sidebar from "@/components/dashboard/Sidebar";
 import { getProjects } from "@/app/actions/project-actions";
-import ProjectsClient from "@/components/projects/ProjectsClient";
+import ProjectsPageClient from "@/components/projects/ProjectsPageClient";
 
-export default async function ProjectsPage() {
+export default async function ProjectsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ new?: string }>;
+}) {
   const user = await currentUser();
   if (!user) redirect("/sign-in");
 
   const { data: projects } = await getProjects();
+  const sp = await searchParams;
+  const initialNewModalOpen = sp.new === "1" || sp.new === "true";
 
-  return (
-    <div className="min-h-screen flex bg-surface-primary">
-      <Sidebar />
-      <main className="flex-1 min-w-0 ml-[280px] p-6 lg:p-8">
-        <ProjectsClient projects={projects ?? []} />
-      </main>
-    </div>
-  );
+  return <ProjectsPageClient projects={projects ?? []} initialNewModalOpen={initialNewModalOpen} />;
 }

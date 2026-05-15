@@ -597,6 +597,110 @@ interface DfsSerpItem {
   domain?: string | null;
 }
 
+const SERP_BOILERPLATE_HOSTS = new Set([
+  'google.com',
+  'youtube.com',
+  'facebook.com',
+  'instagram.com',
+  'linkedin.com',
+  'wikipedia.org',
+  'en.wikipedia.org',
+  'twitter.com',
+  'x.com',
+  'pinterest.com',
+  'tiktok.com',
+  'reddit.com',
+  'quora.com',
+  'amazon.com',
+  'bing.com',
+  'duckduckgo.com',
+]);
+
+function serpHostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Live Google organic SERP for one keyword — top N URLs (DataForSEO advanced).
+ */
+export async function fetchGoogleOrganicSerpTopUrls(
+  keyword: string,
+  opts: {
+    locationCode?: number;
+    languageCode?: string;
+    limit?: number;
+    excludeHosts?: string[];
+    trace?: DataForSEOTraceEntry[];
+  } = {}
+): Promise<{ urls: DiscoveredSerpResult[]; trace: DataForSEOTraceEntry[] }> {
+  const trace = opts.trace ?? [];
+  const clean = (keyword || '').trim();
+  const limit = Math.max(1, Math.min(opts.limit ?? 5, 10));
+  const locationCode = opts.locationCode ?? 2840;
+  const languageCode = (opts.languageCode ?? 'en').toLowerCase();
+  const exclude = new Set((opts.excludeHosts ?? []).map(h => h.replace(/^www\./, '').toLowerCase()));
+
+  if (!clean) {
+    return { urls: [], trace };
+  }
+
+  const auth = getAuthHeader();
+  if (!auth) {
+    trace.push({
+      label: 'serp/google/organic/live/advanced',
+      url: 'https://api.dataforseo.com/v3/serp/google/organic/live/advanced',
+      requestBody: null,
+      httpStatus: 0,
+      ok: false,
+      rawText: '',
+      parsed: null,
+      fetchError: 'DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD missing',
+    });
+    return { urls: [], trace };
+  }
+
+  const body = [
+    {
+      keyword: clean,
+      location_code: locationCode,
+      language_code: languageCode,
+      device: 'desktop',
+      os: 'windows',
+      depth: 10,
+    },
+  ];
+
+  const parsed = (await dfsPost('serp/google/organic/live/advanced', body, auth, trace)) as {
+    tasks?: Array<{ result?: Array<{ items?: DfsSerpItem[] }> }>;
+  } | null;
+
+  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
+  const rows: DiscoveredSerpResult[] = [];
+  for (const it of items) {
+    const t = (it.type ?? '').toLowerCase();
+    if (t !== 'organic' && t !== 'featured_snippet') continue;
+    const url = (it.url ?? '').toString();
+    if (!url) continue;
+    const host = serpHostFromUrl(url);
+    if (!host || SERP_BOILERPLATE_HOSTS.has(host)) continue;
+    if (exclude.has(host)) continue;
+    rows.push({
+      position: Number(it.rank_absolute ?? 0) || rows.length + 1,
+      title: (it.title ?? '').toString(),
+      url,
+      domain: (it.domain ?? extractDomainFromUrl(url)).toString(),
+      type: t,
+    });
+    if (rows.length >= limit) break;
+  }
+
+  return { urls: rows, trace };
+}
+
 /**
  * Fetch live Google organic SERPs for N keywords. Previously this ran
  * sequentially (≈1 req/s × 100 keywords ≈ 1.5 minutes). We now fan out with a
@@ -1471,26 +1575,58 @@ export interface KeywordVitals {
  * Returns a Map keyed by the lower-cased keyword. May be empty if neither
  * provider is reachable — callers should treat this as optional.
  */
+function discoveredKeywordToVitals(kw: DiscoveredKeyword): KeywordVitals {
+  let trend_pct = 0;
+  const t = kw.trend?.trim();
+  if (t) {
+    const m = t.match(/^([+-]?\d+)/);
+    if (m) trend_pct = parseInt(m[1], 10);
+  }
+  const ms = kw.monthly_searches;
+  if (!trend_pct && ms.length >= 2) {
+    const a = ms[ms.length - 1]?.volume ?? 0;
+    const b = ms[ms.length - 2]?.volume ?? 0;
+    if (b > 0) trend_pct = Math.round(((a - b) / b) * 100);
+  }
+  return {
+    keyword: kw.keyword,
+    volume: kw.volume,
+    trend: kw.trend,
+    trend_pct,
+    monthly_searches: ms ?? [],
+  };
+}
+
 export async function fetchKeywordVitals(
   keywords: string[],
   region: string,
-  _language: string = 'en'
+  language: string = 'en'
 ): Promise<Map<string, KeywordVitals>> {
-  void _language;
   const out = new Map<string, KeywordVitals>();
   const clean = [...new Set(keywords.map(k => k.trim()).filter(Boolean))];
   if (!clean.length) return out;
-  if (!isAhrefsConfigured()) {
-    console.warn('[ahrefs] fetchKeywordVitals: AHREFS_API_KEY missing — returning empty vitals.');
-    return out;
-  }
-  try {
-    const overview = await ahrefsKeywordOverview(clean, region);
-    for (const [k, row] of overview.entries()) {
-      out.set(k, ahrefsRowToVitals(row));
+
+  if (isAhrefsConfigured()) {
+    try {
+      const overview = await ahrefsKeywordOverview(clean, region);
+      for (const [k, row] of overview.entries()) {
+        out.set(k, ahrefsRowToVitals(row));
+      }
+    } catch (e) {
+      console.warn('[ahrefs] fetchKeywordVitals failed:', e);
     }
-  } catch (e) {
-    console.warn('[ahrefs] fetchKeywordVitals failed:', e);
+  }
+
+  const missing = [...new Set(clean.map(k => k.trim().toLowerCase()))].filter(k => !out.has(k));
+  const auth = getAuthHeader();
+  if (!missing.length || !auth) return out;
+
+  const locationCode = getLocationCode(region);
+  const languageCode = (language || 'en').trim().slice(0, 2).toLowerCase() || 'en';
+  const trace: DataForSEOTraceEntry[] = [];
+  const dfsMap = await fetchKeywordOverview(missing, locationCode, languageCode, auth, trace);
+  for (const [k, dk] of dfsMap.entries()) {
+    if (!out.has(k)) out.set(k, discoveredKeywordToVitals(dk));
   }
   return out;
 }
@@ -1564,20 +1700,25 @@ function competitionLevelToKdHint(level: string | null | undefined): number {
  *
  * @see https://docs.dataforseo.com/v3/keywords_data-google_ads-keywords_for_site-live/
  */
+export type GoogleAdsKeywordsForSiteFetchResult = {
+  rows: CompetitorKeywordsForSiteRow[];
+  trace: DataForSEOTraceEntry[];
+};
+
 export async function fetchGoogleAdsKeywordsForSite(
   competitorTarget: string,
   regionCode: string,
   languageCode: string = 'en',
   limit: number = 100
-): Promise<CompetitorKeywordsForSiteRow[]> {
+): Promise<GoogleAdsKeywordsForSiteFetchResult> {
   const auth = getAuthHeader();
   if (!auth) {
     console.warn('[dataforseo] fetchGoogleAdsKeywordsForSite: credentials missing');
-    return [];
+    return { rows: [], trace: [] };
   }
 
   const target = extractDomainFromUrl(competitorTarget) || competitorTarget.trim().toLowerCase();
-  if (!target) return [];
+  if (!target) return { rows: [], trace: [] };
 
   const locationCode = getLocationCode(regionCode);
   const trace: DataForSEOTraceEntry[] = [];
@@ -1649,7 +1790,7 @@ export async function fetchGoogleAdsKeywordsForSite(
     keywords.slice(0, 10)
   );
 
-  return keywords;
+  return { rows: keywords, trace };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

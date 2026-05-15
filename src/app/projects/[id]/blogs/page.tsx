@@ -11,6 +11,7 @@ import { BlogStatus, WORD_COUNT_OPTIONS, type CalendarEntryWithBlog } from "@/li
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { TableSkeleton } from "@/components/Skeleton";
+import { PageTitle, EmptyState } from "@/components/common";
 
 type CalendarWithBlogsResponse = Awaited<ReturnType<typeof calendarApi.withBlogs>>;
 
@@ -96,12 +97,12 @@ export default function BlogsPage() {
 
   const handleGenerate = async (entryId: string) => {
     const wc = wordCounts[entryId] ?? 2500;
+    const notes = writerNotes[entryId]?.trim();
+    setGenerateModalEntryId(null);
     setGenerating(entryId);
     setError((prev) => ({ ...prev, [entryId]: "" }));
-
     patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "generating" } : e)));
 
-    const notes = writerNotes[entryId]?.trim();
     const res = await blogsApi.generate({ entryId, wordCount: wc, writerNotes: notes || undefined });
     if (res.success && res.data) {
       patchEntries((list) =>
@@ -114,7 +115,6 @@ export default function BlogsPage() {
       dispatch(calendarRefreshBump({ projectId }));
       void queryClient.invalidateQueries({ queryKey: CALENDAR_KEY });
       void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-      setGenerateModalEntryId(null);
     } else {
       patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "scheduled" } : e)));
       setError((prev) => ({
@@ -154,9 +154,7 @@ export default function BlogsPage() {
     <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
       <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-            Blog Generator
-          </h1>
+          <PageTitle>Blog Generator</PageTitle>
           <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
             Generate and export blogs from your content calendar. Titles update here and on the calendar when generation completes.
           </p>
@@ -181,16 +179,18 @@ export default function BlogsPage() {
           <TableSkeleton rows={8} columns={7} />
         </div>
       ) : entries.length === 0 ? (
-        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
-          <p className="text-[15px] font-medium text-text-secondary">No scheduled entries yet</p>
-          <p className="mt-1 text-[13px] text-text-tertiary">Schedule keywords on the content calendar first.</p>
-          <ProjectNavLink
-            href={`/projects/${projectId}/calendar`}
-            className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-          >
-            Open calendar
-          </ProjectNavLink>
-        </div>
+        <EmptyState
+          title="No scheduled entries yet"
+          body="Schedule keywords on the content calendar first."
+          action={
+            <ProjectNavLink
+              href={`/projects/${projectId}/calendar`}
+              className="inline-flex h-10 items-center justify-center rounded-full bg-brand-primary px-5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+            >
+              Open calendar
+            </ProjectNavLink>
+          }
+        />
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <div className="overflow-x-auto">
@@ -247,12 +247,7 @@ export default function BlogsPage() {
                       </td>
                       <td className="px-4 py-2.5 align-middle">
                         <div className="flex flex-col gap-1">
-                          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${statusCfg.color}`}>
-                            {statusCfg.dot ? (
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusCfg.dot}`} />
-                            ) : null}
-                            {statusCfg.label}
-                          </span>
+                      
                           {hasBlog && entry.blog && (
                             <select
                               value={blogStatus}
@@ -273,17 +268,32 @@ export default function BlogsPage() {
                       </td>
                       <td className="px-4 py-2.5 align-middle text-right">
                         {!hasBlog ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setError((prev) => ({ ...prev, [entry.id]: "" }));
-                              setGenerateModalEntryId(entry.id);
-                            }}
-                            disabled={isGenerating || (generating !== null && !isGenerating)}
-                            className="inline-flex h-8 items-center justify-center rounded-full bg-brand-primary min-w-[5.5rem] px-3 text-[11px] font-semibold text-brand-on-primary disabled:opacity-50"
-                          >
-                            {isGenerating ? "…" : "Generate"}
-                          </button>
+                          <div className="flex flex-col items-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isGenerating) return;
+                                setError((prev) => ({ ...prev, [entry.id]: "" }));
+                                setGenerateModalEntryId(entry.id);
+                              }}
+                              disabled={generating !== null}
+                              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-full bg-brand-primary min-w-[5.5rem] px-3 text-[11px] font-semibold text-brand-on-primary disabled:opacity-50"
+                            >
+                              {isGenerating ? (
+                                <>
+                                  <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-brand-on-primary border-t-transparent" />
+                                  Generating…
+                                </>
+                              ) : (
+                                "Generate"
+                              )}
+                            </button>
+                            {error[entry.id] && (
+                              <p className="text-[10px] text-brand-coral max-w-[9rem] text-right leading-tight">
+                                {error[entry.id]}
+                              </p>
+                            )}
+                          </div>
                         ) : (
                           <ProjectNavLink
                             href={`/projects/${projectId}/blogs/${entry.blog!.id}`}
@@ -321,10 +331,6 @@ export default function BlogsPage() {
               <span className="font-medium text-text-secondary">{generateModalEntry.focus_keyword}</span>
               <span className="text-text-tertiary"> · {fmtDate(generateModalEntry.scheduled_date)}</span>
             </p>
-
-            {error[generateModalEntry.id] ? (
-              <p className="mt-3 text-[13px] text-brand-coral">{error[generateModalEntry.id]}</p>
-            ) : null}
 
             <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
               Target length

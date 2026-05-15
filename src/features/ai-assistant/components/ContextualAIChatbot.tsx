@@ -21,6 +21,7 @@ import { competitorsApi } from "@/frontend/api/competitors";
 import { calendarApi } from "@/frontend/api/calendar";
 import { auditsApi } from "@/frontend/api/audits";
 import { aiAssistantMemoryUpdated } from "@/lib/redux/keyword-workspace-slice";
+import { contentHealthAuditMarkStale } from "@/lib/redux/content-health-audit-slice";
 import { getAIContext } from "@/features/ai-assistant/context/contextManager";
 import { detectAIPageFromPath } from "@/features/ai-assistant/context/page";
 import { executeAgentAction } from "@/features/ai-assistant/agent/executor";
@@ -669,13 +670,12 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
     enabled: !!page,
   });
 
-  // Domain-tab keywords (live Google Ads For Site).
-  // Loaded whenever the chatbot is open so cross-page queries can use both
-  // industry-cached + live-domain keyword pools.
+  // Domain-tab keywords — Supabase snapshot merged with `keywords`; refresh only via Re-discover.
   const { data: domainKeywordsData } = useQuery({
     queryKey: qk.domainKeywords(project.id),
     queryFn: () => keywordsApi.domainKeywords(project.id),
     enabled: aiMode !== "closed",
+    staleTime: Infinity,
   });
 
   const { data: competitorData } = useQuery({
@@ -955,6 +955,7 @@ export function ContextualAIChatbot({ project, aiMode, setAiMode }: Props) {
           queryClient.invalidateQueries({ queryKey: qk.calendar(project.id) });
           queryClient.invalidateQueries({ queryKey: qk.keywords(project.id) });
           queryClient.invalidateQueries({ queryKey: qk.audits(project.id) });
+          dispatch(contentHealthAuditMarkStale({ projectId: project.id }));
           if (blogId) queryClient.invalidateQueries({ queryKey: qk.blog(blogId) });
         }
 

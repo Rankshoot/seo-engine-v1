@@ -2,10 +2,20 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { discoverKeywordsForProject, fetchGoogleAdsKeywordsForSite, type CompetitorKeywordsForSiteRow } from '@/lib/dataforseo';
+import {
+  discoverKeywordsForProject,
+  fetchGoogleAdsKeywordsForSite,
+  type CompetitorKeywordsForSiteRow,
+  type DataForSEOTraceEntry,
+} from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
-import { generateBusinessBrief } from './brief-actions';
+import { generateBusinessBrief, getBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
+import {
+  classifyKeywordIntentsForBusinessChunk,
+  type BusinessContextForIntent,
+} from '@/lib/gemini';
+import { deterministicFunnelStage } from '@/lib/keyword-funnel';
 import { crawlWebsite, type WebsiteCrawlResult } from '@/lib/websiteCrawler';
 import {
   runKeywordDiscovery,
@@ -13,6 +23,191 @@ import {
   type KeywordCandidate,
 } from '@/lib/keyword-discovery';
 import { enrichKeywordInBackground } from '@/lib/keyword-modal';
+import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates } from './calendar-actions';
+
+// ─── AI Evaluation types (mirrors Keyword.ai_eval_data) ──────────────────────
+export type AiEvalData = {
+  category: string;
+  analysis: {
+    businessRelevance: number;
+    intentQuality: number;
+    trafficPotential: number;
+    keywordDifficulty: number;
+    serpWeakness: number;
+    contentDepth: number;
+    trendGrowth: number;
+    conversionPotential: number;
+  };
+  reasoning: {
+    summary: string;
+    strengths: string[];
+    weaknesses: string[];
+    rankingOpportunity: string;
+    contentOpportunity: string;
+  };
+};
+
+const INTENT_REFRESH_CHUNK_SIZE = 28;
+
+function buildBriefContextForIntent(brief: BusinessBrief | null): string {
+  if (!brief) return '';
+  const chunks: string[] = [];
+  if (brief.summary) chunks.push(brief.summary.slice(0, 1200));
+  if (brief.products?.length) {
+    chunks.push(`Products/services: ${brief.products.slice(0, 14).join('; ')}`);
+  }
+  if (brief.entities?.length) {
+    chunks.push(`Key entities: ${brief.entities.slice(0, 18).join('; ')}`);
+  }
+  if (brief.audiences?.length) {
+    chunks.push(`Audiences: ${brief.audiences.slice(0, 8).join('; ')}`);
+  }
+  return chunks.join('\n').slice(0, 4000);
+}
+
+export interface KeywordIntentRefreshTraceEntry {
+  ts: string;
+  batch_index: number;
+  batch_size: number;
+  ok: boolean;
+  ms: number;
+  updated_in_batch: number;
+  error?: string;
+}
+
+/**
+ * Re-label every saved industry keyword's `intent` and `funnel_stage` with Gemini
+ * using project fields + cached business brief. Updates `ai_score` to match the new intent.
+ * Client should `console.log` `intentTrace` for production debugging.
+ */
+export async function refreshKeywordIntentsWithGemini(projectId: string): Promise<{
+  success: boolean;
+  error?: string;
+  updated: number;
+  total: number;
+  intentTrace: KeywordIntentRefreshTraceEntry[];
+}> {
+  const user = await currentUser();
+  if (!user) {
+    return { success: false, error: 'Not authenticated', updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select(
+      'id, domain, company, niche, target_audience, target_region'
+    )
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) {
+    return { success: false, error: 'Project not found', updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const briefRes = await getBusinessBrief(projectId);
+  if (!briefRes.success) {
+    return {
+      success: false,
+      error: briefRes.error ?? 'Could not load business brief',
+      updated: 0,
+      total: 0,
+      intentTrace: [],
+    };
+  }
+
+  const { data: kwRows, error: kwErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, keyword, volume, kd')
+    .eq('project_id', projectId);
+
+  if (kwErr) {
+    return { success: false, error: kwErr.message, updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const list = (kwRows ?? []).filter(
+    (r): r is { id: string; keyword: string; volume: number | null; kd: number | null } =>
+      Boolean(r?.id && r.keyword)
+  );
+
+  if (!list.length) {
+    return { success: true, updated: 0, total: 0, intentTrace: [] };
+  }
+
+  const ctx: BusinessContextForIntent = {
+    company: project.company ?? '',
+    domain: project.domain ?? '',
+    niche: project.niche ?? '',
+    targetAudience: project.target_audience ?? '',
+    targetRegion: project.target_region ?? '',
+    briefContext: buildBriefContextForIntent(briefRes.brief),
+  };
+
+  const intentTrace: KeywordIntentRefreshTraceEntry[] = [];
+  const intentById = new Map<string, string>();
+  const funnelById = new Map<string, string>();
+
+  for (let i = 0; i < list.length; i += INTENT_REFRESH_CHUNK_SIZE) {
+    const batch = list.slice(i, i + INTENT_REFRESH_CHUNK_SIZE);
+    const batchIndex = Math.floor(i / INTENT_REFRESH_CHUNK_SIZE) + 1;
+    const t0 = Date.now();
+    try {
+      const classified = await classifyKeywordIntentsForBusinessChunk(
+        ctx,
+        batch.map(r => ({ id: r.id, keyword: r.keyword }))
+      );
+      for (const c of classified) {
+        intentById.set(c.id, c.intent);
+        funnelById.set(c.id, c.funnel_stage);
+      }
+      intentTrace.push({
+        ts: new Date().toISOString(),
+        batch_index: batchIndex,
+        batch_size: batch.length,
+        ok: true,
+        ms: Date.now() - t0,
+        updated_in_batch: classified.length,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      intentTrace.push({
+        ts: new Date().toISOString(),
+        batch_index: batchIndex,
+        batch_size: batch.length,
+        ok: false,
+        ms: Date.now() - t0,
+        updated_in_batch: 0,
+        error: msg,
+      });
+      return {
+        success: false,
+        error: msg,
+        updated: 0,
+        total: list.length,
+        intentTrace,
+      };
+    }
+  }
+
+  let updated = 0;
+  for (const row of list) {
+    const intent = intentById.get(row.id);
+    const funnel_stage = funnelById.get(row.id);
+    if (!intent || !funnel_stage) continue;
+    const volume = Math.max(0, Math.round(Number(row.volume) || 0));
+    const kd = Math.max(0, Math.round(Number(row.kd) || 0));
+    const ai = aiScore(volume, kd, intent);
+    const { error: upErr } = await supabaseAdmin
+      .from('keywords')
+      .update({ intent, ai_score: ai, funnel_stage })
+      .eq('id', row.id)
+      .eq('project_id', projectId);
+    if (!upErr) updated += 1;
+    else console.error('[intent-refresh] update failed', row.id, upErr.message);
+  }
+
+  return { success: true, updated, total: list.length, intentTrace };
+}
 
 function aiScore(volume: number, kd: number, intent: string = ''): number {
   // Require both volume and KD to be known, otherwise the score misleads.
@@ -234,6 +429,7 @@ function candidateToRow(projectId: string, c: KeywordCandidate) {
     kd: c.difficulty != null ? Math.round(c.difficulty) : 0,
     cpc: cpcDollars,
     intent: c.intent || null,
+    funnel_stage: deterministicFunnelStage(c.intent || '', c.keyword),
     parent_topic: c.parent_topic ?? '',
     traffic_potential: c.traffic_potential != null ? Math.round(c.traffic_potential) : 0,
     source_type: c.source_type,
@@ -388,6 +584,7 @@ export async function discoverKeywords(projectId: string) {
     trend: '',
     competition_level: '',
     intent: kw.intent || null,
+    funnel_stage: deterministicFunnelStage(kw.intent || '', kw.keyword),
     monthly_searches: kw.monthly_searches,
     secondary_keywords: kw.secondary_keywords,
     // Legacy simple scalar — kept for backwards compatibility with the
@@ -581,7 +778,11 @@ export async function loadMoreKeywords(
   return { success: true, data: (data ?? []) as Keyword[], total: count ?? 0 };
 }
 
-export async function updateKeywordStatus(keywordId: string, status: KeywordStatus) {
+export async function updateKeywordStatus(
+  keywordId: string,
+  status: KeywordStatus,
+  expectedProjectId?: string
+) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
@@ -593,6 +794,9 @@ export async function updateKeywordStatus(keywordId: string, status: KeywordStat
     .single();
 
   if (kwErr || !keyword) return { success: false, error: 'Keyword not found or unauthorized' };
+  if (expectedProjectId && String(keyword.project_id) !== String(expectedProjectId)) {
+    return { success: false, error: 'Keyword not found or unauthorized' };
+  }
 
   const { error } = await supabaseAdmin
     .from('keywords')
@@ -600,16 +804,34 @@ export async function updateKeywordStatus(keywordId: string, status: KeywordStat
     .eq('id', keywordId);
 
   if (error) return { success: false, error: error.message };
+
   if (status === 'approved') {
-    // Fire-and-forget: warm the modal cache so the blog pipeline + the
-    // keyword drilldown both have ideas/overview ready when the user clicks.
-    // Calendar entries are created manually on the Calendar page — not here.
     void enrichKeywordInBackground(keywordId);
+    const projectId = keyword.project_id as string;
+    const cal = await scheduleKeywordOnFirstVacantIfNeeded(projectId, keywordId);
+    if (!cal.ok) {
+      return {
+        success: true,
+        calendarError: cal.error,
+      };
+    }
+    if (cal.skipped) {
+      return {
+        success: true,
+        calendarSkipped: true,
+        scheduledDate: cal.scheduledDate,
+      };
+    }
+    return { success: true, scheduledDate: cal.scheduledDate };
   }
   return { success: true };
 }
 
-export async function bulkUpdateKeywordStatus(keywordIds: string[], status: KeywordStatus) {
+export async function bulkUpdateKeywordStatus(
+  keywordIds: string[],
+  status: KeywordStatus,
+  expectedProjectId?: string
+) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
@@ -623,6 +845,9 @@ export async function bulkUpdateKeywordStatus(keywordIds: string[], status: Keyw
   if ((keywords ?? []).length !== keywordIds.length) {
     return { success: false, error: 'Some keywords were not found or unauthorized' };
   }
+  if (expectedProjectId && (keywords ?? []).some(k => String(k.project_id) !== String(expectedProjectId))) {
+    return { success: false, error: 'Some keywords were not found or unauthorized' };
+  }
 
   const { error } = await supabaseAdmin
     .from('keywords')
@@ -631,11 +856,18 @@ export async function bulkUpdateKeywordStatus(keywordIds: string[], status: Keyw
 
   if (error) return { success: false, error: error.message };
   if (status === 'approved') {
-    // Fire-and-forget warming for every newly approved keyword.
-    // Calendar entries are created manually on the Calendar page — not here.
     for (const id of keywordIds) {
       void enrichKeywordInBackground(id);
     }
+    const projectId = (keywords![0] as { project_id: string }).project_id;
+    const batch = await scheduleKeywordsOnVacantDates(projectId, keywordIds);
+    return {
+      success: true,
+      calendarScheduled: batch.scheduled.length,
+      calendarSkipped: batch.skipped.length,
+      ...(batch.error ? { calendarError: batch.error } : {}),
+      ...(batch.scheduled[0] ? { firstScheduledDate: batch.scheduled[0].date } : {}),
+    };
   }
   return { success: true };
 }
@@ -686,7 +918,23 @@ export async function approveKeywordCluster(projectId: string, phrases: string[]
     .in('keyword', [...matched]);
 
   if (error) return { success: false, error: error.message, updated: 0 };
-  // Calendar entries are created manually on the Calendar page — not auto-assigned here.
+
+  const { data: idRows } = await supabaseAdmin
+    .from('keywords')
+    .select('id')
+    .eq('project_id', projectId)
+    .in('keyword', [...matched]);
+  const ids = (idRows ?? []).map(r => r.id as string);
+  if (ids.length) {
+    const batch = await scheduleKeywordsOnVacantDates(projectId, ids);
+    return {
+      success: true,
+      updated: matched.size,
+      calendarScheduled: batch.scheduled.length,
+      calendarSkipped: batch.skipped.length,
+      ...(batch.error ? { calendarError: batch.error } : {}),
+    };
+  }
   return { success: true, updated: matched.size };
 }
 
@@ -723,9 +971,11 @@ export async function deleteAllKeywords(projectId: string) {
 }
 
 /**
- * Fetches keywords for the project's own domain using the Google Ads
- * `keywords_for_site/live` endpoint. Returns live data — not persisted to the
- * `keywords` table.
+ * Google Ads "keywords for site" list for the project's domain.
+ *
+ * Caching: raw DataForSEO rows live in `project_domain_ads_keywords`. Reads merge
+ * against `keywords` for saved status / analysis scores. DataForSEO is only
+ * called when `force: true` (Re-discover / Refresh) or via `refreshDomainKeywordsFromDataForSEO`.
  */
 const KEYWORD_STATUS_SET = new Set<KeywordStatus>(['pending', 'approved', 'rejected']);
 
@@ -734,11 +984,125 @@ function parseKeywordStatus(v: unknown): KeywordStatus | null {
   return KEYWORD_STATUS_SET.has(v as KeywordStatus) ? (v as KeywordStatus) : null;
 }
 
+function parseCachedDomainAdsRows(raw: unknown): CompetitorKeywordsForSiteRow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CompetitorKeywordsForSiteRow[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const keyword = typeof o.keyword === 'string' ? o.keyword.trim().toLowerCase() : '';
+    if (!keyword) continue;
+    const volume = Math.max(0, Math.round(Number(o.volume) || 0));
+    const kd = Math.max(0, Math.min(100, Math.round(Number(o.kd) || 0)));
+    const cpc = Math.max(0, Number(o.cpc) || 0);
+    const intent = typeof o.intent === 'string' ? o.intent : '';
+    let estimated_monthly_traffic: number | null = null;
+    if (o.estimated_monthly_traffic != null) {
+      const etv = Math.round(Number(o.estimated_monthly_traffic) || 0);
+      estimated_monthly_traffic = etv > 0 ? etv : null;
+    }
+    out.push({
+      keyword,
+      volume,
+      kd,
+      cpc,
+      intent: intent as CompetitorKeywordsForSiteRow['intent'],
+      estimated_monthly_traffic,
+      competitor_position: Math.round(Number(o.competitor_position) || 0),
+      competitor_url: typeof o.competitor_url === 'string' ? o.competitor_url : '',
+    });
+  }
+  return out;
+}
+
+async function mergeDomainSiteRowsWithProjectKeywords(
+  projectId: string,
+  keywords: CompetitorKeywordsForSiteRow[]
+): Promise<CompetitorKeywordsForSiteRow[]> {
+  if (keywords.length === 0) return [];
+
+  const norm = (s: string) => (s ?? '').trim().toLowerCase();
+  const normalized = [...new Set(keywords.map(k => norm(k.keyword)))];
+  const dbRows: {
+    id: unknown;
+    normalized_keyword: unknown;
+    keyword_analysis_score: unknown;
+    status: unknown;
+  }[] = [];
+  const chunkSize = 200;
+  for (let i = 0; i < normalized.length; i += chunkSize) {
+    const slice = normalized.slice(i, i + chunkSize);
+    const { data: part, error: dbErr } = await supabaseAdmin
+      .from('keywords')
+      .select('id, normalized_keyword, keyword_analysis_score, status')
+      .eq('project_id', projectId)
+      .in('normalized_keyword', slice);
+    if (dbErr) {
+      console.warn('[mergeDomainSiteRowsWithProjectKeywords] keyword join failed', dbErr.message);
+      break;
+    }
+    dbRows.push(...(part ?? []));
+  }
+
+  const map = new Map(
+    dbRows.map(r => [
+      norm(r.normalized_keyword as string),
+      {
+        id: r.id as string,
+        keyword_analysis_score: r.keyword_analysis_score as number | null,
+        status: parseKeywordStatus(r.status),
+      },
+    ])
+  );
+
+  return keywords.map(k => {
+    const key = norm(k.keyword);
+    const hit = map.get(key);
+    const dbScore = typeof hit?.keyword_analysis_score === 'number' ? hit.keyword_analysis_score : null;
+    const fallback = aiScore(k.volume, k.kd, k.intent || '');
+    const fromIndustry = dbScore != null && dbScore > 0;
+    const keyword_analysis_score =
+      fromIndustry ? dbScore : fallback > 0 ? fallback : dbScore;
+    return {
+      ...k,
+      matched_keyword_id: hit?.id ?? null,
+      keyword_analysis_score,
+      matched_status: hit?.status ?? null,
+      analysis_score_is_industry: fromIndustry,
+    };
+  });
+}
+
+export type GetDomainKeywordsResult =
+  | {
+      success: true;
+      data: CompetitorKeywordsForSiteRow[];
+      fromCache: boolean;
+      lastFetchedAt: string | null;
+      discoveryTrace?: DataForSEOTraceEntry[];
+    }
+  | {
+      success: false;
+      error: string;
+      data: CompetitorKeywordsForSiteRow[];
+      fromCache: boolean;
+      lastFetchedAt: string | null;
+      discoveryTrace?: DataForSEOTraceEntry[];
+    };
+
 export async function getDomainKeywords(
-  projectId: string
-): Promise<{ success: true; data: CompetitorKeywordsForSiteRow[] } | { success: false; error: string; data: CompetitorKeywordsForSiteRow[] }> {
+  projectId: string,
+  opts: { force?: boolean } = {}
+): Promise<GetDomainKeywordsResult> {
   const user = await currentUser();
-  if (!user) return { success: false, error: 'Not authenticated', data: [] };
+  if (!user)
+    return {
+      success: false,
+      error: 'Not authenticated',
+      data: [],
+      fromCache: false,
+      lastFetchedAt: null,
+    };
 
   const { data: project, error: pErr } = await supabaseAdmin
     .from('projects')
@@ -747,63 +1111,90 @@ export async function getDomainKeywords(
     .eq('user_id', user.id)
     .single();
 
-  if (pErr || !project) return { success: false, error: 'Project not found', data: [] };
+  if (pErr || !project)
+    return { success: false, error: 'Project not found', data: [], fromCache: false, lastFetchedAt: null };
 
   const domain: string = (project as { domain?: string | null }).domain ?? '';
   const region: string = (project as { target_region?: string | null }).target_region ?? 'us';
   const language: string = (project as { target_language?: string | null }).target_language ?? 'en';
 
-  if (!domain) return { success: false, error: 'No domain configured for this project', data: [] };
+  if (!domain)
+    return { success: false, error: 'No domain configured for this project', data: [], fromCache: false, lastFetchedAt: null };
 
-  try {
-    const keywords = await fetchGoogleAdsKeywordsForSite(domain, region, language, 1000);
-    if (keywords.length === 0) return { success: true, data: [] };
-
-    const norm = (s: string) => (s ?? '').trim().toLowerCase();
-    const normalized = [...new Set(keywords.map(k => norm(k.keyword)))];
-    const { data: dbRows, error: dbErr } = await supabaseAdmin
-      .from('keywords')
-      .select('id, normalized_keyword, keyword_analysis_score, status')
+  if (!opts.force) {
+    const { data: cached, error: cErr } = await supabaseAdmin
+      .from('project_domain_ads_keywords')
+      .select('rows, last_fetched_at')
       .eq('project_id', projectId)
-      .in('normalized_keyword', normalized);
+      .maybeSingle();
 
-    if (dbErr) {
-      console.warn('[getDomainKeywords] keyword join failed', dbErr.message);
+    if (cErr) {
+      console.warn('[getDomainKeywords] cache read failed', cErr.message);
     }
 
-    const map = new Map(
-      (dbRows ?? []).map(r => [
-        norm(r.normalized_keyword as string),
-        {
-          id: r.id as string,
-          keyword_analysis_score: r.keyword_analysis_score as number | null,
-          status: parseKeywordStatus(r.status),
-        },
-      ])
+    if (cached?.rows != null) {
+      const rawRows = parseCachedDomainAdsRows(cached.rows);
+      const merged = await mergeDomainSiteRowsWithProjectKeywords(projectId, rawRows);
+      return {
+        success: true,
+        data: merged,
+        fromCache: true,
+        lastFetchedAt: (cached.last_fetched_at as string) ?? null,
+      };
+    }
+
+    return {
+      success: true,
+      data: [],
+      fromCache: false,
+      lastFetchedAt: null,
+    };
+  }
+
+  try {
+    const { rows: keywords, trace } = await fetchGoogleAdsKeywordsForSite(domain, region, language, 1000);
+    const nowIso = new Date().toISOString();
+
+    const { error: upsertErr } = await supabaseAdmin.from('project_domain_ads_keywords').upsert(
+      {
+        project_id: projectId,
+        target_domain: domain.trim().toLowerCase(),
+        region,
+        language,
+        rows: keywords,
+        last_fetched_at: nowIso,
+        updated_at: nowIso,
+      },
+      { onConflict: 'project_id' }
     );
 
-    const merged: CompetitorKeywordsForSiteRow[] = keywords.map(k => {
-      const key = norm(k.keyword);
-      const hit = map.get(key);
-      const dbScore = typeof hit?.keyword_analysis_score === 'number' ? hit.keyword_analysis_score : null;
-      const fallback = aiScore(k.volume, k.kd, k.intent || '');
-      const fromIndustry = dbScore != null && dbScore > 0;
-      const keyword_analysis_score =
-        fromIndustry ? dbScore : fallback > 0 ? fallback : dbScore;
-      return {
-        ...k,
-        matched_keyword_id: hit?.id ?? null,
-        keyword_analysis_score,
-        matched_status: hit?.status ?? null,
-        analysis_score_is_industry: fromIndustry,
-      };
-    });
+    if (upsertErr) {
+      console.warn('[getDomainKeywords] cache upsert failed', upsertErr.message);
+    }
 
-    return { success: true, data: merged };
+    const merged = await mergeDomainSiteRowsWithProjectKeywords(projectId, keywords);
+    return {
+      success: true,
+      data: merged,
+      fromCache: false,
+      lastFetchedAt: nowIso,
+      discoveryTrace: trace,
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { success: false, error: `API error: ${msg}`, data: [] };
+    return {
+      success: false,
+      error: `API error: ${msg}`,
+      data: [],
+      fromCache: false,
+      lastFetchedAt: null,
+    };
   }
+}
+
+/** Explicit DataForSEO refresh for the domain tab — same as `getDomainKeywords(..., { force: true })`. */
+export async function refreshDomainKeywordsFromDataForSEO(projectId: string): Promise<GetDomainKeywordsResult> {
+  return getDomainKeywords(projectId, { force: true });
 }
 
 type DomainSiteKeywordPayload = Pick<
@@ -819,7 +1210,16 @@ export async function upsertKeywordFromDomainSite(
   projectId: string,
   row: DomainSiteKeywordPayload,
   status: KeywordStatus
-): Promise<{ success: true; id: string } | { success: false; error: string }> {
+): Promise<
+  | {
+      success: true;
+      id: string;
+      scheduledDate?: string;
+      calendarSkipped?: boolean;
+      calendarError?: string;
+    }
+  | { success: false; error: string }
+> {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
@@ -839,75 +1239,483 @@ export async function upsertKeywordFromDomainSite(
   const kd = Math.max(0, Math.min(100, Math.round(Number(row.kd) || 0)));
   const cpc = Math.max(0, Number(row.cpc) || 0);
   const intentStr = row.intent || '';
-  const tp =
-    row.estimated_monthly_traffic != null &&
-    Number.isFinite(row.estimated_monthly_traffic) &&
-    row.estimated_monthly_traffic > 0
-      ? Math.round(row.estimated_monthly_traffic)
-      : 0;
 
   const { data: existing, error: exErr } = await supabaseAdmin
     .from('keywords')
-    .select('id, keyword_analysis_score')
+    .select('id')
     .eq('project_id', projectId)
     .eq('normalized_keyword', phrase)
     .maybeSingle();
 
   if (exErr) return { success: false, error: exErr.message };
 
-  const now = new Date().toISOString();
+  const ai = aiScore(volume, kd, intentStr);
 
-  if (existing?.id) {
-    const { data: updated, error: upErr } = await supabaseAdmin
-      .from('keywords')
-      .update({
+  let id: string | undefined = existing?.id as string | undefined;
+
+  if (!id) {
+    // Same column set as `discoverKeywords` — never reference columns missing from this Supabase project.
+    // `ignoreDuplicates: true` matches discovery: do not overwrite an existing approved/rejected row on conflict.
+    const { error: insErr } = await supabaseAdmin.from('keywords').upsert(
+      {
+        project_id: projectId,
+        keyword: phrase,
         volume,
         kd,
         cpc,
-        intent: intentStr,
-        traffic_potential: tp,
-        status,
-        source_type: 'google_ads_domain',
-        updated_at: now,
-      })
-      .eq('id', existing.id)
-      .select('id')
-      .single();
+        trend: '',
+        competition_level: '',
+        intent: intentStr || null,
+        funnel_stage: deterministicFunnelStage(intentStr, phrase),
+        monthly_searches: [],
+        secondary_keywords: [],
+        ai_score: ai,
+        keyword_analysis_score: ai,
+        relevance_score: null,
+        business_fit_score: null,
+        status: 'pending',
+      },
+      { onConflict: 'project_id,keyword', ignoreDuplicates: true }
+    );
 
-    if (upErr || !updated) return { success: false, error: upErr?.message ?? 'Update failed' };
-    return { success: true, id: updated.id as string };
+    if (insErr) return { success: false, error: insErr.message };
+
+    const { data: got, error: selErr } = await supabaseAdmin
+      .from('keywords')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('normalized_keyword', phrase)
+      .maybeSingle();
+
+    if (selErr || !got?.id) {
+      return { success: false, error: selErr?.message ?? 'Could not resolve keyword after save' };
+    }
+    id = got.id as string;
   }
 
-  const ai = aiScore(volume, kd, intentStr);
-
-  const { data: inserted, error: insErr } = await supabaseAdmin
+  // Same metrics industry discovery updates — omit `traffic_potential`, `updated_at`, etc. when missing from schema.
+  const { error: metErr } = await supabaseAdmin
     .from('keywords')
-    .insert({
-      project_id: projectId,
-      keyword: phrase,
+    .update({
       volume,
       kd,
       cpc,
       intent: intentStr,
-      traffic_potential: tp,
-      status,
-      source_type: 'google_ads_domain',
-      trend: '+0%',
-      monthly_searches: [],
-      secondary_keywords: [],
-      ai_score: ai,
-      keyword_analysis_score: 0,
-      relevance_score: 0,
-      business_fit_score: 0,
-      competition_level: '',
-      parent_topic: '',
-      source_competitors: [],
-      source_urls: [],
-      updated_at: now,
+      funnel_stage: deterministicFunnelStage(intentStr, phrase),
     })
-    .select('id')
-    .single();
+    .eq('id', id);
 
-  if (insErr || !inserted) return { success: false, error: insErr?.message ?? 'Insert failed' };
-  return { success: true, id: inserted.id as string };
+  if (metErr) return { success: false, error: metErr.message };
+
+  // Industry tab Action column → `updateKeywordStatus` only. Domain tab uses the same path for calendar + enrich.
+  const stRes = await updateKeywordStatus(id, status, projectId);
+  if (!stRes.success) return { success: false, error: stRes.error ?? 'Could not update keyword status' };
+
+  return {
+    success: true,
+    id,
+    ...(stRes.scheduledDate ? { scheduledDate: stRes.scheduledDate } : {}),
+    ...(stRes.calendarSkipped ? { calendarSkipped: true as const } : {}),
+    ...(stRes.calendarError ? { calendarError: stRes.calendarError } : {}),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// scoreKeywordsWithAI
+//
+// Runs a comprehensive Gemini evaluation across all industry keywords for a
+// project. Batches in groups of 25 to stay within token limits. Writes
+// ai_eval_score + ai_eval_data + ai_eval_at back to each keyword row.
+// Results are cached; re-running only re-evaluates keywords not yet scored
+// unless `force` is true.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Smaller batches = shorter output = less risk of truncation / malformed JSON.
+const AI_EVAL_BATCH = 15;
+
+// Use JSON-mode capable models (responseMimeType forces valid JSON).
+const GEMINI_EVAL_URLS = [
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+];
+
+/** Extracts the first JSON array from raw text (handles trailing commentary / partial fences). */
+function extractJsonArray(raw: string): string {
+  // Strip any markdown fences
+  let s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  // Find the first '[' and last ']'
+  const start = s.indexOf('[');
+  const end = s.lastIndexOf(']');
+  if (start === -1 || end === -1 || end < start) throw new Error('No JSON array found in response');
+  return s.slice(start, end + 1);
+}
+
+async function callGeminiForEval(prompt: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY!;
+
+  for (const url of GEMINI_EVAL_URLS) {
+    try {
+      const body = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 16384,
+          responseMimeType: 'application/json',
+        },
+      };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => res.status.toString());
+        console.error(`[callGeminiForEval] ${url} HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        continue;
+      }
+      const json = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+      if (text) return text;
+    } catch (e) {
+      console.error('[callGeminiForEval] fetch error', e);
+    }
+  }
+  throw new Error('All Gemini endpoints failed for keyword evaluation');
+}
+
+function buildEvalPrompt(
+  project: { name: string; domain: string; niche: string; target_audience: string; target_region: string },
+  brief: BusinessBrief | null,
+  competitors: string[],
+  keywords: Array<{ keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string }>
+): string {
+  const briefSnippet = brief
+    ? [
+        brief.summary?.slice(0, 600),
+        brief.products?.length ? `Core offerings: ${brief.products.slice(0, 10).join(', ')}` : '',
+        brief.audiences?.length ? `Audience: ${brief.audiences.slice(0, 3).join('; ')}` : '',
+        brief.usps?.length ? `USPs: ${brief.usps.slice(0, 4).join('; ')}` : '',
+      ].filter(Boolean).join('\n')
+    : `Company: ${project.name}, Niche: ${project.niche}, Audience: ${project.target_audience}`;
+
+  const kwList = keywords
+    .map((k, i) =>
+      `${i + 1}. "${k.keyword}" | vol=${k.volume} | KD=${k.kd} | CPC=$${k.cpc.toFixed(2)} | intent=${k.intent ?? 'unknown'} | trend=${k.trend}`
+    )
+    .join('\n');
+
+  return `You are a senior SEO strategist, content marketer, and business growth consultant evaluating keywords for a production SEO platform.
+
+## BUSINESS CONTEXT
+Company: ${project.name}
+Domain: ${project.domain}
+Niche: ${project.niche}
+Target audience: ${project.target_audience}
+Region: ${project.target_region}
+Competitors: ${competitors.slice(0, 6).join(', ') || 'unknown'}
+
+## BUSINESS BRIEF
+${briefSnippet}
+
+## EVALUATION FRAMEWORK (weighted scoring)
+- Business Relevance (25%): Does keyword align with company services, audience, goals?
+- Intent Match (15%): Is intent commercial/transactional > informational > navigational?
+- Traffic Potential (15%): Organic CTR opportunity, SERP type, ad density
+- Search Volume (10%): Volume appropriate for niche (B2B 500–5k can beat B2C 100k)
+- Keyword Difficulty (10%): Competitor strength, SERP weakness, outdated pages
+- SERP Weakness (10%): Can quality content realistically outrank current results?
+- Content Depth (5%): Rich subtopics, FAQs, use cases, 1500+ word article potential
+- Trend Growth (5%): Rising vs declining demand
+- Brand Safety (5%): Not a competitor brand / navigational / celebrity query
+
+## CATEGORY DEFINITIONS
+- high_opportunity: score ≥ 75, strong business fit + rankable + good intent
+- good_fit: score 55–74, solid alignment, worth targeting
+- moderate: score 35–54, some value but gaps in relevance or difficulty
+- low_priority: score < 35, too broad / irrelevant / impossible to rank
+- avoid: brand-only, navigational, spam, or zero business relevance
+
+## KEYWORDS TO EVALUATE
+${kwList}
+
+## CRITICAL RULES
+1. A 500 vol / KD 20 keyword beating a competitor's thin page = high score for B2B.
+2. A 50k vol generic keyword with no buying intent = low score even with high volume.
+3. Reject / heavily penalise competitor brand names, navigational queries, celebrity terms.
+4. High KD is NOT an automatic rejection — weak SERP content creates opportunity.
+5. All string values must use plain ASCII quotes — do NOT use curly/smart quotes.
+
+Return a JSON array. Each element must have exactly these fields:
+- keyword (string — exact match from input)
+- score (integer 0-100)
+- category (one of: high_opportunity, good_fit, moderate, low_priority, avoid)
+- analysis (object with integer fields 1-10: businessRelevance, intentQuality, trafficPotential, keywordDifficulty, serpWeakness, contentDepth, trendGrowth, conversionPotential)
+- reasoning (object with: summary string, strengths string array, weaknesses string array, rankingOpportunity string, contentOpportunity string)
+
+Keep all string values short (summary ≤ 120 chars, each strength/weakness ≤ 80 chars) to avoid truncation.`;
+}
+
+export async function scoreKeywordsWithAI(
+  projectId: string,
+  opts?: { force?: boolean; keywordIds?: string[] }
+): Promise<{
+  success: boolean;
+  scored: number;
+  skipped: number;
+  error?: string;
+}> {
+  const user = await currentUser();
+  if (!user) return { success: false, scored: 0, skipped: 0, error: 'Not authenticated' };
+
+  // Ownership check
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, name, domain, niche, target_audience, target_region')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, scored: 0, skipped: 0, error: 'Project not found' };
+
+  // Load competitors
+  const { data: compRows } = await supabaseAdmin
+    .from('project_competitors')
+    .select('domain')
+    .eq('project_id', projectId);
+  const competitors = (compRows ?? []).map(c => c.domain);
+
+  // Load brief (optional — degrades gracefully)
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.brief;
+
+  // Fetch keywords to score
+  let query = supabaseAdmin
+    .from('keywords')
+    .select('id, keyword, volume, kd, cpc, intent, trend, ai_eval_score, ai_eval_at')
+    .eq('project_id', projectId)
+    .eq('source_type', 'industry')
+    .order('volume', { ascending: false })
+    .limit(200);
+
+  if (opts?.keywordIds?.length) {
+    query = query.in('id', opts.keywordIds);
+  } else if (!opts?.force) {
+    query = query.is('ai_eval_score', null);
+  }
+
+  const { data: rows, error: fetchErr } = await query;
+  if (fetchErr) return { success: false, scored: 0, skipped: 0, error: fetchErr.message };
+  if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
+
+  let scored = 0;
+
+  // Process in batches
+  for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
+    const batch = rows.slice(i, i + AI_EVAL_BATCH);
+    const prompt = buildEvalPrompt(project, brief, competitors, batch as Array<{keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string}>);
+
+    let results: Array<{ keyword: string; score: number; category: string; analysis: AiEvalData['analysis']; reasoning: AiEvalData['reasoning'] }>;
+    try {
+      const raw = await callGeminiForEval(prompt);
+      results = JSON.parse(extractJsonArray(raw));
+    } catch (e) {
+      // Skip this batch but continue with others
+      console.error('[scoreKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);
+      continue;
+    }
+
+    // Build a lookup by keyword phrase (case-insensitive)
+    const lookup = new Map(results.map(r => [r.keyword.toLowerCase().trim(), r]));
+
+    const now = new Date().toISOString();
+    const updates = batch.flatMap(row => {
+      const hit = lookup.get(row.keyword.toLowerCase().trim());
+      if (!hit) return [];
+      const evalData: AiEvalData = { category: hit.category, analysis: hit.analysis, reasoning: hit.reasoning };
+      return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+    });
+
+    if (updates.length) {
+      for (const upd of updates) {
+        await supabaseAdmin
+          .from('keywords')
+          .update({ ai_eval_score: upd.ai_eval_score, ai_eval_data: upd.ai_eval_data, ai_eval_at: upd.ai_eval_at })
+          .eq('id', upd.id);
+      }
+      scored += updates.length;
+    }
+  }
+
+  return { success: true, scored, skipped: rows.length - scored };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// scoreCompetitorKeywordsWithAI
+//
+// Same Gemini evaluation pipeline but targeted at keyword_gaps rows (competitor
+// keyword gaps on the Competitor Insights page). Prompt is tuned for competitor
+// research and blog-writing opportunity signals rather than pure industry intent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildCompetitorEvalPrompt(
+  project: { name: string; domain: string; niche: string; target_audience: string; target_region: string },
+  brief: BusinessBrief | null,
+  competitors: string[],
+  gaps: Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+): string {
+  const briefSnippet = brief
+    ? [
+        brief.summary?.slice(0, 500),
+        brief.products?.length ? `Core offerings: ${brief.products.slice(0, 8).join(', ')}` : '',
+        brief.audiences?.length ? `Audience: ${brief.audiences.slice(0, 3).join('; ')}` : '',
+        brief.usps?.length ? `USPs: ${brief.usps.slice(0, 3).join('; ')}` : '',
+      ].filter(Boolean).join('\n')
+    : `Company: ${project.name}, Niche: ${project.niche}, Audience: ${project.target_audience}`;
+
+  const kwList = gaps
+    .map((g, i) =>
+      `${i + 1}. "${g.keyword}" | vol=${g.volume} | KD=${g.kd} | gap=${g.gap_type} | competitor_weakness=${g.competitor_weakness} | top_competitor=${g.top_competitor_domain}`
+    )
+    .join('\n');
+
+  return `You are a senior content strategist and competitive SEO expert evaluating competitor keyword gaps for a production content platform.
+
+## BUSINESS CONTEXT
+Company: ${project.name}
+Domain: ${project.domain}
+Niche: ${project.niche}
+Target audience: ${project.target_audience}
+Region: ${project.target_region}
+Main competitors: ${competitors.slice(0, 6).join(', ') || 'unknown'}
+
+## BUSINESS BRIEF
+${briefSnippet}
+
+## GAP TYPE DEFINITIONS
+- missing: You have no content for this keyword — competitor ranks, you don't
+- weak: You have content but it underperforms competitor content
+- untapped: High-value keyword neither you nor competitors dominate yet
+
+## EVALUATION FRAMEWORK (weighted scoring for competitor gap keywords)
+- Business Relevance (20%): Does this keyword align with company services / audience goals?
+- Blog Writing Potential (20%): Can a high-quality 1500+ word article be written on this topic? Rich subtopics, FAQs, use cases?
+- Competitive Takeover Opportunity (20%): Gap type + competitor weakness score — how realistic is outranking the current result?
+- Search Intent Quality (15%): Informational / commercial intent that drives discovery and consideration. Avoid pure transactional or navigational.
+- Traffic Potential (10%): Organic volume and CTR opportunity in the niche context
+- Trend & Freshness (10%): Rising demand or evergreen; avoid declining or seasonal-only terms
+- Audience Fit (5%): Does the audience searching this match the company's ideal customer profile?
+
+## CATEGORY DEFINITIONS
+- high_opportunity: score ≥ 75 — strong blog angle, realistic to outrank, business-relevant
+- good_fit: score 55–74 — solid topic, worth writing, some competition
+- moderate: score 35–54 — borderline value or hard to rank
+- low_priority: score < 35 — too generic, irrelevant, or impossible gap
+- avoid: competitor brand, navigational, spam, no writing angle
+
+## COMPETITOR KEYWORDS TO EVALUATE
+${kwList}
+
+## CRITICAL RULES
+1. A missing/untapped keyword with competitor_weakness > 60 is a prime blog target — score high.
+2. A weak gap with competitor_weakness > 40 is still a rewrite/upgrade opportunity.
+3. Prioritise keywords with clear article angles (how-to, comparison, guide, list, case study).
+4. Reject / heavily penalise competitor brand names, pure navigational queries, product-only transactional queries.
+5. B2B niche: 300 vol / KD 25 beating a thin competitor page = high score.
+6. All string values must use plain ASCII quotes.
+
+Return a JSON array. Each element must have exactly these fields:
+- keyword (string — exact match from input)
+- score (integer 0-100)
+- category (one of: high_opportunity, good_fit, moderate, low_priority, avoid)
+- analysis (object with integer fields 1-10: businessRelevance, blogPotential, competitiveTakeover, intentQuality, trafficPotential, trendGrowth, audienceFit, contentDepth)
+- reasoning (object with: summary string, strengths string array, weaknesses string array, rankingOpportunity string, contentOpportunity string)
+
+Keep all strings short (summary ≤ 120 chars, each strength/weakness ≤ 80 chars, rankingOpportunity ≤ 100 chars, contentOpportunity ≤ 100 chars) to avoid truncation.`;
+}
+
+export async function scoreCompetitorKeywordsWithAI(
+  projectId: string,
+  opts?: { force?: boolean }
+): Promise<{
+  success: boolean;
+  scored: number;
+  skipped: number;
+  error?: string;
+}> {
+  const user = await currentUser();
+  if (!user) return { success: false, scored: 0, skipped: 0, error: 'Not authenticated' };
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, name, domain, niche, target_audience, target_region')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, scored: 0, skipped: 0, error: 'Project not found' };
+
+  const { data: compRows } = await supabaseAdmin
+    .from('project_competitors')
+    .select('domain')
+    .eq('project_id', projectId);
+  const competitors = (compRows ?? []).map(c => c.domain);
+
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.brief;
+
+  let query = supabaseAdmin
+    .from('keyword_gaps')
+    .select('id, keyword, volume, kd, gap_type, competitor_weakness, top_competitor_domain, ai_eval_score')
+    .eq('project_id', projectId)
+    .order('volume', { ascending: false })
+    .limit(300);
+
+  if (!opts?.force) {
+    query = query.is('ai_eval_score', null);
+  }
+
+  const { data: rows, error: fetchErr } = await query;
+  if (fetchErr) return { success: false, scored: 0, skipped: 0, error: fetchErr.message };
+  if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
+
+  let scored = 0;
+
+  for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
+    const batch = rows.slice(i, i + AI_EVAL_BATCH);
+    const prompt = buildCompetitorEvalPrompt(
+      project,
+      brief,
+      competitors,
+      batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+    );
+
+    let results: Array<{ keyword: string; score: number; category: string; analysis: Record<string, number>; reasoning: AiEvalData['reasoning'] }>;
+    try {
+      const raw = await callGeminiForEval(prompt);
+      results = JSON.parse(extractJsonArray(raw));
+    } catch (e) {
+      console.error('[scoreCompetitorKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);
+      continue;
+    }
+
+    const lookup = new Map(results.map(r => [r.keyword.toLowerCase().trim(), r]));
+    const now = new Date().toISOString();
+
+    const updates = batch.flatMap(row => {
+      const hit = lookup.get(row.keyword.toLowerCase().trim());
+      if (!hit) return [];
+      const evalData = { category: hit.category, analysis: hit.analysis, reasoning: hit.reasoning };
+      return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+    });
+
+    if (updates.length) {
+      for (const upd of updates) {
+        await supabaseAdmin
+          .from('keyword_gaps')
+          .update({ ai_eval_score: upd.ai_eval_score, ai_eval_data: upd.ai_eval_data, ai_eval_at: upd.ai_eval_at })
+          .eq('id', upd.id);
+      }
+      scored += updates.length;
+    }
+  }
+
+  return { success: true, scored, skipped: rows.length - scored };
 }

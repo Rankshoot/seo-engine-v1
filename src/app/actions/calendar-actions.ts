@@ -201,7 +201,13 @@ export async function addKeywordToCalendarOnDate(
   keywordId: string,
   projectId: string,
   date: string,
-  options?: { contentHealthAudit?: Record<string, unknown> | null }
+  options?: {
+    contentHealthAudit?: Record<string, unknown> | null;
+    /** Applied on create only (not when rescheduling an existing row). */
+    title?: string;
+    article_type?: string;
+    slug?: string;
+  }
 ) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
@@ -267,16 +273,21 @@ export async function addKeywordToCalendarOnDate(
     return { success: true, data, rescheduled: true };
   }
 
-  // CREATE: no existing entry
+  // CREATE: no existing entry — never leave title blank (domain / API callers often omit options.title).
+  const rawTitle = (options?.title ?? '').trim();
+  const title = rawTitle || (kw.keyword as string).trim() || 'Scheduled topic';
+  const articleType = options?.article_type ?? 'Blog Post';
+  const slug = options?.slug ?? slugify(kw.keyword);
+
   const { data, error } = await supabaseAdmin
     .from('calendar_entries')
     .insert({
       project_id: projectId,
       keyword_id: keywordId,
       scheduled_date: date,
-      title: '',
-      article_type: 'Blog Post',
-      slug: slugify(kw.keyword),
+      title,
+      article_type: articleType,
+      slug,
       focus_keyword: kw.keyword,
       secondary_keywords: kw.secondary_keywords ?? [],
       status: 'scheduled',
@@ -289,20 +300,126 @@ export async function addKeywordToCalendarOnDate(
   return { success: true, data };
 }
 
-async function nextOpenCalendarDate(projectId: string): Promise<string | null> {
+/** Local calendar day as YYYY-MM-DD (`daysFromToday`: 0 = today). */
+function localDayISOFromOffset(daysFromToday: number): string {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + daysFromToday);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Earliest vacant dates starting today (one keyword per day). Fills “gaps” between
+ * existing scheduled dates before advancing past the last occupied day.
+ */
+export async function collectEarliestVacantDates(projectId: string, count: number): Promise<string[]> {
+  if (count <= 0) return [];
   const { data: rows } = await supabaseAdmin
     .from('calendar_entries')
     .select('scheduled_date')
     .eq('project_id', projectId);
   const taken = new Set((rows ?? []).map(r => String(r.scheduled_date).slice(0, 10)));
-  const anchor = new Date();
-  for (let add = 1; add <= 400; add++) {
-    const d = new Date(anchor.getTime());
-    d.setUTCDate(anchor.getUTCDate() + add);
-    const key = d.toISOString().slice(0, 10);
-    if (!taken.has(key)) return key;
+  const out: string[] = [];
+  for (let i = 0; i < 500 && out.length < count; i++) {
+    const key = localDayISOFromOffset(i);
+    if (!taken.has(key)) {
+      out.push(key);
+      taken.add(key);
+    }
   }
-  return null;
+  return out;
+}
+
+async function nextOpenCalendarDate(projectId: string): Promise<string | null> {
+  const d = await collectEarliestVacantDates(projectId, 1);
+  return d[0] ?? null;
+}
+
+/** If the keyword has no calendar row, create one on the earliest free day. */
+export async function scheduleKeywordOnFirstVacantIfNeeded(
+  projectId: string,
+  keywordId: string,
+  createOptions?: { title?: string; article_type?: string; slug?: string }
+): Promise<
+  | { ok: true; skipped: boolean; scheduledDate?: string }
+  | { ok: false; error: string }
+> {
+  const { data: existing } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id, scheduled_date')
+    .eq('project_id', projectId)
+    .eq('keyword_id', keywordId)
+    .maybeSingle();
+
+  if (existing) {
+    return {
+      ok: true,
+      skipped: true,
+      scheduledDate: String(existing.scheduled_date).slice(0, 10),
+    };
+  }
+
+  const dates = await collectEarliestVacantDates(projectId, 1);
+  const date = dates[0];
+  if (!date) {
+    return { ok: false, error: 'No free calendar day found in the next 500 days.' };
+  }
+
+  const res = await addKeywordToCalendarOnDate(keywordId, projectId, date, {
+    title: createOptions?.title,
+    article_type: createOptions?.article_type,
+    slug: createOptions?.slug,
+  });
+  if (!res.success) return { ok: false, error: res.error ?? 'Could not schedule keyword' };
+  return { ok: true, skipped: false, scheduledDate: date };
+}
+
+/** Assign each keyword (that is not already on the calendar) to a distinct earliest vacant day. */
+export async function scheduleKeywordsOnVacantDates(
+  projectId: string,
+  keywordIds: string[]
+): Promise<{
+  scheduled: { keywordId: string; date: string }[];
+  skipped: string[];
+  error?: string;
+}> {
+  const unique = [...new Set(keywordIds.filter(Boolean))];
+  if (unique.length === 0) return { scheduled: [], skipped: [] };
+
+  const { data: existingRows } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('keyword_id')
+    .eq('project_id', projectId)
+    .in('keyword_id', unique);
+
+  const hasCal = new Set(
+    (existingRows ?? []).map(r => r.keyword_id as string | null).filter((id): id is string => Boolean(id))
+  );
+  const need = unique.filter(id => !hasCal.has(id));
+  const skipped = unique.filter(id => hasCal.has(id));
+
+  const dates = await collectEarliestVacantDates(projectId, need.length);
+  const scheduled: { keywordId: string; date: string }[] = [];
+  let error: string | undefined;
+
+  for (let i = 0; i < need.length; i++) {
+    const date = dates[i];
+    if (!date) {
+      error = error ?? 'Not enough vacant calendar days for all keywords.';
+      break;
+    }
+    const res = await addKeywordToCalendarOnDate(need[i], projectId, date);
+    if (!res.success) {
+      error = error ?? res.error;
+      continue;
+    }
+    scheduled.push({ keywordId: need[i], date });
+  }
+
+  return { scheduled, skipped, error };
 }
 
 function normKw(s: string): string {
@@ -407,9 +524,16 @@ export async function addContentHealthKeywordToCalendar(
       : {};
 
   if (keywordId) {
-    return addKeywordToCalendarOnDate(keywordId, projectId, scheduledDate, {
+    const r = await addKeywordToCalendarOnDate(keywordId, projectId, scheduledDate, {
       contentHealthAudit: opts.contentHealthAudit ?? null,
     });
+    if (!r.success) return r;
+    const entry = 'data' in r ? r.data : undefined;
+    const sd =
+      entry && typeof entry === 'object' && entry !== null && 'scheduled_date' in entry
+        ? String((entry as { scheduled_date: string }).scheduled_date).slice(0, 10)
+        : scheduledDate.slice(0, 10);
+    return { success: true as const, data: entry, scheduled_date: sd };
   }
 
   const titleBase = canonical.slice(0, 120) || 'Content improvement';

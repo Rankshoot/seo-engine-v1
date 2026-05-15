@@ -51,7 +51,10 @@ CREATE TABLE IF NOT EXISTS blog_audits (
   severity TEXT DEFAULT 'low',
   primary_keyword TEXT DEFAULT '',
   analysis JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- Mirrors analysis.page_status for lightweight coverage queries.
+  page_status TEXT NOT NULL DEFAULT 'ok',
   scraped_chars INTEGER DEFAULT 0,
+  scraped_markdown TEXT,
   error TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -77,6 +80,7 @@ CREATE TABLE IF NOT EXISTS keywords (
   gap_competitor TEXT DEFAULT '',
   competition_level TEXT DEFAULT '',
   intent TEXT DEFAULT '',
+  funnel_stage TEXT DEFAULT '',
   -- Keyword-discovery pipeline columns. See supabase-migration-keyword-discovery-pipeline.sql.
   source_type TEXT DEFAULT 'industry',
   ai_source TEXT DEFAULT '',
@@ -102,6 +106,27 @@ CREATE TABLE IF NOT EXISTS keywords (
 ALTER TABLE keywords
   ADD COLUMN IF NOT EXISTS normalized_keyword TEXT
   GENERATED ALWAYS AS (LOWER(TRIM(keyword))) STORED;
+
+-- Older databases may already have `keywords` without funnel_stage; `CREATE TABLE IF NOT EXISTS`
+-- does not add new columns. See supabase-migration-keyword-funnel-stage.sql.
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS funnel_stage TEXT DEFAULT '';
+
+-- Gemini deep-evaluation columns. See supabase-migration-keyword-ai-eval.sql.
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS ai_eval_score INTEGER DEFAULT NULL;
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS ai_eval_data JSONB DEFAULT NULL;
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS ai_eval_at TIMESTAMPTZ DEFAULT NULL;
+
+-- Gemini AI eval for competitor keyword gaps. See supabase-migration-keyword-gaps-ai-eval.sql.
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS ai_eval_score INTEGER DEFAULT NULL;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS ai_eval_data JSONB DEFAULT NULL;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS ai_eval_at TIMESTAMPTZ DEFAULT NULL;
 
 -- One-row-per-keyword modal payload (overview / history / by-country / SERP).
 CREATE TABLE IF NOT EXISTS keyword_details (
@@ -152,7 +177,7 @@ CREATE TABLE IF NOT EXISTS calendar_entries (
 
 CREATE TABLE IF NOT EXISTS blogs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  entry_id UUID NOT NULL REFERENCES calendar_entries(id) ON DELETE CASCADE,
+  entry_id UUID REFERENCES calendar_entries(id) ON DELETE CASCADE,
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
@@ -165,11 +190,38 @@ CREATE TABLE IF NOT EXISTS blogs (
   research_sources INTEGER DEFAULT 0,
   external_links TEXT[] DEFAULT '{}',
   internal_links TEXT[] DEFAULT '{}',
+  in_articles_library BOOLEAN NOT NULL DEFAULT false,
   source_url TEXT DEFAULT '',
   repair_notes TEXT[] DEFAULT '{}',
+  deep_analysis JSONB,
+  deep_analysis_score INTEGER,
+  deep_analysis_updated_at TIMESTAMPTZ,
+  -- Content Studio (phase 5) — see supabase-migration-content-studio.sql
+  content_type TEXT NOT NULL DEFAULT 'blog'
+    CHECK (content_type IN ('blog', 'ebook', 'whitepaper', 'linkedin')),
+  content_data JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Cached SERP competitor comparison for View Blog → Deep Analysis.
+CREATE TABLE IF NOT EXISTS blog_deep_analyses (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  blog_id UUID NOT NULL REFERENCES blogs(id) ON DELETE CASCADE,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  target_keyword TEXT NOT NULL DEFAULT '',
+  analysis JSONB NOT NULL DEFAULT jsonb_build_object(),
+  trace JSONB NOT NULL DEFAULT jsonb_build_array(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(blog_id)
+);
+-- Older databases may already have `blogs` without these columns; CREATE TABLE IF NOT EXISTS
+-- never adds new columns. See supabase-migration-content-studio.sql.
+ALTER TABLE blogs
+  ADD COLUMN IF NOT EXISTS content_type TEXT NOT NULL DEFAULT 'blog';
+ALTER TABLE blogs
+  ADD COLUMN IF NOT EXISTS content_data JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- ============================================================
 -- Competitor Benchmarking Engine (phase 5)
@@ -264,6 +316,9 @@ CREATE INDEX IF NOT EXISTS idx_calendar_project_id ON calendar_entries(project_i
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_entries(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_blogs_entry_id ON blogs(entry_id);
 CREATE INDEX IF NOT EXISTS idx_blogs_project_id ON blogs(project_id);
+CREATE INDEX IF NOT EXISTS idx_blog_deep_analyses_project_id ON blog_deep_analyses(project_id);
+CREATE INDEX IF NOT EXISTS idx_blogs_content_type
+  ON blogs(project_id, content_type, status);
 CREATE INDEX IF NOT EXISTS idx_competitors_project_id ON competitors(project_id);
 CREATE INDEX IF NOT EXISTS idx_competitor_keywords_project_id ON competitor_keywords(project_id);
 CREATE INDEX IF NOT EXISTS idx_competitor_keywords_competitor_id ON competitor_keywords(competitor_id);
@@ -271,3 +326,16 @@ CREATE INDEX IF NOT EXISTS idx_keyword_gaps_project_id ON keyword_gaps(project_i
 CREATE INDEX IF NOT EXISTS idx_keyword_gaps_score ON keyword_gaps(opportunity_score DESC);
 CREATE INDEX IF NOT EXISTS idx_project_site_explorer_project_id
   ON project_site_explorer(project_id);
+
+-- Cached DataForSEO Google Ads keywords-for-site payload per project (domain tab).
+-- Refreshed only via explicit user action — never on a normal GET.
+CREATE TABLE IF NOT EXISTS project_domain_ads_keywords (
+  project_id UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  target_domain TEXT NOT NULL DEFAULT '',
+  region TEXT NOT NULL DEFAULT 'us',
+  language TEXT NOT NULL DEFAULT 'en',
+  rows JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_fetched_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);

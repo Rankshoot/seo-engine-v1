@@ -133,6 +133,8 @@ export function StatusActionDropdown({
     <ul
       ref={menuRef}
       role="listbox"
+      /** Prevent document-level mousedown handlers (sidebar, other menus) from seeing this event — fixes option clicks not firing in portaled menus. */
+      onMouseDown={e => e.stopPropagation()}
       style={
         displayPos && open
           ? {

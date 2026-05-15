@@ -7,14 +7,16 @@ export type CalendarScheduledKeyword = {
 };
 
 export type KeywordFilterTab = "all" | "ai" | KeywordStatus;
+/** Keyword discovery page — which DataForSEO path Re-discover uses. */
+export type KeywordDiscoverySourceTab = "industry" | "domain";
 export type KeywordTableSortColumn =
   | "keyword"
   | "volume"
-  | "est_traffic"
   | "kd"
   | "cpc"
   | "intent"
   | "analysis_score"
+  | "ai_eval_score"
   | "status";
 export type KeywordSortDir = "asc" | "desc";
 
@@ -22,12 +24,14 @@ export type ProjectStatsSnapshot = {
   approvedKeywords: number;
   calendarEntries: number;
   blogsGenerated: number;
+  articlesInLibrary?: number;
   auditPending?: number;
 };
 
 type KeywordTablePrefs = {
   filter: KeywordFilterTab;
   tableSort: { column: KeywordTableSortColumn; dir: KeywordSortDir };
+  discoverySourceTab: KeywordDiscoverySourceTab;
 };
 
 export type ProjectKeywordWorkspace = {
@@ -103,6 +107,7 @@ export type KeywordWorkspaceState = {
 const defaultPrefs: KeywordTablePrefs = {
   filter: "all",
   tableSort: { column: "analysis_score", dir: "desc" },
+  discoverySourceTab: "industry",
 };
 
 const initialState: KeywordWorkspaceState = {
@@ -150,8 +155,13 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
   if (f === "low_competition" || f === "long_tail") proj.prefs.filter = "all";
   const col = proj.prefs.tableSort.column as string;
   if (col === "ai_score") proj.prefs.tableSort.column = "analysis_score";
+  if (col === "funnel_stage") {
+    proj.prefs.tableSort.column = "analysis_score";
+    proj.prefs.tableSort.dir = "desc";
+  }
   const pf = proj.aiAssistant.preferredFilter as string;
   if (pf === "low_competition" || pf === "long_tail") proj.aiAssistant.preferredFilter = "all";
+  proj.prefs.discoverySourceTab ??= "industry";
   return proj;
 }
 
@@ -186,6 +196,13 @@ export const keywordWorkspaceSlice = createSlice({
       }>
     ) {
       ensureProject(state, action.payload.projectId).prefs.tableSort = action.payload.tableSort;
+    },
+
+    rememberKeywordDiscoverySourceTab(
+      state,
+      action: PayloadAction<{ projectId: string; tab: KeywordDiscoverySourceTab }>
+    ) {
+      ensureProject(state, action.payload.projectId).prefs.discoverySourceTab = action.payload.tab;
     },
 
     /**
@@ -265,7 +282,7 @@ export const keywordWorkspaceSlice = createSlice({
       action: PayloadAction<{ projectId: string; count: number }>
     ) {
       const project = ensureProject(state, action.payload.projectId);
-      project.stats ??= { approvedKeywords: 0, calendarEntries: 0, blogsGenerated: 0 };
+      project.stats ??= { approvedKeywords: 0, calendarEntries: 0, blogsGenerated: 0, articlesInLibrary: 0 };
       project.stats.calendarEntries = action.payload.count;
     },
 
@@ -411,6 +428,7 @@ export const keywordWorkspaceSlice = createSlice({
 export const {
   rememberKeywordFilter,
   rememberKeywordSort,
+  rememberKeywordDiscoverySourceTab,
   mergeKeywordStatuses,
   keywordStatusChanged,
   bulkKeywordStatusChanged,

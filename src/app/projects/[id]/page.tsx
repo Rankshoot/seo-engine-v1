@@ -18,6 +18,7 @@ import type { CalendarEntryWithBlog, ProjectCompetitor } from "@/lib/types";
 import { TARGET_REGIONS } from "@/lib/types";
 import { BusinessBriefSection } from "@/components/projects/BusinessBriefSection";
 import { Skeleton } from "@/components/Skeleton";
+import { PageTitle } from "@/components/common";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -127,9 +128,7 @@ export default function ProjectOverviewPage() {
 
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div>
-            <h1 className="text-[48px] font-normal tracking-[-0.96px] leading-none text-text-primary font-display">
-              {project.name}
-            </h1>
+            <PageTitle>{project.name}</PageTitle>
             {project.company && project.company !== project.name && (
               <p className="mt-3 text-[16px] text-text-tertiary">{project.company}</p>
             )}

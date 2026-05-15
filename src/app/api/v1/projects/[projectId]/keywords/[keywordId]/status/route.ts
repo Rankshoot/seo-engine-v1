@@ -8,13 +8,17 @@ export const runtime = "nodejs";
 export async function PATCH(req: Request, { params }: { params: Promise<{ projectId: string; keywordId: string }> }) {
   const user = await currentUser();
   if (!user) return apiJson({ success: false, error: "Not authenticated" }, { status: 401 });
-  const { keywordId } = await params;
+  const { projectId, keywordId } = await params;
   try {
     const body = (await req.json()) as { status: KeywordStatus };
     if (!body.status) return apiJson({ success: false, error: "Expected { status }" }, { status: 400 });
-    const result = await updateKeywordStatus(keywordId, body.status);
-    return apiJson(result, { status: result.success ? 200 : 404 });
-  } catch {
-    return apiJson({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    const result = await updateKeywordStatus(keywordId, body.status, projectId);
+    return apiJson(result, { status: result.success ? 200 : 400 });
+  } catch (e) {
+    console.error("[PATCH /keywords/:id/status]", e);
+    return apiJson(
+      { success: false, error: e instanceof Error ? e.message : "Server error" },
+      { status: 500 }
+    );
   }
 }

@@ -15,8 +15,18 @@ export const qk = {
 
   calendar: (id: string) => ["calendar", id] as const,
   calendarWithBlogs: (id: string) => ["calendar", id, "with-blogs"] as const,
+  articlesLibrary: (id: string) => ["project", id, "articles-library"] as const,
+  contentGeneratorHistory: (id: string) => ["project", id, "content-generator-history"] as const,
+  /**
+   * Unified Content Studio history (blog + ebook + whitepaper + linkedin).
+   * Pass the same key (no filter dimension) for every list — the frontend
+   * filters in-memory so we never duplicate fetches across tabs.
+   */
+  contentStudioHistory: (id: string) => ["project", id, "content-studio-history"] as const,
 
   audits: (id: string) => ["audits", id] as const,
+  /** Content Health snapshot URL → calendar entry + blog id (Analyze content history actions). */
+  analyzeCalendarLinks: (id: string) => ["audits", id, "analyze-calendar-links"] as const,
   competitors: (id: string) => ["competitors", id] as const,
   brief: (id: string) => ["brief", id] as const,
   blog: (blogId: string) => ["blog", blogId] as const,

@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    /** Instant Article custom uploads (base64) can approach 10 MB per file. */
+    serverActions: {
+      bodySizeLimit: "12mb",
+    },
+  },
   async headers() {
     return [
       {

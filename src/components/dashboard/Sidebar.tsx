@@ -11,12 +11,9 @@ const Icon = {
   plus: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8m-4-4h8"/></svg>,
 };
 
-const navItems = [
-  { icon: Icon.folder, label: "Projects", href: "/projects" },
-  { icon: Icon.plus, label: "New Project", href: "/projects/new" },
-];
+const navItems = [{ icon: Icon.folder, label: "Projects", href: "/projects" as const }];
 
-export default function Sidebar() {
+export default function Sidebar({ onNewProject }: { onNewProject?: () => void }) {
   const pathname = usePathname();
 
   return (
@@ -35,11 +32,8 @@ export default function Sidebar() {
       <nav className="flex-1 px-4">
         <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary px-4 mb-4">Navigation</p>
         <ul className="space-y-1.5">
-          {navItems.map((item) => {
-            const isActive = item.href === "/projects"
-              ? pathname === item.href
-              : pathname.startsWith(item.href);
-
+          {navItems.map(item => {
+            const isActive = pathname === "/projects" || pathname === "/projects/";
             return (
               <li key={item.label}>
                 <ProjectNavLink
@@ -57,6 +51,26 @@ export default function Sidebar() {
               </li>
             );
           })}
+          <li>
+            {onNewProject ? (
+              <button
+                type="button"
+                onClick={onNewProject}
+                className="flex w-full items-center gap-3 px-4 py-3 rounded-[8px] text-[14px] font-medium transition-colors text-left border border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-hover"
+              >
+                <span className="text-text-tertiary">{Icon.plus}</span>
+                New Project
+              </button>
+            ) : (
+              <ProjectNavLink
+                href="/projects?new=1"
+                className="flex items-center gap-3 px-4 py-3 rounded-[8px] text-[14px] font-medium transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"
+              >
+                <span className="text-text-tertiary">{Icon.plus}</span>
+                New Project
+              </ProjectNavLink>
+            )}
+          </li>
         </ul>
       </nav>
 

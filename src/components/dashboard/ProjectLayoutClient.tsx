@@ -7,6 +7,7 @@ import type { Project } from "@/lib/types";
 import { ContextualAIChatbot, type AIMode } from "@/features/ai-assistant/components/ContextualAIChatbot";
 import { Skeleton } from "@/components/Skeleton";
 import { useProject, useProjects } from "@/lib/query";
+import { NewProjectModal } from "@/components/NewProjectModal";
 
 /** Sidebar + main chrome while `qk.project` is still resolving (non-blocking layout). */
 function ProjectLayoutShell({
@@ -58,7 +59,7 @@ function ProjectLayoutShell({
           />
         </div>
         <nav className={`flex-1 overflow-y-auto transition-all duration-300 ease-in-out ${isCollapsed ? "px-2" : "px-4"} space-y-2 mt-2`}>
-          {[0, 1, 2, 3, 4, 5].map(i => (
+          {[0, 1, 2, 3, 4, 5, 6].map(i => (
             <Skeleton
               key={i}
               className={isCollapsed ? "h-11 w-11 mx-auto rounded-[8px]" : "h-11 w-full rounded-[8px]"}
@@ -88,6 +89,7 @@ export default function ProjectLayoutClient({
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [aiMode, setAiMode] = useState<AIMode>("closed");
+  const [newProjectModalOpen, setNewProjectModalOpen] = useState(false);
 
   const { data: projectRes, isFetched } = useProject(projectId);
   const { data: projectsListRes } = useProjects();
@@ -117,6 +119,7 @@ export default function ProjectLayoutClient({
         isCollapsed={isCollapsed}
         setIsCollapsed={setIsCollapsed}
         onOpenAI={() => setAiMode("full")}
+        onNewProject={() => setNewProjectModalOpen(true)}
       />
       <main
         className={`flex-1 min-w-0 overflow-y-auto p-6 lg:p-8 transition-all duration-300 ease-in-out ${
@@ -125,6 +128,7 @@ export default function ProjectLayoutClient({
       >
         {children}
         <ContextualAIChatbot project={project} aiMode={aiMode} setAiMode={setAiMode} />
+        <NewProjectModal open={newProjectModalOpen} onClose={() => setNewProjectModalOpen(false)} />
       </main>
     </div>
   );

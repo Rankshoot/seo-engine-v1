@@ -28,6 +28,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/Skeleton";
+import { Dialog } from "@/components/common";
 import { API_V1 } from "@/frontend/api/http";
 import { V1Routes } from "@/frontend/api/routes";
 import { qk } from "@/lib/query";
@@ -208,25 +209,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
   const fetchError = queryError instanceof Error ? queryError.message : queryError ? String(queryError) : "";
   void isFetching;
 
-  // Esc to close.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  // Body scroll lock while the modal is open.
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
+  // Esc-to-close and body scroll lock are handled by <Dialog/>.
 
   const handleStatus = async (status: KeywordStatus) => {
     if (!keyword) return;
@@ -238,7 +221,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
     }
   };
 
-  if (!open || !keyword) return null;
+  if (!keyword) return null;
 
   const overview = data?.overview ?? null;
   // Prefer freshly fetched values; fall back to the row data so the modal
@@ -259,17 +242,10 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
     !data.ideas.alsoTalkAbout.length;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Keyword details: ${keyword.keyword}`}
-      className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-surface-primary/85 p-3 backdrop-blur-sm sm:p-6 animate-fade-in"
-      onClick={onClose}
-    >
+    <Dialog open={open} onClose={onClose} size="xl" unstyled>
       <div
-        className="relative my-4 flex w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-secondary shadow-2xl shadow-black/60 animate-scale-in"
+        className="my-4 flex w-full flex-col overflow-hidden rounded-card border border-border-default bg-surface-secondary shadow-(--shadow-xl) animate-[scale-in_0.18s_var(--ease-out)_forwards]"
         style={{ maxHeight: "calc(100vh - 3rem)" }}
-        onClick={e => e.stopPropagation()}
       >
         <Header
           keyword={keyword}
@@ -362,7 +338,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
           />
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

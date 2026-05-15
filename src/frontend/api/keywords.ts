@@ -1,5 +1,5 @@
 import type { Keyword, KeywordStatus } from "@/lib/types";
-import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
+import type { CompetitorKeywordsForSiteRow, DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { apiDelete, apiGet, apiPatch, apiPost } from "./http";
 import { V1Routes } from "./routes";
 
@@ -50,9 +50,42 @@ export const keywordsApi = {
   },
 
   domainKeywords(projectId: string): Promise<
-    { success: true; data: CompetitorKeywordsForSiteRow[] } | { success: false; error: string; data: CompetitorKeywordsForSiteRow[] }
+    | {
+        success: true;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache?: boolean;
+        lastFetchedAt?: string | null;
+      }
+    | {
+        success: false;
+        error: string;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache?: boolean;
+        lastFetchedAt?: string | null;
+      }
   > {
     return apiGet(V1Routes.keywordsDomain(projectId));
+  },
+
+  /** Calls DataForSEO and overwrites the domain-keyword snapshot (Re-discover). */
+  domainKeywordsRefresh(projectId: string): Promise<
+    | {
+        success: true;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache: boolean;
+        lastFetchedAt: string | null;
+        discoveryTrace?: DataForSEOTraceEntry[];
+      }
+    | {
+        success: false;
+        error: string;
+        data: CompetitorKeywordsForSiteRow[];
+        fromCache: boolean;
+        lastFetchedAt: string | null;
+        discoveryTrace?: DataForSEOTraceEntry[];
+      }
+  > {
+    return apiPost(V1Routes.keywordsDomain(projectId), { action: "refresh" });
   },
 
   upsertDomainKeyword(
@@ -62,7 +95,16 @@ export const keywordsApi = {
       "keyword" | "volume" | "kd" | "cpc" | "intent" | "estimated_monthly_traffic"
     >,
     status: KeywordStatus
-  ): Promise<{ success: true; id: string } | { success: false; error?: string }> {
+  ): Promise<
+    | {
+        success: true;
+        id: string;
+        scheduledDate?: string;
+        calendarSkipped?: boolean;
+        calendarError?: string;
+      }
+    | { success: false; error?: string }
+  > {
     return apiPost(V1Routes.keywordsDomain(projectId), { row, status });
   },
 
@@ -70,7 +112,13 @@ export const keywordsApi = {
     keywordId: string,
     projectId: string,
     status: KeywordStatus
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    scheduledDate?: string;
+    calendarSkipped?: boolean;
+    calendarError?: string;
+  }> {
     return apiPatch(V1Routes.keywordStatus(projectId, keywordId), { status });
   },
 
@@ -78,7 +126,14 @@ export const keywordsApi = {
     projectId: string,
     keywordIds: string[],
     status: KeywordStatus
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    calendarScheduled?: number;
+    calendarSkipped?: number;
+    firstScheduledDate?: string;
+    calendarError?: string;
+  }> {
     return apiPost(V1Routes.keywordsBulkStatus(projectId), { keywordIds, status });
   },
 

@@ -37,7 +37,9 @@ export type KeywordSourceType =
   | 'competitor_benchmark'
   | 'quick_win'
   /** Google Ads `keywords_for_site` — domain tab live list. */
-  | 'google_ads_domain';
+  | 'google_ads_domain'
+  /** Added via calendar “custom keyword” flow. */
+  | 'manual';
 
 /** Multi-intent flags as Ahrefs returns them. Structurally matches `AhrefsIntentObject`. */
 export interface KeywordIntents {
@@ -50,6 +52,41 @@ export interface KeywordIntents {
 }
 export type CalendarStatus = 'scheduled' | 'generating' | 'generated' | 'downloaded' | 'published' | 'approved';
 export type BlogStatus = 'generated' | 'approved' | 'published';
+
+/**
+ * Content Studio (phase 5).
+ *
+ * `'blog'` keeps the existing markdown blog pipeline. The other three live in
+ * the same `blogs` table and reuse the same status / SEO scoring / preview
+ * primitives — only the writer prompt and content-data payload differ.
+ */
+export type ContentType = 'blog' | 'ebook' | 'whitepaper' | 'linkedin';
+
+export const CONTENT_TYPES: ContentType[] = ['blog', 'ebook', 'whitepaper', 'linkedin'];
+
+/** Display metadata used by sidebar nav, history filters, and preview chrome. */
+export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
+  blog: 'Blog article',
+  ebook: 'Ebook',
+  whitepaper: 'Whitepaper',
+  linkedin: 'LinkedIn post',
+};
+
+export const CONTENT_TYPE_PLURAL: Record<ContentType, string> = {
+  blog: 'Blog articles',
+  ebook: 'Ebooks',
+  whitepaper: 'Whitepapers',
+  linkedin: 'LinkedIn posts',
+};
+
+/** Path segment for type-specific routes inside `/content-generator/`. */
+export const CONTENT_TYPE_SLUG: Record<ContentType, string> = {
+  blog: 'blogs',
+  ebook: 'ebooks',
+  whitepaper: 'whitepapers',
+  linkedin: 'linkedin',
+};
+
 export type BlogSeoIssueKey =
   | 'title_keyword'
   | 'intro_keyword'
@@ -94,6 +131,8 @@ export interface Keyword {
   competition_level?: string | null;
   /** Dominant SERP intent: informational / commercial / navigational / transactional */
   intent?: string | null;
+  /** Marketing funnel: TOFU / MOFU / BOFU (Gemini on AI intent refresh, else heuristic). */
+  funnel_stage?: string | null;
   /** Discovery-pipeline provenance. */
   source_type?: KeywordSourceType | string | null;
   /** Set when the keyword was stamped from the AI assistant (e.g. "AI · keywords"). */
@@ -123,6 +162,34 @@ export interface Keyword {
   serp_features?: KeywordSerpFeature[] | null;
   /** Mutation timestamp; bumped explicitly by app code on UPDATE. */
   updated_at?: string;
+  /**
+   * 0–100 strategic AI score produced by Gemini deep-evaluation.
+   * Null until `scoreKeywordsWithAI` has run for this keyword.
+   */
+  ai_eval_score?: number | null;
+  /** Full Gemini evaluation payload (analysis sub-scores + reasoning). */
+  ai_eval_data?: {
+    category: string;
+    analysis: {
+      businessRelevance: number;
+      intentQuality: number;
+      trafficPotential: number;
+      keywordDifficulty: number;
+      serpWeakness: number;
+      contentDepth: number;
+      trendGrowth: number;
+      conversionPotential: number;
+    };
+    reasoning: {
+      summary: string;
+      strengths: string[];
+      weaknesses: string[];
+      rankingOpportunity: string;
+      contentOpportunity: string;
+    };
+  } | null;
+  /** ISO timestamp when ai_eval_score was last computed. */
+  ai_eval_at?: string | null;
 }
 
 /**
@@ -260,7 +327,8 @@ export interface CalendarEntry {
 
 export interface Blog {
   id: string;
-  entry_id: string;
+  /** Null for uploads analyzed under Content Health (no calendar row). */
+  entry_id: string | null;
   project_id: string;
   title: string;
   content: string;
@@ -273,18 +341,117 @@ export interface Blog {
   research_sources: number;
   external_links: string[];
   internal_links: string[];
+  /** When true, listed on the project Articles page (saved from the blog viewer). */
+  in_articles_library?: boolean;
   /** If this blog is a repair of an existing public page, the original URL. */
   source_url?: string;
   /** Bullet list of changes the LLM made during repair (only set when article_type === 'Repair'). */
   repair_notes?: string[];
+  /**
+   * Full cached SERP deep analysis JSON when `blog_deep_analyses` is unavailable
+   * (fallback on the blog row). Shape matches `BlogDeepAnalysisResult` from `blog-deep-analysis.ts`.
+   */
+  deep_analysis?: unknown | null;
+  /** Latest saved SERP deep analysis score (0–100); set when Deep Analysis completes. */
+  deep_analysis_score?: number | null;
+  /** When `deep_analysis_score` was last written from Deep Analysis. */
+  deep_analysis_updated_at?: string | null;
+  /** Content Studio type — 'blog' for existing rows, 'ebook'/'whitepaper'/'linkedin' for new content. */
+  content_type?: ContentType;
+  /**
+   * Type-specific structured payload (chapters for ebooks, sections for whitepapers,
+   * hooks/CTA for LinkedIn). The markdown body is still the source of truth — this
+   * lets the previewer render rich type-specific UI without re-parsing markdown.
+   */
+  content_data?: ContentDataPayload;
   created_at: string;
   updated_at: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Content Studio payloads (`blogs.content_data`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface EbookChapter {
+  number: number;
+  title: string;
+  summary: string;
+  word_count: number;
+}
+
+export interface EbookContentData {
+  cover_title: string;
+  cover_subtitle: string;
+  table_of_contents: EbookChapter[];
+  faqs: Array<{ question: string; answer: string }>;
+  cta: string;
+  references: string[];
+  audience: string;
+  tone: string;
+  goal: string;
+  primary_keyword: string;
+  semantic_keywords: string[];
+}
+
+export interface WhitepaperSection {
+  number: number;
+  title: string;
+  summary: string;
+}
+
+export interface WhitepaperContentData {
+  cover_title: string;
+  cover_subtitle: string;
+  executive_summary: string;
+  sections: WhitepaperSection[];
+  recommendations: string[];
+  references: string[];
+  industry: string;
+  audience: string;
+  problem_statement: string;
+  business_objective: string;
+  technical_depth: string;
+  primary_keyword: string;
+  semantic_keywords: string[];
+}
+
+export type LinkedInPostStyle =
+  | 'educational'
+  | 'founder'
+  | 'industry_insight'
+  | 'storytelling'
+  | 'list'
+  | 'carousel';
+
+export interface LinkedInContentData {
+  post_style: LinkedInPostStyle;
+  hook: string;
+  body: string;
+  cta: string;
+  hashtags: string[];
+  audience: string;
+  tone: string;
+  primary_keyword: string;
+  /** Optional single-image attachment for the feed card (set after image generation). */
+  featured_image_url?: string;
+}
+
+export type ContentDataPayload =
+  | Record<string, never>
+  | EbookContentData
+  | WhitepaperContentData
+  | LinkedInContentData;
 
 /** Calendar row plus optional blog summary from `getCalendarWithBlogs`. */
 export type CalendarEntryWithBlog = CalendarEntry & {
   blog: Pick<Blog, "id" | "entry_id" | "title" | "word_count" | "status" | "research_sources"> | null;
 };
+
+/** Row shape for the Articles library table (no body content). */
+export type ArticleLibraryEntry = Pick<
+  Blog,
+  "id" | "title" | "target_keyword" | "article_type" | "status" | "created_at" | "updated_at"
+>;
 
 export const ARTICLE_TYPES = [
   'How-to Guide',
@@ -298,6 +465,7 @@ export const ARTICLE_TYPES = [
   "Beginner's Guide",
   'Expert Interview',
   'Repair',
+  'Import',
 ] as const;
 
 export const TARGET_REGIONS = [
@@ -417,6 +585,31 @@ export interface KeywordGap {
   reasoning: string;
   created_at: string;
   updated_at: string;
+  /** 0-100 Gemini strategic AI score for this competitor keyword gap. */
+  ai_eval_score?: number | null;
+  /** Full Gemini evaluation payload. */
+  ai_eval_data?: {
+    category: string;
+    analysis: {
+      businessRelevance: number;
+      intentQuality: number;
+      trafficPotential: number;
+      keywordDifficulty: number;
+      serpWeakness: number;
+      contentDepth: number;
+      trendGrowth: number;
+      blogPotential: number;
+    };
+    reasoning: {
+      summary: string;
+      strengths: string[];
+      weaknesses: string[];
+      rankingOpportunity: string;
+      contentOpportunity: string;
+    };
+  } | null;
+  /** ISO timestamp of last AI evaluation. */
+  ai_eval_at?: string | null;
 }
 
 /** Aggregated benchmark across all competitors for one project. */

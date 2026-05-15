@@ -1,11 +1,17 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback, type DragEvent } from "react";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
 import type { CalendarEntry } from "@/lib/types";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
+
+const CAL_DRAG_MIME = "application/x-seo-calendar-entry";
+
+function normalizeCalDay(raw: string): string {
+  return String(raw).slice(0, 10);
+}
 
 function fmtVol(n: number | undefined | null): string {
   if (!n || n === 0) return "—";
@@ -21,14 +27,6 @@ function kdLabel(kd: number | undefined | null): { text: string; cls: string } {
   return { text: "Hard", cls: "text-brand-coral" };
 }
 
-function fmtModalDate(iso: string): string {
-  return new Date(iso + "T12:00:00").toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
 
 export function MiniCalendar({
   entries,
@@ -37,9 +35,11 @@ export function MiniCalendar({
   schedulingKeywordPhrase,
   onDatePick,
   onCancelSchedule,
-  unscheduledKeywords = [],
-  onScheduleKeywordOnDate,
   scheduleBusy = false,
+  /** Drag a scheduled row to another day (grid). Disabled while `schedulingKeywordId` is set. */
+  onMoveEntryToDate,
+  /** Called when the user clicks an empty future day in the grid. Opens the add-keyword modal. */
+  onEmptyDayClick,
 }: {
   entries: CalendarEntry[];
   projectId: string;
@@ -47,35 +47,70 @@ export function MiniCalendar({
   schedulingKeywordPhrase: string;
   onDatePick: (date: string) => void;
   onCancelSchedule: () => void;
-  unscheduledKeywords?: Array<{
-    id: string;
-    keyword: string;
-    volume?: number | null;
-    kd?: number | null;
-    /** Traffic potential (e.g. Ahrefs-style estimate for top-ranking page). */
-    traffic?: number | null;
-  }>;
-  onScheduleKeywordOnDate?: (keywordId: string, date: string) => boolean | Promise<boolean>;
   scheduleBusy?: boolean;
+  onMoveEntryToDate?: (entryId: string, date: string) => boolean | Promise<boolean>;
+  onEmptyDayClick?: (date: string) => void;
 }) {
   const today = new Date();
-  const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [viewMonth, setViewMonth] = useState(today.getMonth());
-  const [pickKeywordModalDate, setPickKeywordModalDate] = useState<string | null>(null);
+  const [calendarViewYM, setCalendarViewYM] = useState(() => ({
+    y: today.getFullYear(),
+    m: today.getMonth(),
+  }));
+  const viewYear = calendarViewYM.y;
+  const viewMonth = calendarViewYM.m;
+  const [draggingEntryId, setDraggingEntryId] = useState<string | null>(null);
+  const [dragOverIso, setDragOverIso] = useState<string | null>(null);
+  const monthNavIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const dateToEntry = useMemo(
-    () => new Map(entries.map(e => [e.scheduled_date, e])),
-    [entries]
-  );
+  const stopMonthNavInterval = useCallback(() => {
+    if (monthNavIntervalRef.current) {
+      clearInterval(monthNavIntervalRef.current);
+      monthNavIntervalRef.current = null;
+    }
+  }, []);
+
+  const endDragSession = useCallback(() => {
+    setDraggingEntryId(null);
+    setDragOverIso(null);
+    stopMonthNavInterval();
+  }, [stopMonthNavInterval]);
+
+  useEffect(() => {
+    return () => stopMonthNavInterval();
+  }, [stopMonthNavInterval]);
+
+  /** All entries per calendar day (multiple keywords can share the same date). */
+  const entriesByDate = useMemo(() => {
+    const m = new Map<string, CalendarEntry[]>();
+    for (const e of entries) {
+      const k = normalizeCalDay(e.scheduled_date);
+      const list = m.get(k) ?? [];
+      list.push(e);
+      m.set(k, list);
+    }
+    for (const list of m.values()) {
+      list.sort((a, b) => a.focus_keyword.localeCompare(b.focus_keyword));
+    }
+    return m;
+  }, [entries]);
 
   const normPhrase = schedulingKeywordPhrase.toLowerCase().trim();
+
+  const entryConflictsWithScheduling = useCallback(
+    (e: CalendarEntry) => {
+      if (!schedulingKeywordId) return false;
+      if (e.keyword_id) return e.keyword_id !== schedulingKeywordId;
+      return !normPhrase || e.focus_keyword.toLowerCase().trim() !== normPhrase;
+    },
+    [schedulingKeywordId, normPhrase]
+  );
 
   const schedulingKeywordCurrentDate = useMemo(() => {
     if (!schedulingKeywordId) return null;
     const e =
       entries.find(e => e.keyword_id === schedulingKeywordId) ??
       entries.find(e => !e.keyword_id && normPhrase && e.focus_keyword.toLowerCase().trim() === normPhrase);
-    return e?.scheduled_date ?? null;
+    return e ? normalizeCalDay(e.scheduled_date) : null;
   }, [entries, schedulingKeywordId, normPhrase]);
 
   const firstDay = new Date(viewYear, viewMonth, 1);
@@ -88,23 +123,46 @@ export function MiniCalendar({
   const toISO = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
   const todayISO = toISO(today.getFullYear(), today.getMonth(), today.getDate());
 
-  const prevMonth = () => {
-    if (viewMonth === 0) {
-      setViewYear(y => y - 1);
-      setViewMonth(11);
-    } else setViewMonth(m => m - 1);
-  };
-  const nextMonth = () => {
-    if (viewMonth === 11) {
-      setViewYear(y => y + 1);
-      setViewMonth(0);
-    } else setViewMonth(m => m + 1);
-  };
+  const prevMonth = () =>
+    setCalendarViewYM(v => (v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 }));
+  const nextMonth = () =>
+    setCalendarViewYM(v => (v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 }));
 
-  const canOpenAddModal = Boolean(onScheduleKeywordOnDate) && unscheduledKeywords.length > 0;
+  const dndActive = Boolean(onMoveEntryToDate) && !schedulingKeywordId;
+
+  const emptyDayDropProps = useCallback(
+    (iso: string, eligible: boolean) => {
+      if (!dndActive || !eligible) return {};
+      return {
+        onDragOver: (e: DragEvent) => {
+          if (!draggingEntryId) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setDragOverIso(iso);
+        },
+        onDrop: async (e: DragEvent) => {
+          e.preventDefault();
+          if (!draggingEntryId || scheduleBusy || !onMoveEntryToDate) return;
+          let entryId = draggingEntryId;
+          try {
+            const raw = e.dataTransfer.getData(CAL_DRAG_MIME);
+            if (raw) {
+              const parsed = JSON.parse(raw) as { entryId?: string };
+              if (parsed.entryId) entryId = parsed.entryId;
+            }
+          } catch {
+            /* use draggingEntryId */
+          }
+          await onMoveEntryToDate(entryId, iso);
+          endDragSession();
+        },
+      };
+    },
+    [dndActive, draggingEntryId, scheduleBusy, onMoveEntryToDate, endDragSession]
+  );
 
   return (
-    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6">
+    <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6" onDragEnd={endDragSession}>
       <div className="mb-5 flex items-center justify-between">
         <div>
           <h3 className="text-[18px] font-medium tracking-[-0.18px] text-text-primary">Content Calendar</h3>
@@ -124,9 +182,8 @@ export function MiniCalendar({
           ) : (
             <p className="mt-0.5 text-[13px] text-text-tertiary">
               {entries.length} scheduled
-              {unscheduledKeywords.length > 0
-                ? ` · ${unscheduledKeywords.length} waiting for a date`
-                : ""}
+              {dndActive ? " · Drag a card by its handle to reschedule" : ""}
+              {onEmptyDayClick ? " · Click any free date to add a keyword" : ""}
             </p>
           )}
         </div>
@@ -145,7 +202,21 @@ export function MiniCalendar({
             <button
               type="button"
               onClick={prevMonth}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-lg text-text-secondary transition-colors hover:bg-surface-hover"
+              onDragEnter={e => {
+                if (!draggingEntryId) return;
+                e.preventDefault();
+                stopMonthNavInterval();
+                monthNavIntervalRef.current = setInterval(() => {
+                  prevMonth();
+                }, 480);
+              }}
+              onDragLeave={() => {
+                stopMonthNavInterval();
+              }}
+              title={dndActive && draggingEntryId ? "Hold drag here to go to previous month" : undefined}
+              className={`flex h-8 w-8 items-center justify-center rounded-full text-lg text-text-secondary transition-colors hover:bg-surface-hover ${
+                draggingEntryId ? "ring-1 ring-brand-action/30 bg-brand-action/5" : ""
+              }`}
             >
               ‹
             </button>
@@ -153,7 +224,21 @@ export function MiniCalendar({
             <button
               type="button"
               onClick={nextMonth}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-lg text-text-secondary transition-colors hover:bg-surface-hover"
+              onDragEnter={e => {
+                if (!draggingEntryId) return;
+                e.preventDefault();
+                stopMonthNavInterval();
+                monthNavIntervalRef.current = setInterval(() => {
+                  nextMonth();
+                }, 480);
+              }}
+              onDragLeave={() => {
+                stopMonthNavInterval();
+              }}
+              title={dndActive && draggingEntryId ? "Hold drag here to go to next month" : undefined}
+              className={`flex h-8 w-8 items-center justify-center rounded-full text-lg text-text-secondary transition-colors hover:bg-surface-hover ${
+                draggingEntryId ? "ring-1 ring-brand-action/30 bg-brand-action/5" : ""
+              }`}
             >
               ›
             </button>
@@ -181,18 +266,15 @@ export function MiniCalendar({
           }
 
           const iso = toISO(viewYear, viewMonth, dayNum);
-          const entry = dateToEntry.get(iso) ?? null;
+          const dayEntries = entriesByDate.get(iso) ?? [];
+          const hasDayEntry = dayEntries.length > 0;
           const isToday = iso === todayISO;
           const isPast = iso < todayISO;
 
           const isOwnCurrentDate = !!schedulingKeywordId && iso === schedulingKeywordCurrentDate;
 
           const isOtherKeywordDate =
-            !!entry &&
-            (() => {
-              if (entry.keyword_id) return entry.keyword_id !== schedulingKeywordId;
-              return !normPhrase || entry.focus_keyword.toLowerCase().trim() !== normPhrase;
-            })();
+            !!schedulingKeywordId && dayEntries.some(e => entryConflictsWithScheduling(e));
 
           const isPickable =
             !!schedulingKeywordId &&
@@ -201,6 +283,13 @@ export function MiniCalendar({
             iso !== schedulingKeywordCurrentDate;
 
           if (schedulingKeywordId && isOwnCurrentDate) {
+            const schedulingEntry =
+              dayEntries.find(e => e.keyword_id === schedulingKeywordId) ??
+              dayEntries.find(
+                e => !e.keyword_id && normPhrase && e.focus_keyword.toLowerCase().trim() === normPhrase
+              ) ??
+              dayEntries[0] ??
+              null;
             return (
               <div
                 key={idx}
@@ -210,63 +299,43 @@ export function MiniCalendar({
               >
                 <span className="self-end text-[10px] font-bold leading-none text-[#f59e0b]/60">{dayNum}</span>
                 <p className="line-clamp-2 flex flex-1 items-center justify-center px-1 text-center text-[9px] font-medium text-[#f59e0b]">
-                  {entry?.focus_keyword}
+                  {schedulingEntry?.focus_keyword}
                 </p>
                 <span className="pb-0.5 text-center text-[9px] text-[#f59e0b]/60">current date</span>
               </div>
             );
           }
 
-          if (entry && !isOwnCurrentDate) {
-            const kwData = entry.keywords as
-              | {
-                  source_type?: string | null;
-                  volume?: number | null;
-                  kd?: number | null;
-                  ai_source?: string | null;
-                }
-              | undefined;
-            const volume = kwData?.volume;
-            const kd_ = kdLabel(kwData?.kd);
-            const isGenerated = entry.status === "generated" || entry.status === "downloaded";
+          if (hasDayEntry && !isOwnCurrentDate) {
             const isBlocked = !!schedulingKeywordId;
-
-            const origin = resolveCalendarKeywordOrigin({
-              keywordSourceType: kwData?.source_type,
-              articleType: entry.article_type,
-              aiSourceFromEntry: entry.ai_source,
-              aiSourceFromKeyword: kwData?.ai_source ?? null,
-            });
-            const life = resolveCalendarLifecycleStatus({
-              hasCalendarEntry: true,
-              calendarStatus: entry.status,
-            });
 
             if (isBlocked) {
               return (
                 <div
                   key={idx}
-                  className={`flex min-h-[90px] flex-col rounded-[8px] border border-border-subtle/40 bg-surface-secondary/30 p-1.5 opacity-40 ${
+                  className={`flex min-h-[90px] flex-col gap-1 rounded-[8px] border border-border-subtle/40 bg-surface-secondary/30 p-1.5 opacity-40 ${
                     isToday ? "ring-1 ring-brand-action/20" : ""
                   }`}
                 >
                   <span className="self-end text-[10px] font-medium leading-none text-text-tertiary">{dayNum}</span>
-                  <p className="line-clamp-2 flex flex-1 items-center px-0.5 text-[9px] text-text-tertiary">
-                    {entry.focus_keyword}
-                  </p>
+                  <div className="flex min-h-0 flex-1 flex-col gap-1">
+                    {dayEntries.map(e => (
+                      <p
+                        key={e.id}
+                        className="line-clamp-2 px-0.5 text-[9px] text-text-tertiary"
+                        title={e.focus_keyword}
+                      >
+                        {e.focus_keyword}
+                      </p>
+                    ))}
+                  </div>
                 </div>
               );
             }
 
+            const stack = dayEntries.length > 1;
             return (
-              <div
-                key={idx}
-                className={`flex min-h-[90px] flex-col gap-1 rounded-[8px] border p-2 transition-all ${
-                  isToday
-                    ? "border-brand-action bg-brand-action/10"
-                    : "border-brand-action/20 bg-brand-action/[0.06]"
-                }`}
-              >
+              <div key={idx} className="flex min-h-[90px] flex-col gap-1">
                 <span
                   className={`self-end text-[10px] font-bold leading-none ${
                     isToday ? "text-brand-action" : "text-brand-action/60"
@@ -274,35 +343,112 @@ export function MiniCalendar({
                 >
                   {dayNum}
                 </span>
-                <p
-                  className="line-clamp-2 flex-1 text-[10px] font-semibold leading-tight text-text-primary"
-                  title={entry.focus_keyword}
-                >
-                  {entry.focus_keyword}
-                </p>
-                <div className="origin-left scale-[0.88]">
-                  <CalendarOriginPills resolved={origin} />
+                <div className="flex min-h-0 flex-1 flex-col gap-1">
+                  {dayEntries.map(entry => {
+                    const kwData = entry.keywords as
+                      | {
+                          source_type?: string | null;
+                          volume?: number | null;
+                          kd?: number | null;
+                          ai_source?: string | null;
+                        }
+                      | undefined;
+                    const volume = kwData?.volume;
+                    const kd_ = kdLabel(kwData?.kd);
+                    const isGenerated = entry.status === "generated" || entry.status === "downloaded";
+                    const origin = resolveCalendarKeywordOrigin({
+                      contentHealthAudit: entry.content_health_audit,
+                      keywordSourceType: kwData?.source_type,
+                      articleType: entry.article_type,
+                      aiSourceFromEntry: entry.ai_source,
+                      aiSourceFromKeyword: kwData?.ai_source ?? null,
+                    });
+                    const life = resolveCalendarLifecycleStatus({
+                      hasCalendarEntry: true,
+                      calendarStatus: entry.status,
+                    });
+                    const canDragThisEntry = dndActive && entry.status !== "generating";
+
+                    return (
+                      <div
+                        key={entry.id}
+                        className={`relative flex min-h-0 flex-1 flex-col gap-0.5 rounded-[8px] border p-1.5 transition-all ${
+                          draggingEntryId === entry.id ? "opacity-75" : ""
+                        } ${
+                          isToday
+                            ? "border-brand-action bg-brand-action/10"
+                            : "border-brand-action/20 bg-brand-action/[0.06]"
+                        }`}
+                      >
+                        {canDragThisEntry ? (
+                          <div
+                            draggable
+                            onDragStart={(e: DragEvent) => {
+                              e.stopPropagation();
+                              setDraggingEntryId(entry.id);
+                              const payload = JSON.stringify({ entryId: entry.id });
+                              e.dataTransfer.setData(CAL_DRAG_MIME, payload);
+                              e.dataTransfer.setData("text/plain", entry.id);
+                              e.dataTransfer.effectAllowed = "move";
+                            }}
+                            aria-label={`Drag to reschedule ${entry.focus_keyword}`}
+                            title="Drag to another date"
+                            className="absolute left-0.5 top-0.5 z-10 cursor-grab rounded border border-transparent p-0.5 text-text-tertiary hover:border-border-subtle hover:bg-surface-hover active:cursor-grabbing"
+                          >
+                            <svg
+                              width="10"
+                              height="14"
+                              viewBox="0 0 10 14"
+                              fill="currentColor"
+                              aria-hidden
+                              className="opacity-70"
+                            >
+                              <circle cx="3" cy="3" r="1.25" />
+                              <circle cx="7" cy="3" r="1.25" />
+                              <circle cx="3" cy="7" r="1.25" />
+                              <circle cx="7" cy="7" r="1.25" />
+                              <circle cx="3" cy="11" r="1.25" />
+                              <circle cx="7" cy="11" r="1.25" />
+                            </svg>
+                          </div>
+                        ) : null}
+                        <p
+                          className={`line-clamp-2 pl-4 text-[10px] font-semibold leading-tight text-text-primary ${
+                            stack ? "text-[9px]" : ""
+                          }`}
+                          title={entry.focus_keyword}
+                        >
+                          {entry.focus_keyword}
+                        </p>
+                        <div className={`origin-left ${stack ? "scale-[0.82]" : "scale-[0.88]"}`}>
+                          <CalendarOriginPills resolved={origin} />
+                        </div>
+                        <p className={`text-[8px] font-bold uppercase tracking-wide ${life.color}`}>{life.label}</p>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {volume != null && (
+                            <span className="font-mono text-[9px] text-text-tertiary">{fmtVol(volume)}</span>
+                          )}
+                          {volume != null && kwData?.kd ? (
+                            <span className="text-[9px] text-text-tertiary/50">·</span>
+                          ) : null}
+                          {kwData?.kd ? (
+                            <span className={`text-[9px] font-bold ${kd_.cls}`}>{kd_.text}</span>
+                          ) : null}
+                        </div>
+                        <ProjectNavLink
+                          href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+                          className={`mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] ${
+                            isGenerated
+                              ? "bg-[#10b981]/15 text-[#10b981] hover:bg-[#10b981]/25"
+                              : "bg-brand-action/10 text-brand-action hover:bg-brand-action/20"
+                          }`}
+                        >
+                          {isGenerated ? "View Blog" : "Generate →"}
+                        </ProjectNavLink>
+                      </div>
+                    );
+                  })}
                 </div>
-                <p className={`text-[8px] font-bold uppercase tracking-wide ${life.color}`}>{life.label}</p>
-                <div className="flex flex-wrap items-center gap-1">
-                  {volume != null && (
-                    <span className="font-mono text-[9px] text-text-tertiary">{fmtVol(volume)}</span>
-                  )}
-                  {volume != null && kwData?.kd ? <span className="text-[9px] text-text-tertiary/50">·</span> : null}
-                  {kwData?.kd ? (
-                    <span className={`text-[9px] font-bold ${kd_.cls}`}>{kd_.text}</span>
-                  ) : null}
-                </div>
-                <ProjectNavLink
-                  href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                  className={`mt-auto w-full rounded-[4px] py-1 text-center text-[9px] font-bold uppercase tracking-wide transition-colors ${
-                    isGenerated
-                      ? "bg-[#10b981]/15 text-[#10b981] hover:bg-[#10b981]/25"
-                      : "bg-brand-action/10 text-brand-action hover:bg-brand-action/20"
-                  }`}
-                >
-                  {isGenerated ? "View Blog" : "Generate →"}
-                </ProjectNavLink>
               </div>
             );
           }
@@ -324,13 +470,15 @@ export function MiniCalendar({
             );
           }
 
-          if (!schedulingKeywordId && !isPast && canOpenAddModal) {
+          if (!schedulingKeywordId && !isPast && onEmptyDayClick) {
+            const dropRing = dragOverIso === iso && draggingEntryId ? "ring-2 ring-brand-action/50" : "";
             return (
               <div
                 key={idx}
                 className={`group relative flex min-h-[90px] flex-col rounded-[8px] p-1.5 ${
-                  isToday ? "bg-brand-action/[0.03] ring-1 ring-brand-action/30" : "border border-transparent hover:border-border-subtle"
-                }`}
+                  isToday ? "bg-brand-action/3 ring-1 ring-brand-action/30" : "border border-transparent hover:border-border-subtle"
+                } ${dropRing}`}
+                {...emptyDayDropProps(iso, true)}
               >
                 <span
                   className={`self-end text-[10px] font-medium leading-none ${
@@ -341,7 +489,7 @@ export function MiniCalendar({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setPickKeywordModalDate(iso)}
+                  onClick={() => onEmptyDayClick(iso)}
                   className="absolute inset-1 flex flex-col items-center justify-center rounded-[6px] border border-transparent bg-surface-elevated/0 opacity-0 transition-all hover:border-brand-action/25 hover:bg-brand-action/10 group-hover:opacity-100"
                 >
                   <span className="text-xl font-light leading-none text-brand-action">+</span>
@@ -351,12 +499,14 @@ export function MiniCalendar({
             );
           }
 
+          const dropRingDefault = !isPast && dragOverIso === iso && draggingEntryId ? "ring-2 ring-brand-action/50" : "";
           return (
             <div
               key={idx}
               className={`flex min-h-[90px] flex-col rounded-[8px] p-1.5 ${
-                isToday ? "bg-brand-action/[0.03] ring-1 ring-brand-action/30" : ""
-              } ${isPast ? "opacity-25" : ""} ${schedulingKeywordId && !isPast ? "opacity-20" : ""}`}
+                isToday ? "bg-brand-action/3 ring-1 ring-brand-action/30" : ""
+              } ${isPast ? "opacity-25" : ""} ${schedulingKeywordId && !isPast ? "opacity-20" : ""} ${dropRingDefault}`}
+              {...emptyDayDropProps(iso, !isPast)}
             >
               <span
                 className={`self-end text-[10px] font-medium leading-none ${
@@ -375,10 +525,10 @@ export function MiniCalendar({
           <span className="h-3 w-3 rounded-[3px] border border-brand-action/20 bg-brand-action/10" />
           Scheduled
         </span>
-        {canOpenAddModal && !schedulingKeywordId ? (
+        {onEmptyDayClick && !schedulingKeywordId ? (
           <span className="flex items-center gap-1.5">
             <span className="text-brand-action">+</span>
-            Hover a free date — add keyword
+            Click a free date to add a keyword
           </span>
         ) : null}
         {schedulingKeywordId ? (
@@ -395,84 +545,14 @@ export function MiniCalendar({
             ) : null}
           </>
         ) : null}
+        {dndActive ? (
+          <span className="flex items-center gap-1.5">
+            <span className="text-text-secondary">‹ ›</span>
+            While dragging, hover the month arrows to change month
+          </span>
+        ) : null}
       </div>
 
-      {pickKeywordModalDate && onScheduleKeywordOnDate ? (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="mini-cal-add-kw-title"
-          onClick={() => setPickKeywordModalDate(null)}
-        >
-          <div
-            className="w-full max-w-2xl rounded-[16px] border border-border-subtle bg-surface-elevated p-5 shadow-xl ring-1 ring-border-subtle/80"
-            onClick={e => e.stopPropagation()}
-          >
-            <h4 id="mini-cal-add-kw-title" className="text-[16px] font-medium text-text-primary">
-              Add keyword — {fmtModalDate(pickKeywordModalDate)}
-            </h4>
-            <p className="mt-1 text-[13px] text-text-tertiary">
-              Approved keywords that are not on the calendar yet. Pick one to schedule on this date.
-            </p>
-            {unscheduledKeywords.length === 0 ? (
-              <p className="mt-4 text-[13px] text-text-tertiary">Nothing to schedule — all approved keywords have dates.</p>
-            ) : (
-              <div className="mt-4 overflow-x-auto">
-                <div className="min-w-[28rem]">
-                <div className="grid grid-cols-[minmax(0,1fr)_4rem_3.25rem_4rem_auto] gap-x-2 gap-y-1 border-b border-border-subtle pb-2 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
-                  <span>Keyword</span>
-                  <span className="text-right">Vol</span>
-                  <span className="text-center">KD</span>
-                  <span className="text-right">Traffic</span>
-                  <span className="text-right" aria-hidden />
-                </div>
-                <ul className="max-h-64 space-y-1 overflow-y-auto pr-1 pt-2">
-                  {unscheduledKeywords.map(row => {
-                    const kd = kdLabel(row.kd);
-                    return (
-                      <li key={row.id}>
-                        <button
-                          type="button"
-                          disabled={scheduleBusy}
-                          onClick={async () => {
-                            if (scheduleBusy) return;
-                            const ok = await onScheduleKeywordOnDate(row.id, pickKeywordModalDate);
-                            if (ok) setPickKeywordModalDate(null);
-                          }}
-                          className="grid w-full grid-cols-[minmax(0,1fr)_4rem_3.25rem_4rem_auto] items-center gap-x-2 rounded-[10px] border border-border-subtle bg-surface-secondary px-2 py-2 text-left text-[13px] text-text-primary transition-colors hover:border-brand-action/35 hover:bg-surface-hover disabled:opacity-50"
-                        >
-                          <span className="min-w-0 truncate pl-1 font-medium" title={row.keyword}>
-                            {row.keyword}
-                          </span>
-                          <span className="text-right font-mono text-[11px] tabular-nums text-text-secondary">
-                            {fmtVol(row.volume)}
-                          </span>
-                          <span className={`text-center text-[11px] font-bold ${kd.cls}`}>{kd.text}</span>
-                          <span className="text-right font-mono text-[11px] tabular-nums text-text-secondary">
-                            {fmtVol(row.traffic)}
-                          </span>
-                          <span className="shrink-0 pr-1 text-[11px] font-semibold text-brand-action">Schedule →</span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-                </div>
-              </div>
-            )}
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setPickKeywordModalDate(null)}
-                className="rounded-full border border-border-subtle px-4 py-2 text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

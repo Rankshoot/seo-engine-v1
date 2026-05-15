@@ -3,11 +3,14 @@
  * Combines keyword.source_type, calendar article_type, and calendar/keyword ai_source.
  */
 
+import { contentHealthAuditForCalendarOrigin } from "@/lib/content-health-calendar";
+
 export type CalendarKeywordOrigin =
   | "keyword_discovery"
   | "competitor_insights"
   | "domain"
-  | "content_health";
+  | "content_health"
+  | "custom_keyword";
 
 export interface ResolvedCalendarOrigin {
   origin: CalendarKeywordOrigin;
@@ -34,6 +37,8 @@ function mergeAiSource(
  * @param aiSourceFromKeyword — `keywords.ai_source` when not yet on the calendar
  */
 export function resolveCalendarKeywordOrigin(input: {
+  /** Full Content Health snapshot on the calendar row — takes precedence over keyword.source_type. */
+  contentHealthAudit?: unknown | null;
   keywordSourceType?: string | null;
   articleType?: string | null;
   aiSourceFromEntry?: string | null;
@@ -48,6 +53,16 @@ export function resolveCalendarKeywordOrigin(input: {
         }
       : undefined;
 
+  const ch = contentHealthAuditForCalendarOrigin(input.contentHealthAudit);
+  if (ch) {
+    return {
+      origin: "content_health",
+      label: ch.label,
+      badgeClass: "bg-[#ef4444]/10 text-[#f87171] border-[#ef4444]/20",
+      aiBadge,
+    };
+  }
+
   if (input.articleType === "Repair") {
     return {
       origin: "content_health",
@@ -58,6 +73,14 @@ export function resolveCalendarKeywordOrigin(input: {
   }
 
   const st = (input.keywordSourceType ?? "industry").toLowerCase();
+  if (st === "manual") {
+    return {
+      origin: "custom_keyword",
+      label: "Custom keyword",
+      badgeClass: "bg-slate-500/12 text-slate-300 border-slate-500/25",
+      aiBadge,
+    };
+  }
   if (st === "google_ads_domain") {
     return {
       origin: "domain",

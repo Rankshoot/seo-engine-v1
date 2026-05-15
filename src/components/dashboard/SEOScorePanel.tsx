@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { Blog, BlogSeoIssueKey } from "@/lib/types";
+import { reclassifyBlogLinkSidebarLists, urlMatchesProjectSite } from "@/lib/blog-content";
 
 // ─── CSS variable refs (auto-switch light ↔ dark) ─────────────────────────
 const V = {
@@ -49,6 +50,35 @@ function keywordInText(keywordNorm: string, haystackLower: string): boolean {
 }
 
 /** First ~100 words of body as plain lowercase text (strip headings / link syntax) for intro keyword check. */
+/** Count `https?://` markdown links that are not the project's own site. */
+function countMarkdownExternalHttpLinks(md: string, projectDomain?: string): number {
+  if (!projectDomain?.trim()) {
+    return (md.match(/\[([^\]]+)\]\(https?:\/\//g) ?? []).length;
+  }
+  let n = 0;
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  for (const m of md.matchAll(re)) {
+    const idx = m.index ?? 0;
+    if (idx > 0 && md[idx - 1] === "!") continue;
+    if (!urlMatchesProjectSite(m[2], projectDomain)) n++;
+  }
+  return n;
+}
+
+/** Relative `/...` links plus absolute URLs on the project domain. */
+function countMarkdownInternalLinks(md: string, projectDomain?: string): number {
+  const relative = (md.match(/\[([^\]]+)\]\(\//g) ?? []).length;
+  if (!projectDomain?.trim()) return relative;
+  let ownAbsolute = 0;
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  for (const m of md.matchAll(re)) {
+    const idx = m.index ?? 0;
+    if (idx > 0 && md[idx - 1] === "!") continue;
+    if (urlMatchesProjectSite(m[2], projectDomain)) ownAbsolute++;
+  }
+  return relative + ownAbsolute;
+}
+
 function openingPlainLower(md: string, maxWords: number): string {
   const noFront = md.replace(/^---[\s\S]*?---\s*/m, "");
   const flat = noFront
@@ -59,7 +89,7 @@ function openingPlainLower(md: string, maxWords: number): string {
   return flat.split(/\s+/).filter(Boolean).slice(0, maxWords).join(" ");
 }
 
-function computeSEOScore(blog: Blog): SEOScore {
+function computeSEOScore(blog: Blog, projectDomain?: string): SEOScore {
   const kw      = normalizeKeyword(blog.target_keyword ?? "");
   const content = blog.content ?? "";
   const title   = blog.title?.toLowerCase() ?? "";
@@ -73,11 +103,16 @@ function computeSEOScore(blog: Blog): SEOScore {
   const h2Count = (content.match(/^## /gm) ?? []).length;
   const h3Count = (content.match(/^### /gm) ?? []).length;
 
-  const markdownExternalLinks = (content.match(/\[([^\]]+)\]\(https?:\/\//g) ?? []).length;
-  const markdownInternalLinks = (content.match(/\[([^\]]+)\]\(\//g) ?? []).length;
+  const classified = reclassifyBlogLinkSidebarLists(
+    blog.external_links ?? [],
+    blog.internal_links ?? [],
+    projectDomain
+  );
+  const markdownExternalLinks = countMarkdownExternalHttpLinks(content, projectDomain);
+  const markdownInternalLinks = countMarkdownInternalLinks(content, projectDomain);
   // `??` does not fall back when DB arrays exist but are empty ([] → length 0); merge with markdown-derived counts.
-  const externalLinks = Math.max(blog.external_links?.length ?? 0, markdownExternalLinks);
-  const internalLinks = Math.max(blog.internal_links?.length ?? 0, markdownInternalLinks);
+  const externalLinks = Math.max(classified.externalLinks.length, markdownExternalLinks);
+  const internalLinks = Math.max(classified.internalLinks.length, markdownInternalLinks);
 
   const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(content);
 
@@ -188,16 +223,19 @@ const GRADE_CONFIG = {
 
 export default function SEOScorePanel({
   blog,
+  projectDomain,
   onFixIssue,
   fixingIssue,
   className = "rounded-[8px] p-5 bg-surface-primary border border-border-default",
 }: {
   blog: Blog;
+  /** When set, same-host links are treated as internal (matches blog preview sidebar). */
+  projectDomain?: string | null;
   onFixIssue?: (issue: SEOCheck) => void;
   fixingIssue?: BlogSeoIssueKey | null;
   className?: string;
 }) {
-  const score    = useMemo(() => computeSEOScore(blog), [blog]);
+  const score    = useMemo(() => computeSEOScore(blog, projectDomain ?? undefined), [blog, projectDomain]);
   const cfg      = GRADE_CONFIG[score.grade];
   const pct      = Math.round((score.total / score.maxTotal) * 100);
   const failures = score.checks.filter(c => !c.pass);

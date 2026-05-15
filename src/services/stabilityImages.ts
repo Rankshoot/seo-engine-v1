@@ -33,31 +33,53 @@ interface StabilityImageResponse {
   finish_reason?: string;
 }
 
-const STABILITY_ULTRA_ENDPOINT = 'https://api.stability.ai/v2beta/stable-image/generate/ultra';
+// Switched from `/ultra` (6.5+ credits) to the SD 3.5 endpoint with the
+// `sd3.5-flash` model — flat 2.5 credits per successful generation, which is
+// the cheapest option that still produces editorial-quality blog imagery.
+// https://platform.stability.ai/docs/api-reference#tag/Generate
+const STABILITY_SD3_ENDPOINT = 'https://api.stability.ai/v2beta/stable-image/generate/sd3';
+const STABILITY_MODEL = 'sd3.5-flash';
+
+/**
+ * Neutral inline SVG so markdown survives `sanitizeBlogContent` (empty `![]( )`
+ * is stripped). Alt text still describes the intended image for editors and a11y.
+ */
+const BLOG_IMAGE_PLACEHOLDER_URL =
+  'data:image/svg+xml;charset=utf-8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img">
+      <rect width="1600" height="900" fill="#27272a"/>
+      <rect x="1" y="1" width="1598" height="898" fill="none" stroke="#3f3f46" stroke-width="2"/>
+    </svg>`
+  );
+
+function assetWithPlaceholder(request: Omit<BlogImageAsset, 'url'>): BlogImageAsset {
+  return { ...request, url: BLOG_IMAGE_PLACEHOLDER_URL };
+}
 
 export async function generateBlogImages(input: GenerateBlogImagesInput): Promise<BlogImageAsset[]> {
-  const apiKey = process.env.STABILITY_API_KEY;
-  if (!apiKey) {
-    throw new Error('Stability API key is missing. Add STABILITY_API_KEY before generating blog images.');
-  }
-
   const imageRequests = buildImageRequests(input);
-  const requiredHero = await generateSingleImage(apiKey, imageRequests[0]);
-  if (!requiredHero) {
-    throw new Error('Stability did not return a usable hero image. Blog generation was stopped so it is not saved without an image.');
+  const apiKey = process.env.STABILITY_API_KEY?.trim();
+
+  if (!apiKey) {
+    console.warn('[stability] STABILITY_API_KEY missing — saving blog with image placeholders.');
+    return imageRequests.map(assetWithPlaceholder);
   }
 
-  if (imageRequests.length === 1) return [requiredHero];
+  const hero = (await generateSingleImage(apiKey, imageRequests[0])) ?? assetWithPlaceholder(imageRequests[0]);
+  if (imageRequests.length === 1) return [hero];
 
   const settled = await Promise.allSettled(
     imageRequests.slice(1).map(request => generateSingleImage(apiKey, request))
   );
 
-  const optionalImages = settled
-    .map(result => (result.status === 'fulfilled' ? result.value : null))
-    .filter((asset): asset is BlogImageAsset => Boolean(asset));
+  const rest = imageRequests.slice(1).map((request, i) => {
+    const result = settled[i];
+    if (result.status === 'fulfilled' && result.value) return result.value;
+    return assetWithPlaceholder(request);
+  });
 
-  return [requiredHero, ...optionalImages];
+  return [hero, ...rest];
 }
 
 export async function generateContextualBlogImage(
@@ -69,7 +91,7 @@ export async function generateContextualBlogImage(
   const prompt = [
     `Editorial blog illustration for "${input.title}" about "${input.targetKeyword}" in ${input.niche}.`,
     `Image intent: ${input.imageAlt || `${input.targetKeyword} visual`}. Nearby context: ${compactContext(input.contextBefore, input.contextAfter)}.`,
-    `Style: premium modern SaaS/editorial, clean 16:9 composition, no text, no logos, no watermark.`,
+    `Style: premium modern SaaS/editorial, clean 16:9 composition, sharp focus, high quality, no text, no words, no letters, no logos, no watermark, no distorted hands, no blurry artifacts.`,
   ].filter(Boolean).join(' ');
 
   return generateSingleImage(apiKey, {
@@ -118,7 +140,7 @@ function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImag
   // matching post-generation cap.
   const count = input.wordCount >= 1400 ? 2 : 1;
   const baseStyle =
-    'premium editorial blog illustration, modern SaaS website style, clean composition, realistic lighting, no text, no logos, no watermark';
+    'premium editorial blog illustration, modern SaaS website style, clean composition, realistic lighting, sharp focus, high quality, no text, no words, no letters, no logos, no watermark, no distorted hands, no blurry artifacts';
   const context = `${input.niche} industry, for ${input.audience}, company context: ${input.company}`;
 
   const requests: Array<Omit<BlogImageAsset, 'url'>> = [
@@ -151,11 +173,14 @@ async function generateSingleImage(
   try {
     const form = new FormData();
     form.append('prompt', request.prompt);
-    form.append('negative_prompt', 'text, words, letters, logo, watermark, distorted hands, low quality, blurry');
+    form.append('model', STABILITY_MODEL);
+    form.append('mode', 'text-to-image');
     form.append('aspect_ratio', process.env.STABILITY_IMAGE_ASPECT_RATIO || '16:9');
     form.append('output_format', outputFormat);
+    // `negative_prompt` is rejected by the distilled flash/turbo SD 3.5
+    // variants, so we bake the avoid-list straight into the prompt instead.
 
-    const response = await fetch(STABILITY_ULTRA_ENDPOINT, {
+    const response = await fetch(STABILITY_SD3_ENDPOINT, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -167,13 +192,13 @@ async function generateSingleImage(
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      console.warn(`Stability Ultra image generation failed (${response.status}): ${detail.slice(0, 500)}`);
+      console.warn(`Stability SD3.5 Flash image generation failed (${response.status}): ${detail.slice(0, 500)}`);
       return null;
     }
 
     const data = (await response.json()) as StabilityImageResponse;
     if (!data.image || (data.finish_reason && data.finish_reason !== 'SUCCESS')) {
-      console.warn(`Stability Ultra returned no usable image. finish_reason=${data.finish_reason ?? 'unknown'}`);
+      console.warn(`Stability SD3.5 Flash returned no usable image. finish_reason=${data.finish_reason ?? 'unknown'}`);
       return null;
     }
 
@@ -182,7 +207,7 @@ async function generateSingleImage(
       url: `data:image/${outputFormat};base64,${data.image}`,
     };
   } catch (error) {
-    console.warn('Stability Ultra image generation skipped:', error);
+    console.warn('Stability SD3.5 Flash image generation skipped:', error);
     return null;
   } finally {
     clearTimeout(timeout);

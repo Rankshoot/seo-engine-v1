@@ -2,13 +2,16 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
-import { generateBlogPost, geminiGenerate } from '@/lib/gemini';
+import { generateBlogPost, geminiGenerate, repairBlogPost } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
-import { Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
+import { ArticleLibraryEntry, Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
-import { formatContentHealthAuditForWriter } from '@/lib/content-health-calendar';
+import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan } from '@/lib/content-health-calendar';
+import { hybridReadUrl } from '@/services/hybridScraper';
+import type { BlogAuditAnalysis } from '@/lib/content-audit';
+import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
   const user = await currentUser();
@@ -37,6 +40,142 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     .eq('id', entryId);
 
   try {
+    // Load the cached Business Brief — used for internal-link pools + repair tone.
+    let brief: BusinessBrief | null = null;
+    try {
+      const { data: briefRow } = await supabaseAdmin
+        .from('project_briefs')
+        .select('brief')
+        .eq('project_id', entry.project_id)
+        .maybeSingle();
+      brief = (briefRow?.brief as BusinessBrief | undefined) ?? null;
+    } catch {
+      /* optional */
+    }
+
+    const contentHealthRaw = (entry as { content_health_audit?: unknown }).content_health_audit;
+    const repairPlan = parseContentHealthRepairPlan(contentHealthRaw);
+
+    // ── Content Health → repair mode (same pipeline as audit "Repair with AI") ──
+    if (repairPlan) {
+      const analysis = repairPlan.analysis;
+      const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
+      if (!fresh.ok || fresh.markdown.length < 400) {
+        throw new Error(
+          fresh.error ||
+            'Could not read the reference article for repair. Check the URL is public, then re-run the audit and try again.'
+        );
+      }
+
+      const fromAudit = (analysis.internal_link_opportunities ?? []).map(i => i.target_url);
+      const fromBrief = (brief?.internal_link_candidates ?? []).map(c => c.url);
+      const fromBriefBlogs = brief?.blog_urls ?? [];
+      const internalLinkPool = Array.from(new Set([...fromAudit, ...fromBrief, ...fromBriefBlogs])).filter(
+        u => u && u !== repairPlan.url
+      );
+
+      const repaired = await repairBlogPost({
+        sourceUrl: repairPlan.url,
+        originalTitle: repairPlan.title || '',
+        originalMarkdown: fresh.markdown,
+        issues: analysis.issues.map(i => ({
+          label: i.label,
+          detail: i.detail,
+          fix: i.fix,
+          severity: i.severity,
+          why_it_matters: i.why_it_matters,
+        })),
+        contentGaps: analysis.content_gaps ?? [],
+        internalLinkPool,
+        primaryKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
+        secondaryKeywords: analysis.secondary_keywords ?? [],
+        brief,
+        project,
+        wordCount: Math.min(4000, Math.max(1200, countWords(fresh.markdown) + 200)),
+      });
+
+      const preserveTitle = !repairTitleNeedsRepairFlag(analysis) && Boolean(repairPlan.title);
+      const finalTitle = preserveTitle ? repairPlan.title : repaired.title;
+      const rawMarkdown = preserveTitle ? replaceFirstH1(repaired.content, repairPlan.title) : repaired.content;
+      const finalMetaDescription = repairMetaNeedsRepairFlag(analysis)
+        ? repaired.meta_description
+        : (analysis.summary || repaired.meta_description);
+      const repairNotes = normalizeRepairNotesFromModel(repaired.repair_notes, analysis);
+
+      const images = await generateBlogImages({
+        title: finalTitle,
+        targetKeyword: entry.focus_keyword,
+        articleType: entry.article_type,
+        niche: project.niche,
+        audience: project.target_audience,
+        company: project.company,
+        wordCount: countWords(rawMarkdown),
+      });
+      const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(rawMarkdown, images));
+      const sanitized = await sanitizeBlogContent(contentWithImages, {
+        ownDomain: project.domain ?? '',
+      });
+      if (sanitized.removedLinks.length) {
+        console.log(
+          `[blog repair] dropped ${sanitized.removedLinks.length} dead external link(s) from "${finalTitle}":`,
+          sanitized.removedLinks.slice(0, 5)
+        );
+      }
+      const finalContent = sanitized.content;
+      const finalWordCount = countWords(finalContent);
+
+      const { data: existing } = await supabaseAdmin
+        .from('blogs')
+        .select('id')
+        .eq('entry_id', entryId)
+        .maybeSingle();
+
+      const upsertPayload = {
+        title: finalTitle,
+        content: finalContent,
+        meta_description: finalMetaDescription,
+        slug: repaired.slug,
+        word_count: finalWordCount,
+        target_keyword: entry.focus_keyword,
+        article_type: 'Repair',
+        status: 'generated' as const,
+        research_sources: repaired.research_sources,
+        external_links: sanitized.externalLinks.slice(0, 10),
+        internal_links: sanitized.internalLinks.slice(0, 12),
+        source_url: repairPlan.url,
+        repair_notes: repairNotes,
+        updated_at: new Date().toISOString(),
+      };
+
+      let blog: Blog;
+      if (existing) {
+        const { data, error } = await supabaseAdmin
+          .from('blogs')
+          .update(upsertPayload)
+          .eq('id', existing.id)
+          .select()
+          .single();
+        if (error) throw error;
+        blog = data as Blog;
+      } else {
+        const { data, error } = await supabaseAdmin
+          .from('blogs')
+          .insert({ ...upsertPayload, entry_id: entryId, project_id: entry.project_id })
+          .select()
+          .single();
+        if (error) throw error;
+        blog = data as Blog;
+      }
+
+      await supabaseAdmin
+        .from('calendar_entries')
+        .update({ status: 'generated', title: finalTitle, article_type: 'Repair' })
+        .eq('id', entryId);
+
+      return { success: true, data: blog };
+    }
+
+    // ── Standard net-new generation ─────────────────────────────────────────
     let research = null;
     try {
       research = await researchKeyword(
@@ -47,9 +186,6 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     } catch (e) {
       console.warn('Research step failed, proceeding without context:', e);
     }
-
-    // External rank-data keyword/SERP enrichment disabled — generation uses
-    // `researchKeyword` + Serper inside `generateBlogPost` only.
 
     let existingBlogs: { title: string; slug: string; target_keyword: string }[] = [];
     try {
@@ -62,26 +198,10 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
         .limit(15);
       existingBlogs = blogs ?? [];
     } catch {
-      // optional context for internal links
+      /* optional */
     }
 
-    // Load the cached Business Brief for this project — powers company
-    // grounding + internal links to the user's REAL site pages.
-    let brief: BusinessBrief | null = null;
-    try {
-      const { data: briefRow } = await supabaseAdmin
-        .from('project_briefs')
-        .select('brief')
-        .eq('project_id', entry.project_id)
-        .maybeSingle();
-      brief = (briefRow?.brief as BusinessBrief | undefined) ?? null;
-    } catch {
-      // Brief is optional at the DB layer — generation must still work if it's missing.
-    }
-
-    const auditWriterBlock = formatContentHealthAuditForWriter(
-      (entry as { content_health_audit?: unknown }).content_health_audit
-    );
+    const auditWriterBlock = formatContentHealthAuditForWriter(contentHealthRaw);
     const mergedWriterNotes = [writerNotes?.trim(), auditWriterBlock || '']
       .filter(Boolean)
       .join('\n\n---\n\n');
@@ -107,10 +227,6 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     });
     const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(blogData.content, images));
 
-    // Probe every external link, drop dead ones, cap rendered images at 2
-    // and strip leftover IMAGE_PLACEHOLDER artifacts so the preview and the
-    // exported file always agree. `external_links` / `internal_links` are
-    // rebuilt from the sanitized markdown so the sidebar counts can't drift.
     const sanitized = await sanitizeBlogContent(contentWithImages, {
       ownDomain: project.domain ?? '',
     });
@@ -141,6 +257,8 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       research_sources: blogData.research_sources,
       external_links: sanitized.externalLinks.slice(0, 10),
       internal_links: sanitized.internalLinks.slice(0, 12),
+      source_url: '',
+      repair_notes: [] as string[],
       updated_at: new Date().toISOString(),
     };
 
@@ -205,8 +323,248 @@ export async function getBlogById(blogId: string) {
     .eq('id', blogId)
     .single();
 
-  if (error) return { success: false, error: error.message, data: null };
+  if (error || !data) return { success: false, error: error?.message ?? 'Not found', data: null };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', data.project_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false, error: 'Not found', data: null };
+
   return { success: true, data: { ...data, content: sanitizeBlogMarkdown(data.content ?? '') } as Blog };
+}
+
+/**
+ * Look up the most recent "enhanced" version of a blog — i.e. a Repair-type
+ * blog whose `source_url` points back at the original (`blog://<id>`).
+ *
+ * Used by the blog viewer to restore the Before / After comparison toggle
+ * when a user re-opens a blog they previously enhanced via Content Health
+ * → Analyse content → Generate enhanced. Returns `data: null` (with
+ * `success: true`) when no enhanced version exists for this blog.
+ */
+export async function getEnhancedBlogForOriginal(originalBlogId: string) {
+  const user = await currentUser();
+  if (!user) {
+    return { success: false as const, error: 'Not authenticated', data: null };
+  }
+
+  // 1. Confirm the caller owns the original blog (prevents IDOR — we use
+  //    the source_url marker, which is otherwise scoped only by project).
+  const { data: original, error: oErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, project_id')
+    .eq('id', originalBlogId)
+    .maybeSingle();
+
+  if (oErr || !original) {
+    return { success: false as const, error: 'Blog not found', data: null };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', original.project_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) {
+    return { success: false as const, error: 'Not authorized', data: null };
+  }
+
+  // 2. The enhanced row is inserted with `source_url = "blog://<originalId>"`
+  //    (see `repairBlogFromContent` in `repair-actions.ts`). Pull the most
+  //    recent one — there should usually only be one, but if the user
+  //    re-enhances we want the freshest copy.
+  const sourceMarker = `blog://${originalBlogId}`;
+  const { data: enhanced, error: eErr } = await supabaseAdmin
+    .from('blogs')
+    .select('*')
+    .eq('project_id', original.project_id)
+    .eq('article_type', 'Repair')
+    .eq('source_url', sourceMarker)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (eErr) {
+    return { success: false as const, error: eErr.message, data: null };
+  }
+  if (!enhanced) {
+    return { success: true as const, data: null };
+  }
+
+  return {
+    success: true as const,
+    data: { ...enhanced, content: sanitizeBlogMarkdown(enhanced.content ?? '') } as Blog,
+  };
+}
+
+export async function getArticlesLibraryForProject(projectId: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated', data: [] as ArticleLibraryEntry[] };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false as const, error: 'Project not found', data: [] as ArticleLibraryEntry[] };
+
+  const { data, error } = await supabaseAdmin
+    .from('blogs')
+    .select('id, title, target_keyword, article_type, status, created_at, updated_at')
+    .eq('project_id', projectId)
+    .eq('in_articles_library', true)
+    .in('status', ['generated', 'approved', 'published'])
+    .order('updated_at', { ascending: false });
+
+  if (error) {
+    if (/in_articles_library|schema cache/i.test(error.message)) {
+      return { success: true as const, data: [] as ArticleLibraryEntry[] };
+    }
+    return { success: false as const, error: error.message, data: [] as ArticleLibraryEntry[] };
+  }
+
+  return { success: true as const, data: (data ?? []) as ArticleLibraryEntry[] };
+}
+
+/** Instant / web-research drafts created from Content Generator (`article_type` prefix). */
+const INSTANT_ARTICLE_TYPE_PREFIX = 'Instant ·';
+
+export async function getContentGeneratorHistoryForProject(projectId: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated', data: [] as ArticleLibraryEntry[] };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false as const, error: 'Project not found', data: [] as ArticleLibraryEntry[] };
+
+  const historyQuery = (columns: string) =>
+    supabaseAdmin
+      .from('blogs')
+      .select(columns)
+      .eq('project_id', projectId)
+      .like('article_type', `${INSTANT_ARTICLE_TYPE_PREFIX}%`)
+      .in('status', ['generated', 'approved', 'published'])
+      .order('updated_at', { ascending: false });
+
+  // Full query — includes the FK relation `calendar_entries(scheduled_date)`
+  // so the UI can show "Scheduled for ..." instead of "Schedule".
+  const FULL_COLS =
+    'id, title, target_keyword, article_type, status, created_at, updated_at, in_articles_library, entry_id, calendar_entries:entry_id(scheduled_date)';
+  let { data, error } = await historyQuery(FULL_COLS);
+
+  // Older databases may not have `in_articles_library` yet — fall back.
+  if (error && /in_articles_library|schema cache/i.test(error.message)) {
+    const second = await historyQuery(
+      'id, title, target_keyword, article_type, status, created_at, updated_at, entry_id, calendar_entries:entry_id(scheduled_date)'
+    );
+    data = second.data;
+    error = second.error;
+  }
+  // If the FK embed itself isn't available, retry without it.
+  if (error && /calendar_entries|relationship/i.test(error.message)) {
+    const third = await historyQuery(
+      'id, title, target_keyword, article_type, status, created_at, updated_at, in_articles_library, entry_id'
+    );
+    data = third.data;
+    error = third.error;
+  }
+
+  if (error) return { success: false as const, error: error.message, data: [] as ArticleLibraryEntry[] };
+
+  // Flatten the embedded calendar relation into a top-level scheduled_date.
+  type EmbeddedRow = ArticleLibraryEntry & {
+    in_articles_library?: boolean;
+    entry_id?: string | null;
+    // Supabase returns embedded relations as either a single object or array.
+    calendar_entries?: { scheduled_date: string } | { scheduled_date: string }[] | null;
+  };
+  const rows = ((data ?? []) as unknown as EmbeddedRow[]).map((r) => {
+    const sched = Array.isArray(r.calendar_entries)
+      ? r.calendar_entries[0]?.scheduled_date
+      : r.calendar_entries?.scheduled_date;
+    const { calendar_entries: _unused, ...rest } = r;
+    void _unused;
+    return { ...rest, scheduled_date: sched ?? null };
+  });
+  return { success: true as const, data: rows };
+}
+
+/**
+ * Pin the current blog to the project Articles list. Idempotent if already saved.
+ * Uses `select('*')` so this still loads the row before `in_articles_library` exists in DB
+ * (explicit `select(..., in_articles_library)` makes PostgREST error and looked like "Blog not found").
+ */
+export async function addBlogToArticlesLibrary(blogId: string) {
+  const user = await currentUser();
+  if (!user) return { success: false as const, error: 'Not authenticated', alreadySaved: false };
+
+  const id = blogId?.trim();
+  if (!id) return { success: false as const, error: 'Missing blog id', alreadySaved: false };
+
+  const { data: row, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (bErr) {
+    return { success: false as const, error: bErr.message, alreadySaved: false };
+  }
+  if (!row) {
+    return { success: false as const, error: 'Blog not found', alreadySaved: false };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', row.project_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (pErr || !project) return { success: false as const, error: 'Not authorized', alreadySaved: false };
+
+  const already = Boolean((row as { in_articles_library?: boolean }).in_articles_library);
+  if (already) {
+    return { success: true as const, alreadySaved: true };
+  }
+
+  const { data: updated, error: uErr } = await supabaseAdmin
+    .from('blogs')
+    .update({ in_articles_library: true, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+
+  if (uErr) {
+    const hint =
+      /in_articles_library|schema cache/i.test(uErr.message)
+        ? ' Run the SQL migration `supabase-migration-blog-in-articles-library.sql` on your Supabase project.'
+        : '';
+    return { success: false as const, error: `${uErr.message}${hint}`, alreadySaved: false };
+  }
+
+  if (!updated) {
+    return {
+      success: false as const,
+      error: 'Update did not apply. Confirm the blog exists and `in_articles_library` is enabled in Supabase.',
+      alreadySaved: false,
+    };
+  }
+
+  return { success: true as const, alreadySaved: false };
 }
 
 export async function updateBlogStatus(blogId: string, status: BlogStatus) {
@@ -280,8 +638,35 @@ function replaceFirstH1(markdown: string, title: string): string {
   return `# ${safeTitle}\n\n${markdown.trim()}`;
 }
 
+function repairTitleNeedsRepairFlag(analysis: BlogAuditAnalysis): boolean {
+  return analysis.issues.some(i =>
+    /title|h1|headline|keyword in title|target keyword/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+}
+
+function repairMetaNeedsRepairFlag(analysis: BlogAuditAnalysis): boolean {
+  return analysis.issues.some(i =>
+    /meta description|meta tag|description/i.test(`${i.label} ${i.detail} ${i.fix}`)
+  );
+}
+
+function normalizeRepairNotesFromModel(notes: string[], analysis: BlogAuditAnalysis): string[] {
+  const cleaned = notes.map(n => n.trim()).filter(Boolean);
+  const hasDone = cleaned.some(n => /^done:/i.test(n));
+  const hasStill = cleaned.some(n => /^still to do:/i.test(n));
+  const done = hasDone
+    ? cleaned.filter(n => /^done:/i.test(n))
+    : analysis.issues.slice(0, 6).map(i => `Done: ${i.fix || i.label}`);
+  const still = hasStill
+    ? cleaned.filter(n => /^still to do:/i.test(n))
+    : [
+        'Still to do: none — re-run Content Health after publishing to verify the fixes.',
+      ];
+  return [...done, ...still].slice(0, 10);
+}
+
 function sanitizeBlogMarkdown(markdown: string): string {
-  return stripSchemaJsonBlocks(markdown)
+  return stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(markdown))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     // Strip the LLM's leftover `![alt](IMAGE_PLACEHOLDER)` artifacts so the
@@ -1038,6 +1423,100 @@ Return the FULL revised blog markdown only — no commentary, no code fences.`;
   return await persistBlogPatch(blogId, updated, project.domain as string);
 }
 
+export type BlogEditorRewriteTrace = Array<{ label: string; ok: boolean; ms?: number; detail?: string }>;
+
+/**
+ * Rewrite text the user selected in the visual blog editor (contentEditable).
+ * Does not persist — the client replaces the selection and the user saves when ready.
+ */
+export async function rewriteBlogEditorSelection(
+  blogId: string,
+  /** Markdown excerpt from the editor (includes `[text](url)` for links). */
+  selectedMarkdown: string,
+  instruction: string
+): Promise<{
+  success: boolean;
+  error?: string;
+  rewritten?: string;
+  trace?: BlogEditorRewriteTrace;
+}> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const sel = selectedMarkdown.trim();
+  const instr = instruction.trim();
+  if (!sel) return { success: false, error: 'Select some text to rewrite.' };
+  if (!instr) return { success: false, error: 'Add an instruction or pick a quick action.' };
+  if (sel.length > 12_000) return { success: false, error: 'Selection is too long (max 12,000 characters).' };
+  if (instr.length > 4_000) return { success: false, error: 'Instruction is too long.' };
+
+  const { data: blog } = await supabaseAdmin.from('blogs').select('id, title, target_keyword, project_id').eq('id', blogId).single();
+  if (!blog) return { success: false, error: 'Blog not found' };
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project) return { success: false, error: 'Not authorized' };
+
+  const prompt = `You are rewriting a short excerpt from an existing blog post. Return ONLY the rewritten excerpt — no title lines, no preamble, no quotes around the answer, no code fences.
+
+Blog title: ${blog.title}
+Target keyword: ${blog.target_keyword}
+
+User instruction:
+"${instr}"
+
+Selected excerpt (Markdown — rewrite this; links use [anchor text](url)):
+"""
+${sel}
+"""
+
+Rules:
+1. Output GitHub-flavored Markdown for this excerpt only. Do not use # headings or fenced code blocks. Inline code with backticks is OK only if the original had it.
+2. Preserve every hyperlink from the excerpt as Markdown [anchor](url) using the same URL. You may shorten or rephrase the anchor text if the instruction requires it, but keep the destination URL unless the instruction says to remove the link.
+3. Apply the instruction faithfully while staying on-topic for this article.
+4. Match the tone of a professional business blog.
+5. Unless the instruction asks otherwise, keep a similar scope (do not turn one sentence into a full article).`;
+
+  const t0 = Date.now();
+  let rewritten: string;
+  try {
+    rewritten = (await geminiGenerate(prompt, 1)).trim();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'LLM call failed';
+    return {
+      success: false,
+      error: msg,
+      trace: [
+        { label: '(gemini)', ok: false, ms: Date.now() - t0, detail: msg },
+      ],
+    };
+  }
+  const ms = Date.now() - t0;
+  rewritten = rewritten.replace(/^"+|"+$/g, '').replace(/^```[a-z]*\n?|```$/g, '').trim();
+  if (!rewritten) {
+    return {
+      success: false,
+      error: 'Model returned empty text.',
+      trace: [{ label: '(gemini)', ok: false, ms, detail: 'empty output' }],
+    };
+  }
+
+  const trace: BlogEditorRewriteTrace = [
+    {
+      label: '(gemini)',
+      ok: true,
+      ms,
+      detail: `chars in: ${sel.length + instr.length}, out: ${rewritten.length}`,
+    },
+  ];
+
+  return { success: true, rewritten, trace };
+}
+
 export async function getCalendarWithBlogs(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: [] };
@@ -1055,11 +1534,128 @@ export async function getCalendarWithBlogs(projectId: string) {
     .select('id, entry_id, title, word_count, status, research_sources')
     .eq('project_id', projectId);
 
-  const blogMap = new Map((blogs ?? []).map(b => [b.entry_id, b]));
+  const blogMap = new Map(
+    (blogs ?? [])
+      .filter((b): b is typeof b & { entry_id: string } => Boolean(b.entry_id))
+      .map(b => [b.entry_id, b])
+  );
   const combined: CalendarEntryWithBlog[] = (entries ?? []).map(entry => ({
     ...entry,
     blog: blogMap.get(entry.id) ?? null,
   }));
 
   return { success: true, data: combined };
+}
+
+// ─── Blog content analysis ────────────────────────────────────────────────
+
+export type BlogContentIssue = {
+  label: string;
+  detail: string;
+  fix: string;
+  severity: "high" | "medium" | "low";
+  category: "technical" | "seo" | "content" | "ux";
+};
+
+export type BlogContentRubricRow = {
+  id: string;
+  label: string;
+  detail: string;
+  status: "pass" | "warn" | "fail";
+};
+
+export type BlogContentAnalysis = {
+  summary: string;
+  plain_language_verdict: string;
+  conclusion: {
+    verdict: "ready_to_publish" | "needs_minor_fixes" | "needs_major_work";
+    summary: string;
+  };
+  issues: BlogContentIssue[];
+  quality_rubric: BlogContentRubricRow[];
+  content_gaps: string[];
+  quick_wins: string[];
+};
+
+/**
+ * Analyze a blog post's content with Gemini.
+ * Content-only diagnosis — no URL scraping, no keyword demand data.
+ */
+export async function analyzeBlogContent(
+  blogId: string
+): Promise<{ success: true; analysis: BlogContentAnalysis } | { success: false; error: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: "Not authenticated" };
+
+  const { data: blog, error: bErr } = await supabaseAdmin
+    .from("blogs")
+    .select("id, project_id, title, content, target_keyword, meta_description")
+    .eq("id", blogId)
+    .single();
+
+  if (bErr || !blog) return { success: false, error: "Blog not found" };
+
+  // Ownership check
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from("projects")
+    .select("id")
+    .eq("id", blog.project_id)
+    .eq("user_id", user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: "Unauthorized" };
+
+  const contentPreview = (blog.content ?? "").slice(0, 12_000);
+
+  const prompt = `You are a senior SEO and content strategist performing a thorough, one-pass audit of a blog post. Your job is to find ALL genuine issues in a single pass so nothing needs to be re-discovered later. Do not invent issues that aren't truly present — only report real problems.
+
+BLOG TITLE: ${blog.title ?? "(no title)"}
+TARGET KEYWORD: ${blog.target_keyword ?? "(unknown)"}
+META DESCRIPTION: ${blog.meta_description ?? "(none)"}
+
+CONTENT (first 12,000 chars):
+${contentPreview}
+
+Return ONLY valid JSON in this exact shape — no markdown fences, no commentary:
+{
+  "summary": "2-3 sentence description of what this article is about",
+  "plain_language_verdict": "1-2 sentence plain-English summary of the most impactful problem (or that the content is solid if no real issues)",
+  "conclusion": {
+    "verdict": "ready_to_publish|needs_minor_fixes|needs_major_work",
+    "summary": "1-2 sentence plain-English conclusion for a non-technical user — tell them clearly if it's safe to post, needs a few tweaks, or requires significant work, and why"
+  },
+  "issues": [
+    {
+      "label": "short issue name",
+      "detail": "what exactly is wrong and why it matters for rankings or readers",
+      "fix": "specific, actionable fix in plain language — enough detail to act on immediately",
+      "severity": "high|medium|low",
+      "category": "technical|seo|content|ux"
+    }
+  ],
+  "quality_rubric": [
+    { "id": "unique_id", "label": "rubric item label", "detail": "why pass/warn/fail", "status": "pass|warn|fail" }
+  ],
+  "content_gaps": ["topic or angle this article should cover but doesn't"],
+  "quick_wins": ["one small specific change that would immediately improve this article"]
+}
+
+Rules — read carefully:
+- COMPLETENESS: Surface every genuine issue in this single pass. If the content is already strong, say so — do not inflate the issue list.
+- VERDICT MAPPING: "ready_to_publish" = no high-severity issues, maybe 1-2 minor; "needs_minor_fixes" = 1-3 medium issues fixable in <30 min; "needs_major_work" = any high-severity issue or structural problem.
+- Return 0-8 issues ordered by impact (highest first). Zero issues is valid for high-quality content.
+- Include 6-8 quality_rubric rows covering: E-E-A-T signals, keyword placement, heading structure, meta description, internal linking, readability, answer-first structure, call to action.
+- Include 0-5 content_gaps (only real missing topics, not padding).
+- Include 1-4 quick_wins.
+- Be specific. Reference actual text from the article when relevant.
+- Do NOT fabricate keyword volume data. Focus purely on content quality.`;
+
+  try {
+    const raw = await geminiGenerate(prompt, 2);
+    const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+    const parsed = JSON.parse(cleaned) as BlogContentAnalysis;
+    return { success: true, analysis: parsed };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : "Analysis failed" };
+  }
 }

@@ -7,9 +7,11 @@
  *     keyword gaps come from **DataForSEO
  *     `keywords_data/google_ads/keywords_for_site/live`** (per competitor
  *     domain, `location_code` + `language_code` from project, `search_partners:
- *     true`, `sort_by: search_volume`, limit 10). Ahrefs is used only when
- *     **no** manual competitors exist. DataForSEO is also the fallback when
- *     Ahrefs returns no opportunities (for manual competitors only).
+ *     true`, `sort_by: search_volume`, limit 10). That API does not return
+ *     landing URLs, so we match each keyword to the closest **blog URL from the
+ *     competitor’s public sitemap** (see `competitor-sitemap-match.ts`). Ahrefs
+ *     is used only when **no** manual competitors exist. DataForSEO is also the
+ *     fallback when Ahrefs returns no opportunities (for manual competitors only).
  *
  *   • `getCompetitorBenchmark` — hydrate all three tables for the project.
  *
@@ -17,6 +19,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase';
+import { deterministicFunnelStage } from '@/lib/keyword-funnel';
 import { currentUser } from '@clerk/nextjs/server';
 import {
   benchmarkContentQuality,
@@ -35,6 +38,9 @@ import {
   type AhrefsOrganicKeyword,
 } from '@/lib/ahrefs';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
+import { addKeywordToCalendarOnDate, collectEarliestVacantDates } from '@/app/actions/calendar-actions';
+import { bestMatchingBlogUrl } from '@/lib/competitor-sitemap-match';
+import { fetchBlogUrls } from '@/lib/jina';
 import type {
   BenchmarkAverages,
   Competitor,
@@ -90,6 +96,12 @@ function normalizeDomainInput(raw: string): string {
 
 /** Rows per competitor from Google Ads Keywords For Site (DataForSEO). */
 const KEYWORDS_FOR_SITE_LIMIT = 100;
+
+/** Max rows written to `competitor_keywords` and `keyword_gaps`; must match `getCompetitorBenchmark` read limit. */
+const BENCHMARK_KEYWORD_CAP = 200;
+
+/** Max blog-style URLs to load per competitor sitemap for keyword ↔ URL matching. */
+const COMPETITOR_SITEMAP_BLOG_CAP = 3000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Run the full benchmark pipeline
@@ -348,7 +360,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     );
     const intersectionResults = await Promise.all(
       competitorList.map(async competitor => {
-        const items = await fetchGoogleAdsKeywordsForSite(
+        const { rows: items } = await fetchGoogleAdsKeywordsForSite(
           competitor.domain,
           project.target_region,
           languageCode,
@@ -412,6 +424,8 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
       trace,
     };
   }
+
+  await enrichRankingUrlsFromCompetitorSitemaps(dedupedOpportunities, competitorList, trace);
 
   // ───────────────────────────────────────────────────────────────────────
   // 1d. Selectively scrape ranking pages for structural signals.
@@ -540,7 +554,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   await supabaseAdmin.from('competitor_keywords').delete().eq('project_id', projectId);
   const ckRows: Array<Record<string, unknown>> = [];
   const competitorIdByDomain = new Map(persistedCompetitors.map(c => [c.domain, c.id]));
-  for (const opportunity of dedupedOpportunities.slice(0, 200)) {
+  for (const opportunity of dedupedOpportunities.slice(0, BENCHMARK_KEYWORD_CAP)) {
     const competitorId = competitorIdByDomain.get(opportunity.top_competitor_domain);
     if (!competitorId) continue;
     ckRows.push({
@@ -611,7 +625,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   });
 
   gapRows.sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score);
-  const topGapRows = gapRows.slice(0, 120);
+  const topGapRows = gapRows.slice(0, BENCHMARK_KEYWORD_CAP);
 
   if (topGapRows.length) {
     const { error: gapErr } = await supabaseAdmin
@@ -640,6 +654,86 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** True when URL is the competitor site root (or subdomain root) with no path — not a specific page. */
+function isLikelyHomepageOnlyUrl(url: string, competitorDomain: string): boolean {
+  const comp = normalizeDomainInput(competitorDomain);
+  if (!comp || !url.trim()) return false;
+  let u: URL;
+  try {
+    u = new URL(url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`);
+  } catch {
+    return false;
+  }
+  const host = safeHostFromUrl(u.href);
+  if (!host) return false;
+  if (host !== comp && !host.endsWith(`.${comp}`)) return false;
+  const path = u.pathname.replace(/\/+$/, '') || '';
+  return path === '';
+}
+
+/**
+ * For rows that only have the site homepage (typical for DataForSEO keywords
+ * for site), pick the best-matching blog URL from each competitor’s sitemap.
+ */
+async function enrichRankingUrlsFromCompetitorSitemaps(
+  opportunities: RankingOpportunity[],
+  competitors: Array<{ domain: string }>,
+  trace: BenchmarkTraceEntry[]
+): Promise<void> {
+  const domains = [
+    ...new Set(
+      [
+        ...competitors.map(c => normalizeDomainInput(c.domain)),
+        ...opportunities.map(o => normalizeDomainInput(o.top_competitor_domain)),
+      ].filter(Boolean)
+    ),
+  ];
+  if (!domains.length) return;
+
+  const blogUrlsByDomain = new Map<string, string[]>();
+  await Promise.all(
+    domains.map(async d => {
+      try {
+        const urls = await fetchBlogUrls(d, COMPETITOR_SITEMAP_BLOG_CAP);
+        blogUrlsByDomain.set(d, urls);
+        trace.push({
+          label: `competitor_sitemap_blogs:${d}`,
+          ok: true,
+          info: { blog_urls: urls.length, cap: COMPETITOR_SITEMAP_BLOG_CAP },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        trace.push({ label: `competitor_sitemap_blogs:${d}`, ok: false, error: msg });
+        blogUrlsByDomain.set(d, []);
+      }
+    })
+  );
+
+  let candidates = 0;
+  let matched = 0;
+  for (const opp of opportunities) {
+    if (!isLikelyHomepageOnlyUrl(opp.top_competitor_url, opp.top_competitor_domain)) continue;
+    candidates += 1;
+    const blogs = blogUrlsByDomain.get(opp.top_competitor_domain) ?? [];
+    const hit = bestMatchingBlogUrl(opp.keyword, blogs);
+    if (hit) {
+      opp.top_competitor_url = hit.url;
+      opp.source_title = hit.titleHint;
+      matched += 1;
+    }
+  }
+
+  trace.push({
+    label: 'competitor_sitemap_keyword_match',
+    ok: true,
+    info: {
+      competitors_with_sitemap: domains.length,
+      homepage_placeholder_rows: candidates,
+      matched_to_blog_url: matched,
+    },
+  });
+}
 
 function pageBoost(
   row: AhrefsOrganicKeyword,
@@ -722,9 +816,6 @@ function buildGapReasoning(
   return bits.join(' ');
 }
 
-// keep linter happy when only the Ahrefs path is hit
-void safeHostFromUrl;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Hydrate benchmark state for the UI
 // ─────────────────────────────────────────────────────────────────────────────
@@ -790,7 +881,7 @@ export async function getCompetitorBenchmark(projectId: string): Promise<Benchma
       .select('*')
       .eq('project_id', projectId)
       .order('opportunity_score', { ascending: false })
-      .limit(200),
+      .limit(BENCHMARK_KEYWORD_CAP),
   ]);
 
   const competitors = (competitorsRows ?? []) as Competitor[];
@@ -819,6 +910,17 @@ export async function getCompetitorBenchmark(projectId: string): Promise<Benchma
 // 3. One-click "Generate blog" from an opportunity row
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** PostgREST when `keywords.funnel_stage` exists in app code but not yet in DB / schema cache. */
+function isMissingKeywordsFunnelStageError(message: string | undefined): boolean {
+  if (!message) return false;
+  return message.includes('funnel_stage') && message.includes('schema cache');
+}
+
+function stripFunnelStageFromPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  const { funnel_stage: _fs, ...rest } = patch;
+  return rest;
+}
+
 export async function generateBlogFromOpportunity(projectId: string, keyword: string) {
   const user = await currentUser();
   if (!user) return { success: false as const, error: 'Not authenticated' };
@@ -834,60 +936,132 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     .single();
   if (pErr || !project) return { success: false as const, error: 'Project not found' };
 
-  const { data: gap } = await supabaseAdmin
+  // `keyword_gaps.keyword` keeps provider casing; never match with a lowercased string.
+  const { data: gapRows, error: gapErr } = await supabaseAdmin
     .from('keyword_gaps')
     .select('*')
-    .eq('project_id', projectId)
-    .eq('keyword', normalized)
-    .maybeSingle();
+    .eq('project_id', projectId);
+  if (gapErr) return { success: false as const, error: gapErr.message };
 
-  const { data: kwRow, error: kwErr } = await supabaseAdmin
+  const gap =
+    (gapRows ?? []).find(r => (r.keyword as string).trim().toLowerCase() === normalized) ?? null;
+
+  // Reuse an existing `keywords` row when the normalized phrase already exists (e.g. discovery
+  // saved "HR Software" and the gap row says "hr software"). Upsert on `(project_id, keyword)`
+  // alone would try to INSERT a second row and hit `idx_keywords_project_normalized`.
+  const { data: existingKw, error: kwLookupErr } = await supabaseAdmin
     .from('keywords')
-    .upsert(
-      {
-        project_id: projectId,
-        keyword: normalized,
-        volume: gap?.volume ?? 0,
-        kd: gap?.kd ?? 0,
-        trend: gap?.trend ?? '+0%',
-        status: 'approved',
-        source_type: 'competitor_benchmark',
-        source_url: gap?.top_competitor_url ?? '',
-        gap_competitor: gap?.top_competitor_domain ?? '',
-        ai_score: gap?.opportunity_score ?? 0,
-        keyword_analysis_score: gap?.opportunity_score ?? 0,
-      },
-      { onConflict: 'project_id,keyword', ignoreDuplicates: false }
-    )
-    .select('id')
-    .single();
+    .select('id, keyword')
+    .eq('project_id', projectId)
+    .eq('normalized_keyword', normalized)
+    .maybeSingle();
+  if (kwLookupErr) return { success: false as const, error: kwLookupErr.message };
 
-  if (kwErr || !kwRow) return { success: false as const, error: kwErr?.message ?? 'Failed to save keyword.' };
-
-  const scheduledDate = new Date();
-  scheduledDate.setDate(scheduledDate.getDate() + 1);
-  const dateStr = scheduledDate.toISOString().split('T')[0];
-  const slugBase = slugify(normalized) || `opportunity-${Date.now().toString(36)}`;
-
-  const { data: entryRow, error: entryErr } = await supabaseAdmin
-    .from('calendar_entries')
-    .insert({
-      project_id: projectId,
-      keyword_id: kwRow.id,
-      scheduled_date: dateStr,
-      title: toTitleCase(normalized),
-      article_type: 'How-to Guide',
-      slug: `${slugBase}-${Date.now().toString(36)}`,
-      focus_keyword: normalized,
-      secondary_keywords: [],
-      status: 'scheduled',
-    })
-    .select('id')
-    .single();
-
-  if (entryErr || !entryRow) {
-    return { success: false as const, error: entryErr?.message ?? 'Failed to create calendar entry.' };
+  const statusPatch: Record<string, unknown> = {
+    status: 'approved',
+    source_type: 'competitor_benchmark',
+    funnel_stage: deterministicFunnelStage('', normalized),
+  };
+  if (gap) {
+    statusPatch.volume = gap.volume;
+    statusPatch.kd = gap.kd;
+    statusPatch.trend = gap.trend;
+    statusPatch.source_url = gap.top_competitor_url ?? '';
+    statusPatch.gap_competitor = gap.top_competitor_domain ?? '';
+    statusPatch.ai_score = gap.opportunity_score ?? 0;
+    statusPatch.keyword_analysis_score = gap.opportunity_score ?? 0;
   }
 
-  return { success: true as const, entryId: entryRow.id as string, keywordId: kwRow.id as string };
+  let keywordId: string;
+  let canonicalKeyword: string;
+
+  if (existingKw) {
+    let upErr = (
+      await supabaseAdmin.from('keywords').update(statusPatch).eq('id', existingKw.id as string)
+    ).error;
+    if (upErr && isMissingKeywordsFunnelStageError(upErr.message)) {
+      upErr = (
+        await supabaseAdmin
+          .from('keywords')
+          .update(stripFunnelStageFromPatch(statusPatch))
+          .eq('id', existingKw.id as string)
+      ).error;
+    }
+    if (upErr) return { success: false as const, error: upErr.message };
+    keywordId = existingKw.id as string;
+    canonicalKeyword = String(existingKw.keyword);
+  } else {
+    const displayKeyword = (gap?.keyword as string | undefined)?.trim() || keyword.trim();
+    const insertPayload = {
+      project_id: projectId,
+      keyword: displayKeyword,
+      volume: gap?.volume ?? 0,
+      kd: gap?.kd ?? 0,
+      trend: gap?.trend ?? '+0%',
+      source_url: gap?.top_competitor_url ?? '',
+      gap_competitor: gap?.top_competitor_domain ?? '',
+      ai_score: gap?.opportunity_score ?? 0,
+      keyword_analysis_score: gap?.opportunity_score ?? 0,
+      ...statusPatch,
+    };
+    let { data: insRow, error: insErr } = await supabaseAdmin
+      .from('keywords')
+      .insert(insertPayload)
+      .select('id')
+      .single();
+    if (insErr && isMissingKeywordsFunnelStageError(insErr.message)) {
+      const { funnel_stage: _ignored, ...payloadNoFunnel } = insertPayload as Record<string, unknown>;
+      ({ data: insRow, error: insErr } = await supabaseAdmin
+        .from('keywords')
+        .insert(payloadNoFunnel)
+        .select('id')
+        .single());
+    }
+    if (insErr || !insRow) {
+      return { success: false as const, error: insErr?.message ?? 'Failed to save keyword.' };
+    }
+    keywordId = insRow.id as string;
+    canonicalKeyword = displayKeyword;
+  }
+
+  const { data: existingEntry } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id, scheduled_date')
+    .eq('project_id', projectId)
+    .eq('keyword_id', keywordId)
+    .maybeSingle();
+
+  if (existingEntry) {
+    return {
+      success: true as const,
+      entryId: existingEntry.id as string,
+      keywordId,
+      scheduledDate: String(existingEntry.scheduled_date).slice(0, 10),
+      alreadyOnCalendar: true as const,
+    };
+  }
+
+  const vacant = await collectEarliestVacantDates(projectId, 1);
+  const dateStr = vacant[0];
+  if (!dateStr) {
+    return { success: false as const, error: 'No free calendar day found in the next 500 days.' };
+  }
+
+  const slugBase = slugify(normalized) || `opportunity-${Date.now().toString(36)}`;
+  const calRes = await addKeywordToCalendarOnDate(keywordId, projectId, dateStr, {
+    title: toTitleCase(canonicalKeyword),
+    article_type: 'How-to Guide',
+    slug: `${slugBase}-${Date.now().toString(36)}`,
+  });
+
+  if (!calRes.success || !calRes.data) {
+    return { success: false as const, error: 'Failed to create calendar entry.' };
+  }
+
+  return {
+    success: true as const,
+    entryId: calRes.data.id as string,
+    keywordId,
+    scheduledDate: dateStr,
+  };
 }

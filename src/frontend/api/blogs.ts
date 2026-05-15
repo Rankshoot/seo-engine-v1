@@ -1,3 +1,4 @@
+import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
 import type { Blog, BlogSeoIssueKey, BlogStatus } from "@/lib/types";
 import { apiGet, apiPatch, apiPost } from "./http";
 import { V1Routes } from "./routes";
@@ -5,6 +6,24 @@ import { V1Routes } from "./routes";
 export const blogsApi = {
   getById(blogId: string): Promise<{ success: boolean; error?: string; data: Blog | null }> {
     return apiGet(V1Routes.blog(blogId));
+  },
+
+  /**
+   * Returns the latest "Enhanced" version of this blog, or `data: null` when
+   * none exists. Used by the blog viewer to restore the Before / After toggle
+   * after a hard reload / history navigation.
+   */
+  getEnhanced(blogId: string): Promise<{ success: boolean; error?: string; data: Blog | null }> {
+    return apiGet(V1Routes.blogEnhanced(blogId));
+  },
+
+  addToArticlesLibrary(
+    blogId: string
+  ): Promise<
+    | { success: true; alreadySaved: boolean }
+    | { success: false; error: string; alreadySaved: boolean }
+  > {
+    return apiPost(V1Routes.blogArticlesLibrary(blogId), {});
   },
 
   generate(body: {
@@ -34,5 +53,49 @@ export const blogsApi = {
     issueKey: BlogSeoIssueKey
   ): Promise<{ success: boolean; error?: string; data: Blog | null }> {
     return apiPost(V1Routes.blogFixSeo(blogId), { issueKey });
+  },
+
+  rewriteSelection(
+    blogId: string,
+    body: { selectedText: string; instruction: string }
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    rewritten?: string;
+    trace?: Array<{ label: string; ok: boolean; ms?: number; detail?: string }>;
+  }> {
+    return apiPost(V1Routes.blogRewriteSelection(blogId), body);
+  },
+
+  regenerateImage(
+    blogId: string,
+    body: { imageAlt: string; contextBefore: string; contextAfter: string }
+  ): Promise<{ success: boolean; error?: string; data?: { url: string; alt: string } }> {
+    return apiPost(V1Routes.blog(blogId) + "/image", body);
+  },
+
+  getDeepAnalysis(blogId: string): Promise<{
+    success: boolean;
+    cached: boolean;
+    data: BlogDeepAnalysisResult | null;
+    updatedAt: string | null;
+    targetKeyword: string | null;
+  }> {
+    return apiGet(V1Routes.blogDeepAnalysis(blogId));
+  },
+
+  runDeepAnalysis(
+    blogId: string,
+    body: { force?: boolean } = {}
+  ): Promise<
+    | {
+        success: true;
+        data: BlogDeepAnalysisResult;
+        updatedAt: string;
+        trace?: Array<{ stage: string; ok: boolean; detail?: string }>;
+      }
+    | { success: false; error: string }
+  > {
+    return apiPost(V1Routes.blogDeepAnalysis(blogId), body);
   },
 };

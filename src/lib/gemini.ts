@@ -1,6 +1,13 @@
 import { CalendarEntry, Project } from './types';
 import { ResearchContext, formatResearchForPrompt } from './research';
 import type { BusinessBrief } from './business-brief';
+import { buildInstantWebResearchArticlePrompt } from './prompts/instant-web-research-article-prompt';
+import {
+  deterministicFunnelStage,
+  parseFunnelStageLabel,
+  type FunnelStage,
+} from '@/lib/keyword-funnel';
+import { countWordsInMarkdown, stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
@@ -55,23 +62,28 @@ function formatAhrefsContextForPrompt(ctx: {
   return lines.join('\n');
 }
 
-export async function geminiGenerate(prompt: string, retries = 3): Promise<string> {
+export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearch = false): Promise<string> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      const body: any = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
+      };
+      if (useGoogleSearch) {
+        body.tools = [{ googleSearch: {} }];
+      }
+
       const res = await fetch(GEMINI_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-goog-api-key': GEMINI_API_KEY,
         },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
-        }),
+        body: JSON.stringify(body),
       });
 
       if (res.status === 429) {
-        const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached');
+        const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached', 0.75);
         if (fallback) return fallback;
         throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
       }
@@ -93,7 +105,11 @@ export async function geminiGenerate(prompt: string, retries = 3): Promise<strin
   throw new Error('Gemini failed after all retries');
 }
 
-async function pollinationsGeminiFallback(prompt: string, reason: string): Promise<string | null> {
+async function pollinationsGeminiFallback(
+  prompt: string,
+  reason: string,
+  temperature = 0.75
+): Promise<string | null> {
   const apiKey = process.env.POLLINATIONS_API_KEY;
   if (!apiKey) return null;
 
@@ -108,7 +124,7 @@ async function pollinationsGeminiFallback(prompt: string, reason: string): Promi
       body: JSON.stringify({
         model: process.env.POLLINATIONS_TEXT_MODEL || 'gemini-fast',
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.75,
+        temperature,
       }),
     });
 
@@ -125,6 +141,308 @@ async function pollinationsGeminiFallback(prompt: string, reason: string): Promi
     console.warn('Pollinations fallback failed:', error instanceof Error ? error.message : error);
     return null;
   }
+}
+
+/** Schema for structured JSON array output (consumer Gemini API). */
+const KEYWORD_INTENT_RESPONSE_SCHEMA = {
+  type: 'ARRAY',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      id: { type: 'STRING' },
+      intent: {
+        type: 'STRING',
+        enum: ['informational', 'commercial', 'navigational', 'transactional'],
+      },
+    },
+    required: ['id', 'intent'],
+  },
+} as const;
+
+/** Low-temperature JSON-style output for deterministic intent labels. */
+async function geminiGenerateClassificationJson(prompt: string, retries = 3): Promise<string> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const tryOnce = async (withResponseSchema: boolean): Promise<string> => {
+        const generationConfig: Record<string, unknown> = {
+          temperature: 0.2,
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json',
+        };
+        if (withResponseSchema) {
+          generationConfig.responseSchema = KEYWORD_INTENT_RESPONSE_SCHEMA;
+        }
+
+        const res = await fetch(GEMINI_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': GEMINI_API_KEY,
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig,
+          }),
+        });
+
+        if (res.status === 400 && withResponseSchema) {
+          const errText = await res.text();
+          console.warn(
+            '[intent-classify] responseSchema rejected; retrying without schema:',
+            errText.slice(0, 200)
+          );
+          return tryOnce(false);
+        }
+
+        if (res.status === 429) {
+          const fallback = await pollinationsGeminiFallback(
+            prompt,
+            'Gemini API rate limit reached',
+            0.2
+          );
+          if (fallback) return fallback;
+          throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
+        }
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(`Gemini ${res.status}: ${err}`);
+        }
+
+        const json = await res.json();
+        const cand = json?.candidates?.[0];
+        const text = cand?.content?.parts?.[0]?.text;
+        if (!text) {
+          const reason = String(cand?.finishReason ?? '');
+          if (reason.includes('SAFETY')) {
+            throw new Error('Gemini blocked the response (safety filter).');
+          }
+          throw new Error('Empty response from Gemini');
+        }
+        return text;
+      };
+
+      return await tryOnce(true);
+    } catch (e: unknown) {
+      if (attempt === retries - 1) throw e;
+      await new Promise(r => setTimeout(r, 4000));
+    }
+  }
+  throw new Error('Gemini classification failed after all retries');
+}
+
+export interface KeywordIntentClassifyRow {
+  id: string;
+  keyword: string;
+}
+
+export interface BusinessContextForIntent {
+  company: string;
+  domain: string;
+  niche: string;
+  targetAudience: string;
+  targetRegion: string;
+  /** Pre-truncated brief-derived block (may be empty). */
+  briefContext: string;
+}
+
+const SERP_INTENT_LABELS = ['informational', 'commercial', 'navigational', 'transactional'] as const;
+export type SerpIntentValue = (typeof SERP_INTENT_LABELS)[number];
+
+export function normalizeSerpIntentLabel(raw: unknown): SerpIntentValue {
+  const s = typeof raw === 'string' ? raw.toLowerCase().trim() : '';
+  return (SERP_INTENT_LABELS as readonly string[]).includes(s) ? (s as SerpIntentValue) : 'informational';
+}
+
+function stripJsonTrailingCommas(s: string): string {
+  return s.replace(/,\s*([}\]])/g, '$1');
+}
+
+/** Extract a top-level JSON array from `start` using bracket depth (strings respected). */
+function extractBalancedJsonArray(s: string): string | null {
+  const start = s.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === '[') depth++;
+    else if (c === ']') {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function tryParseIntentArrayPayload(raw: string): unknown[] | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    try {
+      parsed = JSON.parse(stripJsonTrailingCommas(trimmed));
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === 'object') {
+    const o = parsed as Record<string, unknown>;
+    for (const key of [
+      'results',
+      'keywords',
+      'items',
+      'data',
+      'classifications',
+      'intents',
+      'rows',
+      'output',
+    ]) {
+      const v = o[key];
+      if (Array.isArray(v)) return v;
+    }
+  }
+  return null;
+}
+
+/**
+ * Last-resort: pull `{"id":"…","intent":"…"}` objects from noisy text (e.g. Pollinations).
+ */
+function extractIntentObjectsLoose(s: string): unknown[] {
+  const out: unknown[] = [];
+  const idFirst = /\{\s*"id"\s*:\s*"([^"]*)"\s*,\s*"intent"\s*:\s*"([^"]*)"\s*\}/gi;
+  let m: RegExpExecArray | null;
+  while ((m = idFirst.exec(s)) !== null) {
+    out.push({ id: m[1], intent: m[2] });
+  }
+  if (out.length) return out;
+
+  const intentFirst = /\{\s*"intent"\s*:\s*"([^"]*)"\s*,\s*"id"\s*:\s*"([^"]*)"\s*\}/gi;
+  while ((m = intentFirst.exec(s)) !== null) {
+    out.push({ id: m[2], intent: m[1] });
+  }
+  return out;
+}
+
+function parseIntentClassificationArray(text: string): unknown[] {
+  let s = text.trim();
+  if (!s) {
+    throw new Error('Could not parse intent JSON array from model output');
+  }
+
+  // Single fenced block
+  const fence = /^```(?:json)?\s*([\s\S]*?)```\s*$/im.exec(s);
+  if (fence) s = fence[1].trim();
+
+  const candidates = [
+    s,
+    s.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim(),
+  ];
+
+  for (const chunk of candidates) {
+    const direct = tryParseIntentArrayPayload(chunk);
+    if (direct) return direct;
+
+    const balanced = extractBalancedJsonArray(chunk);
+    if (balanced) {
+      const fromBalanced = tryParseIntentArrayPayload(stripJsonTrailingCommas(balanced));
+      if (fromBalanced) return fromBalanced;
+    }
+  }
+
+  const loose = extractIntentObjectsLoose(s);
+  if (loose.length) return loose;
+
+  throw new Error('Could not parse intent JSON array from model output');
+}
+
+/**
+ * Classify a batch of keywords into a single SERP intent label each, grounded in
+ * the customer's business (brief + project fields).
+ */
+export async function classifyKeywordIntentsForBusinessChunk(
+  ctx: BusinessContextForIntent,
+  rows: KeywordIntentClassifyRow[]
+): Promise<{ id: string; intent: SerpIntentValue; funnel_stage: FunnelStage }[]> {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured');
+  }
+  if (!rows.length) return [];
+
+  const expectedIds = new Set(rows.map(r => r.id));
+  const lines = rows.map(
+    (r, i) => `${i + 1}. id=${r.id} | keyword="${String(r.keyword).replace(/"/g, '\\"')}"`
+  );
+
+  const prompt = `You are an SEO analyst. For each keyword below, assign EXACTLY ONE primary search intent for how ${ctx.company || 'this business'} (${ctx.domain}) should think about the query in their industry — not a generic dictionary guess.
+
+BUSINESS CONTEXT
+- Company: ${ctx.company || 'Unknown'}
+- Domain: ${ctx.domain || 'Unknown'}
+- Industry / niche: ${ctx.niche || 'Unknown'}
+- Target audience: ${ctx.targetAudience || 'Unknown'}
+- Region: ${ctx.targetRegion || 'Unknown'}
+${ctx.briefContext ? `\nSITE / OFFERING CONTEXT (from scraped brief — use to interpret services and jargon):\n${ctx.briefContext}\n` : ''}
+
+INTENT LABELS (pick one per keyword)
+- informational: learning, definitions, how/what/why, early research; not actively choosing a vendor.
+- commercial: comparing providers/services/solutions, "best", "top", "vs", reviews, or category shopping where the user is evaluating options before buying or hiring.
+- transactional: ready to act now — purchase, sign up, pricing, demo, quote, apply, download a gated asset tied to conversion, or hire immediately.
+- navigational: trying to reach a specific brand, product name, or web destination (including obvious brand + "login" / "portal").
+
+Rules:
+- Interpret each keyword in light of THIS company's niche. A broad term may be commercial for a B2B service provider even if it looks informational in isolation.
+- If a query is ambiguous, prefer informational over commercial.
+
+FUNNEL STAGE (one per keyword, must align with intent + phrasing)
+- TOFU: early research — how/what/why, broad education, awareness, definitions, ideas, tips; user is not comparing vendors yet.
+- MOFU: evaluation — best/top/vs/reviews/alternatives/compare, shortlists, "which X", category shopping before a final decision.
+- BOFU: ready to convert or navigate — buy/pricing/demo/signup/download/hire/apply, transactional or clear brand/site navigation.
+
+- Return JSON ONLY: one array. Each element: {"id":"<exact uuid from input>","intent":"informational"|"commercial"|"navigational"|"transactional","funnel_stage":"TOFU"|"MOFU"|"BOFU"}.
+- Same number of elements as input, same order as listed.
+
+KEYWORDS:
+${lines.join('\n')}
+`;
+
+  const rawText = await geminiGenerateClassificationJson(prompt);
+  const arr = parseIntentClassificationArray(rawText);
+  const byId = new Map<string, SerpIntentValue>();
+  const byFunnel = new Map<string, FunnelStage>();
+
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as { id?: unknown; intent?: unknown; funnel_stage?: unknown };
+    const id = typeof rec.id === 'string' ? rec.id : '';
+    if (!expectedIds.has(id)) continue;
+    byId.set(id, normalizeSerpIntentLabel(rec.intent));
+    const fs = parseFunnelStageLabel(rec.funnel_stage);
+    if (fs) byFunnel.set(id, fs);
+  }
+
+  return rows.map(r => {
+    const intent = byId.get(r.id) ?? 'informational';
+    const funnel_stage = byFunnel.get(r.id) ?? deterministicFunnelStage(intent, r.keyword);
+    return { id: r.id, intent, funnel_stage };
+  });
 }
 
 export interface GeneratedBlog {
@@ -175,6 +493,96 @@ export interface AhrefsBlogContext {
   }>;
 }
 
+/** Collapse leaked planning headers from Gemini blog output. */
+function stripLeakedStepContent(raw: string): string {
+  return stripEmptyFragmentAnchorTags(
+    raw
+      .replace(/^[═]{8,}\s*$/gm, '')
+      .replace(/^STEP\s+\d+\s*[—–:-].*$/gm, '')
+      .replace(/^\[PLAN STEP.*?\].*$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  );
+}
+
+function parseGeneratedBlogMarkdown(
+  rawText: string,
+  entry: { title: string; slug: string },
+  project: Project,
+  research?: ResearchContext
+): GeneratedBlog {
+  const text = rawText.trim();
+  const sepIdx = text.indexOf('---META---');
+  let content = stripLeakedStepContent(text);
+  let meta_description = '';
+  let slug = entry.slug;
+  let external_links: string[] = [];
+  let internal_links: string[] = [];
+
+  if (sepIdx !== -1) {
+    content = stripLeakedStepContent(text.substring(0, sepIdx).trim());
+    try {
+      const metaRaw = text.substring(sepIdx + 10).trim();
+      const metaJson = JSON.parse(metaRaw);
+      meta_description = metaJson.meta_description ?? '';
+      slug = metaJson.slug ?? entry.slug;
+      external_links = metaJson.external_links ?? [];
+      internal_links = metaJson.internal_links ?? [];
+    } catch {
+      /* use defaults */
+    }
+  }
+
+  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+  let match;
+  const ownHost = normalizeHost(project.domain);
+  while ((match = linkRegex.exec(content)) !== null) {
+    const url = match[2];
+    const host = safeHost(url);
+    const pointsToOwn = Boolean(host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`)));
+    if (pointsToOwn) {
+      if (!internal_links.includes(url)) internal_links.push(url);
+    } else if (!external_links.includes(url)) {
+      external_links.push(url);
+    }
+  }
+
+  const internalLinkRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
+  while ((match = internalLinkRegex.exec(content)) !== null) {
+    const path = match[2];
+    const absoluteUrl = project.domain ? `https://${project.domain}${path}` : path;
+    content = content.replace(`](${path})`, `](${absoluteUrl})`);
+    if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
+  }
+
+  const word_count = content.split(/\s+/).filter(Boolean).length;
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  const title = titleMatch ? titleMatch[1].replace(/\*/g, '').trim() : entry.title;
+
+  return {
+    title,
+    content,
+    meta_description,
+    slug,
+    word_count,
+    research_sources: research?.totalSourcesFound ?? 0,
+    external_links: [...new Set(external_links)].slice(0, 10),
+    internal_links: [...new Set(internal_links)].slice(0, 12),
+  };
+}
+
+function slugFromTopic(topic: string): string {
+  const base = topic
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 10)
+    .join('-');
+  return base || 'article';
+}
+
 export async function generateBlogPost(
   entry: CalendarEntry,
   project: Project,
@@ -207,8 +615,8 @@ export async function generateBlogPost(
           .join('\n')}`
       : '';
     const generatedBlock = generatedLinks.length
-      ? `Blog posts we've generated in this project (use /slug relative URLs):\n${generatedLinks
-          .map(b => `- "${b.title}" → /${b.slug} (keyword: ${b.target_keyword})`)
+      ? `Blog posts we've generated in this project (use absolute URLs like https://${project.domain}/blog/slug or https://${project.domain}/slug):\n${generatedLinks
+          .map(b => `- "${b.title}" → https://${project.domain}/${b.slug} (keyword: ${b.target_keyword})`)
           .join('\n')}`
       : '';
     internalLinksBlock = `\nINTERNAL LINKING (pick 2–4 total, split across the two pools, placed where they genuinely help the reader):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
@@ -216,9 +624,13 @@ export async function generateBlogPost(
 
   // Company grounding from the Business Brief so the draft sounds like this
   // specific company rather than a generic explainer.
+  const writerCap =
+    writerNotes && writerNotes.includes("CONTENT HEALTH AUDIT")
+      ? 12_000
+      : 2500;
   const writerNotesBlock =
     writerNotes && writerNotes.length > 0
-      ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, 2500)}\n`
+      ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, writerCap)}\n`
       : "";
 
   const briefBlock = brief
@@ -379,10 +791,10 @@ IMAGES:
 • Never reference an image by URL.
 
 LINKS (machine-checked — these directly affect your SEO score):
-• External links: include AT LEAST 5 credible institutional citations (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Spread them across different sections. Do NOT link to competitor blogs, random marketing blogs, Medium posts, Quora, Reddit, or thin affiliate pages — prefer primary reports and official publications.
-• Every external URL must be a real, currently-live page. Prefer the publication's main domain (e.g. https://www.mckinsey.com) over deep-linked article slugs that decay. If you are not confident a URL resolves, use the root domain only.
-• Internal links: include AT LEAST 2 from the INTERNAL LINKING pools above, woven naturally into body sections. Do NOT invent internal URLs.
-• If you genuinely cannot place 2 natural in-body internal links, add a section ## Also read immediately BEFORE "## Frequently Asked Questions" with 2–3 bullets. Each bullet must be a single markdown link from the INTERNAL LINKING pool plus one short sentence on why it matters. Do not duplicate URLs already linked in the body.
+• External links: include AT LEAST 5 credible institutional citations (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Spread them across different sections. Do NOT link to competitor blogs, random marketing blogs, Medium posts, Quora, Reddit, or thin affiliate pages.
+• You have access to Google Search. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com" or "https://www.mckinsey.com". Link to the exact report, article, or statistic page that supports your claim.
+• Internal links: include AT LEAST 3 from the INTERNAL LINKING pools above, woven naturally into body sections. Do NOT invent internal URLs. You MUST use the exact URLs provided in the pool.
+• If you genuinely cannot place 3 natural in-body internal links, add a section ## Also read immediately BEFORE "## Frequently Asked Questions" with 2–3 bullets. Each bullet must be a single markdown link from the INTERNAL LINKING pool plus one short sentence on why it matters. Do not duplicate URLs already linked in the body.
 • Format all links as [anchor text](url).
 
 KEYWORD DENSITY:
@@ -453,7 +865,7 @@ OUTPUT FORMAT — begin your response here, nothing before it
 [Answer ≤50 words]
 
 ## Conclusion
-[Strong, actionable closing — 3–5 sentences. Include primary keyword once. End with a subtle pointer to ${project.company} if relevant.]
+[Strong, actionable closing — 3–5 sentences. Include primary keyword once. The final paragraph MUST include a strong Call to Action (CTA) linking to ${project.domain} or a relevant product page from the internal linking pool.]
 
 FORMAT: Valid Markdown only. Use [text](url) for all links. Never output raw HTML.
 
@@ -461,81 +873,112 @@ After the article, output EXACTLY this block (no extra text, no trailing comma, 
 ---META---
 {"meta_description":"[140–165 chars, must include '${entry.focus_keyword}', written as a clear sentence]","slug":"url-slug-from-h1","external_links":["https://url1","https://url2","https://url3","https://url4","https://url5"],"internal_links":["/slug-or-absolute-url-1","/slug-or-absolute-url-2"]}`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
+  return parseGeneratedBlogMarkdown(text, entry, project, research);
+}
 
-  // Safety strip: remove any leaked planning-step headers the LLM may have output
-  // despite the INTERNAL PLANNING instruction. These lines begin with "STEP N —"
-  // or are the ════ separator lines used in the planning section.
-  function stripLeakedStepContent(raw: string): string {
-    return raw
-      // Remove lines that are exactly the ════ separator (8+ chars)
-      .replace(/^[═]{8,}\s*$/gm, '')
-      // Remove lines like "STEP 1 — ..." or "STEP 1: ..."
-      .replace(/^STEP\s+\d+\s*[—–:-].*$/gm, '')
-      // Remove [PLAN STEP …] markers if they leaked
-      .replace(/^\[PLAN STEP.*?\].*$/gm, '')
-      // Collapse 3+ consecutive blank lines into 2
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+export async function generateInstantWebResearchArticle(input: {
+  project: Project;
+  topic: string;
+  primaryKeyword: string;
+  regionName: string;
+  languageLabel: string;
+  writingStyleLabel: string;
+  articleType: string;
+  articleTypeLabel: string;
+  optionalKeywordsCsv: string;
+  research: ResearchContext;
+  brief: BusinessBrief | null;
+  existingBlogs: Array<{ title: string; slug: string; target_keyword: string }>;
+  customSourcesMarkdown?: string | null;
+  researchMethod: 'web' | 'custom';
+  /** Number of user files/URLs successfully ingested into the prompt (for analytics). */
+  customSourceIngestCount?: number;
+}): Promise<GeneratedBlog> {
+  const {
+    project,
+    topic,
+    primaryKeyword,
+    regionName,
+    languageLabel,
+    writingStyleLabel,
+    articleType,
+    articleTypeLabel,
+    optionalKeywordsCsv,
+    research,
+    brief,
+    existingBlogs,
+    customSourcesMarkdown,
+    researchMethod,
+    customSourceIngestCount = 0,
+  } = input;
+
+  const siteLinks = (brief?.internal_link_candidates ?? [])
+    .filter(l => l.url && l.url.startsWith('http'))
+    .slice(0, 12);
+  const generatedLinks = (existingBlogs ?? [])
+    .filter(b => b.target_keyword !== primaryKeyword)
+    .slice(0, 8);
+
+  let internalLinksBlock = '';
+  if (siteLinks.length || generatedLinks.length) {
+    const siteBlock = siteLinks.length
+      ? `User's own website pages (prefer these — use the absolute URL as the link target):\n${siteLinks
+          .map(l => `- ${l.title || l.topic || 'Page'} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
+          .join('\n')}`
+      : '';
+    const generatedBlock = generatedLinks.length
+      ? `Blog posts generated in this project:\n${generatedLinks
+          .map(b => `- "${b.title}" → https://${project.domain}/${b.slug} (keyword: ${b.target_keyword})`)
+          .join('\n')}`
+      : '';
+    internalLinksBlock = `INTERNAL LINKING (pick 2–4 natural in-body links from the pools below):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
+  } else {
+    internalLinksBlock = 'INTERNAL LINKING: No internal URL pool is available for this project yet — do not invent internal links.';
   }
 
-  // Parse content + metadata
-  const sepIdx = text.indexOf('---META---');
-  let content = stripLeakedStepContent(text.trim());
-  let meta_description = '';
-  let slug = entry.slug;
-  let external_links: string[] = [];
-  let internal_links: string[] = [];
+  const briefBlock = brief
+    ? `
+- Summary: ${brief.summary || '(none)'}
+- Products / offerings: ${brief.products.slice(0, 10).join(', ') || '(none)'}
+- Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
+- USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
+- Default tone from brief: ${brief.tone || 'professional, expert, helpful'}
+`
+    : '(No cached business brief — infer tone from the company name and niche.)';
 
-  if (sepIdx !== -1) {
-    content = stripLeakedStepContent(text.substring(0, sepIdx).trim());
-    try {
-      const metaRaw = text.substring(sepIdx + 10).trim();
-      const metaJson = JSON.parse(metaRaw);
-      meta_description = metaJson.meta_description ?? '';
-      slug = metaJson.slug ?? entry.slug;
-      external_links = metaJson.external_links ?? [];
-      internal_links = metaJson.internal_links ?? [];
-    } catch { /* use defaults */ }
-  }
+  const researchBlock = formatResearchForPrompt(research);
 
-  // Extract additional links from content via regex. Any http(s) link that
-  // points to the user's own domain is an *internal* link (backlinks to their
-  // site); anything else is external.
-  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
-  let match;
-  const ownHost = normalizeHost(project.domain);
-  while ((match = linkRegex.exec(content)) !== null) {
-    const url = match[2];
-    const host = safeHost(url);
-    const pointsToOwn = Boolean(host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`)));
-    if (pointsToOwn) {
-      if (!internal_links.includes(url)) internal_links.push(url);
-    } else if (!external_links.includes(url)) {
-      external_links.push(url);
-    }
-  }
+  const prompt = buildInstantWebResearchArticlePrompt({
+    topic,
+    primaryKeyword,
+    secondaryKeywordsLine: optionalKeywordsCsv.trim(),
+    targetAudienceLine: `${project.target_audience} — infer the most relevant sub-audience for this specific topic.`,
+    targetRegionName: regionName,
+    languageLabel,
+    writingStyleLabel,
+    articleTypeId: articleType,
+    articleTypeLabel,
+    companyName: project.company,
+    companyDomain: project.domain,
+    niche: project.niche,
+    briefBlock,
+    internalLinksBlock,
+    researchBlock,
+    customSourcesBlock: (customSourcesMarkdown ?? '').trim(),
+    researchMethod,
+  });
 
-  // Relative /slug links (our own generated blogs) — still internal.
-  const internalLinkRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
-  while ((match = internalLinkRegex.exec(content)) !== null) {
-    const path = match[2];
-    if (!internal_links.includes(path)) internal_links.push(path);
-  }
-
-  const word_count = content.split(/\s+/).filter(Boolean).length;
-  const titleMatch = content.match(/^#\s+(.+)$/m);
-  const title = titleMatch ? titleMatch[1].replace(/\*/g, '').trim() : entry.title;
-
+  const text = await geminiGenerate(prompt, 3, true);
+  const parsed = parseGeneratedBlogMarkdown(
+    text,
+    { title: topic.trim() || 'Article', slug: slugFromTopic(topic) },
+    project,
+    research
+  );
   return {
-    title,
-    content,
-    meta_description,
-    slug,
-    word_count,
-    research_sources: research?.totalSourcesFound ?? 0,
-    external_links: [...new Set(external_links)].slice(0, 10),
-    internal_links: [...new Set(internal_links)].slice(0, 12),
+    ...parsed,
+    research_sources: (parsed.research_sources ?? 0) + customSourceIngestCount,
   };
 }
 
@@ -587,7 +1030,7 @@ RULES:
 Return ONLY a JSON array. No markdown. No explanation. No code fences:
 [{"day":1,"date":"YYYY-MM-DD","keyword":"exact keyword","title":"Title Here","article_type":"How-to Guide","slug":"title-here"}]`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
 
   const cleaned = text
     .replace(/```json\s*/gi, '')
@@ -651,6 +1094,7 @@ export interface RepairBlogInput {
     fix: string;
     severity: 'low' | 'medium' | 'high';
     why_it_matters?: string;
+    category?: string;
   }>;
   contentGaps: string[];
   /** URLs on the user's own site we can link to. Must be verbatim — LLM won't invent. */
@@ -664,6 +1108,18 @@ export interface RepairBlogInput {
   project: Project;
   /** Target word count for the rewrite. */
   wordCount?: number;
+  /**
+   * Full in-app "Content Analysis" payload — enables a stronger SEO enhancement pass
+   * (issues + rubric + quick wins + verdict), not only minimal surgical edits.
+   */
+  contentAnalysisBundle?: {
+    summary: string;
+    plain_language_verdict: string;
+    conclusion_verdict: string;
+    conclusion_summary: string;
+    quick_wins: string[];
+    quality_rubric: Array<{ label: string; detail: string; status: 'pass' | 'warn' | 'fail' }>;
+  };
 }
 
 export interface RepairedBlog extends GeneratedBlog {
@@ -681,8 +1137,13 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
     secondaryKeywords,
     brief,
     project,
-    wordCount = 2200,
+    contentAnalysisBundle,
   } = input;
+
+  const targetWords = Math.min(
+    4500,
+    Math.max(1400, input.wordCount ?? countWordsInMarkdown(originalMarkdown) + 250),
+  );
 
   const originalTitle =
     input.originalTitle?.trim() ||
@@ -697,16 +1158,36 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
 
   const issueBlock = issues.length
     ? issues
-        .map(
-          (i, idx) =>
-            `${idx + 1}. [${i.severity.toUpperCase()}] ${i.label}\n   What's wrong: ${i.detail}\n   Fix: ${i.fix}`
-        )
+        .map((i, idx) => {
+          const cat = i.category ? ` · ${i.category.toUpperCase()}` : '';
+          const wim = i.why_it_matters ? `\n   Why it matters: ${i.why_it_matters}` : '';
+          return `${idx + 1}. [${i.severity.toUpperCase()}${cat}] ${i.label}\n   What's wrong: ${i.detail}${wim}\n   Fix: ${i.fix}`;
+        })
         .join('\n')
     : '(no explicit issues — focus on depth, clarity, and answer-first intro)';
 
   const gapsBlock = contentGaps.length
     ? contentGaps.map(g => `- ${g}`).join('\n')
     : '(the LLM did not flag explicit content gaps)';
+
+  const rubricNeedsWork =
+    contentAnalysisBundle?.quality_rubric?.filter(r => r.status === 'fail' || r.status === 'warn') ?? [];
+  const rubricBlock = rubricNeedsWork.length
+    ? rubricNeedsWork
+        .map(
+          (r, idx) =>
+            `${idx + 1}. [${r.status.toUpperCase()}] ${r.label}\n   ${r.detail}`,
+        )
+        .join('\n')
+    : '';
+
+  const analysisOverview = contentAnalysisBundle
+    ? `EDITORIAL VERDICT (${contentAnalysisBundle.conclusion_verdict}): ${contentAnalysisBundle.conclusion_summary}
+
+Article summary (stay on this topic): ${contentAnalysisBundle.summary}
+
+Key diagnosis: ${contentAnalysisBundle.plain_language_verdict}`
+    : '';
 
   const linkPool = internalLinkPool
     .filter(u => u !== sourceUrl)
@@ -719,26 +1200,65 @@ export async function repairBlogPost(input: RepairBlogInput): Promise<RepairedBl
     ? `Company voice (for tone ONLY — do not hijack the topic): ${brief.summary} · Products: ${brief.products.slice(0, 3).join(', ') || 'n/a'}`
     : '';
 
+  const fullBundle = Boolean(contentAnalysisBundle);
   // Truncate the original — we want the LLM to see structure + flavor, not
-  // reproduce word-for-word.
-  const originalHead = originalMarkdown.slice(0, 10_000);
+  // reproduce word-for-word. Content-analysis enhancement uses a larger window.
+  const originalBudget = fullBundle ? 20_000 : 10_000;
+  const originalHead = originalMarkdown.slice(0, originalBudget);
 
-  const prompt = `You are a senior SEO + content editor. Repair an existing public blog post by making the smallest useful changes needed to address the audit issues below. This is NOT a net-new article generation task.
+  const modeIntro = fullBundle
+    ? `You are a senior SEO editor. The user clicked "Generate enhanced" after a full content-quality analysis. Your job is to produce a **strong, search-ready** version of the SAME article: same core topic, same audience, same primary keyword intent — but comprehensively upgraded for clarity, depth, E-E-A-T, on-page SEO, and reader UX.
 
-IMPORTANT RULES:
+This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong existing paragraphs where they already work; rewrite or expand anywhere needed to satisfy **every** requirement block below (all audit issues, all rubric rows that are not pass, all quick wins, all content gaps).`
+    : `You are a senior SEO + content editor. Repair an existing public blog post by making the smallest useful changes needed to address the audit issues below. This is NOT a net-new article generation task.`;
+
+  const modeRules = fullBundle
+    ? `IMPORTANT RULES (FULL ENHANCEMENT):
+- Keep the same topic, angle, and reader promise as the original. Do NOT pivot industry, product, or audience.
+- Target PRIMARY KEYWORD naturally in the H1 (if TITLE_NEEDS_REPAIR), first ~120 words, at least one H2, and sporadically in body — never keyword stuffing.
+- Aim for roughly ${targetWords} words (±15%). If the draft was thin, add substantive sections; if long, tighten fluff without losing coverage of gaps/issues.
+- Output valid Markdown only. No HTML.
+- Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
+- Start with one H1 (# Title).
+- Immediately under the H1, write one "answer-first" paragraph in ≤80 words that states the direct takeaway (optimized for AI Overviews / featured snippets).
+- Use clear modular H2/H3 hierarchy (RAG-friendly). Merge redundant headings; fix weak single-sentence sections.
+- Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and long-tail phrasing.
+- Include **at least 3 and at most 8** credible external citations as markdown links in the body. Use Google Search for REAL, specific, deep-linked sources (reports, standards docs, regulator pages, vendor docs). No Wikipedia. No bare root domains.
+- Use **at least 2** INTERNAL LINK POOL URLs verbatim in contextually relevant sentences.
+- Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
+- If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
+- Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.`
+    : `IMPORTANT RULES (REPAIR):
 - This is a REPAIR of an existing page — the topic must stay the same. Do NOT pivot to a different product, industry, or audience.
 - Target the same primary keyword unless the audit explicitly says the keyword is dead; then re-target to the closest secondary keyword listed.
 - Preserve every section, claim, example, and phrasing that is already correct. Only rewrite the parts connected to the listed audit issues or missing subtopics.
-- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
-- Do not change the meta description unless META_NEEDS_REPAIR is true. If false and you cannot see the original meta description, return a neutral summary that matches the original page, not a new angle.
 - Output must be valid Markdown. No HTML.
 - Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
 - Start with an H1 (# Title).
 - Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
 - Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
-- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. No Wikipedia.
-- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
+- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com". Link to the exact report or article. No Wikipedia.
+- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.`;
+
+  const titleMetaBlock = `- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
+- Do not change the meta description unless META_NEEDS_REPAIR is true. If false, keep the same marketing angle as the original page (do not invent a new pitch).`;
+
+  const rubricSection =
+    fullBundle && rubricBlock
+      ? `QUALITY RUBRIC — STILL NEEDS WORK (address each; if an item is marginal, strengthen it anyway):\n${rubricBlock}\n\n`
+      : '';
+
+  const quickWinsSection =
+    fullBundle && contentAnalysisBundle?.quick_wins?.length
+      ? `QUICK WINS (implement each):\n- ${contentAnalysisBundle.quick_wins.join('\n- ')}\n\n`
+      : '';
+
+  const prompt = `${modeIntro}
+
+${titleMetaBlock}
+
+${modeRules}
 
 SOURCE URL (the live page being repaired): ${sourceUrl}
 ORIGINAL TITLE/H1: ${originalTitle || '(unknown)'}
@@ -746,21 +1266,22 @@ TITLE_NEEDS_REPAIR: ${titleNeedsRepair ? 'true' : 'false'}
 META_NEEDS_REPAIR: ${metaNeedsRepair ? 'true' : 'false'}
 PRIMARY KEYWORD: ${primaryKeyword || '(infer from title)'}
 SECONDARY KEYWORDS: ${secondaryKeywords.join(', ') || '(none)'}
+TARGET LENGTH: ~${targetWords} words (${fullBundle ? 'full enhancement' : 'repair'} mode)
 ${briefLine}
 
 AUDIENCE: ${project.target_audience}
 REGION: ${project.target_region}
 
-AUDIT ISSUES TO FIX:
+${analysisOverview ? `${analysisOverview}\n\n` : ''}AUDIT ISSUES TO FIX (address every row):
 ${issueBlock}
 
-MISSING SUBTOPICS TO COVER:
+${rubricSection}${quickWinsSection}MISSING SUBTOPICS TO COVER:
 ${gapsBlock}
 
 INTERNAL LINK POOL (you MUST use at least 2 of these, verbatim):
 ${linkPoolBlock}
 
-ORIGINAL PAGE (first ~10k chars of markdown, for reference — do not copy, rewrite):
+ORIGINAL PAGE (first ~${Math.round(originalBudget / 1000)}k chars of markdown, for reference — do not copy verbatim; rewrite):
 ---
 ${originalHead}
 ---
@@ -769,7 +1290,7 @@ Write the repaired blog now. End the blog content, then on the next line output 
 ---META---
 {"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
 
   const sepIdx = text.indexOf('---META---');
   let content = text.trim();
@@ -792,6 +1313,8 @@ Write the repaired blog now. End the blog content, then on the next line output 
     } catch { /* use defaults */ }
   }
 
+  content = stripEmptyFragmentAnchorTags(content);
+
   // Re-scan markdown to pick up links the LLM embedded but omitted from meta.
   const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
   const ownHost = normalizeHost(project.domain);
@@ -809,7 +1332,10 @@ Write the repaired blog now. End the blog content, then on the next line output 
   const relInternalRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
   while ((m = relInternalRegex.exec(content))) {
     const path = m[2];
-    if (!internal_links.includes(path)) internal_links.push(path);
+    const absoluteUrl = project.domain ? `https://${project.domain}${path}` : path;
+    // Replace the relative link in the content with the absolute URL
+    content = content.replace(`](${path})`, `](${absoluteUrl})`);
+    if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
   }
 
   const word_count = content.split(/\s+/).filter(Boolean).length;
@@ -894,7 +1420,7 @@ JSON rules:
 - Each string must match (verbatim or trivial spacing case) a keyword from the INDUSTRY or COMPETITOR lists above.
 - Order = recommended publishing order for one cohesive monthly cluster.`;
 
-  const text = await geminiGenerate(prompt);
+  const text = await geminiGenerate(prompt, 3, true);
   const marker = '---CLUSTER---';
   const idx = text.indexOf(marker);
   let analysisMarkdown = text.trim();
@@ -920,4 +1446,155 @@ JSON rules:
   }
 
   return { analysisMarkdown, clusterKeywords };
+}
+
+const INSTANT_KEYWORD_TOPIC_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    keyword: { type: 'STRING' },
+    topic: { type: 'STRING' },
+  },
+  required: ['keyword', 'topic'],
+} as const;
+
+/**
+ * One keyword grounded in the project's website domain, then one article topic that targets that keyword (no web search).
+ */
+export async function suggestInstantArticleKeywordAndTopic(input: {
+  company: string;
+  niche: string;
+  domain: string;
+  targetAudience: string;
+  regionLabel: string;
+  languageLabel: string;
+  briefSummary: string | null;
+  seedPhrases: string[];
+  /** Forces a different sub-intent each request (server-chosen). */
+  rotationHint: string;
+  /** Phrases the model must not repeat (e.g. prior Ask AI fills). */
+  avoidPhrases: string[];
+}): Promise<{ topic: string; keyword: string }> {
+  const seeds =
+    input.seedPhrases
+      .map(s => s.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+      .join('\n') || '(none — infer from domain and niche only)';
+
+  const briefBlock = input.briefSummary?.trim()
+    ? `PROJECT BRIEF (source of truth):\n${input.briefSummary.trim()}`
+    : 'No cached project brief — infer primarily from the website domain, company, and niche.';
+
+  const avoidBlock =
+    input.avoidPhrases.length > 0
+      ? `BANNED PHRASES (case-insensitive; do not output the keyword or topic if it duplicates or only trivially rephrases any of these — use a clearly different search intent):\n${input.avoidPhrases.map(p => `- ${p}`).join('\n')}`
+      : '(No prior phrases to avoid — still pick a fresh angle.)';
+
+  const prompt = `You are an SEO content strategist for the Instant Article tool.
+
+PRIMARY ANCHOR — WEBSITE DOMAIN (this is what the keyword must be relevant to):
+${input.domain}
+
+BUSINESS CONTEXT
+- Company: ${input.company}
+- Niche: ${input.niche}
+- Target audience: ${input.targetAudience}
+- Target region: ${input.regionLabel}
+- Article language: ${input.languageLabel}
+
+${briefBlock}
+
+SEED PHRASES (optional alignment — only if they clearly match this domain's offering):
+${seeds}
+
+VARIETY FOR THIS REQUEST (required — obey strictly):
+- ${input.rotationHint}
+- This run must feel like a new brainstorm: a different head term or query pattern than a generic default you might repeat. Same domain, new angle.
+
+${avoidBlock}
+
+Process (follow in order):
+1) KEYWORD — Output exactly ONE short search phrase (2–6 words) in ${input.languageLabel} that a real searcher would type when looking for what this domain's business offers. It must be plausibly winnable organic demand for this site (not a random trending query unrelated to the domain). No brand name unless it is clearly a navigational product query for this company. No hashtags, no quotes, no numbering.
+2) TOPIC — One specific, compelling article title or headline that naturally centers that same keyword intent (not generic fluff). It should read like a strong blog title for ${input.regionLabel}.
+
+Return JSON only with keys "keyword" (string) and "topic" (string).`;
+
+  const run = async (withResponseSchema: boolean): Promise<string> => {
+    const generationConfig: Record<string, unknown> = {
+      temperature: 0.92,
+      topP: 0.94,
+      maxOutputTokens: 1024,
+      responseMimeType: 'application/json',
+    };
+    if (withResponseSchema) {
+      generationConfig.responseSchema = INSTANT_KEYWORD_TOPIC_SCHEMA;
+    }
+
+    const res = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig,
+      }),
+    });
+
+    if (res.status === 400 && withResponseSchema) {
+      const errText = await res.text();
+      console.warn('[instant-keyword-topic] responseSchema rejected; retrying without schema:', errText.slice(0, 200));
+      return run(false);
+    }
+
+    if (res.status === 429) {
+      const fallback = await pollinationsGeminiFallback(
+        prompt + '\n\nReturn valid JSON: {"keyword":"...","topic":"..."}',
+        'Gemini API rate limit reached',
+        0.92
+      );
+      if (fallback) return fallback;
+      throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
+    }
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Gemini ${res.status}: ${err}`);
+    }
+
+    const json = await res.json();
+    const cand = json?.candidates?.[0];
+    const text = cand?.content?.parts?.[0]?.text;
+    if (!text) {
+      const reason = String(cand?.finishReason ?? '');
+      if (reason.includes('SAFETY')) {
+        throw new Error('Gemini blocked the response (safety filter).');
+      }
+      throw new Error('Empty response from Gemini');
+    }
+    return text;
+  };
+
+  const raw = await run(true);
+  let parsed: { keyword?: string; topic?: string };
+  try {
+    parsed = JSON.parse(raw) as { keyword?: string; topic?: string };
+  } catch {
+    const brace = raw.match(/\{[\s\S]*\}/);
+    if (!brace) throw new Error('Could not parse keyword/topic suggestion JSON');
+    parsed = JSON.parse(brace[0]) as { keyword?: string; topic?: string };
+  }
+
+  const keyword = String(parsed.keyword ?? '').trim();
+  const topic = String(parsed.topic ?? '').trim();
+
+  if (!keyword) {
+    throw new Error('Model returned an empty keyword');
+  }
+  if (!topic) {
+    throw new Error('Model returned an empty topic');
+  }
+
+  return { topic, keyword };
 }

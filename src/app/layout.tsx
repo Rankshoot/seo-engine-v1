@@ -3,6 +3,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/components/query-provider";
 import { ReduxProvider } from "@/components/redux-provider";
+import { AppToastContainer } from "@/components/app-toast-container";
 
 // Conditionally import Clerk only if keys are configured
 const isClerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
@@ -48,7 +49,10 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <ReduxProvider>
-            <QueryProvider>{children}</QueryProvider>
+            <QueryProvider>
+              <AppToastContainer />
+              {children}
+            </QueryProvider>
           </ReduxProvider>
         </ThemeProvider>
       </body>

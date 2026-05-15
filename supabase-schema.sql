@@ -196,6 +196,10 @@ CREATE TABLE IF NOT EXISTS blogs (
   deep_analysis JSONB,
   deep_analysis_score INTEGER,
   deep_analysis_updated_at TIMESTAMPTZ,
+  -- Content Studio (phase 5) — see supabase-migration-content-studio.sql
+  content_type TEXT NOT NULL DEFAULT 'blog'
+    CHECK (content_type IN ('blog', 'ebook', 'whitepaper', 'linkedin')),
+  content_data JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -212,6 +216,12 @@ CREATE TABLE IF NOT EXISTS blog_deep_analyses (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(blog_id)
 );
+-- Older databases may already have `blogs` without these columns; CREATE TABLE IF NOT EXISTS
+-- never adds new columns. See supabase-migration-content-studio.sql.
+ALTER TABLE blogs
+  ADD COLUMN IF NOT EXISTS content_type TEXT NOT NULL DEFAULT 'blog';
+ALTER TABLE blogs
+  ADD COLUMN IF NOT EXISTS content_data JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- ============================================================
 -- Competitor Benchmarking Engine (phase 5)
@@ -307,6 +317,8 @@ CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_entries(scheduled_date)
 CREATE INDEX IF NOT EXISTS idx_blogs_entry_id ON blogs(entry_id);
 CREATE INDEX IF NOT EXISTS idx_blogs_project_id ON blogs(project_id);
 CREATE INDEX IF NOT EXISTS idx_blog_deep_analyses_project_id ON blog_deep_analyses(project_id);
+CREATE INDEX IF NOT EXISTS idx_blogs_content_type
+  ON blogs(project_id, content_type, status);
 CREATE INDEX IF NOT EXISTS idx_competitors_project_id ON competitors(project_id);
 CREATE INDEX IF NOT EXISTS idx_competitor_keywords_project_id ON competitor_keywords(project_id);
 CREATE INDEX IF NOT EXISTS idx_competitor_keywords_competitor_id ON competitor_keywords(competitor_id);

@@ -30,11 +30,15 @@ export interface DropdownMenuProps {
   children: ReactNode;
   align?: "start" | "end";
   /** Width preset for the menu. Override with className if needed. */
-  menuWidth?: "auto" | "sm" | "md" | "lg";
+  menuWidth?: "auto" | "sm" | "md" | "lg" | "stretch";
   className?: string;
+  /** Root becomes `block w-full` so a full-width trigger (e.g. sidebar export) lays out correctly. */
+  fillWidth?: boolean;
+  /** Close the menu after a click on any `role="menuitem"` control inside the panel. */
+  closeOnMenuClick?: boolean;
 }
 
-const widthClass: Record<NonNullable<DropdownMenuProps["menuWidth"]>, string> = {
+const widthClass: Record<Exclude<NonNullable<DropdownMenuProps["menuWidth"]>, "stretch">, string> = {
   auto: "min-w-[160px]",
   sm: "w-[180px]",
   md: "w-[220px]",
@@ -47,6 +51,8 @@ export function DropdownMenu({
   align = "end",
   menuWidth = "md",
   className,
+  fillWidth = false,
+  closeOnMenuClick = false,
 }: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -87,18 +93,32 @@ export function DropdownMenu({
     "aria-haspopup": "menu",
   });
 
+  const positionClass =
+    menuWidth === "stretch"
+      ? "left-0 right-0 w-full min-w-0"
+      : align === "end"
+        ? "right-0"
+        : "left-0";
+  const sizeClass = menuWidth === "stretch" ? "" : widthClass[menuWidth];
+
   return (
-    <div ref={containerRef} className="relative inline-block">
+    <div ref={containerRef} className={cn("relative", fillWidth ? "block w-full" : "inline-block")}>
       {enhancedTrigger}
       {open ? (
         <div
           id={menuId}
           role="menu"
+          onClick={e => {
+            if (!closeOnMenuClick) return;
+            if ((e.target as HTMLElement).closest('button[role="menuitem"]')) {
+              queueMicrotask(() => setOpen(false));
+            }
+          }}
           className={cn(
             "absolute z-50 mt-1.5 rounded-md border border-border-default bg-surface-elevated p-1 shadow-(--shadow-md)",
             "animate-[fade-in_0.12s_ease-out]",
-            align === "end" ? "right-0" : "left-0",
-            widthClass[menuWidth],
+            positionClass,
+            sizeClass,
             className,
           )}
         >

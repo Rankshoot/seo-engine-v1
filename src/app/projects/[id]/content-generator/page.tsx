@@ -1,8 +1,26 @@
 "use client";
 
+import { useMemo } from "react";
 import { useParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { PageTitle } from "@/components/common";
+import { contentGeneratorApi } from "@/frontend/api/content-generator";
+import { qk } from "@/lib/query";
+import type { ContentType } from "@/lib/types";
+
+interface ContentTypeCard {
+  id: ContentType | "instant";
+  href: string;
+  badge?: string;
+  duration: string;
+  title: string;
+  subtitle: string;
+  bullets: string[];
+  art: React.ReactNode;
+  artBg: string;
+  primary?: boolean;
+}
 
 function ClockIcon({ className }: { className?: string }) {
   return (
@@ -13,17 +31,7 @@ function ClockIcon({ className }: { className?: string }) {
   );
 }
 
-function IllustrationTenSteps() {
-  return (
-    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
-      <rect x="24" y="16" width="152" height="96" rx="8" className="stroke-text-tertiary/25" strokeWidth="1.5" />
-      <path d="M40 36h120M40 52h96M40 68h108M40 84h72" className="stroke-text-tertiary/35" strokeWidth="2" strokeLinecap="round" />
-      <path d="M148 88l12 12 8-16" className="stroke-violet-500 dark:stroke-violet-400" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function IllustrationInstant() {
+function ArtInstant() {
   return (
     <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
       <rect x="40" y="20" width="120" height="88" rx="10" className="stroke-text-tertiary/25" strokeWidth="1.5" />
@@ -33,9 +41,120 @@ function IllustrationInstant() {
   );
 }
 
-export default function ContentGeneratorPage() {
+function ArtEbook() {
+  return (
+    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
+      <rect x="36" y="14" width="60" height="92" rx="6" className="stroke-violet-500/60 dark:stroke-violet-400/60 fill-violet-500/8 dark:fill-violet-400/10" strokeWidth="1.5" />
+      <rect x="100" y="14" width="60" height="92" rx="6" className="stroke-violet-400/40 dark:stroke-violet-300/40" strokeWidth="1.5" />
+      <path d="M48 32h36M48 44h28M48 56h36M48 68h22" className="stroke-violet-500/70 dark:stroke-violet-300/70" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ArtWhitepaper() {
+  return (
+    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
+      <rect x="32" y="12" width="136" height="96" rx="6" className="stroke-blue-500/60 dark:stroke-blue-400/60" strokeWidth="1.5" />
+      <path d="M48 32h104M48 46h84M48 60h104M48 74h64" className="stroke-blue-500/55 dark:stroke-blue-300/55" strokeWidth="2" strokeLinecap="round" />
+      <rect x="48" y="86" width="56" height="14" rx="2" className="stroke-blue-500/45 dark:stroke-blue-300/45 fill-blue-500/8 dark:fill-blue-400/10" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ArtLinkedIn() {
+  return (
+    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
+      <rect x="24" y="14" width="152" height="92" rx="10" className="stroke-text-tertiary/25" strokeWidth="1.5" />
+      <circle cx="48" cy="40" r="10" className="fill-cyan-500/15 stroke-cyan-500/60 dark:fill-cyan-400/20 dark:stroke-cyan-400/60" strokeWidth="1.5" />
+      <path d="M64 36h72M64 46h52" className="stroke-text-tertiary/55" strokeWidth="2" strokeLinecap="round" />
+      <path d="M40 64h120M40 76h96M40 88h60" className="stroke-text-tertiary/35" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export default function ContentGeneratorHubPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const base = `/projects/${projectId}`;
+  const studioBase = `${base}/content-generator`;
+
+  const { data } = useQuery({
+    queryKey: qk.contentStudioHistory(projectId),
+    queryFn: () => contentGeneratorApi.studioHistory(projectId),
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+
+  const counts = useMemo(() => {
+    const map: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
+    if (data?.success) {
+      for (const r of data.data) map[r.content_type] = (map[r.content_type] ?? 0) + 1;
+    }
+    return map;
+  }, [data]);
+
+  const cards: ContentTypeCard[] = [
+    {
+      id: "instant",
+      href: `${studioBase}/instant`,
+      badge: "Beta",
+      duration: "1 min",
+      title: "Instant article",
+      subtitle: "Topic in, draft out. Live web research + your brief.",
+      bullets: [
+        "Quickest path from a topic to a publishable post",
+        "Live SERP context + Serper PAA included",
+        "Optional custom PDF/DOCX/link sources",
+        `${counts.blog} blog${counts.blog === 1 ? "" : "s"} in this project`,
+      ],
+      art: <ArtInstant />,
+      artBg: "bg-violet-100/80 dark:bg-violet-500/10",
+      primary: true,
+    },
+    {
+      id: "ebook",
+      href: `${studioBase}/ebooks`,
+      badge: "Pro",
+      duration: "3–6 min",
+      title: "Ebooks",
+      subtitle: "Long-form lead magnets with chapters, ToC, FAQs, references.",
+      bullets: [
+        "Powered by Gemini 2.5 Pro long-context",
+        "Authoritative, citation-rich, premium UX",
+        `${counts.ebook} in this project`,
+      ],
+      art: <ArtEbook />,
+      artBg: "bg-violet-200/80 dark:bg-violet-500/15",
+    },
+    {
+      id: "whitepaper",
+      href: `${studioBase}/whitepapers`,
+      badge: "Pro",
+      duration: "4–8 min",
+      title: "Whitepapers",
+      subtitle: "Enterprise research with executive summary + roadmap.",
+      bullets: [
+        "EEAT-heavy, primary-source citations",
+        "Methodology, findings, recommendations",
+        `${counts.whitepaper} in this project`,
+      ],
+      art: <ArtWhitepaper />,
+      artBg: "bg-blue-100/80 dark:bg-blue-500/10",
+    },
+    {
+      id: "linkedin",
+      href: `${studioBase}/linkedin`,
+      duration: "30–60 sec",
+      title: "LinkedIn posts",
+      subtitle: "Hook-first, feed-native posts. No clichés. No hashtag spam.",
+      bullets: [
+        "Educational · founder · industry · storytelling · list · carousel",
+        "Sized for LinkedIn's 1,300-char collapse limit",
+        `${counts.linkedin} in this project`,
+      ],
+      art: <ArtLinkedIn />,
+      artBg: "bg-cyan-100/80 dark:bg-cyan-500/10",
+    },
+  ];
 
   return (
     <div className="space-y-10 pb-16 pl-4 pr-4">
@@ -43,134 +162,77 @@ export default function ContentGeneratorPage() {
         <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
           <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
             <span className="h-2 w-2 rounded-full bg-brand-action" />
-            Content generation
+            AI content studio
           </span>
         </div>
-        <PageTitle>Start your article journey</PageTitle>
+        <PageTitle>What are you writing today?</PageTitle>
         <p className="mt-3 max-w-2xl text-[16px] leading-relaxed text-text-tertiary">
-          Select the writing mode that best fits your needs and time constraints.
+          Pick a content type. Every studio uses your project brief, approved keywords, and live research —
+          so the draft sounds like your business, not a template.
         </p>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <ProjectNavLink
+            href={`${studioBase}/history`}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary transition-colors hover:border-border-default hover:text-text-primary"
+          >
+            <span className="h-2 w-2 rounded-full bg-brand-action" />
+            View content history
+          </ProjectNavLink>
+        </div>
       </div>
 
-      <div className="mx-auto max-w-5xl">
-        <h2 className="mb-6 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">Choose your writing mode</h2>
-
+      <div className="mx-auto max-w-6xl">
+        <h2 className="mb-6 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">
+          Choose your content type
+        </h2>
         <div className="grid gap-6 md:grid-cols-2">
-        {/* 10-Steps Article — full flow not available yet */}
-        <article
-          className="flex flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated opacity-[0.92]"
-          aria-label="10-Steps Article — coming soon"
-        >
-          <div className="relative bg-pink-100/90 px-6 pb-4 pt-8 dark:bg-pink-500/10">
-            <span className="absolute left-4 top-4 inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">
-              Coming soon
-            </span>
-            <div className="mx-auto flex h-[132px] items-center justify-center">
-              <IllustrationTenSteps />
-            </div>
-          </div>
-
-          <div className="flex flex-1 flex-col border-t border-border-subtle p-6">
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <h3 className="text-[20px] font-bold text-text-primary">10-Steps Article</h3>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100/60 px-2 py-0.5 text-[11px] font-semibold text-emerald-800/80 dark:bg-emerald-500/15 dark:text-emerald-400/80">
-                <ClockIcon className="h-3.5 w-3.5" />
-                5 mins
-              </span>
-            </div>
-
-            <p className="mb-2 text-[13px] font-semibold text-text-secondary">Full control over:</p>
-            <ul className="mb-8 flex-1 space-y-2 text-[14px] leading-snug text-text-tertiary">
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Article type (listicles, how-to guides, news, and more)
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Reference and competitor selection
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Keywords from your research workspace
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Word length (500–5000 words)
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Outline, writing style, and CTA
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Images, FAQs, and other settings
-              </li>
-            </ul>
-
-            <button
-              type="button"
-              disabled
-              className="flex w-full cursor-not-allowed items-center justify-center rounded-full border border-border-subtle bg-surface-secondary py-3 text-[14px] font-medium text-text-tertiary"
-            >
-              Coming soon
-            </button>
-          </div>
-        </article>
-
-        {/* Instant Article */}
-        <article className="flex flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-          <div className="relative bg-violet-100/80 px-6 pb-4 pt-8 dark:bg-violet-500/10">
-            <div className="mx-auto flex h-[132px] items-center justify-center">
-              <IllustrationInstant />
-            </div>
-          </div>
-
-          <div className="flex flex-1 flex-col border-t border-border-subtle p-6">
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <h3 className="text-[20px] font-bold text-text-primary">Instant Article</h3>
-              <span className="inline-flex rounded-full bg-violet-200/80 px-2 py-0.5 text-[11px] font-semibold text-violet-800 dark:bg-violet-500/25 dark:text-violet-200">
-                Beta
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300">
-                <ClockIcon className="h-3.5 w-3.5" />
-                1 min
-              </span>
-            </div>
-
-            <p className="mb-2 text-[13px] font-semibold text-text-secondary">You provide:</p>
-            <ul className="mb-8 flex-1 space-y-2 text-[14px] leading-snug text-text-tertiary">
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Topic or title
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Article type (listicles, how-to guides, news, and more)
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Keywords (optional)
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                Reference and competitor selection
-              </li>
-              <li className="flex gap-2">
-                <span className="text-violet-500 dark:text-violet-400">•</span>
-                We handle the rest
-              </li>
-            </ul>
-
-            <ProjectNavLink
-              href={`${base}/content-generator/instant`}
-              className="flex w-full items-center justify-center rounded-full border border-brand-action bg-transparent py-3 text-[14px] font-medium text-text-primary transition-colors hover:bg-brand-action/10"
-            >
-              Click to start
-            </ProjectNavLink>
-          </div>
-        </article>
+          {cards.map(card => (
+            <ContentCard key={card.id} card={card} />
+          ))}
         </div>
       </div>
     </div>
+  );
+}
+
+function ContentCard({ card }: { card: ContentTypeCard }) {
+  return (
+    <article className="flex h-full flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated transition-all duration-200 ease-out hover:border-border-strong hover:shadow-(--shadow-sm)">
+      <div className={`relative ${card.artBg} px-6 pb-4 pt-8`}>
+        {card.badge ? (
+          <span className="absolute left-4 top-4 inline-flex rounded-full bg-text-primary/10 px-2.5 py-0.5 text-[11px] font-semibold text-text-primary backdrop-blur">
+            {card.badge}
+          </span>
+        ) : null}
+        <span className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full bg-text-primary/10 px-2 py-0.5 text-[11px] font-semibold text-text-primary backdrop-blur">
+          <ClockIcon className="h-3 w-3" />
+          {card.duration}
+        </span>
+        <div className="mx-auto flex h-[132px] items-center justify-center">{card.art}</div>
+      </div>
+
+      <div className="flex flex-1 flex-col border-t border-border-subtle p-6">
+        <h3 className="text-[20px] font-bold text-text-primary">{card.title}</h3>
+        <p className="mt-1 text-[13px] text-text-secondary">{card.subtitle}</p>
+        <ul className="mt-4 mb-6 flex-1 space-y-2 text-[13px] leading-snug text-text-tertiary">
+          {card.bullets.map((b, i) => (
+            <li key={i} className="flex gap-2">
+              <span className="text-brand-action">•</span>
+              {b}
+            </li>
+          ))}
+        </ul>
+        <ProjectNavLink
+          href={card.href}
+          className={
+            card.primary
+              ? "flex w-full items-center justify-center rounded-full bg-text-primary px-5 py-3 text-[14px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
+              : "flex w-full items-center justify-center rounded-full border border-brand-action bg-transparent py-3 text-[14px] font-medium text-text-primary transition-colors hover:bg-brand-action/10"
+          }
+        >
+          Open studio
+        </ProjectNavLink>
+      </div>
+    </article>
   );
 }

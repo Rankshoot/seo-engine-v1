@@ -1,10 +1,17 @@
 import { Blog, ExportFormat } from './types';
 import { EXPORT_FILE_INFO, safeFilename } from './blog-content';
 import { buildBlogSchemas, type ProjectMeta } from './schema';
+import { displayDomain } from './studio-brand';
 
 // ─── Public API ────────────────────────────────────────────────────────────
 
 export function exportToMarkdown(blog: Blog, projectMeta?: ProjectMeta): Blob {
+  const orgBlock =
+    projectMeta?.company?.trim() ?
+      `organization: "${escapeYaml(projectMeta.company.trim())}"
+publisher_domain: "${escapeYaml(displayDomain(projectMeta.domain ?? ''))}"
+`
+    : '';
   const frontmatter = `---
 title: "${escapeYaml(blog.title)}"
 slug: "${blog.slug}"
@@ -13,7 +20,7 @@ meta_description: "${escapeYaml(blog.meta_description)}"
 article_type: "${escapeYaml(blog.article_type)}"
 word_count: ${blog.word_count}
 date: "${blog.created_at.split('T')[0]}"
----
+${orgBlock}---
 
 `;
 
@@ -48,6 +55,15 @@ export function exportToHTML(blog: Blog, projectMeta?: ProjectMeta): Blob {
   const { article, faq } = buildBlogSchemas(blog, projectMeta);
   const articleScript = `<script type="application/ld+json">\n${JSON.stringify(article, null, 2)}\n</script>`;
   const faqScript = faq ? `<script type="application/ld+json">\n${JSON.stringify(faq, null, 2)}\n</script>` : '';
+
+  const publisherRow =
+    projectMeta?.company?.trim() ?
+      `<div><strong>Publisher:</strong> ${escapeHTML(projectMeta.company.trim())}${
+        projectMeta.domain?.trim()
+          ? ` &nbsp;|&nbsp; <a href="${escapeHTML(`https://${displayDomain(projectMeta.domain)}`)}">${escapeHTML(displayDomain(projectMeta.domain))}</a>`
+          : ''
+      }</div>`
+    : '';
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -91,6 +107,7 @@ export function exportToHTML(blog: Blog, projectMeta?: ProjectMeta): Blob {
     <strong>Type:</strong> ${escapeHTML(blog.article_type)} &nbsp;|&nbsp;
     <strong>Words:</strong> ${blog.word_count} &nbsp;|&nbsp;
     <strong>Slug:</strong> /${escapeHTML(blog.slug)}
+    ${publisherRow}
   </div>
 ${body}
 </body>
@@ -99,7 +116,10 @@ ${body}
   return new Blob([html], { type: EXPORT_FILE_INFO.html.mime });
 }
 
-export function exportToText(blog: Blog): Blob {
+export function exportToText(
+  blog: Blog,
+  opts?: { publisherLine?: string },
+): Blob {
   const stripped = blog.content
     // Drop image markdown — they make no sense in plain text.
     .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
@@ -114,17 +134,19 @@ export function exportToText(blog: Blog): Blob {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  const header = [
+  const lines = [
     `TITLE: ${blog.title}`,
     `KEYWORD: ${blog.target_keyword}`,
     `TYPE: ${blog.article_type}`,
     `SLUG: ${blog.slug}`,
     `META: ${blog.meta_description}`,
     `WORDS: ${blog.word_count}`,
-    '='.repeat(60),
-    '',
-    '',
-  ].join('\n');
+  ];
+  if (opts?.publisherLine?.trim()) {
+    lines.push(opts.publisherLine.trim());
+  }
+  lines.push("=".repeat(60), "", "");
+  const header = lines.join("\n");
 
   return new Blob([header + stripped], { type: EXPORT_FILE_INFO.txt.mime });
 }

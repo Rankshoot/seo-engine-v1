@@ -37,6 +37,8 @@ export const V1Routes = {
   projectArticlesLibrary: (projectId: string) => `/projects/${projectId}/articles`,
   projectContentGeneratorHistory: (projectId: string) =>
     `/projects/${projectId}/content-generator/history`,
+  projectContentStudioHistory: (projectId: string) =>
+    `/projects/${projectId}/content-studio/history`,
 
   // ── Competitors ────────────────────────────────────────────────────────────
   competitorsBenchmark: (projectId: string) => `/projects/${projectId}/competitors/benchmark`,

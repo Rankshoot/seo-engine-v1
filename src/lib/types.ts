@@ -52,6 +52,41 @@ export interface KeywordIntents {
 }
 export type CalendarStatus = 'scheduled' | 'generating' | 'generated' | 'downloaded' | 'published' | 'approved';
 export type BlogStatus = 'generated' | 'approved' | 'published';
+
+/**
+ * Content Studio (phase 5).
+ *
+ * `'blog'` keeps the existing markdown blog pipeline. The other three live in
+ * the same `blogs` table and reuse the same status / SEO scoring / preview
+ * primitives — only the writer prompt and content-data payload differ.
+ */
+export type ContentType = 'blog' | 'ebook' | 'whitepaper' | 'linkedin';
+
+export const CONTENT_TYPES: ContentType[] = ['blog', 'ebook', 'whitepaper', 'linkedin'];
+
+/** Display metadata used by sidebar nav, history filters, and preview chrome. */
+export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
+  blog: 'Blog article',
+  ebook: 'Ebook',
+  whitepaper: 'Whitepaper',
+  linkedin: 'LinkedIn post',
+};
+
+export const CONTENT_TYPE_PLURAL: Record<ContentType, string> = {
+  blog: 'Blog articles',
+  ebook: 'Ebooks',
+  whitepaper: 'Whitepapers',
+  linkedin: 'LinkedIn posts',
+};
+
+/** Path segment for type-specific routes inside `/content-generator/`. */
+export const CONTENT_TYPE_SLUG: Record<ContentType, string> = {
+  blog: 'blogs',
+  ebook: 'ebooks',
+  whitepaper: 'whitepapers',
+  linkedin: 'linkedin',
+};
+
 export type BlogSeoIssueKey =
   | 'title_keyword'
   | 'intro_keyword'
@@ -321,9 +356,91 @@ export interface Blog {
   deep_analysis_score?: number | null;
   /** When `deep_analysis_score` was last written from Deep Analysis. */
   deep_analysis_updated_at?: string | null;
+  /** Content Studio type — 'blog' for existing rows, 'ebook'/'whitepaper'/'linkedin' for new content. */
+  content_type?: ContentType;
+  /**
+   * Type-specific structured payload (chapters for ebooks, sections for whitepapers,
+   * hooks/CTA for LinkedIn). The markdown body is still the source of truth — this
+   * lets the previewer render rich type-specific UI without re-parsing markdown.
+   */
+  content_data?: ContentDataPayload;
   created_at: string;
   updated_at: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Content Studio payloads (`blogs.content_data`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface EbookChapter {
+  number: number;
+  title: string;
+  summary: string;
+  word_count: number;
+}
+
+export interface EbookContentData {
+  cover_title: string;
+  cover_subtitle: string;
+  table_of_contents: EbookChapter[];
+  faqs: Array<{ question: string; answer: string }>;
+  cta: string;
+  references: string[];
+  audience: string;
+  tone: string;
+  goal: string;
+  primary_keyword: string;
+  semantic_keywords: string[];
+}
+
+export interface WhitepaperSection {
+  number: number;
+  title: string;
+  summary: string;
+}
+
+export interface WhitepaperContentData {
+  cover_title: string;
+  cover_subtitle: string;
+  executive_summary: string;
+  sections: WhitepaperSection[];
+  recommendations: string[];
+  references: string[];
+  industry: string;
+  audience: string;
+  problem_statement: string;
+  business_objective: string;
+  technical_depth: string;
+  primary_keyword: string;
+  semantic_keywords: string[];
+}
+
+export type LinkedInPostStyle =
+  | 'educational'
+  | 'founder'
+  | 'industry_insight'
+  | 'storytelling'
+  | 'list'
+  | 'carousel';
+
+export interface LinkedInContentData {
+  post_style: LinkedInPostStyle;
+  hook: string;
+  body: string;
+  cta: string;
+  hashtags: string[];
+  audience: string;
+  tone: string;
+  primary_keyword: string;
+  /** Optional single-image attachment for the feed card (set after image generation). */
+  featured_image_url?: string;
+}
+
+export type ContentDataPayload =
+  | Record<string, never>
+  | EbookContentData
+  | WhitepaperContentData
+  | LinkedInContentData;
 
 /** Calendar row plus optional blog summary from `getCalendarWithBlogs`. */
 export type CalendarEntryWithBlog = CalendarEntry & {

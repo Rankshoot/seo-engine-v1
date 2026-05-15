@@ -159,6 +159,10 @@ export default function ProjectSidebar({
         safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
         safePrefetch(qk.brief(id), () => briefApi.get(id));
         safePrefetch(qk.contentGeneratorHistory(id), () => contentGeneratorApi.history(id));
+        // Phase 5 — Content Studio (ebooks, whitepapers, LinkedIn) reads
+        // from a unified history endpoint. Prefetching it here means
+        // navigating between sub-tabs feels instant.
+        safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
         break;
       }
       default:
@@ -218,6 +222,9 @@ export default function ProjectSidebar({
       prefetchLabel: "Content Generator",
       children: [
         { label: "Instant article", href: `${base}/content-generator/instant` },
+        { label: "Ebooks", href: `${base}/content-generator/ebooks` },
+        { label: "Whitepapers", href: `${base}/content-generator/whitepapers` },
+        { label: "LinkedIn posts", href: `${base}/content-generator/linkedin` },
         { label: "Content history", href: `${base}/content-generator/history` },
       ],
     },

@@ -703,6 +703,8 @@ export default function BlogViewerPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingImage, setEditingImage] = useState<HTMLImageElement | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState(false);
+  /** Pre-existing handler — declared here so `handleAddToArticles` does not throw on `setAddingToArticles is not defined`. */
+  const [, setAddingToArticles] = useState(false);
 
   // ── Content analysis ────────────────────────────────────────────────────
   const [analysisModalOpen, setAnalysisModalOpen] = useState(false);
@@ -967,9 +969,15 @@ export default function BlogViewerPage() {
         toast.error(!res.success ? res.error : "Could not generate enhanced version.");
         return;
       }
+      if (!res.data.blogId) {
+        toast.error("Enhanced version generated but blogId is missing.");
+        return;
+      }
+      const newBlogId = res.data.blogId;
+      toast.success("Enhanced version ready — opening.");
       // Pull the freshly-generated blog and surface it in the After view —
       // we deliberately stay on this page so the user can A/B compare.
-      const enhancedRes = await blogsApi.getById(res.data.blogId);
+      const enhancedRes = await blogsApi.getById(newBlogId);
       if (!enhancedRes.success || !enhancedRes.data) {
         toast.error(enhancedRes.error || "Enhanced blog generated but could not be loaded.");
         return;

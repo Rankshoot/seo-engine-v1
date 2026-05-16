@@ -1,5 +1,7 @@
 /** Serper-backed SERP/video/news context for blog prompts. */
 
+import { recordSerperCall } from '@/lib/admin/logging/record-provider-call';
+
 export interface ResearchArticle {
   title: string;
   url: string;
@@ -45,6 +47,7 @@ export interface CompetitorGapKeyword {
 const SERPER_API_KEY = () => process.env.SERPER_API_KEY!;
 
 async function serperPost(endpoint: string, body: object): Promise<any> {
+  const started = Date.now();
   try {
     const res = await fetch(`https://google.serper.dev/${endpoint}`, {
       method: 'POST',
@@ -54,9 +57,20 @@ async function serperPost(endpoint: string, body: object): Promise<any> {
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return null;
+    const latencyMs = Date.now() - started;
+    if (!res.ok) {
+      recordSerperCall(endpoint, false, latencyMs, `HTTP ${res.status}`);
+      return null;
+    }
+    recordSerperCall(endpoint, true, latencyMs);
     return res.json();
-  } catch {
+  } catch (e) {
+    recordSerperCall(
+      endpoint,
+      false,
+      Date.now() - started,
+      e instanceof Error ? e.message : String(e)
+    );
     return null;
   }
 }

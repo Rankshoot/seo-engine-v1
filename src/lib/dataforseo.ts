@@ -13,6 +13,7 @@ import {
   type KeywordResearchTraceEntry,
   type NormalizedKeyword,
 } from './keyword-research';
+import { recordDataForSeoCall } from '@/lib/admin/logging/record-provider-call';
 
 export type Intent = 'informational' | 'commercial' | 'navigational' | 'transactional' | '';
 export type CompetitionLevel = 'LOW' | 'MEDIUM' | 'HIGH' | '';
@@ -130,7 +131,11 @@ async function dfsPost(
   auth: string,
   trace: DataForSEOTraceEntry[]
 ): Promise<unknown | null> {
+  const { assertProviderEnabled } = await import('@/lib/admin/platform-settings-runtime');
+  await assertProviderEnabled('dataforseo');
+
   const url = `https://api.dataforseo.com/v3/${endpoint}`;
+  const started = Date.now();
   const entry: DataForSEOTraceEntry = {
     label: endpoint,
     url,
@@ -195,6 +200,7 @@ async function dfsPost(
     console.groupEnd();
 
     trace.push(entry);
+    recordDataForSeoCall(endpoint, entry, Date.now() - started);
   }
   return entry.parsed;
 }

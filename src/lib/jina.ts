@@ -9,6 +9,8 @@
  * Set `JINA_API_KEY` in env for better rate limits (optional).
  */
 
+import { recordJinaCall } from '@/lib/admin/logging/record-provider-call';
+
 /**
  * Best-effort sitemap discovery. Handles two real-world shapes:
  *   1. Flat urlset  —  sitemap.xml lists every page directly.
@@ -270,6 +272,12 @@ export async function readUrlViaJinaReader(
   const timeoutMs = opts.timeoutMs ?? 25_000;
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
+  const started = Date.now();
+  let result: { ok: boolean; markdown: string; error?: string } = {
+    ok: false,
+    markdown: '',
+    error: 'unknown',
+  };
 
   try {
     const headers: Record<string, string> = {
@@ -282,17 +290,26 @@ export async function readUrlViaJinaReader(
 
     const res = await fetch(readerUrl, { signal: controller.signal, headers });
     if (!res.ok) {
-      return { ok: false, markdown: '', error: `Jina Reader HTTP ${res.status}` };
+      result = { ok: false, markdown: '', error: `Jina Reader HTTP ${res.status}` };
+      return result;
     }
     const markdown = (await res.text()).trim();
     if (!markdown || markdown.length < 40) {
-      return { ok: false, markdown: '', error: 'Jina Reader returned empty body' };
+      result = { ok: false, markdown: '', error: 'Jina Reader returned empty body' };
+      return result;
     }
-    return { ok: true, markdown };
+    result = { ok: true, markdown };
+    return result;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, markdown: '', error: msg.includes('abort') ? 'Jina Reader timeout' : msg };
+    result = {
+      ok: false,
+      markdown: '',
+      error: msg.includes('abort') ? 'Jina Reader timeout' : msg,
+    };
+    return result;
   } finally {
     clearTimeout(id);
+    recordJinaCall(url, result.ok, Date.now() - started, result.error);
   }
 }

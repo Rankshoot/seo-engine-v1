@@ -63,4 +63,17 @@ export const V1Routes = {
   blogRewriteSelection: (blogId: string) => `/blogs/${blogId}/rewrite-selection`,
   blogEnhanced: (blogId: string) => `/blogs/${blogId}/enhanced`,
   blogDeepAnalysis: (blogId: string) => `/blogs/${blogId}/deep-analysis`,
+
+  // ── Admin (platform) ─────────────────────────────────────────────────────
+  adminMe: "/admin/me",
+  adminOverview: "/admin/overview",
+  adminUsers: "/admin/users",
+  adminProjects: "/admin/projects",
+  adminApiUsage: "/admin/api-usage",
+  adminAiLogs: "/admin/ai-logs",
+  adminContent: "/admin/content",
+  adminErrors: "/admin/errors",
+  adminAuditLogs: "/admin/audit-logs",
+  adminSettings: "/admin/settings",
+  adminSettingsAdmins: "/admin/settings/admins",
 } as const;

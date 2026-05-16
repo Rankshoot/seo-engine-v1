@@ -752,40 +752,63 @@ export async function getKeywordResearchData(
   input: KeywordResearchInput
 ): Promise<KeywordResearchResult> {
   const trace: KeywordResearchTraceEntry[] = [];
+  const { getPlatformProviders } = await import('@/lib/admin/platform-settings-runtime');
+  const providers = await getPlatformProviders();
 
-  // Primary: Ahrefs.
-  try {
-    const result = await fetchKeywordsFromAhrefs(input);
-    trace.push(...result.trace);
-    return { ...result, trace };
-  } catch (err) {
-    const ahrefsErr =
-      err instanceof KeywordProviderError
-        ? err
-        : new KeywordProviderError('ahrefs', 'unknown', err instanceof Error ? err.message : String(err));
-    trace.push(...ahrefsErr.trace);
+  let ahrefsFailed: KeywordProviderError | null = null;
+
+  if (providers.ahrefs_enabled) {
+    try {
+      const result = await fetchKeywordsFromAhrefs(input);
+      trace.push(...result.trace);
+      return { ...result, trace };
+    } catch (err) {
+      ahrefsFailed =
+        err instanceof KeywordProviderError
+          ? err
+          : new KeywordProviderError('ahrefs', 'unknown', err instanceof Error ? err.message : String(err));
+      trace.push(...ahrefsFailed.trace);
+      pushTrace(trace, {
+        provider: 'ahrefs',
+        endpoint: '(fallback_decision)',
+        ok: false,
+        ms: 0,
+        rows: 0,
+        errorReason: ahrefsFailed.reason,
+        errorMessage: ahrefsFailed.message,
+        fallbackReason: ahrefsFailed.reason,
+      });
+      console.warn(
+        `[keyword-research] ahrefs failed (${ahrefsFailed.reason}): ${ahrefsFailed.message}`
+      );
+    }
+  } else {
     pushTrace(trace, {
       provider: 'ahrefs',
-      endpoint: '(fallback_decision)',
+      endpoint: '(skipped)',
       ok: false,
       ms: 0,
       rows: 0,
-      errorReason: ahrefsErr.reason,
-      errorMessage: ahrefsErr.message,
-      fallbackReason: ahrefsErr.reason,
+      errorReason: 'disabled',
+      errorMessage: 'Ahrefs disabled in platform settings',
     });
-    console.warn(
-      `[keyword-research] ahrefs failed (${ahrefsErr.reason}): ${ahrefsErr.message} — falling back to DataForSEO.`
-    );
+  }
 
-    // Fallback: DataForSEO.
+  const mayUseDataForSeo =
+    providers.dataforseo_enabled &&
+    (!ahrefsFailed || providers.dataforseo_fallback_enabled);
+
+  if (mayUseDataForSeo) {
+    if (ahrefsFailed) {
+      console.warn('[keyword-research] falling back to DataForSEO.');
+    }
     try {
       const result = await fetchKeywordsFromDataForSEO(input);
       trace.push(...result.trace);
       return {
         provider: 'dataforseo',
-        fellBackToDataForSEO: true,
-        fallbackReason: ahrefsErr.reason,
+        fellBackToDataForSEO: Boolean(ahrefsFailed),
+        fallbackReason: ahrefsFailed?.reason,
         keywords: result.keywords,
         trace,
       };
@@ -809,16 +832,36 @@ export async function getKeywordResearchData(
         errorMessage: dfsErr.message,
       });
       console.error(
-        `[keyword-research] both providers failed. ahrefs=${ahrefsErr.reason} dataforseo=${dfsErr.reason}`
+        `[keyword-research] both providers failed. ahrefs=${ahrefsFailed?.reason ?? 'n/a'} dataforseo=${dfsErr.reason}`
       );
       // Throw a synthesised error that carries the merged trace so the caller
       // (typically a server action) can hand it to the client for debugging.
+      const ahrefsPart = ahrefsFailed
+        ? `Ahrefs failed (${ahrefsFailed.reason}: ${ahrefsFailed.message}) and `
+        : '';
       throw new KeywordProviderError(
         'dataforseo',
         dfsErr.reason,
-        `Ahrefs failed (${ahrefsErr.reason}: ${ahrefsErr.message}) and DataForSEO fallback failed (${dfsErr.reason}: ${dfsErr.message}).`,
+        `${ahrefsPart}DataForSEO failed (${dfsErr.reason}: ${dfsErr.message}).`,
         trace
       );
     }
   }
+
+  if (!providers.ahrefs_enabled && !providers.dataforseo_enabled) {
+    throw new KeywordProviderError(
+      'dataforseo',
+      'disabled',
+      'Keyword providers are disabled in platform settings.',
+      trace
+    );
+  }
+
+  throw new KeywordProviderError(
+    'ahrefs',
+    ahrefsFailed?.reason ?? 'disabled',
+    ahrefsFailed?.message ??
+      'Ahrefs is unavailable and DataForSEO fallback is disabled in platform settings.',
+    trace
+  );
 }

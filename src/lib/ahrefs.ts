@@ -19,6 +19,7 @@
  * docs). We always send a tight `select=` list so we only pay for what we use.
  */
 import { TARGET_REGIONS } from './types';
+import { recordAhrefsCall } from '@/lib/admin/logging/record-provider-call';
 
 const AHREFS_BASE_URL = 'https://api.ahrefs.com/v3';
 
@@ -71,6 +72,7 @@ interface AhrefsRequestOptions {
  */
 export type AhrefsErrorReason =
   | 'no_api_key'
+  | 'disabled'
   | 'auth'
   | 'rate_limit'
   | 'quota_exhausted'
@@ -117,6 +119,26 @@ export async function ahrefsGetVerbose<T = unknown>(
   opts: AhrefsRequestOptions
 ): Promise<AhrefsCallResult<T>> {
   const tag = opts.label ?? opts.endpoint;
+  const { assertProviderEnabled } = await import('@/lib/admin/platform-settings-runtime');
+  try {
+    await assertProviderEnabled('ahrefs');
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn(`[ahrefs] ${tag} skipped — ${message}`);
+    const disabled: AhrefsCallResult<T> = {
+      ok: false,
+      status: 0,
+      statusText: '',
+      ms: 0,
+      rows: 0,
+      data: null,
+      errorReason: 'disabled',
+      errorMessage: message,
+    };
+    recordAhrefsCall(opts.endpoint, opts.label, disabled);
+    return disabled;
+  }
+
   const key = getApiKey();
   if (!key) {
     console.warn(`[ahrefs] ${tag} skipped — AHREFS_API_KEY missing`);
@@ -126,7 +148,7 @@ export async function ahrefsGetVerbose<T = unknown>(
       query: opts.query,
       skipped: 'no_api_key',
     });
-    return {
+    const noKey: AhrefsCallResult<T> = {
       ok: false,
       status: 0,
       statusText: '',
@@ -136,6 +158,8 @@ export async function ahrefsGetVerbose<T = unknown>(
       errorReason: 'no_api_key',
       errorMessage: 'AHREFS_API_KEY is not set',
     };
+    recordAhrefsCall(opts.endpoint, opts.label, noKey);
+    return noKey;
   }
 
   const params = new URLSearchParams();
@@ -190,7 +214,7 @@ export async function ahrefsGetVerbose<T = unknown>(
         bodyText: body,
         reason,
       });
-      return {
+      const fail: AhrefsCallResult<T> = {
         ok: false,
         status: res.status,
         statusText: res.statusText,
@@ -200,6 +224,8 @@ export async function ahrefsGetVerbose<T = unknown>(
         errorReason: reason,
         errorMessage: `${res.status} ${res.statusText} ${body.slice(0, 200)}`.trim(),
       };
+      recordAhrefsCall(opts.endpoint, opts.label, fail);
+      return fail;
     }
 
     let json: Record<string, unknown>;
@@ -208,7 +234,7 @@ export async function ahrefsGetVerbose<T = unknown>(
     } catch (parseErr) {
       const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
       console.warn(`[ahrefs] ${tag} parse error in ${ms}ms ${message}`);
-      return {
+      const parseFail: AhrefsCallResult<T> = {
         ok: false,
         status: res.status,
         statusText: res.statusText,
@@ -218,6 +244,8 @@ export async function ahrefsGetVerbose<T = unknown>(
         errorReason: 'parse_error',
         errorMessage: message,
       };
+      recordAhrefsCall(opts.endpoint, opts.label, parseFail);
+      return parseFail;
     }
 
     const rowCount = primaryArrayLength(json);
@@ -231,7 +259,7 @@ export async function ahrefsGetVerbose<T = unknown>(
       body: json,
     });
     console.log(`[ahrefs-raw] ${opts.label ?? opts.endpoint}`, JSON.stringify(json, null, 2));
-    return {
+    const success: AhrefsCallResult<T> = {
       ok: true,
       status: res.status,
       statusText: res.statusText,
@@ -239,6 +267,8 @@ export async function ahrefsGetVerbose<T = unknown>(
       rows: rowCount,
       data: json as T,
     };
+    recordAhrefsCall(opts.endpoint, opts.label, success);
+    return success;
   } catch (error) {
     const ms = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
@@ -249,7 +279,7 @@ export async function ahrefsGetVerbose<T = unknown>(
       ms,
       error: message,
     });
-    return {
+    const netFail: AhrefsCallResult<T> = {
       ok: false,
       status: 0,
       statusText: '',
@@ -259,6 +289,8 @@ export async function ahrefsGetVerbose<T = unknown>(
       errorReason: 'network_error',
       errorMessage: message,
     };
+    recordAhrefsCall(opts.endpoint, opts.label, netFail);
+    return netFail;
   } finally {
     clearTimeout(timer);
   }

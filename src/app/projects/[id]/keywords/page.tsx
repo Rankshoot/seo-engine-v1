@@ -217,6 +217,9 @@ type SortDir = "asc" | "desc";
 
 const STATUS_ORDER: Record<KeywordStatus, number> = { pending: 0, approved: 1, rejected: 2 };
 
+/** Initial rows and each "show more" step on the keywords tables (full list is still sorted in memory). */
+const KEYWORDS_TABLE_PAGE_SIZE = 15;
+
 /** Default first-click direction when activating a column. */
 function defaultDirForSortColumn(col: TableSortColumn): SortDir {
   return col === "keyword" || col === "intent" ? "asc" : "desc";
@@ -292,11 +295,14 @@ export default function KeywordsPage() {
   const filter = keywordPrefs.filter as FilterTab;
   const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
+  const [visibleKeywordRows, setVisibleKeywordRows] = useState(KEYWORDS_TABLE_PAGE_SIZE);
 
   // Industry vs domain DataForSEO paths — persisted so Re-discover matches the visible table.
   const sourceTab: SourceTab = keywordPrefs.discoverySourceTab === "domain" ? "domain" : "industry";
   const [dataSourceMenuOpen, setDataSourceMenuOpen] = useState(false);
   const dataSourceRef = useRef<HTMLDivElement>(null);
+  /** Inner scroll area of the keyword DataTable — used after “Load more” (same pattern as competitors gap table). */
+  const keywordTableScrollRef = useRef<HTMLDivElement>(null);
 
   const aiSuggestedIds = useMemo(() => new Set(aiSuggestedKeywordIds), [aiSuggestedKeywordIds]);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
@@ -594,12 +600,6 @@ export default function KeywordsPage() {
     }
   };
 
-  /** Re-discover: industry tab → keyword_ideas pipeline + DB; domain tab → keywords_for_site + cache. */
-  const handleRediscover = () => {
-    if (sourceTab === "domain") void handleDomainRediscover();
-    else void handleDiscover();
-  };
-
   const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string): Promise<boolean> => {
     const keyword = keywords.find(k => k.id === kwId);
     const previousStatus = keyword?.status;
@@ -775,6 +775,52 @@ export default function KeywordsPage() {
     });
     return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
   }, [keywords, filter, tableSort, aiSuggestedIds]);
+
+  const visibleIndustryKeywords = useMemo(
+    () => filtered.slice(0, Math.min(visibleKeywordRows, filtered.length)),
+    [filtered, visibleKeywordRows]
+  );
+
+  const visibleDomainKeywords = useMemo(
+    () => filteredDomainKeywords.slice(0, Math.min(visibleKeywordRows, filteredDomainKeywords.length)),
+    [filteredDomainKeywords, visibleKeywordRows]
+  );
+
+  useEffect(() => {
+    setVisibleKeywordRows(KEYWORDS_TABLE_PAGE_SIZE);
+  }, [projectId, filter, sourceTab, tableSort.column, tableSort.dir]);
+
+  useEffect(() => {
+    const total = sourceTab === "domain" ? filteredDomainKeywords.length : filtered.length;
+    setVisibleKeywordRows(prev => (total === 0 ? KEYWORDS_TABLE_PAGE_SIZE : Math.min(prev, total)));
+  }, [sourceTab, filtered.length, filteredDomainKeywords.length]);
+
+  const scrollKeywordAnchorRowToTop = (anchorRowKey: string | null) => {
+    if (!anchorRowKey) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const root = keywordTableScrollRef.current;
+        if (!root) return;
+        for (const el of root.querySelectorAll<HTMLElement>("tbody tr[data-table-row-key]")) {
+          if (el.getAttribute("data-table-row-key") === anchorRowKey) {
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+            break;
+          }
+        }
+      });
+    });
+  };
+
+  const bumpVisibleKeywordRows = (total: number, anchorRowKey: string | null) => {
+    setVisibleKeywordRows(prev => Math.min(prev + KEYWORDS_TABLE_PAGE_SIZE, total));
+    scrollKeywordAnchorRowToTop(anchorRowKey);
+  };
+
+  /** Re-discover: industry → keyword_ideas + DB; domain → keywords_for_site + cache. */
+  const handleRediscover = () => {
+    if (sourceTab === "domain") void handleDomainRediscover();
+    else void handleDiscover();
+  };
 
   const toggleSortColumn = (columnId: string) => {
     const col = columnId as TableSortColumn;
@@ -1477,9 +1523,10 @@ export default function KeywordsPage() {
                 </div>
               ) : (
                 <DataTable<CompetitorKeywordsForSiteRow>
-                  data={filteredDomainKeywords}
+                  data={visibleDomainKeywords}
                   columns={domainColumns}
                   keyExtractor={kw => domainSelectId(kw.keyword)}
+                  scrollContainerRef={keywordTableScrollRef}
                   sortColumn={tableSort.column}
                   sortDirection={tableSort.dir}
                   onSortToggle={toggleSortColumn}
@@ -1498,14 +1545,46 @@ export default function KeywordsPage() {
                     }`;
                   }}
                   minWidth="920px"
-                  footer={
-                    <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3">
-                      <span className="text-[12px] text-text-tertiary">
-                        Showing {filteredDomainKeywords.length} of {sortedDomainKeywords.length} for {project?.domain ?? "your domain"}
-                        {filteredDomainKeywords.length < sortedDomainKeywords.length ? " (filter active)" : ""} · use column headers to sort
-                      </span>
-                    </div>
-                  }
+                  footer={(() => {
+                    const shown = visibleDomainKeywords.length;
+                    const total = filteredDomainKeywords.length;
+                    const nextChunk = Math.min(KEYWORDS_TABLE_PAGE_SIZE, Math.max(0, total - shown));
+                    return (
+                      <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3.5">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-[13px] text-text-tertiary">
+                            Showing{" "}
+                            <span className="font-semibold tabular-nums text-text-primary">{shown}</span> of{" "}
+                            <span className="font-semibold tabular-nums text-text-primary">{total}</span> keywords
+                            {total < sortedDomainKeywords.length ? (
+                              <span className="text-text-tertiary/80">
+                                {" "}
+                                ({sortedDomainKeywords.length} total for {project?.domain ?? "your domain"})
+                              </span>
+                            ) : null}
+                          </p>
+                          {shown < total && nextChunk > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const anchor =
+                                  shown > 0
+                                    ? domainSelectId(filteredDomainKeywords[shown - 1]!.keyword)
+                                    : null;
+                                bumpVisibleKeywordRows(total, anchor);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-primary transition-colors hover:border-border-strong hover:bg-surface-hover"
+                            >
+                              Load {nextChunk} more
+                              <svg className="h-4 w-4 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                              </svg>
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 />
               )
             ) : (
@@ -1560,9 +1639,10 @@ export default function KeywordsPage() {
             />
           ) : filtered.length > 0 ? (
             <DataTable<Keyword>
-              data={filtered}
+              data={visibleIndustryKeywords}
               columns={industryColumns}
               keyExtractor={kw => kw.id}
+              scrollContainerRef={keywordTableScrollRef}
               sortColumn={tableSort.column}
               sortDirection={tableSort.dir}
               onSortToggle={toggleSortColumn}
@@ -1583,6 +1663,37 @@ export default function KeywordsPage() {
                 }`;
               }}
               minWidth="1180px"
+              footer={(() => {
+                const shown = visibleIndustryKeywords.length;
+                const total = filtered.length;
+                const nextChunk = Math.min(KEYWORDS_TABLE_PAGE_SIZE, Math.max(0, total - shown));
+                return (
+                  <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-[13px] text-text-tertiary">
+                        Showing{" "}
+                        <span className="font-semibold tabular-nums text-text-primary">{shown}</span> of{" "}
+                        <span className="font-semibold tabular-nums text-text-primary">{total}</span> keywords
+                      </p>
+                      {shown < total && nextChunk > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const anchor = shown > 0 ? filtered[shown - 1]!.id : null;
+                            bumpVisibleKeywordRows(total, anchor);
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-primary transition-colors hover:border-border-strong hover:bg-surface-hover"
+                        >
+                          Load {nextChunk} more
+                          <svg className="h-4 w-4 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                          </svg>
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })()}
             />
           ) : keywords.length > 0 ? (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">

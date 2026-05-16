@@ -14,3 +14,10 @@ export function rangeSelectionToMarkdown(range: Range): string {
   });
   return td.turndown(container.innerHTML).replace(/\n{3,}/g, "\n\n").trim();
 }
+
+/** Raw HTML for `cloneContents()` — optional context for link-aware AI rewrite. */
+export function rangeSelectionHtmlFragment(range: Range): string {
+  const container = document.createElement("div");
+  container.appendChild(range.cloneContents());
+  return container.innerHTML.trim();
+}

@@ -12,12 +12,15 @@ const isPublicRoute = createRouteMatcher([
 
 const clerk = clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();
+  const pathname = req.nextUrl.pathname;
+  /** Let route handlers run — they use `currentUser()` and return JSON 401. Protecting here rewrites to Clerk HTML (404) and breaks `readApiJson`. */
+  const isApi = pathname.startsWith("/api/");
 
-  if (userId && isPublicRoute(req) && !req.nextUrl.pathname.startsWith("/api")) {
+  if (userId && isPublicRoute(req) && !pathname.startsWith("/api")) {
     return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
-  if (!isPublicRoute(req)) {
+  if (!isPublicRoute(req) && !isApi) {
     await auth.protect();
   }
 });

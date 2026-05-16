@@ -1,4 +1,4 @@
-import React, { ReactNode } from "react";
+import React, { ReactNode, RefObject } from "react";
 import { TableSkeleton } from "@/components/Skeleton";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
@@ -40,6 +40,9 @@ export interface DataTableProps<T> {
   
   // Table sizing
   minWidth?: string;
+
+  /** When set, attached to the inner scroll container (for programmatic scroll, e.g. load-more). */
+  scrollContainerRef?: RefObject<HTMLDivElement | null>;
   
   // Footer
   footer?: ReactNode;
@@ -67,6 +70,7 @@ export function DataTable<T>({
   loadingColumns = 6,
   emptyState,
   minWidth = "860px",
+  scrollContainerRef,
   footer,
 }: DataTableProps<T>) {
   const sortMark = (colId: string) =>
@@ -94,7 +98,7 @@ export function DataTable<T>({
 
   return (
     <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-      <div className="max-h-[min(70vh,56rem)] overflow-auto">
+      <div ref={scrollContainerRef} className="max-h-[min(70vh,56rem)] overflow-auto">
         <table className="w-full text-left border-collapse" style={{ minWidth }}>
           <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
             <tr>
@@ -149,6 +153,7 @@ export function DataTable<T>({
               return (
                 <tr
                   key={rowId}
+                  data-table-row-key={rowId}
                   onClick={e => {
                     const t = e.target as HTMLElement;
                     if (
@@ -166,8 +171,8 @@ export function DataTable<T>({
                     if (onRowClick) onRowClick(row);
                   }}
                   className={`transition-colors duration-150 hover:bg-surface-hover/90 ${
-                    rowClassName ? rowClassName(row) : ""
-                  } ${
+                    scrollContainerRef ? "scroll-mt-12" : ""
+                  } ${rowClassName ? rowClassName(row) : ""} ${
                     massSelectMode && selectable && !selectionDisabled ? "cursor-pointer" : onRowClick ? "cursor-pointer" : ""
                   }`}
                 >

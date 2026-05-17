@@ -30,4 +30,19 @@ export const qk = {
   competitors: (id: string) => ["competitors", id] as const,
   brief: (id: string) => ["brief", id] as const,
   blog: (blogId: string) => ["blog", blogId] as const,
+
+  admin: {
+    overview: ["admin", "overview"] as const,
+    users: (filters: Record<string, unknown>) => ["admin", "users", filters] as const,
+    projects: (filters: Record<string, unknown>) =>
+      ["admin", "projects", filters] as const,
+    apiUsage: (filters: Record<string, unknown>) =>
+      ["admin", "api-usage", filters] as const,
+    aiLogs: (filters: Record<string, unknown>) => ["admin", "ai-logs", filters] as const,
+    content: (filters: Record<string, unknown>) => ["admin", "content", filters] as const,
+    errors: (filters: Record<string, unknown>) => ["admin", "errors", filters] as const,
+    auditLogs: (filters: Record<string, unknown>) =>
+      ["admin", "audit-logs", filters] as const,
+    settings: ["admin", "settings"] as const,
+  },
 } as const;

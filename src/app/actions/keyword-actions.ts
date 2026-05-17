@@ -24,6 +24,7 @@ import {
 } from '@/lib/keyword-discovery';
 import { enrichKeywordInBackground } from '@/lib/keyword-modal';
 import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates } from './calendar-actions';
+import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
 
 // ─── AI Evaluation types (mirrors Keyword.ai_eval_data) ──────────────────────
 export type AiEvalData = {
@@ -470,6 +471,19 @@ export async function discoverKeywords(projectId: string) {
   const region: string = project.target_region ?? '';
   const language: string = project.target_language ?? 'en';
 
+  return runWithUsageLogContext(
+    { userId: user.id, projectId, feature: 'keyword_discovery' },
+    async () => {
+  try {
+    const { assertProjectKeywordCapacity } = await import('@/lib/admin/platform-settings-runtime');
+    await assertProjectKeywordCapacity(projectId);
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : 'Keyword limit reached',
+    };
+  }
+
   // 1. In parallel: ensure a Business Brief exists (Jina scrape — cached in
   //    `project_briefs`) and run the lightweight SEO crawler against the
   //    user's domain. `crawlWebsite` NEVER throws — it always resolves to a
@@ -648,6 +662,7 @@ export async function discoverKeywords(projectId: string) {
     briefSummary: briefSummary(brief),
     relevance: relevanceSummary,
   };
+  });
 }
 
 /**

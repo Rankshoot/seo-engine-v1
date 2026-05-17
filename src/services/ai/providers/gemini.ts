@@ -13,6 +13,11 @@
  * regressions; new content types use the providers below.
  */
 
+import {
+  extractGeminiTokenUsage,
+  recordGeminiCall,
+} from '@/lib/admin/logging/record-provider-call';
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? '';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const POLLINATIONS_CHAT_URL = 'https://gen.pollinations.ai/v1/chat/completions';
@@ -72,6 +77,9 @@ export function geminiFlash(prompt: string, opts: GeminiCallOptions = {}): Promi
 }
 
 async function geminiCall(opts: GeminiInternal): Promise<string> {
+  const { assertProviderEnabled } = await import('@/lib/admin/platform-settings-runtime');
+  await assertProviderEnabled('gemini');
+
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY is not configured');
   }
@@ -84,6 +92,7 @@ async function geminiCall(opts: GeminiInternal): Promise<string> {
    * after a 400 (some Gemini snapshots reject responseSchema for Flash).
    */
   const tryOnce = async (withSchema: boolean): Promise<string> => {
+    const started = Date.now();
     const generationConfig: Record<string, unknown> = {
       temperature: opts.temperature,
       maxOutputTokens: opts.maxOutputTokens,
@@ -124,15 +133,47 @@ async function geminiCall(opts: GeminiInternal): Promise<string> {
       // rate-limit errors so the caller can choose whether to retry,
       // wait, or fall back to a different model tier.
       if (opts.jsonMode) {
+        recordGeminiCall({
+          model: opts.model,
+          prompt: opts.prompt,
+          ok: false,
+          latencyMs: Date.now() - started,
+          errorMessage: 'rate_limited_json_mode',
+          featureSuffix: 'rate_limit',
+        });
         throw new Error(`Gemini ${opts.model} rate-limited (JSON mode — no Pollinations fallback)`);
       }
       const fallback = await pollinationsFallback(opts.prompt, opts.temperature ?? 0.6);
-      if (fallback) return fallback;
+      if (fallback) {
+        recordGeminiCall({
+          model: process.env.POLLINATIONS_TEXT_MODEL || 'pollinations/gemini-fast',
+          prompt: opts.prompt,
+          response: fallback,
+          ok: true,
+          latencyMs: Date.now() - started,
+          featureSuffix: 'pollinations_fallback',
+        });
+        return fallback;
+      }
+      recordGeminiCall({
+        model: opts.model,
+        prompt: opts.prompt,
+        ok: false,
+        latencyMs: Date.now() - started,
+        errorMessage: 'rate_limited_no_fallback',
+      });
       throw new Error('Gemini rate-limited and Pollinations fallback unavailable');
     }
 
     if (!res.ok) {
       const err = await res.text();
+      recordGeminiCall({
+        model: opts.model,
+        prompt: opts.prompt,
+        ok: false,
+        latencyMs: Date.now() - started,
+        errorMessage: `${res.status}: ${err.slice(0, 200)}`,
+      });
       throw new Error(`Gemini ${res.status}: ${err.slice(0, 400)}`);
     }
 
@@ -142,17 +183,35 @@ async function geminiCall(opts: GeminiInternal): Promise<string> {
         finishReason?: string;
       }>;
       promptFeedback?: { blockReason?: string };
+      usageMetadata?: Record<string, unknown>;
     };
     const cand = json.candidates?.[0];
     const text = cand?.content?.parts?.[0]?.text;
     if (!text) {
       const blockReason = json.promptFeedback?.blockReason;
       const reason = cand?.finishReason ?? blockReason ?? 'EMPTY';
+      recordGeminiCall({
+        model: opts.model,
+        prompt: opts.prompt,
+        ok: false,
+        latencyMs: Date.now() - started,
+        errorMessage: String(reason),
+      });
       if (typeof reason === 'string' && reason.includes('SAFETY')) {
         throw new Error('Gemini blocked the response (safety filter).');
       }
       throw new Error(`Gemini returned empty output (${reason})`);
     }
+    const usage = extractGeminiTokenUsage(json);
+    recordGeminiCall({
+      model: opts.model,
+      prompt: opts.prompt,
+      response: text,
+      tokensInput: usage.tokensInput,
+      tokensOutput: usage.tokensOutput,
+      ok: true,
+      latencyMs: Date.now() - started,
+    });
     return text;
   };
 

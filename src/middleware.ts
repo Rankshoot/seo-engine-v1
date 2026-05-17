@@ -1,5 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { adminPanelPathFromProjectsAdmin } from "@/lib/projects/reserved-project-slugs";
 
 const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
@@ -42,6 +43,13 @@ export default function middleware(...args: Parameters<typeof clerk>) {
   }
 
   if (lowerPathname === "/projects" || lowerPathname.startsWith("/projects/")) {
+    const adminRedirect = adminPanelPathFromProjectsAdmin(pathname);
+    if (adminRedirect) {
+      const url = req.nextUrl.clone();
+      url.pathname = adminRedirect;
+      return NextResponse.redirect(url);
+    }
+
     const canonical = `/projects${pathname.slice("/projects".length)}`;
     if (pathname !== canonical) {
       const url = req.nextUrl.clone();

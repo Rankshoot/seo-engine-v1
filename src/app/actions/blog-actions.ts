@@ -38,6 +38,7 @@ import {
   type ReplacementLinkCandidate,
   type ResolvedLinkOption,
 } from '@/services/linkResolver';
+import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
   const user = await currentUser();
@@ -65,7 +66,13 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     .update({ status: 'generating' })
     .eq('id', entryId);
 
+  return runWithUsageLogContext(
+    { userId: user.id, projectId: entry.project_id, feature: 'blog_generate' },
+    async () => {
   try {
+    const { assertProjectContentCapacity } = await import('@/lib/admin/platform-settings-runtime');
+    await assertProjectContentCapacity(entry.project_id);
+
     // Load the cached Business Brief — used for internal-link pools + repair tone.
     let brief: BusinessBrief | null = null;
     try {
@@ -322,6 +329,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     const message = e instanceof Error ? e.message : 'Generation failed';
     return { success: false, error: message };
   }
+  });
 }
 
 export async function getBlogByEntryId(entryId: string) {

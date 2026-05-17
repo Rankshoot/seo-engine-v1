@@ -518,9 +518,17 @@ const startBlogGeneration: Tool<{ keyword: string; wordCount?: number; writerNot
     );
     if (!entry) return { success: false, message: `No entry found for "${params.keyword}".`, error: "not_found" };
     const res = await generateBlog(entry.id, params.wordCount ?? 2500, params.writerNotes);
-    return res?.success
-      ? { success: true, message: `Generated blog for "${entry.focus_keyword}".`, data: { blogId: res.data?.id }, sideEffect: "blog.generated" }
-      : { success: false, message: res?.error ?? "Generation failed", error: res?.error };
+    if (!res?.success || !("data" in res)) {
+      const err =
+        res && "error" in res && res.error ? res.error : "Generation failed";
+      return { success: false, message: err, error: err };
+    }
+    return {
+      success: true,
+      message: `Generated blog for "${entry.focus_keyword}".`,
+      data: { blogId: res.data?.id },
+      sideEffect: "blog.generated",
+    };
   },
 };
 

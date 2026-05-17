@@ -828,7 +828,7 @@ export default function AuditImportPage() {
     try {
       const { generateBlog } = await import("@/app/actions/blog-actions");
       const res = await generateBlog(link.entryId, 2500);
-      if (res.success && res.data?.id) {
+      if (res.success && "data" in res && res.data?.id) {
         await queryClient.invalidateQueries({ queryKey: qk.analyzeCalendarLinks(projectId) });
         await queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         await queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });

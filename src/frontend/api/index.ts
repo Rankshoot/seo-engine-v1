@@ -7,3 +7,4 @@ export { calendarApi } from "./calendar";
 export { blogsApi } from "./blogs";
 export { auditsApi } from "./audits";
 export { competitorsApi } from "./competitors";
+export { adminApi } from "./admin";

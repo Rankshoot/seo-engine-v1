@@ -96,36 +96,36 @@
   }
 
   :root[class~="dark"] {
-    /* Dark Mode (Cohere Agent Console/Dark Band style) */
-    --surface-primary: #000000; /* cohere-black */
-    --surface-secondary: #17171c; /* primary */
-    --surface-tertiary: #212121; /* ink */
-    --surface-elevated: #17171c;
-    --surface-hover: #212121;
+    /* Premium AI SaaS Dark Mode (RANKIT) */
+    --surface-primary: #0a0a0f; /* Deep black */
+    --surface-secondary: #14131f; /* Subtle elevation */
+    --surface-tertiary: #1c1b2e; /* Higher elevation */
+    --surface-elevated: #24232f;
+    --surface-hover: #2e2d3d;
 
-    --border-subtle: #333333;
-    --border-default: #444444;
-    --border-strong: #666666;
+    --border-subtle: #2e2d3d;
+    --border-default: #3d3c50;
+    --border-strong: #4d4c61;
 
     --text-primary: #ffffff;
-    --text-secondary: #e5e7eb;
-    --text-tertiary: #93939f;
+    --text-secondary: #d9d9e3;
+    --text-tertiary: #a0a0b8;
 
-    --brand-primary: #ffffff;
-    --brand-on-primary: #17171c;
-    --brand-action: #4c6ee6; /* focus-blue */
-    --brand-action-hover: #1863dc; /* action-blue */
-    --brand-coral: #ffad9b; /* coral-soft */
+    --brand-primary: #7c3aed; /* Violet */
+    --brand-on-primary: #ffffff;
+    --brand-action: #a78bfa; /* Light violet */
+    --brand-action-hover: #8b5cf6; /* Medium violet */
+    --brand-coral: #ff7759;
     --brand-deep-green: #003c33;
     --brand-dark-navy: #071829;
 
-    /* Deeper shadows feel right against true black */
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
-    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.45);
-    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.50);
-    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
-    --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.65);
-    --shadow-ring-action: 0 0 0 3px rgba(76, 110, 230, 0.32);
+    /* Shadows optimized for premium appearance */
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.60);
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.65);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.70);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.75);
+    --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.85);
+    --shadow-ring-action: 0 0 0 3px rgba(124, 58, 237, 0.40);
   }
 
   html {
@@ -337,4 +337,63 @@
 
 @keyframes shimmer {
   100% { transform: translateX(100%); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { filter: drop-shadow(0 0 20px rgba(124, 58, 237, 0.3)); }
+  50% { filter: drop-shadow(0 0 40px rgba(124, 58, 237, 0.5)); }
+}
+
+@keyframes spin-slow {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* Premium utility classes */
+.gradient-text {
+  @apply bg-gradient-to-r from-violet-400 via-blue-400 to-violet-400 bg-clip-text text-transparent;
+  background-size: 200% 200%;
+}
+
+.glass {
+  @apply bg-white/5 backdrop-blur-md border border-white/10;
+}
+
+.glass-hover {
+  @apply hover:bg-white/8 hover:border-white/20 transition-all;
+}
+
+.gradient-border {
+  @apply relative before:absolute before:inset-0 before:rounded-xl before:p-px before:bg-gradient-to-r before:from-violet-500/50 before:via-blue-500/50 before:to-violet-500/50 before:rounded-xl;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 4s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 20s linear infinite;
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 3s ease-in-out infinite;
 }

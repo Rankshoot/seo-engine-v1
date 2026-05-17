@@ -9,15 +9,15 @@ import { AppToastContainer } from "@/components/app-toast-container";
 const isClerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 export const metadata: Metadata = {
-  title: "SerpCraft — AI-Powered SEO Automation Platform",
+  title: "RANKIT — AI SEO Operating System",
   description:
-    "Discover trending keywords, analyze competitors, find content gaps, and generate SEO-optimized blog content with AI. Your complete SEO automation engine.",
+    "Automate your entire SEO workflow with AI. Discover keywords, analyze competitors, generate content, and publish automatically. Enterprise-grade AI that thinks like your best SEO.",
   keywords:
-    "SEO automation, AI content generation, keyword research, competitor analysis, content calendar, SEO tools, SERP analysis",
+    "AI SEO, SEO automation, keyword research, competitor analysis, AI content generation, SEO operating system, content marketing AI",
   openGraph: {
-    title: "SerpCraft — AI-Powered SEO Automation",
+    title: "RANKIT — AI SEO Operating System",
     description:
-      "The all-in-one AI engine that finds trending keywords, analyzes competitor content gaps, generates SEO-optimized blogs, and plans your content calendar.",
+      "The all-in-one AI platform that automates keyword discovery, competitor analysis, content generation, and publishing. Transform your SEO strategy.",
     type: "website",
   },
 };
@@ -41,7 +41,7 @@ export default async function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-screen antialiased bg-surface-primary text-text-primary">
+      <body className="min-h-screen antialiased bg-surface-primary text-text-primary dark">
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

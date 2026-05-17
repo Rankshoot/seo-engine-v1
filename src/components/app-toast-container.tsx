@@ -18,18 +18,40 @@ export function AppToastContainer() {
 
   if (!mounted) return null;
 
+  const isDark = resolvedTheme === "dark";
+
   return (
     <Toaster
       position="top-center"
       reverseOrder={false}
+      gutter={8}
       toastOptions={{
-        // Define default options
-        className: '',
         duration: 4000,
+        className: "",
         style: {
-          background: resolvedTheme === "dark" ? '#333' : '#fff',
-          color: resolvedTheme === "dark" ? '#fff' : '#363636',
+          background: isDark ? "#16171f" : "#ffffff",
+          color: isDark ? "#f4f4f7" : "#0d0d12",
+          border: `1px solid ${isDark ? "#2a2b38" : "#ebebef"}`,
+          borderRadius: 12,
+          padding: "10px 14px",
+          fontSize: 13,
+          fontWeight: 500,
+          boxShadow: isDark
+            ? "0 16px 48px rgba(0, 0, 0, 0.55)"
+            : "0 16px 48px rgba(0, 0, 0, 0.10)",
           zIndex: 100000,
+        },
+        success: {
+          iconTheme: {
+            primary: isDark ? "#22c55e" : "#16a34a",
+            secondary: isDark ? "#16171f" : "#ffffff",
+          },
+        },
+        error: {
+          iconTheme: {
+            primary: isDark ? "#ef4444" : "#dc2626",
+            secondary: isDark ? "#16171f" : "#ffffff",
+          },
         },
       }}
     />

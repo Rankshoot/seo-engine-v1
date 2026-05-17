@@ -20,7 +20,7 @@ export * from "./dialogs/Dialog";
 export * from "./dropdowns/DropdownMenu";
 
 // Re-exports of existing primitives so callers can import everything from one place.
-export { Skeleton, TableSkeleton, BusinessBriefSkeleton, CardGridSkeleton } from "@/components/Skeleton";
+export { Skeleton, TableSkeleton, BusinessBriefSkeleton, CardGridSkeleton, StatStripSkeleton } from "@/components/Skeleton";
 export { DataTable } from "@/components/DataTable";
 export type { ColumnDef, DataTableProps } from "@/components/DataTable";
 export { Tooltip, InfoIcon } from "@/components/Tooltip";

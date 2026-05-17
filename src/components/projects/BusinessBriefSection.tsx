@@ -51,8 +51,8 @@ export function BusinessBriefSection({ projectId }: { projectId: string }) {
   return (
     <section className="space-y-4">
       <div>
-        <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Business brief</h2>
-        <p className="mt-1.5 text-[14px] text-text-tertiary max-w-3xl">
+        <h2 className="text-[18px] font-semibold tracking-tight text-text-primary">Business brief</h2>
+        <p className="mt-1 max-w-3xl text-[12.5px] text-text-tertiary">
           Scraped context from your domain that seeds keyword discovery — refresh when your site or positioning changes.
         </p>
       </div>

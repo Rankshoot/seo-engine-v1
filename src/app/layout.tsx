@@ -4,20 +4,21 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/components/query-provider";
 import { ReduxProvider } from "@/components/redux-provider";
 import { AppToastContainer } from "@/components/app-toast-container";
+import { TooltipProvider } from "@/components/ui/Tooltip";
 
 // Conditionally import Clerk only if keys are configured
 const isClerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 export const metadata: Metadata = {
-  title: "SerpCraft — AI-Powered SEO Automation Platform",
+  title: "Rankit — AI SEO Operating System",
   description:
-    "Discover trending keywords, analyze competitors, find content gaps, and generate SEO-optimized blog content with AI. Your complete SEO automation engine.",
+    "Rankit is an AI-native SEO operating system. Discover keywords, audit competitors, plan your editorial calendar, and ship ranked content — automatically.",
   keywords:
-    "SEO automation, AI content generation, keyword research, competitor analysis, content calendar, SEO tools, SERP analysis",
+    "AI SEO platform, keyword research, competitor analysis, content calendar, AI content generation, GEO, AI Overviews, SEO automation",
   openGraph: {
-    title: "SerpCraft — AI-Powered SEO Automation",
+    title: "Rankit — AI SEO Operating System",
     description:
-      "The all-in-one AI engine that finds trending keywords, analyzes competitor content gaps, generates SEO-optimized blogs, and plans your content calendar.",
+      "Research keywords, audit competitors, plan editorial calendars, and ship ranked content — all from one AI-native workspace.",
     type: "website",
   },
 };
@@ -50,8 +51,10 @@ export default async function RootLayout({
         >
           <ReduxProvider>
             <QueryProvider>
-              <AppToastContainer />
-              {children}
+              <TooltipProvider delayDuration={250} skipDelayDuration={150}>
+                <AppToastContainer />
+                {children}
+              </TooltipProvider>
             </QueryProvider>
           </ReduxProvider>
         </ThemeProvider>
@@ -69,12 +72,12 @@ export default async function RootLayout({
         appearance={{
           baseTheme: dark,
           variables: {
-            colorPrimary: "#6366f1",
-            colorBackground: "#111118",
-            colorInputBackground: "#1a1a24",
-            colorInputText: "#f0f0f5",
-            colorText: "#f0f0f5",
-            colorTextSecondary: "#a0a0b8",
+            colorPrimary: "#7c7eff",
+            colorBackground: "#0d0e15",
+            colorInputBackground: "#16171f",
+            colorInputText: "#f4f4f7",
+            colorText: "#f4f4f7",
+            colorTextSecondary: "#7c7d8e",
             borderRadius: "0.75rem",
             fontFamily: "'Inter', sans-serif",
           },

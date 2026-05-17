@@ -30,7 +30,6 @@ import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
-import { PageTitle } from "@/components/common";
 import { toast } from "react-hot-toast";
 import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
@@ -350,10 +349,10 @@ export default function KeywordsPage() {
 
   const { data: projectData } = useProject(projectId);
 
-  const project =
+  const projectDomain =
     projectData && "success" in projectData && projectData.success && projectData.data
-      ? projectData.data
-      : null;
+      ? projectData.data.domain
+      : "";
 
   const {
     data: domainRes,
@@ -1238,44 +1237,26 @@ export default function KeywordsPage() {
     }
   ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [aiSuggestedIds, busyRowId, handleStatusUpdate, projectData]);
 
-  const thBtn =
-    "group inline-flex items-center gap-0.5 rounded-[6px] px-1 py-0.5 -mx-1 text-left uppercase tracking-widest hover:bg-surface-hover/80 hover:text-text-secondary transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40";
-
   return (
-    <div className="space-y-10 pb-16 pl-4 pr-4 relative">
-      {/* ── HEADER (match project overview chrome) ─────────────────────────── */}
-      <div className="pt-4 pb-8 border-b border-border-subtle">
-        <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
-          <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
-            <span className="h-2 w-2 rounded-full bg-brand-action" />
-            Keyword discovery
-          </span>
-          {project ? (
-            <>
-              <span className="font-mono text-text-primary">{project.domain}</span>
-              <span className="opacity-30">/</span>
-              <span>{regionName(project.target_region)}</span>
-              {project.niche ? (
-                <>
-                  <span className="opacity-30">/</span>
-                  <span>{project.niche}</span>
-                </>
-              ) : null}
-            </>
+    <div className="space-y-4 pb-16 pl-4 pr-4 relative">
+      <h1 className="sr-only">Keywords</h1>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-4">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          {(keywords.length > 0 || domainKeywords.length > 0) ? (
+            <PillTabFilterBar<FilterTab>
+              items={FILTER_TAB_ITEMS}
+              activeId={filter}
+              onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
+            />
           ) : (
-            <span className="text-text-tertiary">…</span>
+            <p className="text-[13px] text-text-tertiary">
+              Run discover to pull keywords from your brief, or switch to domain data for Google Ads terms on your site.
+            </p>
           )}
         </div>
 
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div>
-            <PageTitle>{project?.name ?? "…"}</PageTitle>
-            {project?.company && project.company !== project.name ? (
-              <p className="mt-3 text-[16px] text-text-tertiary">{project.company}</p>
-            ) : null}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
           <button
               type="button"
               onClick={() => void handleRediscover()}
@@ -1361,30 +1342,6 @@ export default function KeywordsPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>
             </ProjectNavLink>
-           
-          </div>
-        </div>
-      </div>
-
-      {/* ── KEYWORD LIST ───────────────────────────────────────────────────── */}
-      <section className="space-y-4">
-    
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {keywords.length > 0 || domainKeywords.length > 0 ? (
-              <PillTabFilterBar<FilterTab>
-                items={FILTER_TAB_ITEMS}
-                activeId={filter}
-                onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
-              />
-            ) : (
-              <p className="text-[13px] text-text-tertiary">
-                Run Discover for industry keywords. Switch data source to Domain to see Google Ads keywords for your site.
-              </p>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
             {((sourceTab === "industry" && keywords.length > 0) ||
               (sourceTab === "domain" && domainKeywords.length > 0)) ? (
               !massSelectMode ? (
@@ -1487,9 +1444,10 @@ export default function KeywordsPage() {
                 </div>
               ) : null}
             </div>
-          </div>
         </div>
+      </div>
 
+      <section className="space-y-4">
         {/* ── DATA VIA DOMAIN ─────────────────────────────────────────── */}
         {sourceTab === "domain" && (
           <div className="space-y-4">
@@ -1559,7 +1517,7 @@ export default function KeywordsPage() {
                             {total < sortedDomainKeywords.length ? (
                               <span className="text-text-tertiary/80">
                                 {" "}
-                                ({sortedDomainKeywords.length} total for {project?.domain ?? "your domain"})
+                                ({sortedDomainKeywords.length} total for {projectDomain ?? "your domain"})
                               </span>
                             ) : null}
                           </p>

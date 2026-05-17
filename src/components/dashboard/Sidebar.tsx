@@ -5,6 +5,7 @@ import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/brand/Logo";
 
 const Icon = {
   folder: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
@@ -20,11 +21,8 @@ export default function Sidebar({ onNewProject }: { onNewProject?: () => void })
     <aside className="w-[280px] h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-secondary flex flex-col z-[60]">
       {/* Logo */}
       <div className="p-8">
-        <Link href="/" className="flex items-center gap-3 font-medium text-[20px] tracking-tight font-display text-text-primary">
-          <span className="w-8 h-8 rounded-[8px] bg-brand-primary flex items-center justify-center text-[14px] text-brand-on-primary">
-            ⚡
-          </span>
-          SerpCraft
+        <Link href="/" className="inline-flex">
+          <Logo size="md" />
         </Link>
       </div>
 

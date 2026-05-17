@@ -8,6 +8,7 @@ import { UserButton } from "@clerk/nextjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/brand/Logo";
 import { qk, keywordsListQueryOptions } from "@/lib/query";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
@@ -286,16 +287,11 @@ export default function ProjectSidebar({
       {/* Logo & Toggle Header */}
       <div className={`p-6 pb-4 flex flex-col transition-all duration-300 ease-in-out ${isCollapsed ? "items-center px-2" : ""}`}>
         <div className={`flex items-center ${isCollapsed ? "justify-center" : "justify-between"} mb-8 relative group w-full`}>
-          <Link 
-            href="/" 
-            className={`flex items-center font-medium tracking-tight font-display text-text-primary transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-100 group-hover:opacity-0" : ""}`}
+          <Link
+            href="/"
+            className={`flex items-center transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-100 group-hover:opacity-0" : ""}`}
           >
-            <span className="w-8 h-8 shrink-0 rounded-[8px] bg-brand-primary flex items-center justify-center text-[14px] text-brand-on-primary">
-              ⚡
-            </span>
-            <span className={`text-[20px] whitespace-nowrap overflow-hidden transition-all duration-300 ease-in-out ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
-              SerpCraft
-            </span>
+            <Logo size="md" markOnly={isCollapsed} className={isCollapsed ? "" : ""} />
           </Link>
 
           {isCollapsed ? (

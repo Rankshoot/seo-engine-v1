@@ -7,6 +7,8 @@ import { Project, ProjectCompetitor, TARGET_REGIONS } from "@/lib/types";
 import { projectDomainHost } from "@/lib/project-domain-host";
 import { projectsApi } from "@/frontend/api/projects";
 import { NewProjectModal } from "@/components/NewProjectModal";
+import { useClickOutside } from "@/hooks/useClickOutside";
+import { ArrowRight, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
 
 /** Shared with `ProjectsClient` for dashed “new project” tiles in the same grid. */
 export const PROJECT_CARD_GRID_HEIGHT_CLASS = "min-h-[200px] h-full";
@@ -145,20 +147,12 @@ export default function ProjectCard({ project }: ProjectCardProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  useClickOutside(menuRef, () => setMenuOpen(false), menuOpen);
   useEffect(() => {
     if (!menuOpen) return;
-    const onClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
     const onEsc = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
-    document.addEventListener("mousedown", onClickOutside);
     document.addEventListener("keydown", onEsc);
-    return () => {
-      document.removeEventListener("mousedown", onClickOutside);
-      document.removeEventListener("keydown", onEsc);
-    };
+    return () => document.removeEventListener("keydown", onEsc);
   }, [menuOpen]);
 
   const host = projectDomainHost(project.domain);
@@ -173,35 +167,46 @@ export default function ProjectCard({ project }: ProjectCardProps) {
       <div className={`relative group ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}>
         <ProjectNavLink
           href={`/projects/${project.id}`}
-          className={`group/card relative flex ${PROJECT_CARD_GRID_HEIGHT_CLASS} flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated p-6 transition-all duration-300 hover:border-border-strong hover:shadow-sm`}
+          className={`group/card relative flex ${PROJECT_CARD_GRID_HEIGHT_CLASS} flex-col overflow-hidden rounded-card border border-border-subtle bg-surface-elevated p-6 transition-all duration-(--duration-base) hover:-translate-y-0.5 hover:border-border-default hover:shadow-(--shadow-md)`}
         >
-          <div className="flex min-h-0 flex-1 gap-5">
+          {/* AI accent line on hover */}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-brand-violet/60 to-transparent opacity-0 transition-opacity duration-(--duration-base) group-hover/card:opacity-100"
+          />
+          {/* AI glow on hover */}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -right-16 -top-16 h-[200px] w-[200px] rounded-full bg-brand-violet/10 blur-[60px] opacity-0 transition-opacity duration-(--duration-slow) group-hover/card:opacity-100"
+          />
+
+          <div className="relative flex min-h-0 flex-1 gap-5">
             <div className="flex w-[48px] shrink-0 flex-col items-center">
               <ProjectDomainLogo domain={project.domain} fallbackLetter={project.company || project.name} />
               <RegionBelowAvatar regionCode={project.target_region} />
             </div>
 
             <div className="flex min-h-0 min-w-0 flex-1 flex-col pr-8">
-              <h3 className="text-[18px] font-medium leading-snug text-text-primary transition-colors group-hover/card:text-brand-action">
+              <h3 className="text-[17px] font-semibold leading-snug tracking-tight text-text-primary transition-colors group-hover/card:text-brand-violet">
                 {project.name}
               </h3>
 
               {companyLine ? (
-                <p className="mt-1 truncate text-[14px] text-text-secondary">{companyLine}</p>
+                <p className="mt-1 truncate text-[13px] text-text-secondary">{companyLine}</p>
               ) : null}
 
-              <p className="mt-1.5 font-mono text-[12px] text-text-tertiary" title={project.domain}>
+              <p className="mt-1.5 font-mono text-[11.5px] text-text-tertiary" title={project.domain}>
                 {host || project.domain}
               </p>
 
-              <p className="mt-3 line-clamp-2 text-[14px] leading-relaxed text-text-secondary">
+              <p className="mt-3 line-clamp-2 text-[13px] leading-relaxed text-text-tertiary">
                 {project.niche}
               </p>
             </div>
           </div>
 
-          <div className="mt-auto flex shrink-0 items-center justify-between border-t border-border-subtle pt-4">
-            <span className="text-[12px] text-text-tertiary">
+          <div className="relative mt-auto flex shrink-0 items-center justify-between border-t border-border-subtle pt-4">
+            <span className="text-[11.5px] text-text-tertiary">
               Added{" "}
               {new Date(project.created_at).toLocaleDateString("en-US", {
                 month: "short",
@@ -209,17 +214,14 @@ export default function ProjectCard({ project }: ProjectCardProps) {
                 year: "numeric",
               })}
             </span>
-            <span className="inline-flex items-center gap-1.5 text-[14px] font-medium text-brand-action transition-transform group-hover/card:translate-x-1">
-              Open workspace
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-              </svg>
+            <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-brand-violet transition-transform group-hover/card:translate-x-0.5">
+              Open workspace <ArrowRight className="h-3.5 w-3.5" />
             </span>
           </div>
         </ProjectNavLink>
 
         {/* Kebab menu */}
-        <div className="absolute top-5 right-5" ref={menuRef}>
+        <div className="absolute top-4 right-4" ref={menuRef}>
           <button
             type="button"
             onClick={e => {
@@ -228,17 +230,13 @@ export default function ProjectCard({ project }: ProjectCardProps) {
               setMenuOpen(v => !v);
             }}
             aria-label="Project menu"
-            className="w-8 h-8 rounded-[4px] bg-transparent hover:bg-surface-tertiary text-text-tertiary hover:text-text-primary flex items-center justify-center transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
           >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-              <circle cx="5" cy="12" r="1.5" />
-              <circle cx="12" cy="12" r="1.5" />
-              <circle cx="19" cy="12" r="1.5" />
-            </svg>
+            <MoreHorizontal className="h-4 w-4" />
           </button>
 
           {menuOpen ? (
-            <div className="absolute right-0 top-10 z-20 w-48 rounded-[8px] border border-border-subtle bg-surface-elevated shadow-lg overflow-hidden">
+            <div className="absolute right-0 top-9 z-20 w-48 overflow-hidden rounded-lg border border-border-subtle bg-surface-elevated shadow-(--shadow-md)">
               <button
                 type="button"
                 onClick={e => {
@@ -247,11 +245,9 @@ export default function ProjectCard({ project }: ProjectCardProps) {
                   setMenuOpen(false);
                   setEditOpen(true);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-3 text-[14px] font-medium text-text-primary hover:bg-surface-hover transition-colors"
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-hover"
               >
-                <svg className="w-4 h-4 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487z" />
-                </svg>
+                <Pencil className="h-3.5 w-3.5 text-text-tertiary" />
                 Edit details
               </button>
               <button
@@ -262,11 +258,9 @@ export default function ProjectCard({ project }: ProjectCardProps) {
                   setMenuOpen(false);
                   setDeleteOpen(true);
                 }}
-                className="w-full flex items-center gap-3 px-4 py-3 text-[14px] font-medium text-[#b30000] hover:bg-[#b30000]/5 transition-colors border-t border-border-subtle"
+                className="flex w-full items-center gap-2.5 border-t border-border-subtle px-3 py-2 text-[13px] font-medium text-status-danger transition-colors hover:bg-status-danger/5"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                </svg>
+                <Trash2 className="h-3.5 w-3.5" />
                 Delete project
               </button>
             </div>
@@ -338,14 +332,15 @@ function DeleteProjectModal({
 
   return (
     <ModalShell onClose={onClose} title="Delete project">
-      <div className="space-y-6">
-        <p className="text-[16px] text-text-secondary leading-relaxed">
-          This will permanently delete <span className="font-medium text-text-primary">{project.name}</span> along with
-          every keyword, calendar entry, blog draft, audit, and competitor benchmark tied to it. This can't be undone.
+      <div className="space-y-5">
+        <p className="text-[14px] leading-relaxed text-text-secondary">
+          This will permanently delete{" "}
+          <span className="font-semibold text-text-primary">{project.name}</span> along with every keyword,
+          calendar entry, blog draft, audit, and competitor benchmark tied to it. This can&apos;t be undone.
         </p>
         <div>
-          <label className="block text-[14px] font-medium text-text-primary mb-2">
-            Type <span className="font-bold text-[#b30000]">{project.name}</span> to confirm
+          <label className="mb-2 block text-[13px] font-medium text-text-primary">
+            Type <span className="font-bold text-status-danger">{project.name}</span> to confirm
           </label>
           <input
             value={confirmText}
@@ -355,15 +350,15 @@ function DeleteProjectModal({
           />
         </div>
         {error ? (
-          <div className="rounded-[8px] border border-[#b30000]/20 bg-[#b30000]/5 p-4 text-[14px] text-[#b30000]">
+          <div className="rounded-lg border border-status-danger/20 bg-status-danger/5 p-3 text-[13px] text-status-danger">
             {error}
           </div>
         ) : null}
-        <div className="flex items-center justify-end gap-3 pt-4 border-t border-border-subtle">
+        <div className="flex items-center justify-end gap-2 border-t border-border-subtle pt-4">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-[4px] px-4 py-2 text-[14px] text-text-primary hover:underline"
+            className="rounded-full px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
           >
             Cancel
           </button>
@@ -371,7 +366,7 @@ function DeleteProjectModal({
             type="button"
             onClick={handleDelete}
             disabled={!matches || deleting}
-            className="rounded-[32px] bg-[#b30000] px-6 py-2.5 text-[14px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="rounded-full bg-status-danger px-5 py-2 text-[13px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {deleting ? "Deleting…" : "Delete project"}
           </button>
@@ -385,26 +380,6 @@ function DeleteProjectModal({
 // Shared shell
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Field({
-  label,
-  optional,
-  children,
-}: {
-  label: string;
-  optional?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className="block text-[14px] font-medium text-text-primary mb-2">
-        {label}
-        {optional ? <span className="ml-1.5 text-text-tertiary font-normal">(optional)</span> : null}
-      </label>
-      {children}
-    </div>
-  );
-}
-
 function ModalShell({
   title,
   onClose,
@@ -416,33 +391,29 @@ function ModalShell({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
       <button
         type="button"
         aria-label="Close modal"
         onClick={onClose}
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
       />
-      {/* Panel */}
       <div
-        className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[22px] border border-border-subtle bg-surface-primary shadow-2xl"
+        className="relative max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-card border border-border-subtle bg-surface-elevated shadow-(--shadow-xl)"
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-center justify-between border-b border-border-subtle px-8 py-6">
-          <h2 className="text-[24px] font-normal tracking-tight text-text-primary font-display">{title}</h2>
+        <div className="flex items-center justify-between border-b border-border-subtle px-6 py-5">
+          <h2 className="text-[18px] font-semibold tracking-tight text-text-primary">{title}</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="w-10 h-10 rounded-[8px] text-text-tertiary hover:text-text-primary hover:bg-surface-tertiary flex items-center justify-center transition-colors"
+            className="flex h-9 w-9 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
+            <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="p-8">{children}</div>
+        <div className="p-6">{children}</div>
       </div>
     </div>
   );

@@ -63,7 +63,7 @@ async function buildProjectInfoResponse(
   // Truncate the brief to keep the LLM prompt focused.
   const briefForPrompt = brief.slice(0, 2400);
 
-  const systemPrompt = `You are a friendly assistant inside SerpCraft. The user is asking about their OWN project / business — not for keyword suggestions. Answer in plain conversational text using only the data below. Do NOT recommend keywords unless they explicitly asked for keywords.
+  const systemPrompt = `You are a friendly assistant inside Rankit. The user is asking about their OWN project / business — not for keyword suggestions. Answer in plain conversational text using only the data below. Do NOT recommend keywords unless they explicitly asked for keywords.
 
 Project data:
 - Domain: ${projectDomain}
@@ -126,7 +126,7 @@ async function buildConversationalResponse(context: AIContext, prompt: string): 
   };
 
   const pageCapability = pageDescriptions[context.page] ?? "help you with your SEO strategy";
-  const systemPrompt = `You are a friendly, knowledgeable SEO assistant embedded inside SerpCraft, an SEO content platform.
+  const systemPrompt = `You are a friendly, knowledgeable SEO assistant embedded inside Rankit, an AI SEO content platform.
 
 Context:
 - Current page: ${context.page}

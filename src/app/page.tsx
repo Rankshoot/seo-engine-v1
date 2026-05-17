@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { AuthSignedIn as SignedIn, AuthSignedOut as SignedOut, AuthUserButton as UserButton } from "@/components/auth-wrapper";
 
 const Icons = {
   sparkles: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3z"/></svg>,
@@ -62,18 +61,10 @@ export default function LandingPage() {
           </div>
 
           <div className="hidden md:flex items-center gap-3">
-            <SignedOut>
-              <a href="/sign-in" className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors">Sign In</a>
-              <a href="/sign-up" className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold transition-all">
-                Get Started {Icons.arrowRight}
-              </a>
-            </SignedOut>
-            <SignedIn>
-              <a href="/projects" className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold transition-all">
-                Dashboard {Icons.arrowRight}
-              </a>
-              <UserButton />
-            </SignedIn>
+            <a href="/sign-in" className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors">Sign In</a>
+            <a href="/sign-up" className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold transition-all">
+              Get Started {Icons.arrowRight}
+            </a>
           </div>
 
           <button className="md:hidden" onClick={() => setMobileMenu(!mobileMenu)} aria-label="Toggle menu">
@@ -88,9 +79,7 @@ export default function LandingPage() {
               <a href="#how-it-works" className="text-sm text-text-secondary hover:text-text-primary" onClick={() => setMobileMenu(false)}>How It Works</a>
               <a href="#testimonials" className="text-sm text-text-secondary hover:text-text-primary" onClick={() => setMobileMenu(false)}>Testimonials</a>
               <div className="pt-3 border-t border-border-subtle flex flex-col gap-2">
-                <SignedOut>
-                  <a href="/sign-up" className="w-full px-6 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold text-center">Get Started</a>
-                </SignedOut>
+                <a href="/sign-up" className="w-full px-6 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold text-center">Get Started</a>
               </div>
             </div>
           </div>

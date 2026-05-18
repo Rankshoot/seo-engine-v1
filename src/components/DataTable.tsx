@@ -11,7 +11,7 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
 
 import { cn } from "@/lib/cn";
-import { Table } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export interface ColumnDef<T> {
   id: string;

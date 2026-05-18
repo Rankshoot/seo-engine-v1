@@ -10,3 +10,4 @@ export { Sheet, SheetTrigger, SheetClose, SheetContent, SheetHeader } from "./Sh
 export { StatusBadge, type StatusTone, type StatusSize } from "./StatusBadge";
 export { Kbd } from "./Kbd";
 export { GradientBorder } from "./GradientBorder";
+export { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "./table";

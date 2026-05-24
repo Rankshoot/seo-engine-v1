@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useCallback } from "react";
-import ProjectCard, { PROJECT_CARD_GRID_HEIGHT_CLASS } from "@/components/dashboard/ProjectCard";
+import ProjectCard from "@/components/dashboard/ProjectCard";
 import { NewProjectModal } from "@/components/NewProjectModal";
 import type { Project } from "@/lib/types";
 import { Button } from "@/components/common";
@@ -114,15 +114,6 @@ export default function ProjectsClient({
               {filtered.map(project => (
                 <ProjectCard key={project.id} project={project} />
               ))}
-              <button
-                onClick={openModal}
-                className={`group flex flex-col items-center justify-center gap-4 rounded-card border border-dashed border-border-strong bg-surface-secondary/40 text-text-tertiary transition-all duration-(--duration-base) ease-out hover:border-brand-action hover:bg-surface-secondary hover:text-brand-action ${PROJECT_CARD_GRID_HEIGHT_CLASS}`}
-              >
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border-subtle bg-surface-elevated text-brand-violet transition-transform duration-(--duration-base) group-hover:scale-110">
-                  <FolderPlus className="h-5 w-5" />
-                </div>
-                <span className="text-[13.5px] font-medium">Create new project</span>
-              </button>
             </div>
           ) : (
             <NoSearchResults query={debouncedQuery} onClear={() => setQuery("")} />

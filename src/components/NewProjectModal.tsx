@@ -136,7 +136,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
     setError("");
     setLoading(true);
     const fd = new FormData(e.currentTarget);
-    const result = await projectsApi.create({
+    const payload = {
       name: fd.get("name") as string,
       domain: fd.get("domain") as string,
       company: fd.get("company") as string,
@@ -147,13 +147,25 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
       description: fd.get("description") as string,
       competitors: competitors.filter(c => c.trim()),
       ahrefs_rank_tracker_project_id: null,
-    });
-    if (result.success && result.data) {
-      onSaved?.();
-      router.push(`/projects/${result.data.id}/keywords`);
+    };
+
+    if (editProject) {
+      const result = await projectsApi.update(editProject.id, payload);
+      if (result.success && result.data) {
+        onSaved?.();
+      } else {
+        setError(result.error ?? "Something went wrong");
+        setLoading(false);
+      }
     } else {
-      setError(result.error ?? "Something went wrong");
-      setLoading(false);
+      const result = await projectsApi.create(payload);
+      if (result.success && result.data) {
+        onSaved?.();
+        router.push(`/projects/${result.data.id}/keywords`);
+      } else {
+        setError(result.error ?? "Something went wrong");
+        setLoading(false);
+      }
     }
   }
 

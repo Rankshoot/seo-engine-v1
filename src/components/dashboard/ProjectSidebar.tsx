@@ -70,7 +70,6 @@ interface ProjectSidebarProps {
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
   onOpenAI?: () => void;
-  onNewProject?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -80,7 +79,6 @@ export default function ProjectSidebar({
   isCollapsed,
   setIsCollapsed,
   onOpenAI,
-  onNewProject,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -359,28 +357,6 @@ export default function ProjectSidebar({
                 ))}
               </div>
               <div className="px-3 pt-2 pb-1 mt-2 border-t border-border-subtle space-y-1.5">
-                {onNewProject ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDropdownOpen(false);
-                      onNewProject();
-                    }}
-                    className="flex w-full cursor-pointer items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
-                  >
-                    {Icon.plus}
-                    New project
-                  </button>
-                ) : (
-                  <ProjectNavLink
-                    href="/projects?new=1"
-                    onClick={() => setIsDropdownOpen(false)}
-                  className="flex items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px]  font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
-                  >
-                    {Icon.plus}
-                    New project
-                  </ProjectNavLink>
-                )}
                 <ProjectNavLink
                   href="/projects"
                   onClick={() => setIsDropdownOpen(false)}

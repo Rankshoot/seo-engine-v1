@@ -433,7 +433,7 @@ function DashboardPreview() {
           A workspace that feels like <span className="gradient-text">a single thought.</span>
         </SectionTitle>
         <SectionSub>
-          Premium dark + light themes, contextual side rails, keyboard-driven everywhere. This is not another SEO tool — it's an operating system.
+          Premium dark + light themes, contextual side rails, keyboard-driven everywhere. This is not another SEO tool — it&apos;s an operating system.
         </SectionSub>
 
         <div className="mt-14 overflow-hidden rounded-card border border-border-default bg-surface-secondary shadow-(--shadow-xl)">
@@ -578,7 +578,7 @@ function DashboardPreview() {
                 <div className="rounded-xl border border-border-subtle bg-surface-elevated p-3 text-text-secondary">
                   I noticed <span className="text-text-primary">5 BOFU keywords</span> in your latest discovery
                   trending up 24%. Want me to draft a comparison post for{" "}
-                  <span className="text-brand-violet">"AI recruitment platform"</span>?
+                  <span className="text-brand-violet">&quot;AI recruitment platform&quot;</span>?
                 </div>
                 <div className="space-y-2">
                   <button className="flex w-full items-center gap-2 rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2 text-left text-[12px] text-text-secondary hover:bg-surface-hover">

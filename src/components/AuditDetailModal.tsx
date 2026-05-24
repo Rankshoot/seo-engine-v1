@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import type { PersistedBlogAudit } from "@/app/actions/audit-actions";
 import type { IssueCategory, QualityRubricRow } from "@/lib/content-audit";
@@ -71,10 +71,6 @@ export function AuditDetailModal({
   onCalendar,
 }: AuditDetailModalProps) {
   const [tab, setTab] = useState<Tab>("issues");
-
-  useEffect(() => {
-    if (open) setTab("issues");
-  }, [open, row?.url]);
 
   const grouped = useMemo(() => (row ? groupIssuesByCategory(row.analysis.issues) : {}), [row]);
 

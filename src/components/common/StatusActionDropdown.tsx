@@ -78,15 +78,7 @@ export function StatusActionDropdown({
   const menuRef = useRef<HTMLUListElement>(null);
   const [fixedPos, setFixedPos] = useState<{ top: number; left: number } | null>(null);
 
-  const estimatePos = useCallback((): { top: number; left: number } | null => {
-    const tr = triggerRef.current;
-    if (!tr || typeof window === "undefined") return null;
-    const rect = tr.getBoundingClientRect();
-    const estH = items.length * 40 + 12;
-    return placeFixedMenu(rect, MENU_MIN_W, estH, align);
-  }, [items.length, align]);
-
-  const displayPos = fixedPos ?? (open ? estimatePos() : null);
+  const displayPos = fixedPos;
 
   const reposition = useCallback(() => {
     const tr = triggerRef.current;
@@ -99,10 +91,7 @@ export function StatusActionDropdown({
   }, [open, items.length, align]);
 
   useLayoutEffect(() => {
-    if (!open) {
-      setFixedPos(null);
-      return;
-    }
+    if (!open) return;
     reposition();
     const id = requestAnimationFrame(() => requestAnimationFrame(() => reposition()));
     window.addEventListener("resize", reposition);

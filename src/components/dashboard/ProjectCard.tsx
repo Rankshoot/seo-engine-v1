@@ -3,7 +3,7 @@
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Project, ProjectCompetitor, TARGET_REGIONS } from "@/lib/types";
+import { Project, TARGET_REGIONS } from "@/lib/types";
 import { projectDomainHost } from "@/lib/project-domain-host";
 import { projectsApi } from "@/frontend/api/projects";
 import { NewProjectModal } from "@/components/NewProjectModal";
@@ -39,8 +39,11 @@ function ProjectDomainLogo({
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    setIndex(0);
-    setFailed(false);
+    const timer = window.setTimeout(() => {
+      setIndex(0);
+      setFailed(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [host]);
 
   const letter = (fallbackLetter || "?").charAt(0).toUpperCase();

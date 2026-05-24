@@ -1,8 +1,8 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
 import { Toaster } from "react-hot-toast";
+import { useMounted } from "@/hooks/useMounted";
 
 /**
  * Single global toast host — use `import { toast } from "react-hot-toast"` in pages.
@@ -10,11 +10,7 @@ import { Toaster } from "react-hot-toast";
  */
 export function AppToastContainer() {
   const { resolvedTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useMounted();
 
   if (!mounted) return null;
 

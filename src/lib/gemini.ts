@@ -72,7 +72,7 @@ export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearc
   for (let attempt = 0; attempt < retries; attempt++) {
     const started = Date.now();
     try {
-      const body: any = {
+      const body: Record<string, unknown> = {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
       };

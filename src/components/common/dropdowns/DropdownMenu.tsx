@@ -56,7 +56,6 @@ export function DropdownMenu({
 }: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
 
   useEffect(() => {
@@ -67,7 +66,6 @@ export function DropdownMenu({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setOpen(false);
-        triggerRef.current?.focus();
       }
     };
     document.addEventListener("mousedown", onDocClick);
@@ -83,7 +81,6 @@ export function DropdownMenu({
   }
 
   const enhancedTrigger = cloneElement(trigger, {
-    ref: triggerRef,
     onClick: (e: React.MouseEvent) => {
       e.stopPropagation();
       setOpen(v => !v);

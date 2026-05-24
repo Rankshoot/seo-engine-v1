@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
@@ -91,36 +91,23 @@ export default function ProjectSidebar({
     queryFn: () => projectsApi.stats(project.id),
     enabled: !!project.id,
   });
-  const serverStats = useMemo(() => {
-    if (statsResponse?.success && statsResponse.data) {
-      return {
-        approvedKeywords: statsResponse.data.approvedKeywords,
-        calendarEntries: statsResponse.data.calendarEntries,
-        blogsGenerated: statsResponse.data.blogsGenerated,
-        articlesInLibrary: statsResponse.data.articlesInLibrary,
-        auditPending: statsResponse.data.auditPending,
-      };
-    }
-    return stats;
-  }, [
-    stats,
-    statsResponse?.success,
-    statsResponse?.data?.approvedKeywords,
-    statsResponse?.data?.calendarEntries,
-    statsResponse?.data?.blogsGenerated,
-    statsResponse?.data?.articlesInLibrary,
-    statsResponse?.data?.auditPending,
-  ]);
+  const serverStats =
+    statsResponse?.success && statsResponse.data
+      ? {
+          approvedKeywords: statsResponse.data.approvedKeywords,
+          calendarEntries: statsResponse.data.calendarEntries,
+          blogsGenerated: statsResponse.data.blogsGenerated,
+          articlesInLibrary: statsResponse.data.articlesInLibrary,
+          auditPending: statsResponse.data.auditPending,
+        }
+      : stats;
   const liveStats = useAppSelector(state => selectProjectStats(state, project.id, serverStats));
   const base = `/projects/${project.id}`;
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  /** Nav count badges use React Query + Redux; values can differ SSR vs first client paint — defer badges until mounted to avoid hydration mismatch. */
-  const [navCountsReady, setNavCountsReady] = useState(false);
-  useEffect(() => {
-    setNavCountsReady(true);
-  }, []);
+  /** Nav count badges use React Query + Redux; sidebar is client-only so counts can render immediately. */
+  const navCountsReady = true;
 
   // Warm TanStack cache on nav **click** only (not hover/focus) so moving the
   // mouse across the sidebar does not hit `/api/v1`.

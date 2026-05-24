@@ -218,7 +218,7 @@ function NoSearchResults({ query, onClear }: { query: string; onClear: () => voi
       </span>
       <div className="max-w-[420px]">
         <h3 className="text-[15px] font-semibold tracking-tight text-text-primary">
-          No projects match "{query}"
+          No projects match &quot;{query}&quot;
         </h3>
         <p className="mt-1.5 text-[13px] leading-relaxed text-text-tertiary">
           Try a different name, domain, or niche.

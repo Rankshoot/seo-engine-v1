@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import { Input } from "@/components/common";
 import { cn } from "@/lib/cn";
 
@@ -24,17 +24,11 @@ export function AdminFilters({
   onChange: (next: AdminFiltersState) => void;
   extra?: React.ReactNode;
 }) {
-  const [searchDraft, setSearchDraft] = useState(state.search);
-
-  useEffect(() => {
-    setSearchDraft(state.search);
-  }, [state.search]);
-
   const commitSearch = useCallback(() => {
-    if (searchDraft !== state.search) {
-      onChange({ ...state, search: searchDraft });
+    if (state.search.trim() !== state.search) {
+      onChange({ ...state, search: state.search.trim() });
     }
-  }, [onChange, searchDraft, state]);
+  }, [onChange, state]);
 
   return (
     <div className="flex flex-col gap-3 mb-6">
@@ -45,8 +39,8 @@ export function AdminFilters({
           </label>
           <div className="flex gap-2">
             <Input
-              value={searchDraft}
-              onChange={(e) => setSearchDraft(e.target.value)}
+              value={state.search}
+              onChange={(e) => onChange({ ...state, search: e.target.value })}
               onKeyDown={(e) => e.key === "Enter" && commitSearch()}
               placeholder={searchPlaceholder}
               className="h-9"

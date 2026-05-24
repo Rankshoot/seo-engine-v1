@@ -286,10 +286,10 @@ export function AdminOverviewDashboard() {
               <span key={p.id} className="font-medium text-text-primary">
                 {p.name}
               </span>,
-              <span className="text-text-tertiary truncate max-w-[140px] block">
+              <span key={`${p.id}-domain`} className="text-text-tertiary truncate max-w-[140px] block">
                 {p.domain}
               </span>,
-              formatDate(p.createdAt),
+              <span key={`${p.id}-created`}>{formatDate(p.createdAt)}</span>,
             ])}
           />
         </SectionCard>
@@ -302,8 +302,8 @@ export function AdminOverviewDashboard() {
               <span key={c.id} className="line-clamp-2 text-text-primary">
                 {c.title}
               </span>,
-              <span className="capitalize text-text-tertiary">{c.contentType}</span>,
-              formatDate(c.createdAt),
+              <span key={`${c.id}-type`} className="capitalize text-text-tertiary">{c.contentType}</span>,
+              <span key={`${c.id}-created`}>{formatDate(c.createdAt)}</span>,
             ])}
           />
         </SectionCard>
@@ -316,8 +316,8 @@ export function AdminOverviewDashboard() {
               <code key={u.userId} className="text-[11px] text-text-tertiary">
                 {u.userId.slice(0, 12)}…
               </code>,
-              formatInt(u.projectCount),
-              u.lastActiveAt ? formatDate(u.lastActiveAt) : "—",
+              <span key={`${u.userId}-projects`}>{formatInt(u.projectCount)}</span>,
+              <span key={`${u.userId}-last-active`}>{u.lastActiveAt ? formatDate(u.lastActiveAt) : "—"}</span>,
             ])}
           />
         </SectionCard>
@@ -331,6 +331,7 @@ export function AdminOverviewDashboard() {
                 {e.feature || e.provider || "—"}
               </span>,
               <span
+                key={`${e.id}-severity`}
                 className={cn(
                   "capitalize text-[12px] font-medium",
                   e.severity === "critical" || e.severity === "high"
@@ -340,7 +341,7 @@ export function AdminOverviewDashboard() {
               >
                 {e.severity}
               </span>,
-              formatDate(e.createdAt),
+              <span key={`${e.id}-created`}>{formatDate(e.createdAt)}</span>,
             ])}
           />
         </SectionCard>

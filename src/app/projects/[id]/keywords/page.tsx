@@ -976,7 +976,7 @@ export default function KeywordsPage() {
       header: "Keyword",
       sortable: true,
       tooltip: "Search query from Google Ads keywords for your domain.",
-      cell: (kw: any) => (
+      cell: (kw: CompetitorKeywordsForSiteRow) => (
         <div className="flex items-center gap-2 max-w-[260px]">
           <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
           {kw.matched_keyword_id && aiSuggestedIds.has(kw.matched_keyword_id) ? (
@@ -993,7 +993,7 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Average monthly searches over the last 12 months.",
-      cell: (kw: any) => (
+      cell: (kw: CompetitorKeywordsForSiteRow) => (
         <span className="text-[14px] font-mono text-text-secondary tabular-nums">
           {kw.volume ? kw.volume.toLocaleString() : "—"}
         </span>
@@ -1005,7 +1005,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Difficulty hint from Google Ads competition (0–100).",
-      cell: (kw: any) => kw.kd > 0 ? (
+      cell: (kw: CompetitorKeywordsForSiteRow) => kw.kd > 0 ? (
         <div className="flex items-center justify-center gap-2">
           <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
             <div
@@ -1027,7 +1027,7 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Cost Per Click (USD) from Google Ads.",
-      cell: (kw: any) => (
+      cell: (kw: CompetitorKeywordsForSiteRow) => (
         <span className="text-[13px] font-mono text-text-tertiary tabular-nums">
           {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
         </span>
@@ -1039,7 +1039,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "When this phrase matches a saved industry keyword, you see that row’s analysis score. Otherwise we show an estimate from volume, difficulty, and intent so you can still sort and compare.",
-      cell: (kw: any) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+      cell: (kw: CompetitorKeywordsForSiteRow) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
         <span
           className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums"
           title={
@@ -1059,7 +1059,7 @@ export default function KeywordsPage() {
       header: "Action",
       align: "center",
       sortable: true,
-      cell: (kw: any) => {
+      cell: (kw: CompetitorKeywordsForSiteRow) => {
         const effectiveStatus = effectiveDomainStatus(kw);
         const busyKey = kw.matched_keyword_id ?? `dom:${kw.keyword}`;
         return (
@@ -1081,7 +1081,7 @@ export default function KeywordsPage() {
       header: "Keyword",
       sortable: true,
       tooltip: `The search query. Live data from DataForSEO in ${projectData?.success && projectData.data ? regionName(projectData.data.target_region) : "your region"}.`,
-      cell: (kw: any) => {
+      cell: (kw: Keyword) => {
         const isAiPick = aiSuggestedIds.has(kw.id);
         return (
           <div className="max-w-[260px]">
@@ -1118,7 +1118,7 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Average monthly searches over the last 12 months. Hover for trend chart.",
-      cell: (kw: any) => (
+      cell: (kw: Keyword) => (
         <Tooltip placement="above" content={<MonthlySearchesChart data={kw.monthly_searches} />}>
           <span className="text-[14px] font-mono text-text-secondary tabular-nums border-b border-dashed border-text-tertiary/40 cursor-help pb-0.5">
             {kw.volume ? kw.volume.toLocaleString() : "—"}
@@ -1132,7 +1132,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Keyword Difficulty (0-100). Higher means harder to rank in top 10.",
-      cell: (kw: any) => kw.kd > 0 ? (
+      cell: (kw: Keyword) => kw.kd > 0 ? (
         <div className="flex items-center justify-center gap-2">
           <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
             <div
@@ -1154,7 +1154,7 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Cost Per Click (USD). Indicates commercial value of the keyword.",
-      cell: (kw: any) => (
+      cell: (kw: Keyword) => (
         <span className="text-[13px] font-mono text-text-tertiary tabular-nums">
           {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
         </span>
@@ -1167,7 +1167,7 @@ export default function KeywordsPage() {
       sortable: true,
       tooltip:
         "SERP-style search intent from keyword data: informational, commercial, transactional, or navigational.",
-      cell: (kw: any) => kw.intent ? (
+      cell: (kw: Keyword) => kw.intent ? (
         <span
           className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
             kw.intent === "commercial" || kw.intent === "transactional"
@@ -1189,7 +1189,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Composite opportunity score from volume, KD, CPC, and relevance signals.",
-      cell: (kw: any) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+      cell: (kw: Keyword) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
         <span className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums">
           {Math.round(kw.keyword_analysis_score)}
         </span>
@@ -1203,7 +1203,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Strategic score from Gemini AI — evaluates business relevance, rankability, content depth, and conversion potential.",
-      cell: (kw: any) => {
+      cell: (kw: Keyword) => {
         const score = kw.ai_eval_score as number | null | undefined;
         const data = kw.ai_eval_data as AiEvalData | null | undefined;
         if (!score || !data) {
@@ -1225,7 +1225,7 @@ export default function KeywordsPage() {
       header: "Action",
       align: "center",
       sortable: true,
-      cell: (kw: any) => (
+      cell: (kw: Keyword) => (
         <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
           <KeywordActionDropdown
             status={kw.status}

@@ -225,7 +225,7 @@ export default function LinkedInViewerPage() {
           {blog.title}
         </p>
         <p className="mt-2 text-[11px] text-text-tertiary">
-          Published once you click "Copy post" and paste into LinkedIn.
+          Published once you click &quot;Copy post&quot; and paste into LinkedIn.
         </p>
       </div>
 

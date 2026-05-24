@@ -197,7 +197,6 @@ function BlogImageEditOverlay({
 
   useEffect(() => {
     if (!active) {
-      if (targetImg) setTargetImg(null);
       return;
     }
     const handleBodyClick = (e: MouseEvent) => {
@@ -445,7 +444,6 @@ function BlogContentAnalysisModal({
 }) {
   const [tab, setTab] = useState<"issues" | "rubric" | "gaps">("issues");
 
-  useEffect(() => { if (open) setTab("issues"); }, [open]);
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -653,7 +651,7 @@ function BlogContentAnalysisModal({
         {/* Footer */}
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-surface-secondary/95 p-4 backdrop-blur">
           <p className="text-[11px] text-text-tertiary max-w-xs leading-relaxed">
-            "Generate enhanced" rewrites applying <strong className="text-text-secondary">all</strong> issues above at once. "Schedule" queues the keyword for later.
+            &quot;Generate enhanced&quot; rewrites applying <strong className="text-text-secondary">all</strong> issues above at once. &quot;Schedule&quot; queues the keyword for later.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={onClose}

@@ -1357,7 +1357,7 @@ const GEMINI_EVAL_URLS = [
 /** Extracts the first JSON array from raw text (handles trailing commentary / partial fences). */
 function extractJsonArray(raw: string): string {
   // Strip any markdown fences
-  let s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  const s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
   // Find the first '[' and last ']'
   const start = s.indexOf('[');
   const end = s.lastIndexOf(']');

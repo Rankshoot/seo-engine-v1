@@ -639,14 +639,19 @@ function AI_GAP_SCORE_CATEGORY(score: number): { icon: string; colorClass: strin
 
 function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number }) {
   const cat = AI_GAP_SCORE_CATEGORY(score);
+  const analysis = data.analysis as GapAiEvalData["analysis"] & {
+    blogPotential?: number;
+    competitiveTakeover?: number;
+    audienceFit?: number;
+  };
   const dims = [
     { label: "Biz Relevance", val: data.analysis.businessRelevance ?? 0 },
-    { label: "Blog Potential", val: (data.analysis as any).blogPotential ?? 0 },
-    { label: "Competitive", val: (data.analysis as any).competitiveTakeover ?? 0 },
-    { label: "Intent Quality", val: (data.analysis as any).intentQuality ?? data.analysis.intentQuality ?? 0 },
+    { label: "Blog Potential", val: analysis.blogPotential ?? 0 },
+    { label: "Competitive", val: analysis.competitiveTakeover ?? 0 },
+    { label: "Intent Quality", val: analysis.intentQuality ?? data.analysis.intentQuality ?? 0 },
     { label: "Traffic Potential", val: data.analysis.trafficPotential ?? 0 },
     { label: "Trend/Growth", val: data.analysis.trendGrowth ?? 0 },
-    { label: "Audience Fit", val: (data.analysis as any).audienceFit ?? 0 },
+    { label: "Audience Fit", val: analysis.audienceFit ?? 0 },
     { label: "Content Depth", val: data.analysis.contentDepth ?? 0 },
   ].filter(d => d.val > 0);
 
@@ -849,7 +854,10 @@ function OpportunityDashboard({
 
   // Reset visible count whenever the tab or sort changes so the user always
   // sees the top of the new list.
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [workspaceTab, sortCol, sortDir]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisibleCount(PAGE_SIZE), 0);
+    return () => window.clearTimeout(timer);
+  }, [workspaceTab, sortCol, sortDir]);
 
   const loadMore = () => {
     const el = tableScrollRef.current;

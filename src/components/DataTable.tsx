@@ -124,7 +124,7 @@ export function DataTable<T>({
     return dataCols;
   }, [columns, onSortToggle, sortColumn, sortDirection]);
 
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table API
+   
   const table = useReactTable({
     data,
     columns: tanstackColumns,

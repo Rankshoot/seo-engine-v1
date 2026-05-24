@@ -1599,7 +1599,7 @@ export async function rewriteBlogEditorSelection(
   let machineResolvedTitle = '';
   let machineResolvedStatus = 0;
   let resolvedLinkType: 'internal' | 'external' | null = null;
-  let resolverCandidates: ReplacementLinkCandidate[] = [];
+  const resolverCandidates: ReplacementLinkCandidate[] = [];
   let machineLinkRows: LinkReplacementRow[] = [];
   let addedLinksForPrompt: Array<{ href: string; anchorText: string; type: string }> = [];
   const wantsVagueResolver =

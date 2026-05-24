@@ -103,7 +103,7 @@ export function EbookReader({
   const subtitle = data.cover_subtitle ?? "";
   const coverDate = useMemo(
     () =>
-      new Date(blog.created_at || Date.now()).toLocaleDateString("en-US", {
+      new Date(blog.created_at || "1970-01-01T00:00:00.000Z").toLocaleDateString("en-US", {
         year: "numeric",
         month: "long",
       }),

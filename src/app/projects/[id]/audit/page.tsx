@@ -264,7 +264,7 @@ export default function ContentHealthPage() {
         <CHEmptyState
           icon={<svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" /></svg>}
           title="No blog URLs found"
-          body={<>We couldn't find blog-style URLs in your sitemap. Make sure <code className="rounded bg-surface-elevated px-1.5 py-0.5 text-[12px]">/blog/…</code> paths are included, then refresh your brief.</>}
+          body={<>We couldn&apos;t find blog-style URLs in your sitemap. Make sure <code className="rounded bg-surface-elevated px-1.5 py-0.5 text-[12px]">/blog/…</code> paths are included, then refresh your brief.</>}
           action={
             <ProjectNavLink href={`/projects/${projectId}/keywords`} className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-5 py-2.5 text-[13px] font-medium text-text-secondary hover:text-text-primary transition-colors">
               Refresh brief

@@ -86,7 +86,9 @@ export function AdminSettingsDashboard() {
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (data) setDraft(data);
+    if (!data) return;
+    const timer = window.setTimeout(() => setDraft(data), 0);
+    return () => window.clearTimeout(timer);
   }, [data]);
 
   const handleSave = async () => {

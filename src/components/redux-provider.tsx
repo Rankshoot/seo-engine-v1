@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Provider } from "react-redux";
 import { makeStore, persistState, type AppStore } from "@/lib/redux/store";
 
-export function ReduxProvider({ children }: { children: ReactNode }) {
+export function ReduxProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [store] = useState<AppStore>(() => makeStore());
 
   useEffect(() => {

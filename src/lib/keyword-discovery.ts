@@ -109,8 +109,8 @@ export interface DiscoveryResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TOP_COMPETITOR_COUNT = 5;
-const OWN_LIMIT = 300;
-const PER_COMP_LIMIT = 300;
+const OWN_LIMIT = 150;
+const PER_COMP_LIMIT = 100;
 const QUICK_WIN_MIN_POSITION = 4;
 const QUICK_WIN_MAX_POSITION = 20;
 const QUICK_WIN_MIN_VOLUME = 50;
@@ -567,24 +567,66 @@ export async function runKeywordDiscovery(
     return { candidates: [], trace, meta };
   }
 
-  // 8. Bulk-enrich every candidate with Ahrefs Keywords Explorer / overview.
-  //    `ahrefsKeywordOverview` already chunks at 80 internally.
-  const allKws = [...pool.keys()];
-  const overview = await ahrefsKeywordOverview(allKws, region).catch(e => {
+  // 8. Preliminary score to filter candidate pool down to top 100 before calling Ahrefs bulk overview.
+  const ctx = buildScoringContext(input);
+  const rawCandidates = [...pool.values()];
+
+  const preScored = rawCandidates.map(raw => {
+    const competitors = [...raw.competitor_pages.entries()]
+      .filter(([dom]) => dom && dom !== target)
+      .map(([dom, url]) => ({ dom, url }));
+
+    const candidate: KeywordCandidate = {
+      keyword: raw.keyword,
+      source_type: raw.source_type,
+      source_competitors: competitors.map(c => c.dom),
+      source_urls: competitors.map(c => c.url),
+      volume: raw.initial.volume ?? 0,
+      difficulty: raw.initial.difficulty ?? 50,
+      cpc: raw.initial.cpc ?? 0,
+      parent_topic: null,
+      traffic_potential: null,
+      intents: null,
+      intent: '',
+      ai_score: 0,
+      analysis_score: 0,
+      relevance_score: 0,
+    };
+
+    const s = scoreCandidate(candidate, ctx);
+    return {
+      raw,
+      preliminary_score: s.analysis_score,
+      volume: candidate.volume,
+    };
+  });
+
+  // Sort by preliminary score desc, volume desc
+  preScored.sort((a, b) => {
+    if (b.preliminary_score !== a.preliminary_score) return b.preliminary_score - a.preliminary_score;
+    return b.volume - a.volume;
+  });
+
+  // Pick top 100 for overview enrichment
+  const topCandidates = preScored.slice(0, 100).map(x => x.raw);
+  const topKws = topCandidates.map(c => c.keyword);
+
+  const overview = await ahrefsKeywordOverview(topKws, region).catch(e => {
     console.warn('[discovery] keyword-overview failed:', e);
     return new Map<string, AhrefsKeywordOverviewRow>();
   });
+
   meta.enriched_with_overview = overview.size;
   pushTrace(trace, 'enrich_overview', {
-    requested: allKws.length,
+    requested: topKws.length,
     returned: overview.size,
-    chunks_estimated: Math.ceil(allKws.length / 80),
+    chunks_estimated: Math.ceil(topKws.length / 80),
+    pool_size: rawCandidates.length,
   });
 
   // 9. Score each candidate.
-  const ctx = buildScoringContext(input);
   const scored: KeywordCandidate[] = [];
-  for (const raw of pool.values()) {
+  for (const raw of topCandidates) {
     const ov = overview.get(raw.keyword) ?? null;
     const competitors = [...raw.competitor_pages.entries()]
       .filter(([dom]) => dom && dom !== target)

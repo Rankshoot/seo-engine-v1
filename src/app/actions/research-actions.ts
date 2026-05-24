@@ -240,10 +240,18 @@ export async function importGapKeywords(projectId: string, gaps: CompetitorGapKe
     funnel_stage: deterministicFunnelStage('', g.keyword),
   }));
 
-  const { data, error } = await supabaseAdmin
+  let { data, error } = await supabaseAdmin
     .from('keywords')
     .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
     .select();
+
+  if (error && error.message.includes('funnel_stage') && error.message.includes('schema cache')) {
+    const rowsNoFunnel = rows.map(({ funnel_stage: _, ...rest }) => rest);
+    ({ data, error } = await supabaseAdmin
+      .from('keywords')
+      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+      .select());
+  }
 
   if (error) return { success: false, error: error.message };
   return { success: true, count: data?.length ?? 0 };

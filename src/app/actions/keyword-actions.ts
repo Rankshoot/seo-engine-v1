@@ -198,11 +198,18 @@ export async function refreshKeywordIntentsWithGemini(projectId: string): Promis
     const volume = Math.max(0, Math.round(Number(row.volume) || 0));
     const kd = Math.max(0, Math.round(Number(row.kd) || 0));
     const ai = aiScore(volume, kd, intent);
-    const { error: upErr } = await supabaseAdmin
+    let { error: upErr } = await supabaseAdmin
       .from('keywords')
       .update({ intent, ai_score: ai, funnel_stage })
       .eq('id', row.id)
       .eq('project_id', projectId);
+    if (upErr && upErr.message.includes('funnel_stage') && upErr.message.includes('schema cache')) {
+      ({ error: upErr } = await supabaseAdmin
+        .from('keywords')
+        .update({ intent, ai_score: ai })
+        .eq('id', row.id)
+        .eq('project_id', projectId));
+    }
     if (!upErr) updated += 1;
     else console.error('[intent-refresh] update failed', row.id, upErr.message);
   }
@@ -641,10 +648,18 @@ export async function discoverKeywords(projectId: string) {
 
   // Use upsert with `ignoreDuplicates: true` only to skip rows whose keyword
   // is already approved/rejected (still in the table). All other rows insert.
-  const { data, error } = await supabaseAdmin
+  let { data, error } = await supabaseAdmin
     .from('keywords')
     .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
     .select();
+
+  if (error && error.message.includes('funnel_stage') && error.message.includes('schema cache')) {
+    const rowsNoFunnel = rows.map(({ funnel_stage: _, ...rest }) => rest);
+    ({ data, error } = await supabaseAdmin
+      .from('keywords')
+      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+      .select());
+  }
 
   if (error)
     return {
@@ -1271,7 +1286,7 @@ export async function upsertKeywordFromDomainSite(
   if (!id) {
     // Same column set as `discoverKeywords` — never reference columns missing from this Supabase project.
     // `ignoreDuplicates: true` matches discovery: do not overwrite an existing approved/rejected row on conflict.
-    const { error: insErr } = await supabaseAdmin.from('keywords').upsert(
+    let { error: insErr } = await supabaseAdmin.from('keywords').upsert(
       {
         project_id: projectId,
         keyword: phrase,
@@ -1293,6 +1308,29 @@ export async function upsertKeywordFromDomainSite(
       { onConflict: 'project_id,keyword', ignoreDuplicates: true }
     );
 
+    if (insErr && insErr.message.includes('funnel_stage') && insErr.message.includes('schema cache')) {
+      ({ error: insErr } = await supabaseAdmin.from('keywords').upsert(
+        {
+          project_id: projectId,
+          keyword: phrase,
+          volume,
+          kd,
+          cpc,
+          trend: '',
+          competition_level: '',
+          intent: intentStr || null,
+          monthly_searches: [],
+          secondary_keywords: [],
+          ai_score: ai,
+          keyword_analysis_score: ai,
+          relevance_score: null,
+          business_fit_score: null,
+          status: 'pending',
+        },
+        { onConflict: 'project_id,keyword', ignoreDuplicates: true }
+      ));
+    }
+
     if (insErr) return { success: false, error: insErr.message };
 
     const { data: got, error: selErr } = await supabaseAdmin
@@ -1309,7 +1347,7 @@ export async function upsertKeywordFromDomainSite(
   }
 
   // Same metrics industry discovery updates — omit `traffic_potential`, `updated_at`, etc. when missing from schema.
-  const { error: metErr } = await supabaseAdmin
+  let { error: metErr } = await supabaseAdmin
     .from('keywords')
     .update({
       volume,
@@ -1319,6 +1357,18 @@ export async function upsertKeywordFromDomainSite(
       funnel_stage: deterministicFunnelStage(intentStr, phrase),
     })
     .eq('id', id);
+
+  if (metErr && metErr.message.includes('funnel_stage') && metErr.message.includes('schema cache')) {
+    ({ error: metErr } = await supabaseAdmin
+      .from('keywords')
+      .update({
+        volume,
+        kd,
+        cpc,
+        intent: intentStr,
+      })
+      .eq('id', id));
+  }
 
   if (metErr) return { success: false, error: metErr.message };
 

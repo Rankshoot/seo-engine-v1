@@ -236,14 +236,17 @@ export async function discoverCompetitorGapKeywords(
       serperPost('search', { q: `${cleanDomain} ${niche} blog`, num: 10 }),
     ]);
 
+    const siteRes = siteResult as { organic?: Array<{ title?: string; link?: string }>; relatedSearches?: Array<{ query?: string }> } | null;
+    const nicheRes = nicheResult as { organic?: Array<{ title?: string; link?: string }>; relatedSearches?: Array<{ query?: string }> } | null;
+
     const allResults = [
-      ...(siteResult?.organic ?? []),
-      ...(nicheResult?.organic ?? []),
+      ...(siteRes?.organic ?? []),
+      ...(nicheRes?.organic ?? []),
     ];
 
     const relatedFromSite = [
-      ...(siteResult?.relatedSearches ?? []).map((r: { query?: string }) => r.query ?? ''),
-      ...(nicheResult?.relatedSearches ?? []).map((r: { query?: string }) => r.query ?? ''),
+      ...(siteRes?.relatedSearches ?? []).map((r) => r.query ?? ''),
+      ...(nicheRes?.relatedSearches ?? []).map((r) => r.query ?? ''),
     ];
 
     for (const result of allResults as { title?: string; link?: string }[]) {

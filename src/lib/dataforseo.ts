@@ -1976,8 +1976,8 @@ export async function discoverKeywordsForProject(
       seeds: userSeeds,
       region,
       language,
-      limit: 100,
-      maxResults: 300,
+      limit: 40,
+      maxResults: 150,
     });
     researchKeywords = research.keywords;
     researchTrace = research.trace;

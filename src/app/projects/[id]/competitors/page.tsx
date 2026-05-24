@@ -181,6 +181,7 @@ export default function CompetitorsPage() {
   const COMPETITORS_KEY = qk.competitors(projectId);
 
   const [running, setRunning] = useState(false);
+  const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
   const [error, setError] = useState("");
   const [insightsView, setInsightsView] = useState<InsightsView>("opportunities");
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -227,6 +228,18 @@ export default function CompetitorsPage() {
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [viewMenuOpen]);
+
+  const handleLoadMoreAhrefs = async () => {
+    setLoadingMoreAhrefs(true);
+    setError("");
+    const res = await competitorsApi.loadMoreFromAhrefs(projectId);
+    if (!res.success) {
+      setError(res.error ?? "Failed to load more from Ahrefs");
+    } else if (res.added > 0) {
+      await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
+    }
+    setLoadingMoreAhrefs(false);
+  };
 
   const handleRun = async () => {
     setRunning(true);
@@ -519,6 +532,8 @@ export default function CompetitorsPage() {
               aiScoring={aiScoring}
               onRunAiScoring={() => void handleRunAiScoring()}
               aiScoringDone={aiScoringDone}
+              onLoadMoreAhrefs={() => void handleLoadMoreAhrefs()}
+              loadingMoreAhrefs={loadingMoreAhrefs}
             />
           )}
 
@@ -558,7 +573,7 @@ function gapKeywordWorkspaceStatus(
   return "pending";
 }
 
-type OpportunityWorkspaceTab = "all" | "ai" | KeywordStatus;
+type OpportunityWorkspaceTab = "all" | KeywordStatus;
 
 function InsightsViewDropdown({
   menuRef,
@@ -782,6 +797,8 @@ function OpportunityDashboard({
   aiScoring,
   onRunAiScoring,
   aiScoringDone,
+  onLoadMoreAhrefs,
+  loadingMoreAhrefs,
 }: {
   gaps: KeywordGap[];
   hasGapsInProject: boolean;
@@ -807,6 +824,8 @@ function OpportunityDashboard({
   aiScoring: boolean;
   onRunAiScoring: () => void;
   aiScoringDone: boolean;
+  onLoadMoreAhrefs: () => void;
+  loadingMoreAhrefs: boolean;
 }) {
   const [workspaceTab, setWorkspaceTab] = useState<OpportunityWorkspaceTab>("all");
   const [sortCol, setSortCol] = useState<GapSortColumn>("volume");
@@ -832,21 +851,18 @@ function OpportunityDashboard({
 
   const workspaceCounts = useMemo(() => {
     let all = 0;
-    let ai = 0;
     let pending = 0;
     let approved = 0;
     let rejected = 0;
     for (const g of gaps) {
       all += 1;
-      const k = g.keyword.toLowerCase();
-      if (aiGapKeywordSet.has(k)) ai += 1;
       const st = gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords);
       if (st === "pending") pending += 1;
       if (st === "approved") approved += 1;
       if (st === "rejected") rejected += 1;
     }
-    return { all, ai, pending, approved, rejected };
-  }, [gaps, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords]);
+    return { all, pending, approved, rejected };
+  }, [gaps, approvedGapKeywords, rejectedGapKeywords]);
 
   const PAGE_SIZE = 20;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -876,12 +892,11 @@ function OpportunityDashboard({
   const allFilteredGaps = useMemo(() => {
     const filtered = gaps.filter(g => {
       if (workspaceTab === "all") return true;
-      if (workspaceTab === "ai") return aiGapKeywordSet.has(g.keyword.toLowerCase());
       const st = gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords);
       return st === workspaceTab;
     });
     return [...filtered].sort((a, b) => compareGaps(a, b, sortCol, sortDir));
-  }, [gaps, workspaceTab, aiGapKeywordSet, approvedGapKeywords, rejectedGapKeywords, sortCol, sortDir]);
+  }, [gaps, workspaceTab, approvedGapKeywords, rejectedGapKeywords, sortCol, sortDir]);
 
   const displayedGaps = useMemo(
     () => allFilteredGaps.slice(0, visibleCount),
@@ -893,7 +908,6 @@ function OpportunityDashboard({
 
   const OPPORTUNITY_TAB_ITEMS: Array<{ id: OpportunityWorkspaceTab; label: string; count: number }> = [
     { id: "all", label: "All", count: workspaceCounts.all },
-    { id: "ai", label: "AI picks", count: workspaceCounts.ai },
     { id: "pending", label: "Pending", count: workspaceCounts.pending },
     { id: "approved", label: "Approved", count: workspaceCounts.approved },
     { id: "rejected", label: "Rejected", count: workspaceCounts.rejected },
@@ -1242,9 +1256,35 @@ function OpportunityDashboard({
               </button>
             </div>
           )}
-          {!hasMore && allFilteredGaps.length > PAGE_SIZE && (
-            <div className="shrink-0 border-t border-border-subtle bg-surface-secondary px-4 py-2.5 text-center text-[12px] text-text-tertiary">
-              All {allFilteredGaps.length} keywords shown
+          {!hasMore && allFilteredGaps.length > 0 && (
+            <div className="shrink-0 border-t border-border-subtle bg-surface-secondary px-4 py-2.5 flex items-center justify-between gap-4">
+              <span className="text-[12px] text-text-tertiary">
+                {allFilteredGaps.length > PAGE_SIZE ? `All ${allFilteredGaps.length} keywords shown` : `${allFilteredGaps.length} keyword${allFilteredGaps.length === 1 ? "" : "s"}`}
+              </span>
+              <button
+                type="button"
+                onClick={onLoadMoreAhrefs}
+                disabled={loadingMoreAhrefs}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-1.5 text-[12px] font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none ${
+                  loadingMoreAhrefs
+                    ? "border-brand-action/40 bg-brand-action/10 text-brand-action animate-pulse"
+                    : "border-brand-action/30 bg-brand-action/5 text-brand-action hover:bg-brand-action/10 hover:border-brand-action/50"
+                }`}
+              >
+                {loadingMoreAhrefs ? (
+                  <>
+                    <div className="h-3 w-3 rounded-full border-2 border-brand-action/30 border-t-brand-action animate-spin" />
+                    Loading from Ahrefs…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                    Load more from Ahrefs
+                  </>
+                )}
+              </button>
             </div>
           )}
         </div>

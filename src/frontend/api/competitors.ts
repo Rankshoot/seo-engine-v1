@@ -1,4 +1,8 @@
-import type { BenchmarkState, RunBenchmarkResult } from "@/app/actions/competitor-actions";
+import type {
+  BenchmarkState,
+  LoadMoreCompetitorGapsResult,
+  RunBenchmarkResult,
+} from "@/app/actions/competitor-actions";
 import { apiGet, apiPost } from "./http";
 import { V1Routes } from "./routes";
 
@@ -9,6 +13,10 @@ export const competitorsApi = {
 
   runBenchmark(projectId: string): Promise<RunBenchmarkResult> {
     return apiPost(V1Routes.competitorsBenchmark(projectId));
+  },
+
+  loadMoreFromAhrefs(projectId: string): Promise<LoadMoreCompetitorGapsResult> {
+    return apiPost(V1Routes.competitorsLoadMoreAhrefs(projectId));
   },
 
   blogFromOpportunity(

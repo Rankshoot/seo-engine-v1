@@ -14,6 +14,8 @@ export const DEFAULT_PLATFORM_PROVIDERS: AdminPlatformProviders = {
   gemini_enabled: true,
   openai_enabled: false,
   claude_enabled: false,
+  // ── Active Ahrefs endpoints (cost-optimised set) ──────────────────────────
+  // Keyword discovery: matching-terms + related-terms only
   ahrefs_matching_terms_enabled: true,
   ahrefs_related_terms_enabled: true,
   ahrefs_search_suggestions_enabled: false,

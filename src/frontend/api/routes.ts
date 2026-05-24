@@ -45,6 +45,8 @@ export const V1Routes = {
   competitorsBenchmark: (projectId: string) => `/projects/${projectId}/competitors/benchmark`,
   competitorsBlogFromOpportunity: (projectId: string) =>
     `/projects/${projectId}/competitors/blog-from-opportunity`,
+  competitorsLoadMoreAhrefs: (projectId: string) =>
+    `/projects/${projectId}/competitors/load-more-from-ahrefs`,
 
   // ── Content health (audits) ────────────────────────────────────────────────
   contentHealthAudits: (projectId: string) => `/projects/${projectId}/content-health/audits`,

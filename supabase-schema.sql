@@ -128,6 +128,20 @@ ALTER TABLE keyword_gaps
 ALTER TABLE keyword_gaps
   ADD COLUMN IF NOT EXISTS ai_eval_at TIMESTAMPTZ DEFAULT NULL;
 
+-- Ahrefs ranking position and search intent flags. See supabase-migration-keyword-gaps-intents.sql.
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT NULL;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS is_informational BOOLEAN DEFAULT FALSE;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS is_navigational BOOLEAN DEFAULT FALSE;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS is_commercial BOOLEAN DEFAULT FALSE;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS is_transactional BOOLEAN DEFAULT FALSE;
+ALTER TABLE keyword_gaps
+  ADD COLUMN IF NOT EXISTS is_branded BOOLEAN DEFAULT FALSE;
+
 -- One-row-per-keyword modal payload (overview / history / by-country / SERP).
 CREATE TABLE IF NOT EXISTS keyword_details (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

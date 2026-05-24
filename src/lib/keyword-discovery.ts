@@ -25,8 +25,6 @@
 
 import {
   ahrefsKeywordOverview,
-  ahrefsOrganicCompetitors,
-  ahrefsOrganicKeywords,
   isAhrefsConfigured,
   type AhrefsCompetitor,
   type AhrefsIntentObject,
@@ -473,53 +471,28 @@ export async function runKeywordDiscovery(
     };
   }
 
-  // 2 + 3. Fan out the two cheap site-explorer calls in parallel.
-  pushTrace(trace, 'fetch_own_and_competitors_start', { target, region });
-  const [ownKeywords, competitors] = await Promise.all([
-    ahrefsOrganicKeywords(target, region, OWN_LIMIT).catch(e => {
-      console.warn('[discovery] own organic-keywords failed:', e);
-      return [] as AhrefsOrganicKeyword[];
-    }),
-    ahrefsOrganicCompetitors(target, region, 10).catch(e => {
-      console.warn('[discovery] organic-competitors failed:', e);
-      return [] as AhrefsCompetitor[];
-    }),
-  ]);
-  meta.own_keyword_count = ownKeywords.length;
-  meta.competitors_returned = competitors.length;
+  // 2 + 3. Site-explorer calls (organic-keywords + competitors) are skipped in
+  // the discovery pipeline — only matching-terms and related-terms are active.
+  // Organic-keywords endpoints are reserved for the competitor benchmark flow.
+  const ownKeywords: AhrefsOrganicKeyword[] = [];
+  const competitors: AhrefsCompetitor[] = [];
+  meta.own_keyword_count = 0;
+  meta.competitors_returned = 0;
   pushTrace(trace, 'fetch_own_and_competitors_done', {
-    own_keyword_count: ownKeywords.length,
-    competitors_returned: competitors.length,
+    own_keyword_count: 0,
+    competitors_returned: 0,
+    skipped: 'organic-keywords/competitors disabled in discovery pipeline',
   });
 
-  // 4. Pick the top-5 competitors.
+  // 4. Pick the top-5 competitors (none since we skipped the API call).
   const picked = pickTopCompetitors(competitors, target, TOP_COMPETITOR_COUNT);
-  meta.competitors_picked = picked.map(p => normalizeDomain(p.competitor_domain));
-  pushTrace(trace, 'pick_top_competitors', {
-    considered: competitors.length,
-    picked: picked.map(p => ({
-      domain: p.competitor_domain,
-      pick_score: p.pick_score,
-      domain_rating: p.domain_rating,
-      keywords_common: p.keywords_common,
-      keywords_competitor: p.keywords_competitor,
-      traffic: p.traffic,
-    })),
-  });
+  meta.competitors_picked = [];
 
-  // 5. Pull each picked competitor's organic-keywords in parallel.
-  const competitorKeywordSets = await Promise.all(
-    picked.map(p =>
-      ahrefsOrganicKeywords(normalizeDomain(p.competitor_domain), region, PER_COMP_LIMIT)
-        .then(rows => ({ domain: normalizeDomain(p.competitor_domain), rows }))
-        .catch(e => {
-          console.warn(`[discovery] organic-keywords for ${p.competitor_domain} failed:`, e);
-          return { domain: normalizeDomain(p.competitor_domain), rows: [] as AhrefsOrganicKeyword[] };
-        })
-    )
-  );
+  // 5. Competitor keyword sets are empty since organic calls are skipped.
+  const competitorKeywordSets: Array<{ domain: string; rows: AhrefsOrganicKeyword[] }> = [];
   pushTrace(trace, 'fetch_competitor_keywords_done', {
-    counts: competitorKeywordSets.map(c => ({ domain: c.domain, rows: c.rows.length })),
+    counts: [],
+    skipped: 'organic-keywords disabled in discovery pipeline',
   });
 
   // 6. Build the gap pool. Strip own-ranking keywords + dedupe by lowercase

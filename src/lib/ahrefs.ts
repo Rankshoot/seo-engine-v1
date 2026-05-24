@@ -449,17 +449,27 @@ export interface AhrefsOrganicKeyword {
   best_position: number | null;
   best_position_url: string;
   sum_traffic: number;
+  /** Search intent flags parsed from the Ahrefs intents object. */
+  is_informational?: boolean;
+  is_navigational?: boolean;
+  is_commercial?: boolean;
+  is_transactional?: boolean;
+  is_branded?: boolean;
 }
 
 interface AhrefsOrganicKeywordRow {
   keyword?: string | null;
   volume?: number | null;
   keyword_difficulty?: number | null;
-  keyword_keyword_difficulty?: number | null;
   cpc?: number | null;
   best_position?: number | null;
   best_position_url?: string | null;
   sum_traffic?: number | null;
+  is_informational?: boolean | null;
+  is_navigational?: boolean | null;
+  is_commercial?: boolean | null;
+  is_transactional?: boolean | null;
+  is_branded?: boolean | null;
 }
 
 /**
@@ -485,8 +495,7 @@ export async function ahrefsOrganicKeywords(
       volume_mode: 'monthly',
       limit,
       order_by: 'sum_traffic:desc',
-      where: 'best_position<=20,volume>=50',
-      select: 'keyword,volume,keyword_keyword_difficulty,best_position_url',
+      select: 'keyword,volume,keyword_difficulty,best_position,best_position_url,is_informational,is_navigational,is_commercial,is_transactional,is_branded',
     },
   });
   if (!json?.keywords) return [];
@@ -495,13 +504,23 @@ export async function ahrefsOrganicKeywords(
     .map(row => ({
       keyword: (row.keyword ?? '').trim(),
       volume: Number(row.volume ?? 0),
-      keyword_difficulty: row.keyword_keyword_difficulty ?? row.keyword_difficulty ?? null,
+      keyword_difficulty: row.keyword_difficulty ?? null,
       cpc: row.cpc ?? null,
       best_position: row.best_position ?? null,
       best_position_url: row.best_position_url ?? '',
       sum_traffic: Number(row.sum_traffic ?? 0),
+      is_informational: row.is_informational ?? false,
+      is_navigational: row.is_navigational ?? false,
+      is_commercial: row.is_commercial ?? false,
+      is_transactional: row.is_transactional ?? false,
+      is_branded: row.is_branded ?? false,
     }))
-    .filter(row => row.keyword && row.best_position_url);
+    .filter(row =>
+      row.keyword &&
+      row.best_position_url &&
+      (row.best_position === null || row.best_position <= 20) &&
+      row.volume >= 50
+    );
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

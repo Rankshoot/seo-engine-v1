@@ -14,8 +14,9 @@ const isServer = typeof window === "undefined";
 
 function getAls(): AlsStore | null {
   if (!isServer) return null;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { AsyncLocalStorage } = require("async_hooks") as typeof import("async_hooks");
+  const req = typeof require !== "undefined" ? eval("require") : null;
+  if (!req) return null;
+  const { AsyncLocalStorage } = req("async_hooks") as typeof import("async_hooks");
   const g = globalThis as typeof globalThis & { __serpcraftUsageAls?: AlsStore };
   if (!g.__serpcraftUsageAls) {
     g.__serpcraftUsageAls = new AsyncLocalStorage<UsageLogContext>();

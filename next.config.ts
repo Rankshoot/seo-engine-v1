@@ -3,10 +3,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /** Pin Turbopack to this app folder so the "multiple lockfiles" warning
-   *  stops firing in CI / local dev. */
+   *  stops firing in CI / local dev.
   turbopack: {
     root: path.resolve(__dirname),
-  },
+  }, */
   experimental: {
     /** Instant Article custom uploads (base64) can approach 10 MB per file. */
     serverActions: {

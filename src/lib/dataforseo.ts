@@ -1981,7 +1981,7 @@ export async function discoverKeywordsForProject(
   let researchProvider: 'ahrefs' | 'dataforseo' = 'ahrefs';
   let researchFellBack = false;
   let researchFallbackReason: string | undefined;
-  let ahrefsDiscoveryState: any = undefined;
+  let ahrefsDiscoveryState: DiscoverKeywordsForProjectResult["ahrefsDiscoveryState"] = undefined;
   try {
     const research = await getKeywordResearchData({
       seeds: userSeeds,

@@ -32,21 +32,8 @@ const PROVIDER_LABELS: { key: keyof AdminPlatformProviders; label: string }[] = 
 const AHREFS_DETAIL_LABELS: { key: keyof AdminPlatformProviders; label: string }[] = [
   { key: "ahrefs_matching_terms_enabled", label: "Keywords Explorer: matching-terms" },
   { key: "ahrefs_related_terms_enabled", label: "Keywords Explorer: related-terms" },
-  { key: "ahrefs_search_suggestions_enabled", label: "Keywords Explorer: search-suggestions" },
-  { key: "ahrefs_keyword_overview_enabled", label: "Keywords Explorer: overview" },
-  { key: "ahrefs_volume_history_enabled", label: "Keywords Explorer: volume-history" },
-  { key: "ahrefs_volume_by_country_enabled", label: "Keywords Explorer: volume-by-country" },
-  { key: "ahrefs_serp_overview_enabled", label: "SERP: serp-overview" },
   { key: "ahrefs_organic_competitors_enabled", label: "Site Explorer: organic-competitors" },
-  { key: "ahrefs_top_pages_enabled", label: "Site Explorer: top-pages" },
   { key: "ahrefs_organic_keywords_enabled", label: "Site Explorer: organic-keywords" },
-  { key: "ahrefs_url_organic_keywords_enabled", label: "Site Explorer: URL organic-keywords (Exact)" },
-  { key: "ahrefs_domain_overview_enabled", label: "Site Explorer: metrics/domain-overview" },
-  { key: "ahrefs_pages_by_internal_links_enabled", label: "Site Explorer: pages-by-internal-links" },
-  { key: "ahrefs_crawled_pages_enabled", label: "Site Explorer: crawled-pages" },
-  { key: "ahrefs_anchors_enabled", label: "Site Explorer: anchors" },
-  { key: "ahrefs_rank_tracker_competitors_overview_enabled", label: "Rank Tracker: competitors-overview" },
-  { key: "ahrefs_rank_tracker_competitors_pages_enabled", label: "Rank Tracker: competitors-pages" },
 ];
 
 const ENV_LABELS: { key: keyof AdminSettingsData["envKeys"]; label: string }[] = [

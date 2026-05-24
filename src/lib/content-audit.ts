@@ -200,29 +200,20 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
 
   // 1. Pre-flight — dead URLs skip scrape + LLM spend.
   const ahrefsT0 = Date.now();
-  const ahrefsCrawl = await ahrefsCrawledPages(url);
+  const ahrefsCrawl: any = null;
   trace.push({
     provider: 'ahrefs',
     step: 'site-explorer/crawled-pages',
     // Optional vendor: skip is success — Jina preflight still runs when Ahrefs has no row.
     ok: true,
-    detail: isAhrefsConfigured() ? (ahrefsCrawl ? 'ok' : 'no-row') : 'skipped — AHREFS_API_KEY unset',
+    detail: 'skipped — disabled endpoint',
     ms: Date.now() - ahrefsT0,
   });
 
-  if (ahrefsCrawl) {
-    if (ahrefsCrawl.http_code && (ahrefsCrawl.http_code === 404 || ahrefsCrawl.http_code === 410)) {
-      return { record: brokenUrlRecord(url, `Site check shows HTTP ${ahrefsCrawl.http_code}.`), trace };
-    }
-    if (ahrefsCrawl.redirects_to_target && ahrefsCrawl.redirects_to_target > 0) {
-      return { record: redirectToHomepageRecord(url, url), trace };
-    }
-  } else {
-    const pre = await preflight(url);
-    if (pre.status === 'broken') return { record: brokenUrlRecord(url, pre.reason), trace };
-    if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
-      return { record: redirectToHomepageRecord(url, pre.finalUrl), trace };
-    }
+  const pre = await preflight(url);
+  if (pre.status === 'broken') return { record: brokenUrlRecord(url, pre.reason), trace };
+  if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
+    return { record: redirectToHomepageRecord(url, pre.finalUrl), trace };
   }
 
   // 2. Live body + Ahrefs context (ranking + inbound links + authority).
@@ -237,18 +228,14 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
   });
 
   const ahrefsBatchT0 = Date.now();
-  const [urlKeywords, anchors, internalLinksInbound] = await Promise.all([
-    ahrefsUrlOrganicKeywords(url, region, 40),
-    ahrefsAnchors(url, 25),
-    ahrefsPagesByInternalLinks(url, 1),
-  ]);
+  const urlKeywords: AhrefsUrlKeyword[] = [];
+  const anchors: any[] = [];
+  const internalLinksInbound: any[] = [];
   trace.push({
     provider: 'ahrefs',
     step: 'organic-keywords+anchors+internal-inbound',
     ok: true,
-    detail: isAhrefsConfigured()
-      ? `keywords=${urlKeywords.length} anchors=${anchors.length}`
-      : 'skipped — AHREFS_API_KEY unset (optional)',
+    detail: 'skipped — disabled endpoint',
     ms: Date.now() - ahrefsBatchT0,
   });
 

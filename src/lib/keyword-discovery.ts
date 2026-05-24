@@ -611,10 +611,7 @@ export async function runKeywordDiscovery(
   const topCandidates = preScored.slice(0, 100).map(x => x.raw);
   const topKws = topCandidates.map(c => c.keyword);
 
-  const overview = await ahrefsKeywordOverview(topKws, region).catch(e => {
-    console.warn('[discovery] keyword-overview failed:', e);
-    return new Map<string, AhrefsKeywordOverviewRow>();
-  });
+  const overview = new Map<string, AhrefsKeywordOverviewRow>();
 
   meta.enriched_with_overview = overview.size;
   pushTrace(trace, 'enrich_overview', {

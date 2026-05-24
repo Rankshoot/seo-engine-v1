@@ -36,6 +36,7 @@ import {
   ahrefsTopPages,
   isAhrefsConfigured,
   type AhrefsOrganicKeyword,
+  type AhrefsTopPage,
 } from '@/lib/ahrefs';
 import { isProviderEnabled } from '@/lib/admin/platform-settings-runtime';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
@@ -293,12 +294,10 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     const fetchTopPages = userSuppliedHosts.length === 0; // skip top-pages for manual competitors
 
     for (const competitor of competitorList.slice(0, 8)) {
-      const [organicKeywords, topPages] = await Promise.all([
-        ahrefsOrganicKeywords(competitor.domain, project.target_region, kwLimit),
-        fetchTopPages ? ahrefsTopPages(competitor.domain, project.target_region, 12) : Promise.resolve([]),
-      ]);
+      const organicKeywords = await ahrefsOrganicKeywords(competitor.domain, project.target_region, 60);
+      const topPages: AhrefsTopPage[] = [];
 
-      const topPageUrls = new Set(topPages.map(p => p.url));
+      const topPageUrls = new Set<string>();
       const topPageByUrl = new Map(topPages.map(p => [p.url, p]));
       const seenKeywords = new Set<string>();
 
@@ -478,21 +477,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   // Pulls from Ahrefs top-pages so we use a single data source.
   for (const comp of competitorList) {
     if (pagesByDomain.has(comp.domain)) continue;
-    let pages: Array<{ url: string; title: string }> = [];
-    try {
-      const top = await ahrefsTopPages(comp.domain, project.target_region, 4);
-      pages = top
-        .filter(p => Boolean(p.url))
-        .slice(0, 2)
-        .map(p => ({ url: p.url, title: p.top_keyword ?? comp.top_title }));
-    } catch (e) {
-      trace.push({
-        label: `ahrefs_top_pages: ${comp.domain}`,
-        ok: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    const sampledPages = pages.length > 0 ? pages : [{ url: comp.top_url, title: comp.top_title }];
+    const sampledPages = [{ url: comp.top_url, title: comp.top_title }];
     for (const p of sampledPages.slice(0, 2)) {
       if (!p.url || scrapedByUrl.has(p.url)) continue;
       const { snapshot } = await extractCompetitorContent(p.url, { trace });
@@ -910,10 +895,10 @@ export async function getCompetitorBenchmark(projectId: string): Promise<Benchma
 
   const lastBenchmarkedAt = competitors.length
     ? competitors
-        .map(c => c.last_benchmarked_at)
-        .filter(Boolean)
-        .sort()
-        .at(-1) ?? null
+      .map(c => c.last_benchmarked_at)
+      .filter(Boolean)
+      .sort()
+      .at(-1) ?? null
     : null;
 
   return {

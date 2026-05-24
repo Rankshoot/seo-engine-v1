@@ -915,20 +915,6 @@ function OpportunityDashboard({
         </div>
       ) : null}
 
-      {averages?.recommendations?.length ? (
-        <div className="rounded-[16px] border border-brand-action/20 bg-brand-action/5 p-6">
-          <h3 className="text-[18px] font-medium text-text-primary mb-4">Content benchmark recommendations</h3>
-          <ul className="space-y-2 text-[14px] text-text-secondary">
-            {averages.recommendations.map((r, i) => (
-              <li key={i} className="flex gap-3">
-                <span className="text-brand-action font-bold">·</span>
-                <span>{r}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
       {hasGapsInProject && aiScoringDone && (
         <div className="flex items-center gap-3 rounded-[12px] border border-[#8b5cf6]/25 bg-[#8b5cf6]/10 px-4 py-3 text-[13px] text-[#8b5cf6]">
           <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
@@ -960,16 +946,7 @@ function OpportunityDashboard({
                       onClick={onStartMassSelect}
                       className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
                     >
-                      <svg
-                        viewBox="0 0 24 24"
-                        className="h-3 w-3 shrink-0 opacity-75"
-                        aria-hidden
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={1.85}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
+                      <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 opacity-75" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.85} strokeLinecap="round" strokeLinejoin="round">
                         <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
                         <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
                         <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
@@ -983,9 +960,7 @@ function OpportunityDashboard({
                         type="button"
                         onClick={onBulkApproveGaps}
                         disabled={bulkApprovingGaps || selectedGapIds.size === 0}
-                        className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
-                          bulkApprovingGaps ? "animate-pulse cursor-wait" : ""
-                        }`}
+                        className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${bulkApprovingGaps ? "animate-pulse cursor-wait" : ""}`}
                       >
                         <span className="block max-w-full overflow-hidden truncate text-center tabular-nums">
                           {bulkApprovingGaps ? "…" : selectedGapIds.size > 0 ? `Approve (${selectedGapIds.size})` : "Approve"}
@@ -1063,203 +1038,192 @@ function OpportunityDashboard({
       ) : (
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden flex flex-col" style={{ height: "560px" }}>
           <div ref={tableScrollRef} className="overflow-x-auto overflow-y-auto flex-1 min-h-0">
-            <table className="w-full min-w-[980px] text-left">
+            <table className="w-full min-w-[1060px] text-left">
               <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
+                  {/* mass-select col */}
                   <th
                     scope="col"
                     className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
                       massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
                     } overflow-hidden`}
                   >
-                    <span
-                      className={`block min-h-5 transition-all duration-300 ease-out ${massSelectMode ? "opacity-100" : "opacity-0"}`}
-                      aria-hidden
-                    />
+                    <span className={`block min-h-5 transition-all duration-300 ease-out ${massSelectMode ? "opacity-100" : "opacity-0"}`} aria-hidden />
                   </th>
-                  <th className="px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <button type="button" className={thBtn} onClick={() => toggleSort("keyword")}>
-                        Keyword{sortMark("keyword")}
-                      </button>
-                      <Tooltip placement="above" content="Search query that competitors rank for in your niche.">
-                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
-                      </Tooltip>
-                    </div>
+                  {/* Keyword */}
+                  <th className="px-4 py-3 min-w-[200px]">
+                    <button type="button" className={thBtn} onClick={() => toggleSort("keyword")}>
+                      Keyword{sortMark("keyword")}
+                    </button>
                   </th>
+                  {/* Intent */}
                   <th className="px-4 py-3 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button type="button" className={thBtn} onClick={() => toggleSort("gap_type")}>
-                        Gap{sortMark("gap_type")}
-                      </button>
-                      <Tooltip placement="above" content="Missing = no content yet. Weak = you have content but it underperforms. Untapped = neither you nor competitors dominate.">
-                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
-                      </Tooltip>
-                    </div>
+                    <Tooltip placement="above" content="Search intent: Informational · Navigational · Commercial · Transactional">
+                      <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">Intent</span>
+                    </Tooltip>
                   </th>
+                  {/* Volume */}
                   <th className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button type="button" className={thBtn} onClick={() => toggleSort("volume")}>
-                        Volume{sortMark("volume")}
-                      </button>
-                      <Tooltip placement="above" content="Monthly search volume from DataForSEO. Higher = more traffic opportunity.">
-                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
-                      </Tooltip>
-                    </div>
+                    <button type="button" className={thBtn} onClick={() => toggleSort("volume")}>
+                      Volume{sortMark("volume")}
+                    </button>
                   </th>
+                  {/* KD */}
                   <th className="px-4 py-3 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button type="button" className={thBtn} onClick={() => toggleSort("competitor_weakness")}>
-                        Weakness{sortMark("competitor_weakness")}
-                      </button>
-                      <Tooltip placement="above" content="How weak the competitor's ranking page is. Higher = easier to beat them.">
-                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
-                      </Tooltip>
-                    </div>
+                    <Tooltip placement="above" content="Keyword Difficulty (0–100). Higher = harder to rank.">
+                      <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">KD</span>
+                    </Tooltip>
                   </th>
+                  {/* Rank */}
                   <th className="px-4 py-3 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button type="button" className={thBtn} onClick={() => toggleSort("ai_eval_score")}>
-                        AI Score{sortMark("ai_eval_score")}
-                      </button>
-                      <Tooltip placement="above" content="Gemini AI score (0–100) evaluating business relevance, blog potential, competitive takeover opportunity, and audience fit for this keyword gap.">
-                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
-                      </Tooltip>
-                    </div>
+                    <Tooltip placement="above" content="Competitor's current ranking position for this keyword.">
+                      <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">Rank</span>
+                    </Tooltip>
                   </th>
+                  {/* AI Score */}
+                  <th className="px-4 py-3 text-center">
+                    <button type="button" className={thBtn} onClick={() => toggleSort("ai_eval_score")}>
+                      AI Score{sortMark("ai_eval_score")}
+                    </button>
+                  </th>
+                  {/* Ranking page */}
                   <th className="px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <span className="uppercase tracking-widest text-[12px] font-bold">Ranking page</span>
-                      <Tooltip placement="above" content="The competitor's URL currently ranking for this keyword.">
-                        <span className="inline-flex h-3.5 w-3.5 cursor-default items-center justify-center rounded-full border border-text-tertiary/30 text-[9px] font-bold text-text-tertiary/60 leading-none select-none">i</span>
-                      </Tooltip>
-                    </div>
+                    <Tooltip placement="above" content="The competitor's URL currently ranking for this keyword.">
+                      <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">Ranking page</span>
+                    </Tooltip>
                   </th>
+                  {/* Action */}
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle/60">
-                {displayedGaps.map(g => (
-                  <tr
-                    key={g.id}
-                    onClick={e => {
-                      const t = e.target as HTMLElement;
-                      if (
-                        t.closest(
-                          "button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a"
-                        )
-                      )
-                        return;
-                      if (massSelectMode && !bulkApprovingGaps) onToggleGapSelected(g.id);
-                    }}
-                    className={`transition-colors hover:bg-surface-hover ${
-                      rejectedGapKeywords.has(g.keyword.toLowerCase()) ? "opacity-75" : ""
-                    } ${massSelectMode && !bulkApprovingGaps ? "cursor-pointer" : ""} ${
-                      selectedGapIds.has(g.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
-                    }`}
-                  >
-                    <td
-                      className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
-                        massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
-                      } overflow-hidden`}
+                {displayedGaps.map(g => {
+                  const intentTags: Array<{ label: string; abbr: string; active: boolean; color: string }> = [
+                    { label: "Informational", abbr: "I", active: Boolean(g.is_informational), color: "text-[#60a5fa] border-[#60a5fa]/25 bg-[#60a5fa]/10" },
+                    { label: "Navigational", abbr: "N", active: Boolean(g.is_navigational), color: "text-[#a78bfa] border-[#a78bfa]/25 bg-[#a78bfa]/10" },
+                    { label: "Commercial", abbr: "C", active: Boolean(g.is_commercial), color: "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" },
+                    { label: "Transactional", abbr: "T", active: Boolean(g.is_transactional), color: "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10" },
+                  ].filter(t => t.active);
+                  const kd = g.kd;
+                  const position = g.position;
+                  return (
+                    <tr
+                      key={g.id}
+                      onClick={e => {
+                        const t = e.target as HTMLElement;
+                        if (t.closest("button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a")) return;
+                        if (massSelectMode && !bulkApprovingGaps) onToggleGapSelected(g.id);
+                      }}
+                      className={`transition-colors hover:bg-surface-hover ${
+                        rejectedGapKeywords.has(g.keyword.toLowerCase()) ? "opacity-75" : ""
+                      } ${massSelectMode && !bulkApprovingGaps ? "cursor-pointer" : ""} ${
+                        selectedGapIds.has(g.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
+                      }`}
                     >
-                      <span
-                        className={`flex justify-center transition-all duration-300 ease-out ${massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0"}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedGapIds.has(g.id)}
-                          onChange={() => onToggleGapSelected(g.id)}
-                          onClick={e => e.stopPropagation()}
-                          disabled={bulkApprovingGaps || !massSelectMode}
-                          aria-label={`Select opportunity ${g.keyword}`}
-                          className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
-                        />
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 max-w-[260px]">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
-                        {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
-                          <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-                            AI pick
-                          </span>
-                        ) : null}
-                      </div>
-                      {g.reasoning ? (
-                        <p className="mt-1 text-[11px] text-text-tertiary truncate" title={g.reasoning}>
-                          {g.reasoning}
-                        </p>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span
-                        className={`inline-block rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${GAP_STYLES[g.gap_type]}`}
-                      >
-                        {g.gap_type}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
-                      {g.volume > 0 ? g.volume.toLocaleString() : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <div className="h-1.5 w-14 overflow-hidden rounded-full bg-surface-tertiary">
-                          <div
-                            className={`h-full rounded-full ${g.competitor_weakness >= 60 ? "bg-[#10b981]" : g.competitor_weakness >= 30 ? "bg-[#f59e0b]" : "bg-brand-coral"}`}
-                            style={{ width: `${g.competitor_weakness}%` }}
+                      {/* mass-select checkbox */}
+                      <td className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"} overflow-hidden`}>
+                        <span className={`flex justify-center transition-all duration-300 ease-out ${massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0"}`}>
+                          <input
+                            type="checkbox"
+                            checked={selectedGapIds.has(g.id)}
+                            onChange={() => onToggleGapSelected(g.id)}
+                            onClick={e => e.stopPropagation()}
+                            disabled={bulkApprovingGaps || !massSelectMode}
+                            aria-label={`Select opportunity ${g.keyword}`}
+                            className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
                           />
+                        </span>
+                      </td>
+                      {/* Keyword */}
+                      <td className="px-4 py-3 max-w-[240px]">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
+                          {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
+                            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">AI pick</span>
+                          ) : null}
                         </div>
-                        <span className="text-[12px] font-bold text-text-secondary">{g.competitor_weakness}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {g.ai_eval_score && g.ai_eval_data ? (
-                        <Tooltip placement="above" content={<GapAiScoreTooltip data={g.ai_eval_data} score={g.ai_eval_score} />}>
-                          {(() => {
-                            const cat = AI_GAP_SCORE_CATEGORY(g.ai_eval_score);
-                            return (
-                              <span className={`inline-flex cursor-default items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-bold tabular-nums ${cat.colorClass}`}>
-                                {cat.icon} {g.ai_eval_score}
-                              </span>
-                            );
-                          })()}
-                        </Tooltip>
-                      ) : (
-                        <span className="text-[12px] text-text-tertiary">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 max-w-[220px]">
-                      <p className="text-[12px] font-bold text-brand-action truncate">{g.top_competitor_domain}</p>
-                      {g.top_competitor_url ? (
-                        <a
-                          href={g.top_competitor_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={g.top_competitor_url}
-                          className="block truncate text-[11px] text-brand-action/80 hover:underline mt-1"
-                        >
-                          {compactUrl(g.top_competitor_url)} ↗
-                        </a>
-                      ) : null}
-                    </td>
-                    <td
-                      className="px-4 py-3 text-center"
-                      onClick={e => e.stopPropagation()}
-                      onPointerDown={e => e.stopPropagation()}
-                    >
-                      <KeywordActionDropdown
-                        status={gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords)}
-                        busy={generatingKeyword === g.keyword || bulkApprovingGaps}
-                        onChange={next => onGapKeywordStatus(g.keyword, next)}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                        <p className="mt-0.5 text-[11px] text-text-tertiary">{g.top_competitor_domain}</p>
+                      </td>
+                      {/* Intent pills */}
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1 flex-wrap">
+                          {intentTags.length > 0 ? intentTags.map(t => (
+                            <Tooltip key={t.abbr} placement="above" content={t.label}>
+                              <span className={`inline-flex h-5 w-5 cursor-default items-center justify-center rounded-[4px] border text-[10px] font-bold ${t.color}`}>{t.abbr}</span>
+                            </Tooltip>
+                          )) : <span className="text-[12px] text-text-tertiary">—</span>}
+                        </div>
+                      </td>
+                      {/* Volume */}
+                      <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
+                        {g.volume > 0 ? g.volume.toLocaleString() : "—"}
+                      </td>
+                      {/* KD */}
+                      <td className="px-4 py-3 text-center">
+                        {typeof kd === "number" && kd > 0 ? (
+                          <span className={`inline-flex items-center justify-center min-w-[34px] rounded-[4px] border px-1.5 py-0.5 text-[12px] font-bold tabular-nums ${
+                            kd >= 70 ? "text-brand-coral border-brand-coral/25 bg-brand-coral/10" :
+                            kd >= 40 ? "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" :
+                            "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10"
+                          }`}>{kd}</span>
+                        ) : <span className="text-[12px] text-text-tertiary">—</span>}
+                      </td>
+                      {/* Rank */}
+                      <td className="px-4 py-3 text-center">
+                        {typeof position === "number" && position > 0 ? (
+                          <span className={`inline-flex items-center justify-center min-w-[34px] rounded-[4px] border px-1.5 py-0.5 text-[12px] font-bold tabular-nums ${
+                            position <= 3 ? "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10" :
+                            position <= 10 ? "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" :
+                            "text-text-secondary border-border-subtle bg-surface-elevated"
+                          }`}>#{position}</span>
+                        ) : <span className="text-[12px] text-text-tertiary">—</span>}
+                      </td>
+                      {/* AI Score */}
+                      <td className="px-4 py-3 text-center">
+                        {g.ai_eval_score && g.ai_eval_data ? (
+                          <Tooltip placement="above" content={<GapAiScoreTooltip data={g.ai_eval_data} score={g.ai_eval_score} />}>
+                            {(() => {
+                              const cat = AI_GAP_SCORE_CATEGORY(g.ai_eval_score);
+                              return (
+                                <span className={`inline-flex cursor-default items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-bold tabular-nums ${cat.colorClass}`}>
+                                  {cat.icon} {g.ai_eval_score}
+                                </span>
+                              );
+                            })()}
+                          </Tooltip>
+                        ) : (
+                          <span className="text-[12px] text-text-tertiary">—</span>
+                        )}
+                      </td>
+                      {/* Ranking page */}
+                      <td className="px-4 py-3 max-w-[220px]">
+                        {g.top_competitor_url ? (
+                          <a
+                            href={g.top_competitor_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={g.top_competitor_url}
+                            className="block truncate text-[12px] text-brand-action/80 hover:text-brand-action hover:underline"
+                          >
+                            {compactUrl(g.top_competitor_url)} ↗
+                          </a>
+                        ) : <span className="text-[12px] text-text-tertiary">—</span>}
+                      </td>
+                      {/* Action */}
+                      <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                        <KeywordActionDropdown
+                          status={gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords)}
+                          busy={generatingKeyword === g.keyword || bulkApprovingGaps}
+                          onChange={next => onGapKeywordStatus(g.keyword, next)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          {/* Load more footer — fixed inside the container, never grows it */}
+          {/* Load more footer */}
           {hasMore && (
             <div className="shrink-0 border-t border-border-subtle bg-surface-secondary px-4 py-2.5 flex items-center justify-between gap-4">
               <span className="text-[12px] text-text-tertiary">

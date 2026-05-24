@@ -37,6 +37,7 @@ import {
   isAhrefsConfigured,
   type AhrefsOrganicKeyword,
 } from '@/lib/ahrefs';
+import { isProviderEnabled } from '@/lib/admin/platform-settings-runtime';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
 import { addKeywordToCalendarOnDate, collectEarliestVacantDates } from '@/app/actions/calendar-actions';
 import { bestMatchingBlogUrl } from '@/lib/competitor-sitemap-match';
@@ -97,6 +98,9 @@ function normalizeDomainInput(raw: string): string {
 /** Rows per competitor from Google Ads Keywords For Site (DataForSEO). */
 const KEYWORDS_FOR_SITE_LIMIT = 100;
 
+/** Rows per competitor fetched from Ahrefs organic keywords (cost-optimised). */
+const AHREFS_KEYWORDS_PER_COMPETITOR = 10;
+
 /** Max rows written to `competitor_keywords` and `keyword_gaps`; must match `getCompetitorBenchmark` read limit. */
 const BENCHMARK_KEYWORD_CAP = 200;
 
@@ -146,9 +150,11 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   const project = projectRow as Project & { project_competitors?: ProjectCompetitor[] };
 
   const trace: BenchmarkTraceEntry[] = [];
-  const ahrefsAvailable = isAhrefsConfigured();
+  const ahrefsKeyConfigured = isAhrefsConfigured();
+  const ahrefsAdminEnabled = ahrefsKeyConfigured ? await isProviderEnabled('ahrefs') : false;
+  const ahrefsAvailable = ahrefsKeyConfigured && ahrefsAdminEnabled;
   console.log(
-    `[benchmark] start project=${projectId} domain=${project.domain} region=${project.target_region} ahrefs=${ahrefsAvailable ? 'on' : 'off'}`
+    `[benchmark] start project=${projectId} domain=${project.domain} region=${project.target_region} ahrefs=${ahrefsAvailable ? 'on' : 'off'} (key=${ahrefsKeyConfigured} admin=${ahrefsAdminEnabled})`
   );
 
   // 1a. Seeds come from the Business Brief.
@@ -195,19 +201,25 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
       top_url: `https://${host}`,
       top_title: host,
     }));
-    benchmarkSource = 'dataforseo';
+    // Route to Ahrefs when admin panel has it enabled; otherwise fall back to DataForSEO.
+    if (!ahrefsAvailable) {
+      benchmarkSource = 'dataforseo';
+    }
     trace.push({
       label: 'benchmark_keyword_source',
       ok: true,
       info: {
-        source: 'keywords_data/google_ads/keywords_for_site/live',
-        reason:
-          'Project has manual competitors — keyword gaps use DataForSEO Google Ads Keywords For Site, not Ahrefs organic keywords.',
+        source: ahrefsAvailable
+          ? '/site-explorer/organic-keywords'
+          : 'keywords_data/google_ads/keywords_for_site/live',
+        reason: ahrefsAvailable
+          ? 'Project has manual competitors — Ahrefs organic keywords enabled in admin panel.'
+          : 'Project has manual competitors — Ahrefs disabled, using DataForSEO Google Ads Keywords For Site.',
         competitors: userSuppliedHosts,
         own_domain: ownDomain,
         target_region: project.target_region,
         target_language: (project as { target_language?: string }).target_language ?? 'en',
-        limit_per_competitor: KEYWORDS_FOR_SITE_LIMIT,
+        limit_per_competitor: ahrefsAvailable ? AHREFS_KEYWORDS_PER_COMPETITOR : KEYWORDS_FOR_SITE_LIMIT,
       },
     });
   } else if (ahrefsAvailable && ownDomain) {
@@ -275,10 +287,15 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   // KEYWORDS_FOR_SITE_LIMIT per competitor domain).
   // ───────────────────────────────────────────────────────────────────────
   if (benchmarkSource === 'ahrefs') {
+    // Use a smaller limit for manual competitors (cost-optimised: 10 per competitor).
+    // For auto-discovered competitors (no userSuppliedHosts) we allow more.
+    const kwLimit = userSuppliedHosts.length > 0 ? AHREFS_KEYWORDS_PER_COMPETITOR : 60;
+    const fetchTopPages = userSuppliedHosts.length === 0; // skip top-pages for manual competitors
+
     for (const competitor of competitorList.slice(0, 8)) {
       const [organicKeywords, topPages] = await Promise.all([
-        ahrefsOrganicKeywords(competitor.domain, project.target_region, 60),
-        ahrefsTopPages(competitor.domain, project.target_region, 12),
+        ahrefsOrganicKeywords(competitor.domain, project.target_region, kwLimit),
+        fetchTopPages ? ahrefsTopPages(competitor.domain, project.target_region, 12) : Promise.resolve([]),
       ]);
 
       const topPageUrls = new Set(topPages.map(p => p.url));
@@ -302,6 +319,11 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
           top_competitor_url: row.best_position_url,
           source_title: enrichment.title || competitor.top_title || competitor.domain,
           position: row.best_position ?? 0,
+          is_informational: row.is_informational,
+          is_navigational: row.is_navigational,
+          is_commercial: row.is_commercial,
+          is_transactional: row.is_transactional,
+          is_branded: row.is_branded,
         });
       }
 
@@ -327,12 +349,10 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     trace.push({
       label: 'ahrefs_ranking_opportunities',
       ok: true,
-      info: { competitors_scanned: competitorList.length, opportunities: rankingOpportunities.length },
+      info: { competitors_scanned: competitorList.length, opportunities: rankingOpportunities.length, kw_limit: kwLimit },
     });
 
-    // Per user rule: "dataforseo api will hit when ahref api is not giving
-    // results due to any reason." If Ahrefs produced 0 opportunities despite
-    // finding competitors, switch to DataForSEO Keywords For Site.
+    // Fallback: if Ahrefs returned 0 results and DataForSEO creds exist, switch over.
     if (rankingOpportunities.length === 0 && userSuppliedHosts.length > 0) {
       trace.push({
         label: 'ahrefs_to_dataforseo_fallback',

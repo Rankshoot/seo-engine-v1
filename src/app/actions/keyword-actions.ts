@@ -670,12 +670,10 @@ export async function discoverKeywords(projectId: string) {
       relevance: relevanceSummary,
     };
 
-  if (ahrefsDiscoveryState) {
-    await supabaseAdmin
-      .from('projects')
-      .update({ ahrefs_discovery_state: ahrefsDiscoveryState })
-      .eq('id', projectId);
-  }
+  await supabaseAdmin
+    .from('projects')
+    .update({ ahrefs_discovery_state: ahrefsDiscoveryState || {} })
+    .eq('id', projectId);
 
   return {
     success: true,
@@ -1710,7 +1708,8 @@ export async function scoreKeywordsWithAI(
 
   if (opts?.keywordIds?.length) {
     query = query.in('id', opts.keywordIds);
-  } else if (!opts?.force) {
+  }
+  if (!opts?.force) {
     query = query.is('ai_eval_score', null);
   }
 

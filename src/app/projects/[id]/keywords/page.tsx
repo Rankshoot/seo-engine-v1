@@ -217,7 +217,7 @@ type SortDir = "asc" | "desc";
 const STATUS_ORDER: Record<KeywordStatus, number> = { pending: 0, approved: 1, rejected: 2 };
 
 /** Initial rows and each "show more" step on the keywords tables (full list is still sorted in memory). */
-const KEYWORDS_TABLE_PAGE_SIZE = 15;
+const KEYWORDS_TABLE_PAGE_SIZE = 20;
 
 /** Default first-click direction when activating a column. */
 function defaultDirForSortColumn(col: TableSortColumn): SortDir {
@@ -1327,10 +1327,13 @@ export default function KeywordsPage() {
                 <button
                   onClick={async () => {
                     setAiScoring(true);
-                    const res = await scoreKeywordsWithAI(projectId);
+                    const res = await scoreKeywordsWithAI(projectId, {
+                      keywordIds: selectedIds.size > 0 ? Array.from(selectedIds) : undefined
+                    });
                     setAiScoring(false);
                     if (res.success) {
-                      toast.success(`AI scored ${res.scored} keyword${res.scored !== 1 ? "s" : ""}${res.skipped ? ` (${res.skipped} already scored)` : ""}`);
+                      const failedPart = res.skipped ? ` (${res.skipped} failed to score)` : "";
+                      toast.success(`AI scored ${res.scored} keyword${res.scored !== 1 ? "s" : ""}${failedPart}`);
                       void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
                     } else {
                       toast.error(res.error ?? "AI scoring failed");
@@ -1635,7 +1638,9 @@ export default function KeywordsPage() {
                 const total = filtered.length;
                 const nextChunk = Math.min(KEYWORDS_TABLE_PAGE_SIZE, Math.max(0, total - shown));
                 const ahrefsState = keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.ahrefsDiscoveryState : null;
-                const hasMoreAhrefs = ahrefsState ? (ahrefsState.matching_has_more || ahrefsState.related_has_more) : false;
+                const hasMoreAhrefs = ahrefsState
+                  ? (ahrefsState.matching_has_more !== false || ahrefsState.related_has_more !== false)
+                  : true;
 
                 return (
                   <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3.5">

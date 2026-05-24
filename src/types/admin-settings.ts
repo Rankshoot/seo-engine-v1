@@ -7,6 +7,23 @@ export interface AdminPlatformProviders {
   gemini_enabled: boolean;
   openai_enabled: boolean;
   claude_enabled: boolean;
+  ahrefs_matching_terms_enabled: boolean;
+  ahrefs_related_terms_enabled: boolean;
+  ahrefs_search_suggestions_enabled: boolean;
+  ahrefs_keyword_overview_enabled: boolean;
+  ahrefs_volume_history_enabled: boolean;
+  ahrefs_volume_by_country_enabled: boolean;
+  ahrefs_serp_overview_enabled: boolean;
+  ahrefs_organic_competitors_enabled: boolean;
+  ahrefs_top_pages_enabled: boolean;
+  ahrefs_organic_keywords_enabled: boolean;
+  ahrefs_url_organic_keywords_enabled: boolean;
+  ahrefs_domain_overview_enabled: boolean;
+  ahrefs_pages_by_internal_links_enabled: boolean;
+  ahrefs_crawled_pages_enabled: boolean;
+  ahrefs_anchors_enabled: boolean;
+  ahrefs_rank_tracker_competitors_overview_enabled: boolean;
+  ahrefs_rank_tracker_competitors_pages_enabled: boolean;
 }
 
 export interface AdminPlatformLimits {

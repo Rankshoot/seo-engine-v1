@@ -14,6 +14,23 @@ export const DEFAULT_PLATFORM_PROVIDERS: AdminPlatformProviders = {
   gemini_enabled: true,
   openai_enabled: false,
   claude_enabled: false,
+  ahrefs_matching_terms_enabled: true,
+  ahrefs_related_terms_enabled: true,
+  ahrefs_search_suggestions_enabled: true,
+  ahrefs_keyword_overview_enabled: true,
+  ahrefs_volume_history_enabled: true,
+  ahrefs_volume_by_country_enabled: true,
+  ahrefs_serp_overview_enabled: true,
+  ahrefs_organic_competitors_enabled: true,
+  ahrefs_top_pages_enabled: true,
+  ahrefs_organic_keywords_enabled: true,
+  ahrefs_url_organic_keywords_enabled: true,
+  ahrefs_domain_overview_enabled: true,
+  ahrefs_pages_by_internal_links_enabled: true,
+  ahrefs_crawled_pages_enabled: true,
+  ahrefs_anchors_enabled: true,
+  ahrefs_rank_tracker_competitors_overview_enabled: true,
+  ahrefs_rank_tracker_competitors_pages_enabled: true,
 };
 
 export const DEFAULT_PLATFORM_LIMITS: AdminPlatformLimits = {

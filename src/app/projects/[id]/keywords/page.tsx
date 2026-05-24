@@ -309,6 +309,29 @@ export default function KeywordsPage() {
   const [aiScoring, setAiScoring] = useState(false);
   /** Domain-tab optimistic status by normalized phrase (survives refetch/cache key mismatches). */
   const [domainPhraseStatusOverlay, setDomainPhraseStatusOverlay] = useState<Record<string, KeywordStatus>>({});
+  const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
+
+  const handleLoadMoreFromAhrefs = async () => {
+    setLoadingMoreAhrefs(true);
+    const toastId = toast.loading("Loading more keywords from Ahrefs...");
+    try {
+      const res = await keywordsApi.loadMoreFromAhrefs(projectId);
+      if (res.success) {
+        toast.success(`Loaded ${res.count ?? 0} new keywords from Ahrefs`, { id: toastId });
+        await queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+        if (res.count && res.count > 0) {
+          setVisibleKeywordRows(prev => prev + res.count!);
+        }
+      } else {
+        toast.error(res.error ?? "Failed to load more keywords from Ahrefs", { id: toastId });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg, { id: toastId });
+    } finally {
+      setLoadingMoreAhrefs(false);
+    }
+  };
 
   // Keyword drilldown modal. Stored as id (not a `Keyword` object) so the
   // modal always reflects the latest row state — including approve/reject
@@ -1611,6 +1634,9 @@ export default function KeywordsPage() {
                 const shown = visibleIndustryKeywords.length;
                 const total = filtered.length;
                 const nextChunk = Math.min(KEYWORDS_TABLE_PAGE_SIZE, Math.max(0, total - shown));
+                const ahrefsState = keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.ahrefsDiscoveryState : null;
+                const hasMoreAhrefs = ahrefsState ? (ahrefsState.matching_has_more || ahrefsState.related_has_more) : false;
+
                 return (
                   <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3.5">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1632,6 +1658,27 @@ export default function KeywordsPage() {
                           <svg className="h-4 w-4 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
                             <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                           </svg>
+                        </button>
+                      ) : shown === total && hasMoreAhrefs ? (
+                        <button
+                          type="button"
+                          disabled={loadingMoreAhrefs}
+                          onClick={handleLoadMoreFromAhrefs}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-brand-action/30 bg-brand-action/10 px-4 py-2 text-[13px] font-semibold text-brand-action transition-all hover:bg-brand-action/20 disabled:opacity-50"
+                        >
+                          {loadingMoreAhrefs ? (
+                            <>
+                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-action/40 border-t-brand-action" />
+                              Loading from Ahrefs…
+                            </>
+                          ) : (
+                            <>
+                              Load more from Ahrefs
+                              <svg className="h-4 w-4 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                              </svg>
+                            </>
+                          )}
                         </button>
                       ) : null}
                     </div>

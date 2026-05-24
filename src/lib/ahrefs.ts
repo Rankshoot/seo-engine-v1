@@ -119,9 +119,10 @@ export async function ahrefsGetVerbose<T = unknown>(
   opts: AhrefsRequestOptions
 ): Promise<AhrefsCallResult<T>> {
   const tag = opts.label ?? opts.endpoint;
-  const { assertProviderEnabled } = await import('@/lib/admin/platform-settings-runtime');
+  const { assertProviderEnabled, assertAhrefsEndpointEnabled } = await import('@/lib/admin/platform-settings-runtime');
   try {
     await assertProviderEnabled('ahrefs');
+    await assertAhrefsEndpointEnabled(opts.endpoint, opts.query?.mode);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.warn(`[ahrefs] ${tag} skipped — ${message}`);
@@ -711,7 +712,8 @@ interface AhrefsIdeaRow {
 export async function ahrefsMatchingTerms(
   seeds: string[],
   region: string,
-  limit = 100
+  limit = 100,
+  offset = 0
 ): Promise<AhrefsKeywordIdea[]> {
   const cleaned = [...new Set(seeds.map(s => s.trim().toLowerCase()).filter(Boolean))].slice(0, 80);
   if (!cleaned.length) return [];
@@ -723,6 +725,7 @@ export async function ahrefsMatchingTerms(
       keywords: cleaned.join(','),
       select: 'keyword,volume,difficulty,intents',
       limit,
+      offset,
       match_mode: 'terms',
       terms: 'all',
       order_by: 'volume:desc',
@@ -739,7 +742,8 @@ export async function ahrefsMatchingTerms(
 export async function ahrefsRelatedTerms(
   seeds: string[],
   region: string,
-  limit = 100
+  limit = 100,
+  offset = 0
 ): Promise<AhrefsKeywordIdea[]> {
   const cleaned = [...new Set(seeds.map(s => s.trim().toLowerCase()).filter(Boolean))].slice(0, 80);
   if (!cleaned.length) return [];
@@ -751,6 +755,7 @@ export async function ahrefsRelatedTerms(
       keywords: cleaned.join(','),
       select: 'keyword,volume,difficulty,intents',
       limit,
+      offset,
       view_for: 'top_10',
       terms: 'all',
       order_by: 'volume:desc',
@@ -801,7 +806,8 @@ export async function ahrefsSearchSuggestions(
 export async function ahrefsMatchingTermsAll(
   seed: string,
   region: string,
-  limit = 100
+  limit = 100,
+  offset = 0
 ): Promise<AhrefsKeywordIdea[]> {
   const cleaned = seed.trim().toLowerCase();
   if (!cleaned) return [];
@@ -813,6 +819,7 @@ export async function ahrefsMatchingTermsAll(
       keywords: cleaned,
       select: 'keyword,volume,difficulty,cpc,intents',
       limit,
+      offset,
       match_mode: 'terms',
       terms: 'all',
       order_by: 'volume:desc',
@@ -829,7 +836,8 @@ export async function ahrefsMatchingTermsAll(
 export async function ahrefsMatchingTermsQuestions(
   seed: string,
   region: string,
-  limit = 100
+  limit = 100,
+  offset = 0
 ): Promise<AhrefsKeywordIdea[]> {
   const cleaned = seed.trim().toLowerCase();
   if (!cleaned) return [];
@@ -841,6 +849,7 @@ export async function ahrefsMatchingTermsQuestions(
       keywords: cleaned,
       select: 'keyword,volume,difficulty,cpc,intents',
       limit,
+      offset,
       match_mode: 'terms',
       terms: 'questions',
       order_by: 'volume:desc',
@@ -857,7 +866,8 @@ export async function ahrefsMatchingTermsQuestions(
 export async function ahrefsRelatedAlsoRankFor(
   seed: string,
   region: string,
-  limit = 100
+  limit = 100,
+  offset = 0
 ): Promise<AhrefsKeywordIdea[]> {
   const cleaned = seed.trim().toLowerCase();
   if (!cleaned) return [];
@@ -869,6 +879,7 @@ export async function ahrefsRelatedAlsoRankFor(
       keywords: cleaned,
       select: 'keyword,volume,difficulty,cpc,intents',
       limit,
+      offset,
       view_for: 'top_10',
       match_against: 'also-rank-for',
       order_by: 'volume:desc',
@@ -885,7 +896,8 @@ export async function ahrefsRelatedAlsoRankFor(
 export async function ahrefsRelatedAlsoTalkAbout(
   seed: string,
   region: string,
-  limit = 100
+  limit = 100,
+  offset = 0
 ): Promise<AhrefsKeywordIdea[]> {
   const cleaned = seed.trim().toLowerCase();
   if (!cleaned) return [];
@@ -897,6 +909,7 @@ export async function ahrefsRelatedAlsoTalkAbout(
       keywords: cleaned,
       select: 'keyword,volume,difficulty,cpc,intents',
       limit,
+      offset,
       view_for: 'top_10',
       match_against: 'also-talk-about',
       order_by: 'volume:desc',

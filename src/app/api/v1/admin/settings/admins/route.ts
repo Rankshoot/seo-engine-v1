@@ -9,7 +9,7 @@ import { apiJson } from "@/server/http/json";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const gate = await assertAdminApi("owner");
+  const gate = await assertAdminApi("admin");
   if (gate.response) return gate.response;
 
   let body: { email?: string; role?: PlatformAdminRole };
@@ -34,7 +34,7 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const gate = await assertAdminApi("owner");
+  const gate = await assertAdminApi("admin");
   if (gate.response) return gate.response;
 
   const id = new URL(req.url).searchParams.get("id");

@@ -20,7 +20,7 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
-  const gate = await assertAdminApi("owner");
+  const gate = await assertAdminApi("admin");
   if (gate.response) return gate.response;
 
   let body: AdminSettingsPatch;

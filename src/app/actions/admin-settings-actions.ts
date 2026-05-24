@@ -130,8 +130,8 @@ export async function updateAdminSettings(
   admin: AdminSession
 ): Promise<{ success: true } | { success: false; error: string }> {
   try {
-    if (!platformAdminMeetsMinRole(admin.role, "owner")) {
-      return { success: false, error: "Owner role required to update settings" };
+    if (!platformAdminMeetsMinRole(admin.role, "admin")) {
+      return { success: false, error: "Admin role required to update settings" };
     }
 
     const db = getSupabaseAdmin();
@@ -226,8 +226,8 @@ export async function grantPlatformAdmin(
   admin: AdminSession
 ): Promise<{ success: true } | { success: false; error: string }> {
   try {
-    if (!platformAdminMeetsMinRole(admin.role, "owner")) {
-      return { success: false, error: "Owner role required to grant admin access" };
+    if (!platformAdminMeetsMinRole(admin.role, "admin")) {
+      return { success: false, error: "Admin role required to grant admin access" };
     }
 
     const normalized = normalizeEmail(email);
@@ -289,8 +289,8 @@ export async function revokePlatformAdmin(
   admin: AdminSession
 ): Promise<{ success: true } | { success: false; error: string }> {
   try {
-    if (!platformAdminMeetsMinRole(admin.role, "owner")) {
-      return { success: false, error: "Owner role required to revoke admin access" };
+    if (!platformAdminMeetsMinRole(admin.role, "admin")) {
+      return { success: false, error: "Admin role required to revoke admin access" };
     }
 
     const db = getSupabaseAdmin();

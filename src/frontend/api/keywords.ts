@@ -12,6 +12,12 @@ export type KeywordsListResponse = {
   discoveryTrace?: unknown;
   briefSummary?: unknown;
   relevance?: unknown;
+  ahrefsDiscoveryState?: {
+    matching_last_volume: number | null;
+    matching_has_more: boolean;
+    related_last_volume: number | null;
+    related_has_more: boolean;
+  };
 };
 
 export const keywordsApi = {
@@ -29,6 +35,10 @@ export const keywordsApi = {
 
   loadMore(projectId: string, offset: number, limit?: number): Promise<KeywordsListResponse> {
     return apiPost(V1Routes.keywordsLoadMore(projectId), { offset, limit });
+  },
+
+  loadMoreFromAhrefs(projectId: string): Promise<{ success: boolean; error?: string; count?: number }> {
+    return apiPost(V1Routes.keywordsLoadMoreAhrefs(projectId));
   },
 
   discover(projectId: string): Promise<

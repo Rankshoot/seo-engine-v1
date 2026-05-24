@@ -141,6 +141,52 @@ export async function assertProviderEnabled(
   }
 }
 
+export async function assertAhrefsEndpointEnabled(endpoint: string, mode?: unknown): Promise<void> {
+  const providers = await getPlatformProviders();
+  let key: keyof AdminPlatformProviders | null = null;
+  if (endpoint === '/keywords-explorer/matching-terms') {
+    key = 'ahrefs_matching_terms_enabled';
+  } else if (endpoint === '/keywords-explorer/related-terms') {
+    key = 'ahrefs_related_terms_enabled';
+  } else if (endpoint === '/keywords-explorer/search-suggestions') {
+    key = 'ahrefs_search_suggestions_enabled';
+  } else if (endpoint === '/keywords-explorer/overview') {
+    key = 'ahrefs_keyword_overview_enabled';
+  } else if (endpoint === '/keywords-explorer/volume-history') {
+    key = 'ahrefs_volume_history_enabled';
+  } else if (endpoint === '/keywords-explorer/volume-by-country') {
+    key = 'ahrefs_volume_by_country_enabled';
+  } else if (endpoint === '/serp-overview/serp-overview') {
+    key = 'ahrefs_serp_overview_enabled';
+  } else if (endpoint === '/site-explorer/organic-competitors') {
+    key = 'ahrefs_organic_competitors_enabled';
+  } else if (endpoint === '/site-explorer/top-pages') {
+    key = 'ahrefs_top_pages_enabled';
+  } else if (endpoint === '/site-explorer/organic-keywords') {
+    if (mode === 'exact') {
+      key = 'ahrefs_url_organic_keywords_enabled';
+    } else {
+      key = 'ahrefs_organic_keywords_enabled';
+    }
+  } else if (endpoint === '/site-explorer/metrics') {
+    key = 'ahrefs_domain_overview_enabled';
+  } else if (endpoint === '/site-explorer/pages-by-internal-links') {
+    key = 'ahrefs_pages_by_internal_links_enabled';
+  } else if (endpoint === '/site-explorer/crawled-pages') {
+    key = 'ahrefs_crawled_pages_enabled';
+  } else if (endpoint === '/site-explorer/anchors') {
+    key = 'ahrefs_anchors_enabled';
+  } else if (endpoint === '/rank-tracker/competitors-overview') {
+    key = 'ahrefs_rank_tracker_competitors_overview_enabled';
+  } else if (endpoint === '/rank-tracker/competitors-pages') {
+    key = 'ahrefs_rank_tracker_competitors_pages_enabled';
+  }
+
+  if (key && !providers[key]) {
+    throw new Error(`Ahrefs endpoint "${endpoint}" is disabled in platform settings.`);
+  }
+}
+
 export async function assertProjectKeywordCapacity(projectId: string): Promise<void> {
   const limits = await getPlatformLimits();
   const { getSupabaseAdmin } = await import("@/lib/supabase");

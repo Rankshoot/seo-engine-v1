@@ -97,6 +97,12 @@ export interface DataForSEOTraceEntry {
 export interface DiscoverKeywordsForProjectResult {
   keywords: DiscoveredKeyword[];
   trace: DataForSEOTraceEntry[];
+  ahrefsDiscoveryState?: {
+    matching_last_volume: number | null;
+    matching_has_more: boolean;
+    related_last_volume: number | null;
+    related_has_more: boolean;
+  };
 }
 
 function getAuthHeader(): string | null {
@@ -1298,6 +1304,10 @@ export interface ProjectContextExtras {
   /** Output of `crawlWebsite(domain)`. Title / meta / headings / top phrases
    *  / URL slugs all feed into coreTokens, phraseBoosts and syntheticSeeds. */
   crawl?: WebsiteCrawlResult;
+  matchingLastVolume?: number;
+  relatedLastVolume?: number;
+  queryMatching?: boolean;
+  queryRelated?: boolean;
 }
 
 export function buildProjectContext(
@@ -1971,6 +1981,7 @@ export async function discoverKeywordsForProject(
   let researchProvider: 'ahrefs' | 'dataforseo' = 'ahrefs';
   let researchFellBack = false;
   let researchFallbackReason: string | undefined;
+  let ahrefsDiscoveryState: any = undefined;
   try {
     const research = await getKeywordResearchData({
       seeds: userSeeds,
@@ -1978,12 +1989,17 @@ export async function discoverKeywordsForProject(
       language,
       limit: 40,
       maxResults: 150,
+      matchingLastVolume: extras.matchingLastVolume,
+      relatedLastVolume: extras.relatedLastVolume,
+      queryMatching: extras.queryMatching,
+      queryRelated: extras.queryRelated,
     });
     researchKeywords = research.keywords;
     researchTrace = research.trace;
     researchProvider = research.provider;
     researchFellBack = research.fellBackToDataForSEO;
     researchFallbackReason = research.fallbackReason;
+    ahrefsDiscoveryState = research.ahrefsDiscoveryState;
   } catch (e) {
     // Both providers failed — push the error to the trace and continue with
     // an empty keyword set. Competitor mining below may still yield rows.
@@ -2034,6 +2050,9 @@ export async function discoverKeywordsForProject(
     keywords: AhrefsKeywordIdea[];
     competitors: string[];
   }> => {
+    if (researchProvider === 'ahrefs') {
+      return { keywords: [], competitors: [] };
+    }
     if (!isAhrefsConfigured()) {
       pushDebugTrace(trace, '(ahrefs_competitor_mining_skipped)', {
         reason: 'AHREFS_API_KEY missing — competitor mining requires Ahrefs Site Explorer.',
@@ -2124,7 +2143,9 @@ export async function discoverKeywordsForProject(
   //    from competitor mining (where `intents`/`parent_topic`/`traffic_potential`
   //    aren't populated by organic-keywords). We chunk by 700 to respect the
   //    Ahrefs `keywords` limit and skip rows that already have full data.
-  const needsOverview = merged.filter(
+  //    For paginated discovery via Ahrefs, we skip this to avoid extra calls/costs.
+  //    For paginated discovery via Ahrefs, we skip this to avoid extra calls/costs.
+  const needsOverview = researchProvider === 'ahrefs' ? [] : merged.filter(
     k => !k.kd || !k.volume
   );
   if (needsOverview.length) {
@@ -2178,7 +2199,7 @@ export async function discoverKeywordsForProject(
   void getAuthHeader;
   void errEntry;
 
-  return { keywords: merged, trace };
+  return { keywords: merged, trace, ahrefsDiscoveryState };
 }
 
 function errEntry(label: string, e: unknown): DataForSEOTraceEntry {

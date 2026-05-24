@@ -15,6 +15,7 @@ export const V1Routes = {
   // ── Keywords ───────────────────────────────────────────────────────────────
   keywords: (projectId: string) => `/projects/${projectId}/keywords`,
   keywordsLoadMore: (projectId: string) => `/projects/${projectId}/keywords/load-more`,
+  keywordsLoadMoreAhrefs: (projectId: string) => `/projects/${projectId}/keywords/load-more-from-ahrefs`,
   keywordsDomain: (projectId: string) => `/projects/${projectId}/keywords/domain`,
   keywordsBulkStatus: (projectId: string) => `/projects/${projectId}/keywords/bulk-status`,
   keywordsApproveCluster: (projectId: string) => `/projects/${projectId}/keywords/approve-cluster`,

@@ -76,6 +76,14 @@ export interface KeywordResearchInput {
   maxResults?: number;
   /** Forwarded to DataForSEO; Ahrefs ignores it. Defaults to `en`. */
   language?: string;
+  /** Last volume for matching terms keyset pagination */
+  matchingLastVolume?: number;
+  /** Last volume for related terms keyset pagination */
+  relatedLastVolume?: number;
+  /** Whether to query matching terms */
+  queryMatching?: boolean;
+  /** Whether to query related terms */
+  queryRelated?: boolean;
 }
 
 /**
@@ -133,6 +141,13 @@ export interface KeywordResearchResult {
   fallbackReason?: string;
   keywords: NormalizedKeyword[];
   trace: KeywordResearchTraceEntry[];
+  /** Pagination state for Ahrefs discovery */
+  ahrefsDiscoveryState?: {
+    matching_last_volume: number | null;
+    matching_has_more: boolean;
+    related_last_volume: number | null;
+    related_has_more: boolean;
+  };
 }
 
 /**
@@ -271,11 +286,21 @@ interface AhrefsResearchCall {
   query: Record<string, string | number | boolean | undefined>;
 }
 
-function ahrefsResearchCalls(seeds: string[], region: string, limit: number): AhrefsResearchCall[] {
+function ahrefsResearchCalls(
+  seeds: string[],
+  region: string,
+  limit: number,
+  matchingLastVolume?: number,
+  relatedLastVolume?: number,
+  queryMatching = true,
+  queryRelated = true
+): AhrefsResearchCall[] {
   const country = ahrefsCountry(region);
   const keywordsParam = seeds.join(',');
-  return [
-    {
+  const calls: AhrefsResearchCall[] = [];
+
+  if (queryMatching) {
+    calls.push({
       endpoint: '/keywords-explorer/matching-terms',
       label: 'matching-terms',
       query: {
@@ -283,12 +308,16 @@ function ahrefsResearchCalls(seeds: string[], region: string, limit: number): Ah
         keywords: keywordsParam,
         select: AHREFS_IDEA_SELECT,
         limit,
+        where: matchingLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', matchingLastVolume] }) : undefined,
         match_mode: 'terms',
         terms: 'all',
         order_by: 'volume:desc',
       },
-    },
-    {
+    });
+  }
+
+  if (queryRelated) {
+    calls.push({
       endpoint: '/keywords-explorer/related-terms',
       label: 'related-terms',
       query: {
@@ -296,23 +325,15 @@ function ahrefsResearchCalls(seeds: string[], region: string, limit: number): Ah
         keywords: keywordsParam,
         select: AHREFS_IDEA_SELECT,
         limit,
+        where: relatedLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', relatedLastVolume] }) : undefined,
         view_for: 'top_10',
         terms: 'all',
         order_by: 'volume:desc',
       },
-    },
-    {
-      endpoint: '/keywords-explorer/search-suggestions',
-      label: 'search-suggestions',
-      query: {
-        country,
-        keywords: keywordsParam,
-        select: AHREFS_IDEA_SELECT,
-        limit,
-        order_by: 'volume:desc',
-      },
-    },
-  ];
+    });
+  }
+
+  return calls;
 }
 
 function ahrefsRowToNormalized(
@@ -348,22 +369,16 @@ function ahrefsRowToNormalized(
 }
 
 /**
- * Primary provider. Calls Ahrefs Keywords Explorer's three idea endpoints in
- * parallel and merges the results. Throws `KeywordProviderError` when:
- *   - AHREFS_API_KEY is missing
- *   - Every individual call returned a transport error (auth / rate limit /
- *     quota / network / parse)
- *   - Calls returned 2xx but the merged keyword list is empty
- *
- * The thrown error carries the partial trace so `getKeywordResearchData` can
- * forward it to the client for debugging.
+ * Primary provider. Calls Ahrefs Keywords Explorer's matching-terms and
+ * related-terms endpoints in parallel and merges the results.
+ * Emits pagination state `ahrefsDiscoveryState`.
  */
 export async function fetchKeywordsFromAhrefs(
   input: KeywordResearchInput
 ): Promise<KeywordResearchResult> {
   const trace: KeywordResearchTraceEntry[] = [];
   const seeds = cleanSeeds(input.seeds);
-  const limit = Math.max(1, Math.min(input.limit ?? DEFAULT_LIMIT, 200));
+  const limit = 10;
   const region = (input.region || 'us').toLowerCase();
 
   if (!seeds.length) {
@@ -388,7 +403,34 @@ export async function fetchKeywordsFromAhrefs(
     );
   }
 
-  const calls = ahrefsResearchCalls(seeds, region, limit);
+  const queryMatching = input.queryMatching !== false;
+  const queryRelated = input.queryRelated !== false;
+
+  const calls = ahrefsResearchCalls(
+    seeds,
+    region,
+    limit,
+    input.matchingLastVolume,
+    input.relatedLastVolume,
+    queryMatching,
+    queryRelated
+  );
+
+  if (!calls.length) {
+    return {
+      provider: 'ahrefs',
+      fellBackToDataForSEO: false,
+      keywords: [],
+      trace,
+      ahrefsDiscoveryState: {
+        matching_last_volume: input.matchingLastVolume ?? null,
+        matching_has_more: false,
+        related_last_volume: input.relatedLastVolume ?? null,
+        related_has_more: false,
+      },
+    };
+  }
+
   const results = await Promise.all(
     calls.map(call =>
       ahrefsGetVerbose<{ keywords?: AhrefsIdeaRow[] }>(call).then(
@@ -404,6 +446,11 @@ export async function fetchKeywordsFromAhrefs(
   let anySuccess = false;
   /** First non-recoverable failure reason — used as the fallback signal. */
   let firstHardFailure: AhrefsErrorReason | undefined;
+
+  let matchingLastVolume: number | null = input.matchingLastVolume ?? null;
+  let relatedLastVolume: number | null = input.relatedLastVolume ?? null;
+  let matchingHasMore = false;
+  let relatedHasMore = false;
 
   for (const { call, res } of results) {
     pushTrace(trace, {
@@ -422,11 +469,44 @@ export async function fetchKeywordsFromAhrefs(
     }
     anySuccess = true;
     const rows = res.data?.keywords ?? [];
+    if (call.label === 'matching-terms') {
+      matchingHasMore = rows.length === limit;
+      if (rows.length > 0) {
+        const lastRow = rows[rows.length - 1];
+        matchingLastVolume = lastRow && lastRow.volume != null ? Number(lastRow.volume) : null;
+        if (matchingLastVolume === 0 || matchingLastVolume === null) {
+          matchingHasMore = false;
+        }
+      } else {
+        matchingHasMore = false;
+      }
+    } else if (call.label === 'related-terms') {
+      relatedHasMore = rows.length === limit;
+      if (rows.length > 0) {
+        const lastRow = rows[rows.length - 1];
+        relatedLastVolume = lastRow && lastRow.volume != null ? Number(lastRow.volume) : null;
+        if (relatedLastVolume === 0 || relatedLastVolume === null) {
+          relatedHasMore = false;
+        }
+      } else {
+        relatedHasMore = false;
+      }
+    }
     for (const row of rows) {
       const normalized = ahrefsRowToNormalized(row, call.label);
       if (normalized) merged.push(normalized);
     }
   }
+
+  const finalMatchingHasMore = queryMatching ? matchingHasMore : false;
+  const finalRelatedHasMore = queryRelated ? relatedHasMore : false;
+
+  const ahrefsDiscoveryState = {
+    matching_last_volume: finalMatchingHasMore ? matchingLastVolume : null,
+    matching_has_more: finalMatchingHasMore,
+    related_last_volume: finalRelatedHasMore ? relatedLastVolume : null,
+    related_has_more: finalRelatedHasMore,
+  };
 
   const keywords = mergeKeywords(merged);
 
@@ -440,11 +520,11 @@ export async function fetchKeywordsFromAhrefs(
     );
   }
 
-  if (!keywords.length) {
+  if (queryMatching && queryRelated && !keywords.length) {
     throw new KeywordProviderError(
       'ahrefs',
       'empty',
-      'Ahrefs answered but yielded zero keywords across matching/related/suggestions.',
+      'Ahrefs answered but yielded zero keywords across matching/related terms.',
       trace
     );
   }
@@ -458,6 +538,7 @@ export async function fetchKeywordsFromAhrefs(
     fellBackToDataForSEO: false,
     keywords: keywords.slice(0, input.maxResults ?? DEFAULT_MAX_RESULTS),
     trace,
+    ahrefsDiscoveryState,
   };
 }
 

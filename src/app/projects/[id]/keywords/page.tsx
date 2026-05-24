@@ -11,7 +11,6 @@ import {
   useAppSelector,
   selectKeywordPrefs,
   selectKeywordStatuses,
-  selectAiSuggestedKeywordIds,
 } from "@/lib/redux/hooks";
 import {
   bulkKeywordStatusChanged,
@@ -285,7 +284,6 @@ export default function KeywordsPage() {
   const dispatch = useAppDispatch();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
-  const aiSuggestedKeywordIds = useAppSelector(state => selectAiSuggestedKeywordIds(state, projectId));
 
   const KEYWORDS_KEY = qk.keywords(projectId);
 
@@ -304,7 +302,6 @@ export default function KeywordsPage() {
   /** Inner scroll area of the keyword DataTable — used after “Load more” (same pattern as competitors gap table). */
   const keywordTableScrollRef = useRef<HTMLDivElement>(null);
 
-  const aiSuggestedIds = useMemo(() => new Set(aiSuggestedKeywordIds), [aiSuggestedKeywordIds]);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -411,36 +408,32 @@ export default function KeywordsPage() {
 
   const industryCounts = useMemo(() => {
     let all = 0;
-    let ai = 0;
     let pending = 0;
     let approved = 0;
     let rejected = 0;
     for (const k of keywords) {
       all += 1;
-      if (aiSuggestedIds.has(k.id)) ai += 1;
       if (k.status === "pending") pending += 1;
       if (k.status === "approved") approved += 1;
       if (k.status === "rejected") rejected += 1;
     }
-    return { all, ai, pending, approved, rejected };
-  }, [keywords, aiSuggestedIds]);
+    return { all, pending, approved, rejected };
+  }, [keywords]);
 
   const domainCounts = useMemo(() => {
     let all = 0;
-    let ai = 0;
     let pending = 0;
     let approved = 0;
     let rejected = 0;
     for (const d of domainKeywords) {
       all += 1;
-      if (d.matched_keyword_id && aiSuggestedIds.has(d.matched_keyword_id)) ai += 1;
       const s = effectiveDomainStatus(d);
       if (s === "pending") pending += 1;
       if (s === "approved") approved += 1;
       if (s === "rejected") rejected += 1;
     }
-    return { all, ai, pending, approved, rejected };
-  }, [domainKeywords, aiSuggestedIds, effectiveDomainStatus]);
+    return { all, pending, approved, rejected };
+  }, [domainKeywords, effectiveDomainStatus]);
 
   const displayCounts = sourceTab === "industry" ? industryCounts : domainCounts;
 
@@ -460,17 +453,13 @@ export default function KeywordsPage() {
   const filteredDomainKeywords = useMemo(() => {
     return sortedDomainKeywords.filter(row => {
       if (filter === "all") return true;
-      if (filter === "ai") {
-        const id = row.matched_keyword_id;
-        return Boolean(id && aiSuggestedIds.has(id));
-      }
       const st = effectiveDomainStatus(row);
       if (filter === "pending") return st === "pending";
       if (filter === "approved") return st === "approved";
       if (filter === "rejected") return st === "rejected";
       return true;
     });
-  }, [sortedDomainKeywords, filter, aiSuggestedIds, effectiveDomainStatus]);
+  }, [sortedDomainKeywords, filter, effectiveDomainStatus]);
 
   useEffect(() => {
     if (sourceTab !== "domain") return;
@@ -768,13 +757,11 @@ export default function KeywordsPage() {
   };
 
   const filtered = useMemo(() => {
-    const list = keywords.filter(k => {
+    return keywords.filter(k => {
       if (filter === "all") return true;
-      if (filter === "ai") return aiSuggestedIds.has(k.id);
       return k.status === filter;
-    });
-    return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
-  }, [keywords, filter, tableSort, aiSuggestedIds]);
+    }).sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
+  }, [keywords, filter, tableSort]);
 
   const visibleIndustryKeywords = useMemo(
     () => filtered.slice(0, Math.min(visibleKeywordRows, filtered.length)),
@@ -963,7 +950,6 @@ export default function KeywordsPage() {
 
   const FILTER_TAB_ITEMS: Array<{ id: FilterTab; label: string; count: number }> = [
     { id: "all", label: "All", count: displayCounts.all },
-    { id: "ai", label: "AI picks", count: displayCounts.ai },
     { id: "pending", label: "Pending", count: displayCounts.pending },
     { id: "approved", label: "Approved", count: displayCounts.approved },
     { id: "rejected", label: "Rejected", count: displayCounts.rejected },
@@ -980,11 +966,6 @@ export default function KeywordsPage() {
       cell: (kw: CompetitorKeywordsForSiteRow) => (
         <div className="flex items-center gap-2 max-w-[260px]">
           <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
-          {kw.matched_keyword_id && aiSuggestedIds.has(kw.matched_keyword_id) ? (
-            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-              AI pick
-            </span>
-          ) : null}
         </div>
       )
     },
@@ -1074,7 +1055,7 @@ export default function KeywordsPage() {
         );
       }
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [aiSuggestedIds, busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
 
   const industryColumns = useMemo<ColumnDef<Keyword>[]>(() => [
     {
@@ -1083,16 +1064,10 @@ export default function KeywordsPage() {
       sortable: true,
       tooltip: `The search query. Live data from DataForSEO in ${projectData?.success && projectData.data ? regionName(projectData.data.target_region) : "your region"}.`,
       cell: (kw: Keyword) => {
-        const isAiPick = aiSuggestedIds.has(kw.id);
         return (
           <div className="max-w-[260px]">
             <div className="flex items-center gap-2">
               <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
-              {isAiPick ? (
-                <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-                  AI pick
-                </span>
-              ) : null}
             </div>
             {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
             (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
@@ -1120,7 +1095,7 @@ export default function KeywordsPage() {
       sortable: true,
       tooltip: "Average monthly searches over the last 12 months. Hover for trend chart.",
       cell: (kw: Keyword) => (
-        <Tooltip placement="above" content={<MonthlySearchesChart data={kw.monthly_searches} />}>
+        <Tooltip placement="above" interactive content={<MonthlySearchesChart data={kw.monthly_searches} />}>
           <span className="text-[14px] font-mono text-text-secondary tabular-nums border-b border-dashed border-text-tertiary/40 cursor-help pb-0.5">
             {kw.volume ? kw.volume.toLocaleString() : "—"}
           </span>
@@ -1236,11 +1211,11 @@ export default function KeywordsPage() {
         </div>
       )
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [aiSuggestedIds, busyRowId, handleStatusUpdate, projectData]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [busyRowId, handleStatusUpdate, projectData]);
 
   return (
     <div className="space-y-4 pb-16 pl-4 pr-4 relative">
-      <header className="sticky top-0 z-40 bg-surface-primary/95 backdrop-blur-md -mx-4 px-4 pt-4 pb-4 border-b border-border-subtle space-y-4">
+      <header className="sticky top-0 z-40 bg-surface-primary/95 backdrop-blur-md -mx-4 px-4 pt-4 pb-4 border-b border-border-subtle">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0 flex-1">
             <PageTitle>Keyword research</PageTitle>
@@ -1305,8 +1280,10 @@ export default function KeywordsPage() {
               </ProjectNavLink>
           </div>
         </div>
+      </header>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             {(keywords.length > 0 || domainKeywords.length > 0) ? (
               <PillTabFilterBar<FilterTab>
@@ -1458,9 +1435,6 @@ export default function KeywordsPage() {
               </div>
           </div>
         </div>
-      </header>
-
-      <section className="space-y-4">
         {/* ── DATA VIA DOMAIN ─────────────────────────────────────────── */}
         {sourceTab === "domain" && (
           <div className="space-y-4">
@@ -1626,10 +1600,9 @@ export default function KeywordsPage() {
                 if (!massSelectMode && !busyRowId) setModalKeywordId(kw.id);
               }}
               rowClassName={(kw) => {
-                const isAiPick = aiSuggestedIds.has(kw.id);
                 return `group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
                   kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
-                } ${isAiPick ? "bg-[#8b5cf6]/[0.07] ring-1 ring-inset ring-[#8b5cf6]/20" : ""} ${
+                } ${
                   selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
                 }`;
               }}

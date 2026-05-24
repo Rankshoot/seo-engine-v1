@@ -22,14 +22,17 @@ export function Tooltip({
   content,
   className = "",
   placement = "above",
+  interactive = false,
 }: {
   children: React.ReactNode;
   content: React.ReactNode;
   className?: string;
   placement?: TooltipPlacement;
+  interactive?: boolean;
 }) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const tooltipRef = React.useRef<HTMLDivElement>(null);
+  const hideTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [visible, setVisible] = React.useState(false);
   const [pos, setPos] = React.useState({ top: -9999, left: -9999 });
   const [mounted, setMounted] = React.useState(false);
@@ -91,20 +94,27 @@ export function Tooltip({
   }, [placement]);
 
   const handleMouseMove = React.useCallback((e: React.MouseEvent) => {
+    if (interactive) return;
     cursorRef.current = { x: e.clientX, y: e.clientY };
     if (visible) computeFromCursor(e.clientX, e.clientY);
-  }, [visible, computeFromCursor]);
+  }, [visible, computeFromCursor, interactive]);
 
   const handleMouseEnter = React.useCallback((e: React.MouseEvent) => {
-    cursorRef.current = { x: e.clientX, y: e.clientY };
-    setVisible(true);
-    // Position immediately using cursor coords (rAF so tooltip is painted first)
-    requestAnimationFrame(() => computeFromCursor(e.clientX, e.clientY));
-  }, [computeFromCursor]);
+    if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+    if (!visible) {
+      cursorRef.current = { x: e.clientX, y: e.clientY };
+      setVisible(true);
+      requestAnimationFrame(() => computeFromCursor(e.clientX, e.clientY));
+    }
+  }, [computeFromCursor, visible]);
 
   const handleMouseLeave = React.useCallback(() => {
-    setVisible(false);
-  }, []);
+    if (interactive) {
+      hideTimeoutRef.current = setTimeout(() => setVisible(false), 200);
+    } else {
+      setVisible(false);
+    }
+  }, [interactive]);
 
   return (
     <div

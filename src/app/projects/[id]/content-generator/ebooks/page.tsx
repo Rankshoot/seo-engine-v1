@@ -113,6 +113,7 @@ export default function EbookGeneratorPage() {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "ebook",
         avoidPhrases: secondaryKeywords,
+        seedKeyword: primaryKeyword.trim() || undefined,
       });
       if (res.success) {
         setTopic(res.topic);

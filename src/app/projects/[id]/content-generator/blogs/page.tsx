@@ -114,6 +114,7 @@ export default function BlogGeneratorPage() {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "blog",
         avoidPhrases: secondaryKeywords,
+        seedKeyword: primaryKeyword.trim() || undefined,
       });
       if (res.success) {
         setTopic(res.topic);

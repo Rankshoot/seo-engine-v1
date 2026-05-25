@@ -134,6 +134,7 @@ export async function suggestContentTopicAction(
   payload: {
     contentType: ContentType;
     avoidPhrases?: string[];
+    seedKeyword?: string;
   }
 ): Promise<
   | { success: true; topic: string; primary_keyword: string; semantic_keywords: string[]; rationale: string }
@@ -163,6 +164,7 @@ export async function suggestContentTopicAction(
       briefSummary: brief?.summary ?? null,
       approvedKeywords: approved,
       avoidPhrases: (payload.avoidPhrases ?? []).slice(0, 6),
+      seedKeyword: payload.seedKeyword,
     });
     return { success: true, ...suggestion };
   } catch (e) {

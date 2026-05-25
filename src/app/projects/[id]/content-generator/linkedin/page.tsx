@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -61,6 +61,7 @@ type Phase = "form" | "review" | "generating";
 export default function LinkedInGeneratorPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const studioBase = `/projects/${projectId}/content-generator`;
 
@@ -69,7 +70,7 @@ export default function LinkedInGeneratorPage() {
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
-  const [primaryKeyword, setPrimaryKeyword] = useState("");
+  const [primaryKeyword, setPrimaryKeyword] = useState(searchParams?.get("keyword") || "");
   const [audience, setAudience] = useState("");
   const [tone, setTone] = useState(TONE_OPTIONS[0]);
   const [postStyle, setPostStyle] = useState<LinkedInPostStyle>("educational");
@@ -108,6 +109,7 @@ export default function LinkedInGeneratorPage() {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "linkedin",
         avoidPhrases: [],
+        seedKeyword: primaryKeyword.trim() || undefined,
       });
       if (res.success) {
         setTopic(res.topic);

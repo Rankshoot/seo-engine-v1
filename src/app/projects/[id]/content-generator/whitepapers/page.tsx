@@ -104,6 +104,7 @@ export default function WhitepaperGeneratorPage() {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "whitepaper",
         avoidPhrases: secondaryKeywords,
+        seedKeyword: primaryKeyword.trim() || undefined,
       });
       if (res.success) {
         setTopic(res.topic);

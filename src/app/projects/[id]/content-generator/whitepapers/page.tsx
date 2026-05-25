@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -52,6 +52,7 @@ type Phase = "form" | "review" | "generating";
 export default function WhitepaperGeneratorPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const studioBase = `/projects/${projectId}/content-generator`;
 
@@ -60,7 +61,7 @@ export default function WhitepaperGeneratorPage() {
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
-  const [primaryKeyword, setPrimaryKeyword] = useState("");
+  const [primaryKeyword, setPrimaryKeyword] = useState(searchParams?.get("keyword") || "");
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
   const [industry, setIndustry] = useState("");

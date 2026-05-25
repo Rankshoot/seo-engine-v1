@@ -30,9 +30,10 @@ import { useProject, qk } from "@/lib/query";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
 import { TARGET_REGIONS } from "@/lib/types";
 import {
-  generateEbookAction,
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
+import { calendarApi } from "@/frontend/api/calendar";
+import { blogsApi } from "@/frontend/api/blogs";
 
 const TONES = [
   { id: "premium-educational", label: "Premium · educational" },
@@ -41,10 +42,10 @@ const TONES = [
   { id: "friendly-expert", label: "Friendly · expert" },
 ] as const;
 
-const DEPTH_OPTIONS = [
-  { id: "concise", label: "Concise", hint: "5–6 chapters · 5k words" },
-  { id: "standard", label: "Standard", hint: "7–8 chapters · 8k words" },
-  { id: "deep", label: "Deep dive", hint: "9–11 chapters · 14k+ words" },
+const WORD_COUNT_OPTIONS = [
+  { id: "1500", label: "Concise", hint: "~1,500 words" },
+  { id: "2500", label: "Standard", hint: "~2,500 words" },
+  { id: "3500", label: "Deep dive", hint: "~3,500+ words" },
 ] as const;
 
 const LANG_OPTIONS = [
@@ -58,7 +59,7 @@ const LANG_OPTIONS = [
 
 type Phase = "form" | "review" | "generating";
 
-export default function EbookGeneratorPage() {
+export default function BlogGeneratorPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -79,7 +80,7 @@ export default function EbookGeneratorPage() {
   const [ctaObjective, setCtaObjective] = useState(
     "Book a demo or download a deeper resource on our site.",
   );
-  const [chapterDepth, setChapterDepth] = useState<(typeof DEPTH_OPTIONS)[number]["id"]>("standard");
+  const [wordCount, setWordCount] = useState<number>(2500);
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
@@ -91,9 +92,9 @@ export default function EbookGeneratorPage() {
     staleTime: 60_000,
     refetchOnMount: false,
   });
-  const recentEbooks = useMemo(() => {
+  const recentBlogs = useMemo(() => {
     const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
-    return rows.filter(r => r.content_type === "ebook").slice(0, 4);
+    return rows.filter(r => r.content_type === "blog").slice(0, 4);
   }, [history]);
 
   useEffect(() => {
@@ -111,7 +112,7 @@ export default function EbookGeneratorPage() {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
-        contentType: "ebook",
+        contentType: "blog",
         avoidPhrases: secondaryKeywords,
       });
       if (res.success) {
@@ -136,51 +137,62 @@ export default function EbookGeneratorPage() {
 
   const runGeneration = async () => {
     setPhase("generating");
-    const res = await generateEbookAction(projectId, {
-      topic,
-      primaryKeyword,
-      secondaryKeywords,
-      audience,
-      tone: TONES.find(t => t.id === tone)?.label ?? tone,
-      goal,
-      ctaObjective,
-      chapterDepth,
-      region,
-      language,
-      semanticKeywords: secondaryKeywords,
-    });
-    if (res.trace?.length) {
-      console.log("[ebook] trace:", res.trace);
-    }
-    if (res.success) {
-      toast.success("Ebook ready — opening preview.");
-      void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
-      void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-      router.push(`${studioBase}/ebooks/${res.data.id}`);
-    } else {
-      toast.error(res.error);
+    try {
+      // 1. Create a calendar entry
+      const calRes = await calendarApi.addCustomKeyword(projectId, {
+        keyword: primaryKeyword,
+        title: `[Draft] ${topic}`,
+        articleType: "blog",
+        writerNotes: `Audience: ${audience}\nTone: ${TONES.find(t => t.id === tone)?.label}\nGoal: ${goal}\nCTA: ${ctaObjective}\nSecondary Keywords: ${secondaryKeywords.join(", ")}`,
+        targetDate: new Date().toISOString().split("T")[0],
+      });
+      
+      if (!calRes.success) {
+        toast.error(calRes.error || "Failed to schedule blog");
+        setPhase("form");
+        return;
+      }
+
+      // 2. Generate the blog
+      const genRes = await blogsApi.generate({
+        entryId: calRes.data.id,
+        wordCount,
+      });
+
+      if (genRes.success) {
+        toast.success("Blog ready — opening preview.");
+        void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+        // Assuming we route to content history or the calendar.
+        router.push(`${base}/content-history`);
+      } else {
+        toast.error(genRes.error || "Failed to generate blog");
+        setPhase("form");
+      }
+    } catch (e) {
+      toast.error("An error occurred during generation");
       setPhase("form");
     }
   };
 
   const heroTitle = useMemo(() => {
-    if (phase === "generating") return "Drafting your ebook";
+    if (phase === "generating") return "Drafting your blog";
     if (phase === "review") return "Review & generate";
-    return "Ebook generator";
+    return "Blog generator";
   }, [phase]);
 
   const heroLead = useMemo(() => {
     if (phase === "generating")
-      return "Gemini 2.5 Pro is synthesising live research, your brief, and approved keywords into a publication-ready ebook. Keep this tab open.";
+      return "Gemini 2.5 Pro is synthesising live research, your brief, and approved keywords into a publication-ready blog post. Keep this tab open.";
     if (phase === "review")
       return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a Pro-tier draft pass before saving.";
-    return "Configure the ebook angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
+    return "Configure the blog angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
   }, [phase]);
 
   return (
     <div className="relative space-y-10 pb-16 pl-4 pr-4">
       <div className="border-b border-border-subtle pb-8 pt-4">
-        <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Ebooks" />
+        <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Blogs" />
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0 max-w-3xl">
             <PageTitle>{heroTitle}</PageTitle>
@@ -208,7 +220,7 @@ export default function EbookGeneratorPage() {
                 Back to details
               </Button>
               <Button variant="primary" shape="pill" size="lg" onClick={() => void runGeneration()}>
-                Generate ebook
+                Generate blog
               </Button>
             </div>
           ) : null}
@@ -228,9 +240,9 @@ export default function EbookGeneratorPage() {
 
         {phase === "generating" ? (
           <GenerationProgress
-            badgeLabel="Ebook"
-            title="Building your premium ebook"
-            lead="Gemini 2.5 Pro is drafting a multi-chapter, lead-magnet ebook with real citations and your internal links woven in. This usually takes 3–6 minutes."
+            badgeLabel="Blog"
+            title="Building your premium blog"
+            lead="Gemini 2.5 Pro is drafting a high-ranking blog post with real citations and your internal links woven in. This usually takes 1–3 minutes."
           />
         ) : phase === "review" ? (
           <ReviewView
@@ -238,7 +250,7 @@ export default function EbookGeneratorPage() {
             primaryKeyword={primaryKeyword}
             audience={audience}
             tone={TONES.find(t => t.id === tone)?.label ?? tone}
-            depthLabel={DEPTH_OPTIONS.find(d => d.id === chapterDepth)?.label ?? chapterDepth}
+            wordCount={wordCount}
             goal={goal}
             ctaObjective={ctaObjective}
             secondaryKeywords={secondaryKeywords}
@@ -250,32 +262,32 @@ export default function EbookGeneratorPage() {
             <ContentFormSection>
               <SectionHeading
                 index="01"
-                label="Ebook brief"
+                label="Blog brief"
                 hint="The angle, who it's for, and what it should accomplish."
               />
               <div className="space-y-5">
-                <Field label="Ebook topic" required htmlFor="ebook-topic">
+                <Field label="Blog topic" required htmlFor="blog-topic">
                   <Input
-                    id="ebook-topic"
+                    id="blog-topic"
                     inputSize="lg"
                     value={topic}
                     onChange={e => setTopic(e.target.value)}
-                    placeholder="e.g. The 2026 RPO Buyer's Handbook"
+                    placeholder="e.g. 10 Trends Shaping Recruitment Process Outsourcing in 2026"
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
-                  <Field label="Primary SEO keyword" required htmlFor="ebook-keyword">
+                  <Field label="Primary SEO keyword" required htmlFor="blog-keyword">
                     <Input
-                      id="ebook-keyword"
+                      id="blog-keyword"
                       inputSize="lg"
                       value={primaryKeyword}
                       onChange={e => setPrimaryKeyword(e.target.value)}
                       placeholder="recruitment process outsourcing"
                     />
                   </Field>
-                  <Field label="Target audience" required htmlFor="ebook-audience">
+                  <Field label="Target audience" required htmlFor="blog-audience">
                     <Input
-                      id="ebook-audience"
+                      id="blog-audience"
                       inputSize="lg"
                       value={audience}
                       onChange={e => setAudience(e.target.value)}
@@ -285,11 +297,11 @@ export default function EbookGeneratorPage() {
                 </ContentFormGrid>
                 <Field
                   label="Supporting / semantic keywords"
-                  description="Optional. We weave these naturally across chapters — never as a list."
-                  htmlFor="ebook-secondary-keywords"
+                  description="Optional. We weave these naturally across the article — never as a list."
+                  htmlFor="blog-secondary-keywords"
                 >
                   <KeywordChips
-                    id="ebook-secondary-keywords"
+                    id="blog-secondary-keywords"
                     value={secondaryKeywords}
                     onChange={setSecondaryKeywords}
                     placeholder="Type a keyword and press Enter…"
@@ -304,17 +316,17 @@ export default function EbookGeneratorPage() {
                 <Field label="Tone">
                   <ChipChoice options={TONES.map(t => ({ id: t.id, label: t.label }))} value={tone} onChange={setTone} ariaLabel="Tone" />
                 </Field>
-                <Field label="Chapter depth">
+                <Field label="Target word count">
                   <ChipChoice
-                    options={DEPTH_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
-                    value={chapterDepth}
-                    onChange={setChapterDepth}
-                    ariaLabel="Chapter depth"
+                    options={WORD_COUNT_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
+                    value={String(wordCount)}
+                    onChange={val => setWordCount(Number(val))}
+                    ariaLabel="Target word count"
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
-                  <Field label="Region" htmlFor="ebook-region">
-                    <Select id="ebook-region" inputSize="lg" value={region} onChange={e => setRegion(e.target.value)}>
+                  <Field label="Region" htmlFor="blog-region">
+                    <Select id="blog-region" inputSize="lg" value={region} onChange={e => setRegion(e.target.value)}>
                       {TARGET_REGIONS.map(r => (
                         <option key={r.code} value={r.code}>
                           {r.name}
@@ -322,9 +334,9 @@ export default function EbookGeneratorPage() {
                       ))}
                     </Select>
                   </Field>
-                  <Field label="Language" htmlFor="ebook-language">
+                  <Field label="Language" htmlFor="blog-language">
                     <Select
-                      id="ebook-language"
+                      id="blog-language"
                       inputSize="lg"
                       value={language}
                       onChange={e => setLanguage(e.target.value)}
@@ -344,38 +356,38 @@ export default function EbookGeneratorPage() {
               <SectionHeading
                 index="03"
                 label="Goal & CTA"
-                hint="Tell the writer what success looks like — drives the closing chapter and CTA."
+                hint="Tell the writer what success looks like — drives the conclusion and CTA."
               />
               <div className="space-y-5">
-                <Field label="Reader takeaway / goal" htmlFor="ebook-goal">
+                <Field label="Reader takeaway / goal" htmlFor="blog-goal">
                   <Textarea
-                    id="ebook-goal"
+                    id="blog-goal"
                     rows={3}
                     value={goal}
                     onChange={e => setGoal(e.target.value)}
                     placeholder="What should the reader walk away knowing or doing?"
                   />
                 </Field>
-                <Field label="CTA objective" htmlFor="ebook-cta">
+                <Field label="CTA objective" htmlFor="blog-cta">
                   <Textarea
-                    id="ebook-cta"
+                    id="blog-cta"
                     rows={3}
                     value={ctaObjective}
                     onChange={e => setCtaObjective(e.target.value)}
-                    placeholder="What action should the closing chapter steer the reader toward?"
+                    placeholder="What action should the conclusion steer the reader toward?"
                   />
                 </Field>
               </div>
             </ContentFormSection>
 
-            {recentEbooks.length > 0 ? (
+            {recentBlogs.length > 0 ? (
               <ContentFormSection>
-                <SectionHeading index="04" label="Recent ebooks" hint="Continue from a draft or open the previewer." />
+                <SectionHeading index="04" label="Recent blogs" hint="Continue from a draft or open the previewer." />
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {recentEbooks.map(r => (
+                  {recentBlogs.map(r => (
                     <ProjectNavLink
                       key={r.id}
-                      href={`${studioBase}/ebooks/${r.id}`}
+                      href={`${studioBase}/blogs/${r.id}`}
                       className="group flex flex-col gap-1 rounded-card border border-border-subtle bg-surface-elevated p-4 transition-colors hover:border-border-strong"
                     >
                       <span className="text-[11px] font-mono uppercase tracking-widest text-text-tertiary">
@@ -404,7 +416,7 @@ function ReviewView({
   primaryKeyword,
   audience,
   tone,
-  depthLabel,
+  wordCount,
   goal,
   ctaObjective,
   secondaryKeywords,
@@ -415,7 +427,7 @@ function ReviewView({
   primaryKeyword: string;
   audience: string;
   tone: string;
-  depthLabel: string;
+  wordCount: number;
   goal: string;
   ctaObjective: string;
   secondaryKeywords: string[];
@@ -427,7 +439,6 @@ function ReviewView({
     { label: "Primary keyword", value: primaryKeyword },
     { label: "Audience", value: audience },
     { label: "Tone", value: tone },
-    { label: "Chapter depth", value: depthLabel },
     { label: "Region", value: regionLabel },
     { label: "Language", value: languageLabel },
   ];
@@ -449,7 +460,7 @@ function ReviewView({
   return (
     <div className="space-y-8">
       <Card padding="lg" elevation="raised">
-        <SectionHeading index="01" label="Ebook brief summary" />
+        <SectionHeading index="01" label="Blog brief summary" />
         <dl className="grid gap-5 sm:grid-cols-2">
           {rows.map(r => (
             <div key={r.label}>
@@ -459,6 +470,12 @@ function ReviewView({
               <dd className="mt-1 wrap-break-word text-[14px] font-medium text-text-primary">{r.value}</dd>
             </div>
           ))}
+          <div>
+            <dt className="font-mono text-[10px] font-medium uppercase tracking-widest text-text-tertiary">
+              Length
+            </dt>
+            <dd className="mt-1 wrap-break-word text-[14px] font-medium text-text-primary">{wordCount} words</dd>
+          </div>
         </dl>
       </Card>
 

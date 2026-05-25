@@ -121,21 +121,9 @@ export default function ProjectSidebar({
         const kwo = keywordsListQueryOptions(id);
         safePrefetch(kwo.queryKey, kwo.queryFn);
         safePrefetch(qk.brief(id), () => briefApi.get(id));
-        break;
-      }
-      case "Calendar":
-        safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
-        safePrefetch(qk.audits(id), () => auditsApi.list(id));
-        break;
-      case "Blogs":
-        safePrefetch(qk.calendarWithBlogs(id), () => calendarApi.withBlogs(id));
-        break;
-      case "Articles":
-        safePrefetch(qk.articlesLibrary(id), () => articlesApi.library(id));
-        break;
-      case "Competitors":
         safePrefetch(qk.competitors(id), () => competitorsApi.benchmark(id));
         break;
+      }
       case "Content Health":
         safePrefetch(qk.audits(id), () => auditsApi.list(id));
         break;
@@ -148,6 +136,11 @@ export default function ProjectSidebar({
         // Phase 5 — Content Studio (ebooks, whitepapers, LinkedIn) reads
         // from a unified history endpoint. Prefetching it here means
         // navigating between sub-tabs feels instant.
+        safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
+        break;
+      }
+      case "Content History": {
+        safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
         safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
         break;
       }
@@ -193,10 +186,15 @@ export default function ProjectSidebar({
   };
 
   const navItems: NavLeaf[] = [
-    { icon: Icon.grid, label: "Overview", href: base, prefetchLabel: "Overview" },
+    {
+      icon: Icon.grid,
+      label: "Overview",
+      href: base,
+      prefetchLabel: "Overview"
+    },
     {
       icon: Icon.search,
-      label: "Keywords",
+      label: "Keyword Discovery",
       href: `${base}/keywords`,
       badge: navCountsReady && liveStats?.approvedKeywords ? `${liveStats.approvedKeywords}` : undefined,
       prefetchLabel: "Keywords",
@@ -207,18 +205,17 @@ export default function ProjectSidebar({
       href: `${base}/content-generator`,
       prefetchLabel: "Content Generator",
       children: [
-        { label: "Instant article", href: `${base}/content-generator/instant` },
+        { label: "Blog articles", href: `${base}/content-generator/blogs` },
         { label: "Ebooks", href: `${base}/content-generator/ebooks` },
         { label: "Whitepapers", href: `${base}/content-generator/whitepapers` },
         { label: "LinkedIn posts", href: `${base}/content-generator/linkedin` },
-        { label: "Content history", href: `${base}/content-generator/history` },
       ],
     },
     {
-      icon: Icon.target,
-      label: "Competitors",
-      href: `${base}/competitors`,
-      prefetchLabel: "Competitors",
+      icon: Icon.calendar,
+      label: "Content History",
+      href: `${base}/content-history`,
+      prefetchLabel: "Content History",
     },
     {
       icon: Icon.audit,
@@ -232,28 +229,6 @@ export default function ProjectSidebar({
         { label: "Page Explorer", href: `${auditBase}/discover-pages` },
         { label: "Content Analyzer", href: `${auditBase}/import` },
       ],
-    },
-    {
-      icon: Icon.calendar,
-      label: "Calendar",
-      href: `${base}/calendar`,
-      badge: navCountsReady && liveStats?.calendarEntries ? `${liveStats.calendarEntries}` : undefined,
-      prefetchLabel: "Calendar",
-    },
-    {
-      icon: Icon.fileText,
-      label: "Blogs",
-      href: `${base}/blogs`,
-      exact: true,
-      badge: navCountsReady && liveStats?.blogsGenerated ? `${liveStats.blogsGenerated}` : undefined,
-      prefetchLabel: "Blogs",
-    },
-    {
-      icon: Icon.articles,
-      label: "Articles",
-      href: `${base}/articles`,
-      badge: navCountsReady && liveStats?.articlesInLibrary ? `${liveStats.articlesInLibrary}` : undefined,
-      prefetchLabel: "Articles",
     },
   ];
 

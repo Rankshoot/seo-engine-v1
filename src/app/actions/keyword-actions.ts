@@ -24,6 +24,7 @@ import {
 } from '@/lib/keyword-discovery';
 import { enrichKeywordInBackground } from '@/lib/keyword-modal';
 import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates } from './calendar-actions';
+import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
 
 // ─── AI Evaluation types (mirrors Keyword.ai_eval_data) ──────────────────────
 export type AiEvalData = {
@@ -197,11 +198,18 @@ export async function refreshKeywordIntentsWithGemini(projectId: string): Promis
     const volume = Math.max(0, Math.round(Number(row.volume) || 0));
     const kd = Math.max(0, Math.round(Number(row.kd) || 0));
     const ai = aiScore(volume, kd, intent);
-    const { error: upErr } = await supabaseAdmin
+    let { error: upErr } = await supabaseAdmin
       .from('keywords')
       .update({ intent, ai_score: ai, funnel_stage })
       .eq('id', row.id)
       .eq('project_id', projectId);
+    if (upErr && upErr.message.includes('funnel_stage') && upErr.message.includes('schema cache')) {
+      ({ error: upErr } = await supabaseAdmin
+        .from('keywords')
+        .update({ intent, ai_score: ai })
+        .eq('id', row.id)
+        .eq('project_id', projectId));
+    }
     if (!upErr) updated += 1;
     else console.error('[intent-refresh] update failed', row.id, upErr.message);
   }
@@ -470,6 +478,19 @@ export async function discoverKeywords(projectId: string) {
   const region: string = project.target_region ?? '';
   const language: string = project.target_language ?? 'en';
 
+  return runWithUsageLogContext(
+    { userId: user.id, projectId, feature: 'keyword_discovery' },
+    async () => {
+  try {
+    const { assertProjectKeywordCapacity } = await import('@/lib/admin/platform-settings-runtime');
+    await assertProjectKeywordCapacity(projectId);
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : 'Keyword limit reached',
+    };
+  }
+
   // 1. In parallel: ensure a Business Brief exists (Jina scrape — cached in
   //    `project_briefs`) and run the lightweight SEO crawler against the
   //    user's domain. `crawlWebsite` NEVER throws — it always resolves to a
@@ -528,7 +549,7 @@ export async function discoverKeywords(projectId: string) {
     crawlError: crawl.error ?? null,
   });
 
-  const { keywords: rawKeywords, trace: discoveryTrace } = await discoverKeywordsForProject(
+  const { keywords: rawKeywords, trace: discoveryTrace, ahrefsDiscoveryState } = await discoverKeywordsForProject(
     seedKeywords,
     region,
     language,
@@ -627,10 +648,18 @@ export async function discoverKeywords(projectId: string) {
 
   // Use upsert with `ignoreDuplicates: true` only to skip rows whose keyword
   // is already approved/rejected (still in the table). All other rows insert.
-  const { data, error } = await supabaseAdmin
+  let { data, error } = await supabaseAdmin
     .from('keywords')
     .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
     .select();
+
+  if (error && error.message.includes('funnel_stage') && error.message.includes('schema cache')) {
+    const rowsNoFunnel = rows.map(({ funnel_stage: _, ...rest }) => rest);
+    ({ data, error } = await supabaseAdmin
+      .from('keywords')
+      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+      .select());
+  }
 
   if (error)
     return {
@@ -640,6 +669,12 @@ export async function discoverKeywords(projectId: string) {
       briefSummary: briefSummary(brief),
       relevance: relevanceSummary,
     };
+
+  await supabaseAdmin
+    .from('projects')
+    .update({ ahrefs_discovery_state: ahrefsDiscoveryState || {} })
+    .eq('id', projectId);
+
   return {
     success: true,
     data,
@@ -648,6 +683,7 @@ export async function discoverKeywords(projectId: string) {
     briefSummary: briefSummary(brief),
     relevance: relevanceSummary,
   };
+  });
 }
 
 /**
@@ -734,14 +770,153 @@ export async function getKeywords(
         .order('volume', { ascending: false })
     : Promise.resolve({ data: [], error: null } as { data: unknown[]; error: { message: string } | null });
 
-  const [pendingRes, lockedRes] = await Promise.all([pendingPromise, lockedPromise]);
+  const projectPromise = supabaseAdmin
+    .from('projects')
+    .select('ahrefs_discovery_state')
+    .eq('id', projectId)
+    .single();
+
+  const [pendingRes, lockedRes, projectRes] = await Promise.all([
+    pendingPromise,
+    lockedPromise,
+    projectPromise,
+  ]);
+
   if (pendingRes.error)
     return { success: false, error: pendingRes.error.message, data: [] as Keyword[], total: 0 };
   if (lockedRes.error)
     return { success: false, error: lockedRes.error.message, data: [] as Keyword[], total: 0 };
 
   const data = [...(lockedRes.data as Keyword[] ?? []), ...(pendingRes.data as Keyword[] ?? [])];
-  return { success: true, data, total: count ?? data.length };
+  return {
+    success: true,
+    data,
+    total: count ?? data.length,
+    ahrefsDiscoveryState: projectRes.data?.ahrefs_discovery_state || null,
+  };
+}
+
+export async function loadMoreFromAhrefsAction(projectId: string) {
+  const user = await currentUser();
+  if (!user) {
+    return { success: false, error: 'Not authenticated' };
+  }
+
+  // 1. Get the project details and its current ahrefs_discovery_state
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('domain, niche, target_audience, target_region, target_language, ahrefs_discovery_state')
+    .eq('id', projectId)
+    .single();
+
+  if (pErr || !project) {
+    return { success: false, error: pErr?.message ?? 'Project not found' };
+  }
+
+  const state = (project.ahrefs_discovery_state ?? {}) as {
+    matching_last_volume?: number | null;
+    matching_has_more?: boolean;
+    related_last_volume?: number | null;
+    related_has_more?: boolean;
+  };
+
+  const matchingLastVolume = state.matching_last_volume ?? undefined;
+  const matchingHasMore = state.matching_has_more !== false;
+  const relatedLastVolume = state.related_last_volume ?? undefined;
+  const relatedHasMore = state.related_has_more !== false;
+
+  if (!matchingHasMore && !relatedHasMore) {
+    return { success: true, count: 0, message: 'All keywords already loaded from Ahrefs' };
+  }
+
+  // 2. Build seed keywords using same logic
+  const seedKeywords = buildSeedsFromInputs(project.niche ?? '', project.target_audience ?? '');
+
+  // 3. Fetch from Ahrefs using last volume
+  // Fetch via discoverKeywordsForProject to reuse the full scoring and normalization pipeline!
+  const research = await discoverKeywordsForProject(
+    seedKeywords,
+    project.target_region ?? 'us',
+    project.target_language ?? 'en',
+    project.domain ?? undefined,
+    project.niche ?? undefined,
+    {
+      targetAudience: project.target_audience ?? undefined,
+      matchingLastVolume,
+      relatedLastVolume,
+      queryMatching: matchingHasMore,
+      queryRelated: relatedHasMore,
+    }
+  );
+
+  const rawKeywords = research.keywords;
+
+  if (!rawKeywords.length) {
+    // If no keywords are returned, update has_more to false so we don't loop endlessly
+    const updatedState = {
+      matching_last_volume: matchingLastVolume ?? null,
+      matching_has_more: false,
+      related_last_volume: relatedLastVolume ?? null,
+      related_has_more: false,
+    };
+    await supabaseAdmin
+      .from('projects')
+      .update({ ahrefs_discovery_state: updatedState })
+      .eq('id', projectId);
+    return { success: true, count: 0 };
+  }
+
+  // 4. Map keywords to DB schema (relevance and fit are already calculated by discoverKeywordsForProject!)
+  const rows = rawKeywords.map(kw => ({
+    project_id: projectId,
+    keyword: kw.keyword,
+    volume: kw.volume,
+    kd: kw.kd,
+    cpc: kw.cpc,
+    trend: '',
+    competition_level: '',
+    intent: kw.intent || null,
+    funnel_stage: deterministicFunnelStage(kw.intent || '', kw.keyword),
+    monthly_searches: kw.monthly_searches || [],
+    secondary_keywords: kw.secondary_keywords || [],
+    ai_score: aiScore(kw.volume, kw.kd, kw.intent),
+    keyword_analysis_score:
+      kw.keyword_analysis_score || aiScore(kw.volume, kw.kd, kw.intent),
+    relevance_score: kw.relevance_score ?? null,
+    business_fit_score: kw.business_fit_score ?? null,
+    status: 'pending' as const,
+  }));
+
+  // 5. Upsert new keywords (ignore duplicate keywords already approved/rejected/pending)
+  let { data: inserted, error: insErr } = await supabaseAdmin
+    .from('keywords')
+    .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+    .select();
+
+  if (insErr && insErr.message.includes('funnel_stage') && insErr.message.includes('schema cache')) {
+    const rowsNoFunnel = rows.map(({ funnel_stage: _, ...rest }) => rest);
+    ({ data: inserted, error: insErr } = await supabaseAdmin
+      .from('keywords')
+      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+      .select());
+  }
+
+  if (insErr) {
+    return { success: false, error: insErr.message };
+  }
+
+  // 6. Update project's `ahrefs_discovery_state`
+  if (research.ahrefsDiscoveryState) {
+    await supabaseAdmin
+      .from('projects')
+      .update({ ahrefs_discovery_state: research.ahrefsDiscoveryState })
+      .eq('id', projectId);
+  }
+
+  return {
+    success: true,
+    count: inserted?.length ?? 0,
+  };
 }
 
 /**
@@ -1256,7 +1431,7 @@ export async function upsertKeywordFromDomainSite(
   if (!id) {
     // Same column set as `discoverKeywords` — never reference columns missing from this Supabase project.
     // `ignoreDuplicates: true` matches discovery: do not overwrite an existing approved/rejected row on conflict.
-    const { error: insErr } = await supabaseAdmin.from('keywords').upsert(
+    let { error: insErr } = await supabaseAdmin.from('keywords').upsert(
       {
         project_id: projectId,
         keyword: phrase,
@@ -1278,6 +1453,29 @@ export async function upsertKeywordFromDomainSite(
       { onConflict: 'project_id,keyword', ignoreDuplicates: true }
     );
 
+    if (insErr && insErr.message.includes('funnel_stage') && insErr.message.includes('schema cache')) {
+      ({ error: insErr } = await supabaseAdmin.from('keywords').upsert(
+        {
+          project_id: projectId,
+          keyword: phrase,
+          volume,
+          kd,
+          cpc,
+          trend: '',
+          competition_level: '',
+          intent: intentStr || null,
+          monthly_searches: [],
+          secondary_keywords: [],
+          ai_score: ai,
+          keyword_analysis_score: ai,
+          relevance_score: null,
+          business_fit_score: null,
+          status: 'pending',
+        },
+        { onConflict: 'project_id,keyword', ignoreDuplicates: true }
+      ));
+    }
+
     if (insErr) return { success: false, error: insErr.message };
 
     const { data: got, error: selErr } = await supabaseAdmin
@@ -1294,7 +1492,7 @@ export async function upsertKeywordFromDomainSite(
   }
 
   // Same metrics industry discovery updates — omit `traffic_potential`, `updated_at`, etc. when missing from schema.
-  const { error: metErr } = await supabaseAdmin
+  let { error: metErr } = await supabaseAdmin
     .from('keywords')
     .update({
       volume,
@@ -1304,6 +1502,18 @@ export async function upsertKeywordFromDomainSite(
       funnel_stage: deterministicFunnelStage(intentStr, phrase),
     })
     .eq('id', id);
+
+  if (metErr && metErr.message.includes('funnel_stage') && metErr.message.includes('schema cache')) {
+    ({ error: metErr } = await supabaseAdmin
+      .from('keywords')
+      .update({
+        volume,
+        kd,
+        cpc,
+        intent: intentStr,
+      })
+      .eq('id', id));
+  }
 
   if (metErr) return { success: false, error: metErr.message };
 
@@ -1342,7 +1552,7 @@ const GEMINI_EVAL_URLS = [
 /** Extracts the first JSON array from raw text (handles trailing commentary / partial fences). */
 function extractJsonArray(raw: string): string {
   // Strip any markdown fences
-  let s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  const s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
   // Find the first '[' and last ']'
   const start = s.indexOf('[');
   const end = s.lastIndexOf(']');
@@ -1498,7 +1708,8 @@ export async function scoreKeywordsWithAI(
 
   if (opts?.keywordIds?.length) {
     query = query.in('id', opts.keywordIds);
-  } else if (!opts?.force) {
+  }
+  if (!opts?.force) {
     query = query.is('ai_eval_score', null);
   }
 

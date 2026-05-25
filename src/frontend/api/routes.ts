@@ -15,6 +15,7 @@ export const V1Routes = {
   // ── Keywords ───────────────────────────────────────────────────────────────
   keywords: (projectId: string) => `/projects/${projectId}/keywords`,
   keywordsLoadMore: (projectId: string) => `/projects/${projectId}/keywords/load-more`,
+  keywordsLoadMoreAhrefs: (projectId: string) => `/projects/${projectId}/keywords/load-more-from-ahrefs`,
   keywordsDomain: (projectId: string) => `/projects/${projectId}/keywords/domain`,
   keywordsBulkStatus: (projectId: string) => `/projects/${projectId}/keywords/bulk-status`,
   keywordsApproveCluster: (projectId: string) => `/projects/${projectId}/keywords/approve-cluster`,
@@ -44,6 +45,8 @@ export const V1Routes = {
   competitorsBenchmark: (projectId: string) => `/projects/${projectId}/competitors/benchmark`,
   competitorsBlogFromOpportunity: (projectId: string) =>
     `/projects/${projectId}/competitors/blog-from-opportunity`,
+  competitorsLoadMoreAhrefs: (projectId: string) =>
+    `/projects/${projectId}/competitors/load-more-from-ahrefs`,
 
   // ── Content health (audits) ────────────────────────────────────────────────
   contentHealthAudits: (projectId: string) => `/projects/${projectId}/content-health/audits`,
@@ -63,4 +66,17 @@ export const V1Routes = {
   blogRewriteSelection: (blogId: string) => `/blogs/${blogId}/rewrite-selection`,
   blogEnhanced: (blogId: string) => `/blogs/${blogId}/enhanced`,
   blogDeepAnalysis: (blogId: string) => `/blogs/${blogId}/deep-analysis`,
+
+  // ── Admin (platform) ─────────────────────────────────────────────────────
+  adminMe: "/admin/me",
+  adminOverview: "/admin/overview",
+  adminUsers: "/admin/users",
+  adminProjects: "/admin/projects",
+  adminApiUsage: "/admin/api-usage",
+  adminAiLogs: "/admin/ai-logs",
+  adminContent: "/admin/content",
+  adminErrors: "/admin/errors",
+  adminAuditLogs: "/admin/audit-logs",
+  adminSettings: "/admin/settings",
+  adminSettingsAdmins: "/admin/settings/admins",
 } as const;

@@ -50,12 +50,11 @@ export function GenerationProgress({
   badgeLabel,
   className,
 }: GenerationProgressProps) {
-  const [autoProgress, setAutoProgress] = useState(0);
+  const [autoProgress, setAutoProgress] = useState(0.04);
   const progress = externalProgress ?? autoProgress;
 
   useEffect(() => {
     if (externalProgress !== undefined) return;
-    setAutoProgress(0.04);
     const tick = setInterval(() => {
       setAutoProgress(p => (p >= 0.94 ? 0.94 : p + 0.013 + Math.random() * 0.018));
     }, 700);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
@@ -8,6 +8,7 @@ import { UserButton } from "@clerk/nextjs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/brand/Logo";
 import { qk, keywordsListQueryOptions } from "@/lib/query";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
@@ -69,7 +70,6 @@ interface ProjectSidebarProps {
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
   onOpenAI?: () => void;
-  onNewProject?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -79,7 +79,6 @@ export default function ProjectSidebar({
   isCollapsed,
   setIsCollapsed,
   onOpenAI,
-  onNewProject,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -90,36 +89,23 @@ export default function ProjectSidebar({
     queryFn: () => projectsApi.stats(project.id),
     enabled: !!project.id,
   });
-  const serverStats = useMemo(() => {
-    if (statsResponse?.success && statsResponse.data) {
-      return {
-        approvedKeywords: statsResponse.data.approvedKeywords,
-        calendarEntries: statsResponse.data.calendarEntries,
-        blogsGenerated: statsResponse.data.blogsGenerated,
-        articlesInLibrary: statsResponse.data.articlesInLibrary,
-        auditPending: statsResponse.data.auditPending,
-      };
-    }
-    return stats;
-  }, [
-    stats,
-    statsResponse?.success,
-    statsResponse?.data?.approvedKeywords,
-    statsResponse?.data?.calendarEntries,
-    statsResponse?.data?.blogsGenerated,
-    statsResponse?.data?.articlesInLibrary,
-    statsResponse?.data?.auditPending,
-  ]);
+  const serverStats =
+    statsResponse?.success && statsResponse.data
+      ? {
+          approvedKeywords: statsResponse.data.approvedKeywords,
+          calendarEntries: statsResponse.data.calendarEntries,
+          blogsGenerated: statsResponse.data.blogsGenerated,
+          articlesInLibrary: statsResponse.data.articlesInLibrary,
+          auditPending: statsResponse.data.auditPending,
+        }
+      : stats;
   const liveStats = useAppSelector(state => selectProjectStats(state, project.id, serverStats));
   const base = `/projects/${project.id}`;
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  /** Nav count badges use React Query + Redux; values can differ SSR vs first client paint — defer badges until mounted to avoid hydration mismatch. */
-  const [navCountsReady, setNavCountsReady] = useState(false);
-  useEffect(() => {
-    setNavCountsReady(true);
-  }, []);
+  /** Nav count badges use React Query + Redux; sidebar is client-only so counts can render immediately. */
+  const navCountsReady = true;
 
   // Warm TanStack cache on nav **click** only (not hover/focus) so moving the
   // mouse across the sidebar does not hit `/api/v1`.
@@ -286,16 +272,11 @@ export default function ProjectSidebar({
       {/* Logo & Toggle Header */}
       <div className={`p-6 pb-4 flex flex-col transition-all duration-300 ease-in-out ${isCollapsed ? "items-center px-2" : ""}`}>
         <div className={`flex items-center ${isCollapsed ? "justify-center" : "justify-between"} mb-8 relative group w-full`}>
-          <Link 
-            href="/" 
-            className={`flex items-center font-medium tracking-tight font-display text-text-primary transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-100 group-hover:opacity-0" : ""}`}
+          <Link
+            href="/"
+            className={`flex items-center transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-100 group-hover:opacity-0" : ""}`}
           >
-            <span className="w-8 h-8 shrink-0 rounded-[8px] bg-brand-primary flex items-center justify-center text-[14px] text-brand-on-primary">
-              ⚡
-            </span>
-            <span className={`text-[20px] whitespace-nowrap overflow-hidden transition-all duration-300 ease-in-out ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
-              SerpCraft
-            </span>
+            <Logo size="md" markOnly={isCollapsed} className={isCollapsed ? "" : ""} />
           </Link>
 
           {isCollapsed ? (
@@ -376,28 +357,6 @@ export default function ProjectSidebar({
                 ))}
               </div>
               <div className="px-3 pt-2 pb-1 mt-2 border-t border-border-subtle space-y-1.5">
-                {onNewProject ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsDropdownOpen(false);
-                      onNewProject();
-                    }}
-                    className="flex w-full cursor-pointer items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
-                  >
-                    {Icon.plus}
-                    New project
-                  </button>
-                ) : (
-                  <ProjectNavLink
-                    href="/projects?new=1"
-                    onClick={() => setIsDropdownOpen(false)}
-                  className="flex items-center justify-start gap-2 rounded-[8px] px-2 py-1.5 text-[12px]  font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
-                  >
-                    {Icon.plus}
-                    New project
-                  </ProjectNavLink>
-                )}
                 <ProjectNavLink
                   href="/projects"
                   onClick={() => setIsDropdownOpen(false)}

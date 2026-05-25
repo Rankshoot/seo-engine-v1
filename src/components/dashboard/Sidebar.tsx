@@ -5,26 +5,23 @@ import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/brand/Logo";
 
 const Icon = {
   folder: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
-  plus: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8m-4-4h8"/></svg>,
 };
 
 const navItems = [{ icon: Icon.folder, label: "Projects", href: "/projects" as const }];
 
-export default function Sidebar({ onNewProject }: { onNewProject?: () => void }) {
+export default function Sidebar() {
   const pathname = usePathname();
 
   return (
     <aside className="w-[280px] h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-secondary flex flex-col z-[60]">
       {/* Logo */}
       <div className="p-8">
-        <Link href="/" className="flex items-center gap-3 font-medium text-[20px] tracking-tight font-display text-text-primary">
-          <span className="w-8 h-8 rounded-[8px] bg-brand-primary flex items-center justify-center text-[14px] text-brand-on-primary">
-            ⚡
-          </span>
-          SerpCraft
+        <Link href="/" className="inline-flex">
+          <Logo size="md" />
         </Link>
       </div>
 
@@ -51,26 +48,6 @@ export default function Sidebar({ onNewProject }: { onNewProject?: () => void })
               </li>
             );
           })}
-          <li>
-            {onNewProject ? (
-              <button
-                type="button"
-                onClick={onNewProject}
-                className="flex w-full items-center gap-3 px-4 py-3 rounded-[8px] text-[14px] font-medium transition-colors text-left border border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-hover"
-              >
-                <span className="text-text-tertiary">{Icon.plus}</span>
-                New Project
-              </button>
-            ) : (
-              <ProjectNavLink
-                href="/projects?new=1"
-                className="flex items-center gap-3 px-4 py-3 rounded-[8px] text-[14px] font-medium transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"
-              >
-                <span className="text-text-tertiary">{Icon.plus}</span>
-                New Project
-              </ProjectNavLink>
-            )}
-          </li>
         </ul>
       </nav>
 

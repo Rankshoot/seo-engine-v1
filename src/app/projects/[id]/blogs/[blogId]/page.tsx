@@ -24,7 +24,8 @@ import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { BlogDeepAnalysisModal } from "@/components/BlogDeepAnalysisModal";
 import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
-import { rangeSelectionToMarkdown } from "@/lib/editor-selection-markdown";
+import { extractInlineMarkdownLinks, type BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
+import { rangeSelectionToMarkdown, rangeSelectionHtmlFragment } from "@/lib/editor-selection-markdown";
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { calendarApi } from "@/frontend/api/calendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
@@ -196,7 +197,6 @@ function BlogImageEditOverlay({
 
   useEffect(() => {
     if (!active) {
-      if (targetImg) setTargetImg(null);
       return;
     }
     const handleBodyClick = (e: MouseEvent) => {
@@ -273,7 +273,7 @@ function BlogEditAiFixOverlay({
   active: boolean;
   getRoots: () => Array<HTMLElement | null>;
   panelRef: RefObject<HTMLElement | null>;
-  onOpen: (payload: { text: string; range: Range }) => void;
+  onOpen: (payload: { snapshot: BlogRewriteSelectionSnapshot; range: Range }) => void;
 }) {
   const btnRef = useRef<HTMLButtonElement | null>(null);
 
@@ -356,9 +356,18 @@ function BlogEditAiFixOverlay({
         if (!walk || !roots.some(r => r.contains(walk))) return;
         const range = sel.getRangeAt(0).cloneRange();
         const asMd = rangeSelectionToMarkdown(range);
-        const text = asMd.trim() ? asMd : sel.toString();
-        if (!text.trim()) return;
-        onOpen({ text, range });
+        const plainText = sel.toString();
+        const markdown = asMd.trim() ? asMd : plainText;
+        if (!markdown.trim()) return;
+        const htmlFragment = rangeSelectionHtmlFragment(range);
+        const links = extractInlineMarkdownLinks(markdown);
+        const snapshot: BlogRewriteSelectionSnapshot = {
+          markdown,
+          plainText,
+          htmlFragment: htmlFragment || undefined,
+          links,
+        };
+        onOpen({ snapshot, range });
       }}
     >
       Ai fix
@@ -435,7 +444,6 @@ function BlogContentAnalysisModal({
 }) {
   const [tab, setTab] = useState<"issues" | "rubric" | "gaps">("issues");
 
-  useEffect(() => { if (open) setTab("issues"); }, [open]);
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -643,7 +651,7 @@ function BlogContentAnalysisModal({
         {/* Footer */}
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-surface-secondary/95 p-4 backdrop-blur">
           <p className="text-[11px] text-text-tertiary max-w-xs leading-relaxed">
-            "Generate enhanced" rewrites applying <strong className="text-text-secondary">all</strong> issues above at once. "Schedule" queues the keyword for later.
+            &quot;Generate enhanced&quot; rewrites applying <strong className="text-text-secondary">all</strong> issues above at once. &quot;Schedule&quot; queues the keyword for later.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={onClose}
@@ -698,7 +706,10 @@ export default function BlogViewerPage() {
   const selectionSnapshotRef = useRef<{ range: Range } | null>(null);
 
   const [editSessionKey, setEditSessionKey] = useState(0);
-  const [aiRewriter, setAiRewriter] = useState<{ open: boolean; text: string }>({ open: false, text: "" });
+  const [aiRewriter, setAiRewriter] = useState<{
+    open: boolean;
+    snapshot: BlogRewriteSelectionSnapshot | null;
+  }>({ open: false, snapshot: null });
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingImage, setEditingImage] = useState<HTMLImageElement | null>(null);
@@ -840,7 +851,7 @@ export default function BlogViewerPage() {
 
   useEffect(() => {
     if (!editMode) {
-      setAiRewriter({ open: false, text: "" });
+      setAiRewriter({ open: false, snapshot: null });
       selectionSnapshotRef.current = null;
     }
   }, [editMode]);
@@ -1167,7 +1178,7 @@ export default function BlogViewerPage() {
   const cancelEditing = () => {
     setEditMode(false);
     setEditError("");
-    setAiRewriter({ open: false, text: "" });
+    setAiRewriter({ open: false, snapshot: null });
     selectionSnapshotRef.current = null;
   };
 
@@ -1175,14 +1186,14 @@ export default function BlogViewerPage() {
     const snap = selectionSnapshotRef.current;
     if (!displayBlog || !snap?.range) {
       setEditError("Couldn't apply rewrite — select text again.");
-      setAiRewriter({ open: false, text: "" });
+      setAiRewriter({ open: false, snapshot: null });
       return;
     }
     try {
       const range = snap.range.cloneRange();
       if (!document.contains(range.startContainer)) {
         setEditError("Editor changed — select text again.");
-        setAiRewriter({ open: false, text: "" });
+        setAiRewriter({ open: false, snapshot: null });
         return;
       }
       range.deleteContents();
@@ -1197,7 +1208,7 @@ export default function BlogViewerPage() {
       s?.removeAllRanges();
       s?.addRange(range);
       selectionSnapshotRef.current = null;
-      setAiRewriter({ open: false, text: "" });
+      setAiRewriter({ open: false, snapshot: null });
       setEditError("");
     } catch {
       setEditError("Couldn't insert rewritten text.");
@@ -1789,9 +1800,9 @@ export default function BlogViewerPage() {
         active={editMode && !aiRewriter.open}
         getRoots={getEditRoots}
         panelRef={blogPanelRef}
-        onOpen={({ text, range }) => {
+        onOpen={({ snapshot, range }) => {
           selectionSnapshotRef.current = { range };
-          setAiRewriter({ open: true, text });
+          setAiRewriter({ open: true, snapshot });
         }}
       />
 
@@ -1841,7 +1852,8 @@ export default function BlogViewerPage() {
       <BlogAiRewriterModal
         open={aiRewriter.open}
         blogId={currentBlog.id}
-        selectedText={aiRewriter.text}
+        projectDomain={project?.domain ?? ""}
+        selection={aiRewriter.snapshot}
         renderMarkdownSnippet={md => (
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -1852,7 +1864,7 @@ export default function BlogViewerPage() {
           </ReactMarkdown>
         )}
         onClose={() => {
-          setAiRewriter({ open: false, text: "" });
+          setAiRewriter({ open: false, snapshot: null });
           selectionSnapshotRef.current = null;
         }}
         onInsert={handleAiRewriterInsert}

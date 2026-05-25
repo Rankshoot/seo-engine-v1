@@ -432,7 +432,7 @@ export async function suggestContentTopicWithFlash(input: {
     ? `Avoid these phrases (already used):\n${input.avoidPhrases.map(p => `- ${p}`).join('\n')}`
     : '(no banned phrases)';
 
-  const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the SerpCraft content engine should produce next.
+  const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankit content engine should produce next.
 
 CONTEXT
 - Domain: ${input.domain}

@@ -57,14 +57,110 @@ export const blogsApi = {
 
   rewriteSelection(
     blogId: string,
-    body: { selectedText: string; instruction: string }
+    body: {
+      selectedText: string;
+      instruction: string;
+      plainText?: string;
+      htmlFragment?: string;
+      links?: Array<{
+        id?: string;
+        anchorText: string;
+        href: string;
+        type?: "internal" | "external";
+      }>;
+      prefValidatedInternalUrl?: string;
+      prefValidatedReplacementUrl?: string;
+      prefValidatedReplacements?: Array<{ linkId: string; newHref: string }>;
+    }
   ): Promise<{
     success: boolean;
     error?: string;
     rewritten?: string;
+    action?: "replace_text" | "update_link" | "update_text_and_link" | "needs_url";
+    linkUpdates?: Array<{
+      oldHref: string;
+      newHref: string;
+      oldAnchorText: string;
+      newAnchorText: string;
+    }>;
+    linkUpdatesDetail?: Array<{
+      oldHref: string;
+      newHref: string;
+      oldAnchorText: string;
+      newAnchorText: string;
+      isValidated?: boolean;
+      validationStatus?: number;
+      validationReason?: string;
+    }>;
+    linkResolution?: { url?: string; status?: number; reason?: string; linkType?: "internal" | "external" };
+    linkResolutions?: Array<{
+      linkId: string;
+      oldHref: string;
+      newHref: string;
+      type: "internal" | "external";
+      status: number;
+      reason: string;
+    }>;
     trace?: Array<{ label: string; ok: boolean; ms?: number; detail?: string }>;
   }> {
     return apiPost(V1Routes.blogRewriteSelection(blogId), body);
+  },
+
+  resolveRewriteLinkCandidates(
+    blogId: string,
+    body: {
+      selectedText: string;
+      plainText?: string;
+      htmlFragment?: string;
+      links?: Array<{
+        id?: string;
+        anchorText: string;
+        href: string;
+        type?: "internal" | "external";
+      }>;
+      instruction?: string;
+    }
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    linkType?: "internal" | "external";
+    selectedUrl?: string;
+    candidates?: Array<{
+      url: string;
+      title: string;
+      domain: string;
+      reason: string;
+      relevanceScore: number;
+      credibilityScore: number;
+      status: number;
+    }>;
+    replacements?: Array<{
+      linkId: string;
+      oldHref: string;
+      oldAnchorText: string;
+      newHref: string;
+      newAnchorText: string;
+      type: "internal" | "external";
+      reason: string;
+      status: number;
+      relevanceScore: number;
+    }>;
+    candidatesByLinkId?: Record<
+      string,
+      Array<{
+        url: string;
+        title: string;
+        domain: string;
+        reason: string;
+        relevanceScore: number;
+        credibilityScore: number;
+        status: number;
+      }>
+    >;
+    resolverErrors?: Array<{ linkId: string; type: "internal" | "external"; message: string }>;
+    trace?: Array<{ label: string; ok: boolean; ms?: number; detail?: string }>;
+  }> {
+    return apiPost(V1Routes.blogRewriteSelection(blogId), { ...body, intent: "resolve_link" });
   },
 
   regenerateImage(

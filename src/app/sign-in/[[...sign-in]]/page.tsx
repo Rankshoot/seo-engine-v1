@@ -1,39 +1,22 @@
+import Link from "next/link";
 import { SignIn } from "@clerk/nextjs";
+import { Logo } from "@/components/brand/Logo";
 
 export default function SignInPage() {
   return (
-    <div className="min-h-screen bg-surface-primary flex items-center justify-center relative overflow-hidden">
-      {/* Background effects */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-[10%] left-[20%] w-[400px] h-[400px] rounded-full bg-brand-500/10 blur-[100px] animate-pulse-glow" />
-        <div className="absolute bottom-[20%] right-[15%] w-[350px] h-[350px] rounded-full bg-accent-500/8 blur-[100px] animate-pulse-glow [animation-delay:4s]" />
-      </div>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-surface-primary">
+      <BackgroundFx />
 
-      {/* Grid overlay */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-30"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)",
-          backgroundSize: "60px 60px",
-          maskImage: "radial-gradient(ellipse at center, black 20%, transparent 70%)",
-          WebkitMaskImage: "radial-gradient(ellipse at center, black 20%, transparent 70%)",
-        }}
-      />
-
-      <div className="relative z-10 w-full max-w-md mx-auto px-4">
-        {/* Logo */}
-        <div className="text-center mb-8 animate-fade-in-up">
-          <a href="/" className="inline-flex items-center gap-3 text-xl font-bold text-text-primary">
-            <span className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center text-lg shadow-[0_0_20px_rgba(99,102,241,0.3)]">
-              ⚡
-            </span>
-            SerpCraft
-          </a>
-          <p className="text-text-tertiary text-sm mt-3">Welcome back! Sign in to continue.</p>
+      <div className="relative z-10 mx-auto w-full max-w-md px-4">
+        <div className="animate-fade-in-up mb-8 text-center">
+          <Link href="/" className="inline-flex justify-center">
+            <Logo size="lg" />
+          </Link>
+          <p className="mt-3 text-[13.5px] text-text-tertiary">
+            Welcome back. Sign in to your workspace.
+          </p>
         </div>
 
-        {/* Clerk Sign In */}
         <div className="animate-fade-in-up delay-200">
           <SignIn
             appearance={{
@@ -44,7 +27,38 @@ export default function SignInPage() {
             }}
           />
         </div>
+
+        <p className="animate-fade-in-up delay-300 mt-8 text-center text-[12px] text-text-tertiary">
+          By signing in you agree to our{" "}
+          <Link href="#" className="text-text-secondary underline-offset-2 hover:underline">
+            terms
+          </Link>{" "}
+          and{" "}
+          <Link href="#" className="text-text-secondary underline-offset-2 hover:underline">
+            privacy policy
+          </Link>
+          .
+        </p>
       </div>
+    </div>
+  );
+}
+
+function BackgroundFx() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div
+        className="absolute inset-0 opacity-40"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(124,126,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(124,126,255,0.06) 1px, transparent 1px)",
+          backgroundSize: "60px 60px",
+          maskImage: "radial-gradient(ellipse at center, black 20%, transparent 70%)",
+          WebkitMaskImage: "radial-gradient(ellipse at center, black 20%, transparent 70%)",
+        }}
+      />
+      <div className="absolute -top-32 left-1/4 h-[420px] w-[420px] rounded-full bg-brand-violet/15 blur-[120px] animate-pulse-glow" />
+      <div className="absolute bottom-[10%] right-[18%] h-[360px] w-[360px] rounded-full bg-brand-aqua/10 blur-[120px] animate-pulse-glow delay-500" />
     </div>
   );
 }

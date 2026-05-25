@@ -12,6 +12,33 @@ import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan } from 
 import { hybridReadUrl } from '@/services/hybridScraper';
 import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
+import {
+  applyLinkUpdatesToMarkdown,
+  enrichSelectionLinks,
+  extractInlineMarkdownLinks,
+  extractSafeUrlsFromText,
+  instructionWantsNewLinkWithoutExactUrl,
+  extractDisplayTextFromRewriteResponse,
+  looksLikeRewriteJson,
+  parseAIRewriteResponse,
+  parseBlogEditorRewriteStructuredResponse,
+  parseMultiLinkRewriteIntent,
+  replaceMarkdownLinkTargetHref,
+  resolveForcedSingleLinkHrefUpdate,
+  hrefKeyForRewrite,
+  type BlogEditorRewriteAction,
+  type BlogEditorRewriteLinkUpdate,
+} from '@/lib/blog-editor-rewrite-selection';
+import { validateUrl } from '@/lib/validate-url';
+import { normalizeDomain } from '@/lib/jina';
+import {
+  classifyLinkReplacementType,
+  resolveReplacementLinks,
+  type LinkReplacementRow,
+  type ReplacementLinkCandidate,
+  type ResolvedLinkOption,
+} from '@/services/linkResolver';
+import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
   const user = await currentUser();
@@ -39,7 +66,13 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     .update({ status: 'generating' })
     .eq('id', entryId);
 
+  return runWithUsageLogContext(
+    { userId: user.id, projectId: entry.project_id, feature: 'blog_generate' },
+    async () => {
   try {
+    const { assertProjectContentCapacity } = await import('@/lib/admin/platform-settings-runtime');
+    await assertProjectContentCapacity(entry.project_id);
+
     // Load the cached Business Brief — used for internal-link pools + repair tone.
     let brief: BusinessBrief | null = null;
     try {
@@ -296,6 +329,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     const message = e instanceof Error ? e.message : 'Generation failed';
     return { success: false, error: message };
   }
+  });
 }
 
 export async function getBlogByEntryId(entryId: string) {
@@ -1425,6 +1459,61 @@ Return the FULL revised blog markdown only — no commentary, no code fences.`;
 
 export type BlogEditorRewriteTrace = Array<{ label: string; ok: boolean; ms?: number; detail?: string }>;
 
+export type RewriteBlogEditorSelectionMeta = {
+  plainText?: string;
+  htmlFragment?: string;
+  links?: Array<{
+    id?: string;
+    anchorText: string;
+    href: string;
+    type?: 'internal' | 'external';
+  }>;
+  /** Client picked a verified replacement URL — re-validated server-side before apply. */
+  prefValidatedInternalUrl?: string;
+  prefValidatedReplacementUrl?: string;
+  /** Per-link verified replacements from the UI (multi-link). */
+  prefValidatedReplacements?: Array<{ linkId: string; newHref: string }>;
+};
+
+async function validateUrlForRewriter(
+  url: string
+): Promise<
+  { ok: true; href: string; status: number } | { ok: false; message: string; status?: number }
+> {
+  const v = await validateUrl(url, 12_000);
+  if (!v.isValid || v.status === undefined || v.status < 200 || v.status >= 400) {
+    return {
+      ok: false,
+      message: v.reason ?? 'This URL is not reachable. Please use a working URL.',
+      status: v.status,
+    };
+  }
+  return { ok: true, href: v.finalUrl ?? url, status: v.status };
+}
+
+async function assertRewrittenMarkdownHrefsReachable(
+  rewritten: string,
+  baselineHrefKeys: Set<string>,
+  preApprovedHrefKeys: Set<string>
+): Promise<{ ok: true } | { ok: false; error: string; href?: string; status?: number }> {
+  const found = extractInlineMarkdownLinks(rewritten);
+  for (const { href } of found) {
+    const key = hrefKeyForRewrite(href);
+    if (baselineHrefKeys.has(key)) continue;
+    if (preApprovedHrefKeys.has(key)) continue;
+    const chk = await validateUrlForRewriter(href);
+    if (!chk.ok) {
+      const msg =
+        chk.status === 404 || chk.status === 410
+          ? 'This link returns 404. Choose another link.'
+          : chk.message;
+      return { ok: false, error: msg, href, status: chk.status };
+    }
+    preApprovedHrefKeys.add(hrefKeyForRewrite(chk.href));
+  }
+  return { ok: true };
+}
+
 /**
  * Rewrite text the user selected in the visual blog editor (contentEditable).
  * Does not persist — the client replaces the selection and the user saves when ready.
@@ -1433,11 +1522,30 @@ export async function rewriteBlogEditorSelection(
   blogId: string,
   /** Markdown excerpt from the editor (includes `[text](url)` for links). */
   selectedMarkdown: string,
-  instruction: string
+  instruction: string,
+  meta: RewriteBlogEditorSelectionMeta = {}
 ): Promise<{
   success: boolean;
   error?: string;
   rewritten?: string;
+  action?: BlogEditorRewriteAction;
+  linkUpdates?: BlogEditorRewriteLinkUpdate[];
+  linkUpdatesDetail?: Array<
+    BlogEditorRewriteLinkUpdate & {
+      isValidated?: boolean;
+      validationStatus?: number;
+      validationReason?: string;
+    }
+  >;
+  linkResolution?: { url?: string; status?: number; reason?: string; linkType?: 'internal' | 'external' };
+  linkResolutions?: Array<{
+    linkId: string;
+    oldHref: string;
+    newHref: string;
+    type: 'internal' | 'external';
+    status: number;
+    reason: string;
+  }>;
   trace?: BlogEditorRewriteTrace;
 }> {
   const user = await currentUser();
@@ -1450,41 +1558,308 @@ export async function rewriteBlogEditorSelection(
   if (sel.length > 12_000) return { success: false, error: 'Selection is too long (max 12,000 characters).' };
   if (instr.length > 4_000) return { success: false, error: 'Instruction is too long.' };
 
-  const { data: blog } = await supabaseAdmin.from('blogs').select('id, title, target_keyword, project_id').eq('id', blogId).single();
+  const { data: blog } = await supabaseAdmin
+    .from('blogs')
+    .select('id, title, target_keyword, project_id')
+    .eq('id', blogId)
+    .single();
   if (!blog) return { success: false, error: 'Blog not found' };
 
   const { data: project } = await supabaseAdmin
     .from('projects')
-    .select('id')
+    .select('id, domain, target_region, target_language')
     .eq('id', blog.project_id)
     .eq('user_id', user.id)
     .single();
-  if (!project) return { success: false, error: 'Not authorized' };
+  if (!project?.domain) return { success: false, error: 'Not authorized' };
 
-  const prompt = `You are rewriting a short excerpt from an existing blog post. Return ONLY the rewritten excerpt — no title lines, no preamble, no quotes around the answer, no code fences.
+  const detectedLinks = enrichSelectionLinks(
+    meta.links && meta.links.length > 0 ? meta.links : extractInlineMarkdownLinks(sel),
+    project.domain as string
+  );
+  const plain = (meta.plainText ?? '').trim();
+  const multiIntent = parseMultiLinkRewriteIntent(instr, detectedLinks);
+  const baselineHrefKeys = new Set(detectedLinks.map(l => hrefKeyForRewrite(l.href)));
+  const preApprovedHrefKeys = new Set<string>();
+
+  for (const u of extractSafeUrlsFromText(instr)) {
+    if (baselineHrefKeys.has(hrefKeyForRewrite(u))) continue;
+    const vx = await validateUrlForRewriter(u);
+    if (!vx.ok) {
+      return {
+        success: false,
+        error: 'This URL is not reachable. Please use a working URL.',
+        trace: [{ label: '(instruction-url)', ok: false, detail: u }],
+      };
+    }
+    preApprovedHrefKeys.add(hrefKeyForRewrite(vx.href));
+  }
+
+  let machineResolvedHref: string | null = null;
+  let machineResolvedTitle = '';
+  let machineResolvedStatus = 0;
+  let resolvedLinkType: 'internal' | 'external' | null = null;
+  const resolverCandidates: ReplacementLinkCandidate[] = [];
+  let machineLinkRows: LinkReplacementRow[] = [];
+  let addedLinksForPrompt: Array<{ href: string; anchorText: string; type: string }> = [];
+  const wantsVagueResolver =
+    instructionWantsNewLinkWithoutExactUrl(instr) && detectedLinks.length > 0;
+
+  const prefUrl = (meta.prefValidatedReplacementUrl ?? meta.prefValidatedInternalUrl)?.trim();
+  const resolverBase = {
+    surroundingText: plain || sel,
+    projectDomain: project.domain as string,
+    projectId: blog.project_id,
+    prompt: instr,
+    topic: `${blog.target_keyword} ${blog.title}`,
+    region: (project.target_region as string) || 'us',
+    language: (project.target_language as string) || 'en',
+  };
+
+  const selectedForResolver = detectedLinks.map(l => ({
+    id: l.id!,
+    anchorText: l.anchorText,
+    href: l.href,
+    type: (l.type ?? classifyLinkReplacementType(l.href, project.domain as string)) as
+      | 'internal'
+      | 'external',
+  }));
+
+  if (meta.prefValidatedReplacements?.length) {
+    for (const pref of meta.prefValidatedReplacements) {
+      const link = detectedLinks.find(l => l.id === pref.linkId);
+      if (!link) continue;
+      const vx = await validateUrlForRewriter(pref.newHref);
+      if (!vx.ok) {
+        return {
+          success: false,
+          error: vx.message,
+          trace: [{ label: '(pref-url)', ok: false, detail: pref.linkId }],
+        };
+      }
+      machineLinkRows.push({
+        linkId: link.id!,
+        oldHref: link.href,
+        oldAnchorText: link.anchorText,
+        newHref: vx.href,
+        newAnchorText: link.anchorText,
+        type: link.type as 'internal' | 'external',
+        reason: 'User-selected verified link',
+        status: vx.status,
+        relevanceScore: 0,
+      });
+      preApprovedHrefKeys.add(hrefKeyForRewrite(vx.href));
+    }
+  } else if (prefUrl && detectedLinks.length === 1) {
+    const vx = await validateUrlForRewriter(prefUrl);
+    if (!vx.ok) {
+      return {
+        success: false,
+        error: vx.message,
+        trace: [{ label: '(pref-url)', ok: false, detail: prefUrl }],
+      };
+    }
+    const link = detectedLinks[0];
+    machineLinkRows = [
+      {
+        linkId: link.id!,
+        oldHref: link.href,
+        oldAnchorText: link.anchorText,
+        newHref: vx.href,
+        newAnchorText: link.anchorText,
+        type: link.type as 'internal' | 'external',
+        reason: 'Selected suggestion',
+        status: vx.status,
+        relevanceScore: 0,
+      },
+    ];
+    preApprovedHrefKeys.add(hrefKeyForRewrite(vx.href));
+  } else if (multiIntent.mode === 'replace_links' && wantsVagueResolver) {
+    const targetIds =
+      multiIntent.targetLinkIds ?? selectedForResolver.map(l => l.id);
+    const multi = await resolveReplacementLinks({
+      ...resolverBase,
+      selectedLinks: selectedForResolver,
+      forceType: multiIntent.forceType,
+      linkIds: targetIds,
+    });
+
+    for (const c of Object.values(multi.candidatesByLinkId)) {
+      resolverCandidates.push(...c);
+    }
+    machineLinkRows = multi.replacements;
+    addedLinksForPrompt = multi.addedLinks.map(a => ({
+      href: a.href,
+      anchorText: a.anchorText,
+      type: a.type,
+    }));
+
+    if (multi.replacements.length === 0 && multi.errors.length > 0) {
+      const internalFail = multi.errors.some(e => e.type === 'internal');
+      const externalFail = multi.errors.some(e => e.type === 'external');
+      const msg =
+        internalFail && externalFail
+          ? 'No verified internal replacement found. No verified credible external source found.'
+          : internalFail
+            ? 'No verified internal replacement found.'
+            : 'No verified credible external source found.';
+      return {
+        success: false,
+        error: msg,
+        action: 'needs_url',
+        trace: [{ label: '(link-resolver)', ok: false, detail: msg }],
+      };
+    }
+
+    for (const row of machineLinkRows) {
+      preApprovedHrefKeys.add(hrefKeyForRewrite(row.newHref));
+      resolvedLinkType = row.type;
+    }
+  } else if (multiIntent.mode === 'add_links') {
+    const multi = await resolveReplacementLinks({
+      ...resolverBase,
+      selectedLinks: selectedForResolver,
+      forceType: multiIntent.forceType,
+      linkIds: [],
+    });
+    addedLinksForPrompt = multi.addedLinks.map(a => ({
+      href: a.href,
+      anchorText: a.anchorText,
+      type: a.type,
+    }));
+    for (const c of Object.values(multi.candidatesByLinkId)) {
+      resolverCandidates.push(...c);
+    }
+    for (const a of multi.addedLinks) {
+      preApprovedHrefKeys.add(hrefKeyForRewrite(a.href));
+    }
+  }
+
+  if (machineLinkRows.length === 1) {
+    machineResolvedHref = machineLinkRows[0].newHref;
+    machineResolvedTitle = machineLinkRows[0].reason;
+    machineResolvedStatus = machineLinkRows[0].status;
+    resolvedLinkType = machineLinkRows[0].type;
+  }
+
+  const linksJson = JSON.stringify(detectedLinks, null, 0);
+  const htmlFrag = (meta.htmlFragment ?? '').trim();
+  const htmlBlock =
+    htmlFrag && htmlFrag.length <= 8000
+      ? `\nOptional HTML fragment (context for links/formatting; do not paste verbatim):\n"""\n${htmlFrag}\n"""\n`
+      : '';
+
+  const verifiedPoolJson = JSON.stringify(
+    resolverCandidates.slice(0, 24).map(c => ({
+      url: c.url,
+      title: c.title,
+      domain: c.domain,
+      status: c.status,
+    })),
+    null,
+    0
+  );
+
+  const resolutionBlock =
+    machineLinkRows.length > 0
+      ? `
+Server-resolved link replacements (HTTP-validated). Use these EXACT newHref values in linkUpdates and rewrittenMarkdown:
+${JSON.stringify(
+  machineLinkRows.map(r => ({
+    linkId: r.linkId,
+    oldHref: r.oldHref,
+    newHref: r.newHref,
+    oldAnchorText: r.oldAnchorText,
+    newAnchorText: r.newAnchorText,
+    type: r.type,
+    status: r.status,
+  })),
+  null,
+  2
+)}
+Never swap internal vs external link type unless the user explicitly asked (e.g. "change to external").
+Do not invent URLs.
+`
+      : machineResolvedHref
+        ? `
+Server-resolved ${resolvedLinkType ?? 'verified'} link (already HTTP-validated). Use this EXACT href when the user asked for a different / better / relevant / credible link without pasting a URL:
+- href: ${machineResolvedHref}
+- title hint: ${machineResolvedTitle}
+- link type: ${resolvedLinkType ?? 'unknown'}
+Never replace an internal company link with an external URL (or vice versa) unless the user explicitly asked to switch link type.
+Do not invent URLs.
+`
+        : addedLinksForPrompt.length > 0
+          ? `
+Additional verified links to insert (HTTP-validated; use verbatim href + anchorText where appropriate):
+${JSON.stringify(addedLinksForPrompt, null, 2)}
+Do not invent URLs.
+`
+          : '';
+
+  const prompt = `You are rewriting a short excerpt from an existing blog post.
 
 Blog title: ${blog.title}
 Target keyword: ${blog.target_keyword}
 
 User instruction:
-"${instr}"
+"""
+${instr}
+"""
 
-Selected excerpt (Markdown — rewrite this; links use [anchor text](url)):
+Selection — plain text (may omit link URLs):
+"""
+${plain || '(not provided)'}
+"""
+
+Selection — Markdown excerpt (source of truth for links; format is [anchor text](url)):
 """
 ${sel}
 """
 
-Rules:
-1. Output GitHub-flavored Markdown for this excerpt only. Do not use # headings or fenced code blocks. Inline code with backticks is OK only if the original had it.
-2. Preserve every hyperlink from the excerpt as Markdown [anchor](url) using the same URL. You may shorten or rephrase the anchor text if the instruction requires it, but keep the destination URL unless the instruction says to remove the link.
-3. Apply the instruction faithfully while staying on-topic for this article.
-4. Match the tone of a professional business blog.
-5. Unless the instruction asks otherwise, keep a similar scope (do not turn one sentence into a full article).`;
+Detected links as JSON (anchor + href from the Markdown excerpt):
+${linksJson}
+${htmlBlock}
+${resolutionBlock}
+
+VERIFIED_INTERNAL_URL_POOL and VERIFIED_EXTERNAL_URL_POOL (combined; only these may be used as brand-new link targets if the user did not paste a URL; do not invent others):
+${verifiedPoolJson}
+
+Return ONLY a single JSON object (valid JSON, no markdown outside it, no code fences) with exactly this shape:
+{
+  "action": "replace_text" | "update_link" | "update_text_and_link" | "needs_url",
+  "rewrittenMarkdown": "<GitHub-flavored Markdown for the excerpt only>",
+  "rewrittenHtml": "<same as rewrittenMarkdown — optional duplicate for tools>",
+  "linkUpdates": [
+    {
+      "oldHref": "string",
+      "newHref": "string",
+      "oldAnchorText": "string",
+      "newAnchorText": "string",
+      "isValidated": true,
+      "validationStatus": 200,
+      "reason": "optional"
+    }
+  ]
+}
+
+Critical URL rules:
+1. Do NOT invent URLs, paths, or slugs. Never guess a URL.
+2. If the user did not paste an http(s) URL and asked for a different/relevant/better/credible link, use ONLY hrefs from the verified URL pool or the server-resolved link block above.
+3. Keep link type consistent: internal company pages for internal links; credible external sources for external links — unless the user explicitly asked to switch type.
+4. If no suitable verified URL exists, return action "needs_url" and explain briefly in linkUpdates[0].reason (no fake href).
+5. If the user pasted a URL, use that exact string in newHref and rewrittenMarkdown.
+6. rewrittenMarkdown must be GitHub-flavored Markdown for this excerpt only. No # headings or fenced code blocks unless already in the excerpt style.
+
+Other rules:
+- When keeping the same URL, preserve href exactly unless the instruction changes it.
+- Match a professional business blog tone.
+- Keep similar scope unless asked to expand.`;
 
   const t0 = Date.now();
-  let rewritten: string;
+  let raw: string;
   try {
-    rewritten = (await geminiGenerate(prompt, 1)).trim();
+    raw = (await geminiGenerate(prompt, 1)).trim();
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'LLM call failed';
     return {
@@ -1496,7 +1871,46 @@ Rules:
     };
   }
   const ms = Date.now() - t0;
-  rewritten = rewritten.replace(/^"+|"+$/g, '').replace(/^```[a-z]*\n?|```$/g, '').trim();
+  raw = raw.replace(/^"+|"+$/g, '').trim();
+
+  const aiParsed = parseAIRewriteResponse(raw);
+  const structured = aiParsed
+    ? {
+        action: aiParsed.action,
+        rewrittenMarkdown: aiParsed.rewrittenMarkdown,
+        linkUpdates: aiParsed.linkUpdates,
+      }
+    : parseBlogEditorRewriteStructuredResponse(raw);
+  if (structured?.action === 'needs_url') {
+    const needsMsg =
+      resolvedLinkType === 'external'
+        ? 'No verified credible external source found.'
+        : resolvedLinkType === 'internal'
+          ? 'No relevant working internal blog link found.'
+          : 'No suitable verified link is available. Paste a full http(s) URL you want to use.';
+    return {
+      success: false,
+      error: needsMsg,
+      action: 'needs_url',
+      trace: [{ label: '(gemini)', ok: true, ms, detail: 'needs_url' }],
+    };
+  }
+
+  let rewritten = aiParsed?.displayText ?? structured?.rewrittenMarkdown ?? '';
+  if (!rewritten) {
+    rewritten = extractDisplayTextFromRewriteResponse(raw);
+  }
+  if (!rewritten && looksLikeRewriteJson(raw)) {
+    return {
+      success: false,
+      error: 'Model returned an unreadable response. Please try again.',
+      trace: [{ label: '(gemini)', ok: false, ms, detail: 'json without display text' }],
+    };
+  }
+  if (!rewritten) {
+    rewritten = raw.replace(/^```[a-z]*\n?|```$/g, '').trim();
+  }
+
   if (!rewritten) {
     return {
       success: false,
@@ -1505,16 +1919,327 @@ Rules:
     };
   }
 
+  let action: BlogEditorRewriteAction = structured?.action ?? 'replace_text';
+  const mergedUpdates: BlogEditorRewriteLinkUpdate[] = [...(structured?.linkUpdates ?? [])];
+
+  rewritten = applyLinkUpdatesToMarkdown(rewritten, mergedUpdates);
+
+  const forced = resolveForcedSingleLinkHrefUpdate(sel, detectedLinks, instr);
+  if (forced) {
+    const vForced = await validateUrlForRewriter(forced.newHref);
+    if (!vForced.ok) {
+      return {
+        success: false,
+        error: 'This URL is not reachable. Please use a working URL.',
+        trace: [{ label: '(forced-url)', ok: false, detail: forced.newHref }],
+      };
+    }
+    const canonical = vForced.href;
+    rewritten = replaceMarkdownLinkTargetHref(rewritten, forced.oldHref, canonical);
+    const existingIx = mergedUpdates.findIndex(u => u.oldHref === forced.oldHref);
+    if (existingIx >= 0) {
+      mergedUpdates[existingIx] = { ...mergedUpdates[existingIx], newHref: canonical };
+    } else {
+      const fromSel = detectedLinks.find(l => l.href === forced.oldHref);
+      mergedUpdates.push({
+        oldHref: forced.oldHref,
+        newHref: canonical,
+        oldAnchorText: fromSel?.anchorText ?? '',
+        newAnchorText: fromSel?.anchorText ?? '',
+      });
+    }
+    preApprovedHrefKeys.add(hrefKeyForRewrite(canonical));
+    if (action === 'replace_text') action = 'update_link';
+  }
+
+  if (machineLinkRows.length > 0) {
+    for (const row of machineLinkRows) {
+      if (hrefKeyForRewrite(row.oldHref) === hrefKeyForRewrite(row.newHref)) continue;
+      rewritten = replaceMarkdownLinkTargetHref(rewritten, row.oldHref, row.newHref);
+      const ix = mergedUpdates.findIndex(u => u.oldHref === row.oldHref);
+      if (ix >= 0) {
+        const cur = mergedUpdates[ix];
+        if (cur) mergedUpdates[ix] = { ...cur, newHref: row.newHref, newAnchorText: row.newAnchorText };
+      } else {
+        mergedUpdates.push({
+          oldHref: row.oldHref,
+          newHref: row.newHref,
+          oldAnchorText: row.oldAnchorText,
+          newAnchorText: row.newAnchorText,
+        });
+      }
+      if (action === 'replace_text') action = 'update_link';
+    }
+  } else if (machineResolvedHref && detectedLinks.length === 1) {
+    const oldOnly = detectedLinks[0].href;
+    if (hrefKeyForRewrite(oldOnly) !== hrefKeyForRewrite(machineResolvedHref)) {
+      rewritten = replaceMarkdownLinkTargetHref(rewritten, oldOnly, machineResolvedHref);
+      const ix = mergedUpdates.findIndex(u => u.oldHref === oldOnly);
+      if (ix >= 0) {
+        const cur = mergedUpdates[ix];
+        if (cur) mergedUpdates[ix] = { ...cur, newHref: machineResolvedHref };
+      } else {
+        mergedUpdates.push({
+          oldHref: oldOnly,
+          newHref: machineResolvedHref,
+          oldAnchorText: detectedLinks[0].anchorText,
+          newAnchorText: detectedLinks[0].anchorText,
+        });
+      }
+      if (action === 'replace_text') action = 'update_link';
+    }
+  }
+
+  const reach = await assertRewrittenMarkdownHrefsReachable(
+    rewritten,
+    baselineHrefKeys,
+    preApprovedHrefKeys
+  );
+  if (!reach.ok) {
+    return {
+      success: false,
+      error: reach.error,
+      trace: [
+        { label: '(gemini)', ok: true, ms, detail: 'blocked: href validation' },
+        { label: '(href-validate)', ok: false, detail: reach.href ?? '' },
+      ],
+    };
+  }
+
+  const expectedTypeByHrefKey = new Map<string, 'internal' | 'external'>();
+  for (const row of machineLinkRows) {
+    expectedTypeByHrefKey.set(hrefKeyForRewrite(row.newHref), row.type);
+  }
+  if (multiIntent.forceType) {
+    for (const row of machineLinkRows) {
+      expectedTypeByHrefKey.set(hrefKeyForRewrite(row.newHref), multiIntent.forceType);
+    }
+  }
+
+  for (const { href } of extractInlineMarkdownLinks(rewritten)) {
+    const key = hrefKeyForRewrite(href);
+    const expected =
+      expectedTypeByHrefKey.get(key) ??
+      (baselineHrefKeys.has(key)
+        ? detectedLinks.find(l => hrefKeyForRewrite(l.href) === key)?.type
+        : resolvedLinkType) ??
+      null;
+    if (!expected) continue;
+    const actual = classifyLinkReplacementType(href, project.domain as string);
+    if (actual !== expected) {
+      return {
+        success: false,
+        error:
+          expected === 'internal'
+            ? 'No verified internal replacement found.'
+            : 'No verified credible external source found.',
+        trace: [
+          {
+            label: '(link-type)',
+            ok: false,
+            detail: `expected=${expected} got=${actual} href=${href}`,
+          },
+        ],
+      };
+    }
+  }
+
   const trace: BlogEditorRewriteTrace = [
     {
       label: '(gemini)',
       ok: true,
       ms,
-      detail: `chars in: ${sel.length + instr.length}, out: ${rewritten.length}`,
+      detail: `json=${Boolean(structured)} chars in: ${sel.length + instr.length}, out: ${rewritten.length}`,
+    },
+  ];
+  if (forced) {
+    trace.push({
+      label: '(href-enforced)',
+      ok: true,
+      detail: `${forced.oldHref} → ${mergedUpdates.find(u => u.oldHref === forced.oldHref)?.newHref ?? forced.newHref}`,
+    });
+  }
+  if (machineLinkRows.length > 0) {
+    trace.push({
+      label: '(link-resolver)',
+      ok: true,
+      detail: machineLinkRows.map(r => `${r.oldHref} → ${r.newHref}`).join('; '),
+    });
+  } else if (machineResolvedHref) {
+    trace.push({
+      label: '(link-resolver)',
+      ok: true,
+      detail: machineResolvedHref,
+    });
+  }
+
+  let linkUpdatesDetail:
+    | Array<
+        BlogEditorRewriteLinkUpdate & {
+          isValidated?: boolean;
+          validationStatus?: number;
+          validationReason?: string;
+        }
+      >
+    | undefined;
+  if (mergedUpdates.length) {
+    linkUpdatesDetail = await Promise.all(
+      mergedUpdates.map(async u => {
+        const vx = await validateUrlForRewriter(u.newHref);
+        return {
+          ...u,
+          isValidated: vx.ok,
+          validationStatus: vx.status,
+          validationReason: vx.ok ? undefined : vx.message,
+        };
+      })
+    );
+  }
+
+  return {
+    success: true,
+    rewritten,
+    action,
+    linkUpdates: mergedUpdates.length ? mergedUpdates : undefined,
+    linkUpdatesDetail,
+    linkResolution: machineResolvedHref
+      ? {
+          url: machineResolvedHref,
+          status: machineResolvedStatus,
+          reason: machineResolvedTitle,
+          linkType: resolvedLinkType ?? undefined,
+        }
+      : undefined,
+    trace,
+  };
+}
+
+export async function resolveBlogEditorLinkAlternates(
+  blogId: string,
+  selectedMarkdown: string,
+  meta: RewriteBlogEditorSelectionMeta = {},
+  prompt = ''
+): Promise<{
+  success: boolean;
+  error?: string;
+  linkType?: 'internal' | 'external';
+  candidates?: ReplacementLinkCandidate[];
+  selectedUrl?: string;
+  replacements?: LinkReplacementRow[];
+  addedLinks?: Array<{ href: string; anchorText: string; type: 'internal' | 'external'; reason: string; status: number }>;
+  candidatesByLinkId?: Record<string, ReplacementLinkCandidate[]>;
+  resolverErrors?: Array<{ linkId: string; type: 'internal' | 'external'; message: string }>;
+  /** @deprecated */ legacyCandidates?: ResolvedLinkOption[];
+  trace?: BlogEditorRewriteTrace;
+}> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const sel = selectedMarkdown.trim();
+  if (!sel) return { success: false, error: 'Select some text first.' };
+
+  const { data: blog } = await supabaseAdmin
+    .from('blogs')
+    .select('id, title, target_keyword, project_id')
+    .eq('id', blogId)
+    .single();
+  if (!blog) return { success: false, error: 'Blog not found' };
+
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain, target_region, target_language')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+  if (!project?.domain) return { success: false, error: 'Not authorized' };
+
+  const detectedLinks = enrichSelectionLinks(
+    meta.links && meta.links.length > 0 ? meta.links : extractInlineMarkdownLinks(sel),
+    project.domain as string
+  );
+  if (detectedLinks.length === 0) {
+    return { success: false, error: 'Select text that contains at least one link.' };
+  }
+
+  const instr = prompt.trim() || 'find a relevant replacement link';
+  const multiIntent = parseMultiLinkRewriteIntent(instr, detectedLinks);
+  const selectedForResolver = detectedLinks.map(l => ({
+    id: l.id!,
+    anchorText: l.anchorText,
+    href: l.href,
+    type: (l.type ?? classifyLinkReplacementType(l.href, project.domain as string)) as
+      | 'internal'
+      | 'external',
+  }));
+  const targetIds =
+    multiIntent.targetLinkIds ??
+    selectedForResolver.map(l => l.id);
+
+  const t0 = Date.now();
+  const plain = (meta.plainText ?? '').trim();
+  const multi = await resolveReplacementLinks({
+    selectedLinks: selectedForResolver,
+    surroundingText: plain || sel,
+    projectDomain: project.domain as string,
+    projectId: blog.project_id,
+    prompt: instr,
+    forceType: multiIntent.forceType,
+    linkIds: multiIntent.mode === 'add_links' ? [] : targetIds,
+    topic: `${blog.target_keyword} ${blog.title}`,
+    region: (project.target_region as string) || 'us',
+    language: (project.target_language as string) || 'en',
+  });
+
+  const trace: BlogEditorRewriteTrace = [
+    {
+      label: '(link-resolver)',
+      ok: multi.replacements.length > 0 || Object.values(multi.candidatesByLinkId).some(c => c.length > 0),
+      ms: Date.now() - t0,
+      detail: `replacements=${multi.replacements.length} errors=${multi.errors.length}`,
     },
   ];
 
-  return { success: true, rewritten, trace };
+  const hasAnyCandidate = Object.values(multi.candidatesByLinkId).some(c => c.length > 0);
+  if (!multi.replacements.length && !hasAnyCandidate && multi.addedLinks.length === 0) {
+    const internalFail = multi.errors.some(e => e.type === 'internal');
+    const externalFail = multi.errors.some(e => e.type === 'external');
+    const msg =
+      internalFail && externalFail
+        ? 'No verified internal replacement found. No verified credible external source found.'
+        : internalFail
+          ? 'No verified internal replacement found.'
+          : 'No verified credible external source found.';
+    return {
+      success: false,
+      error: msg,
+      resolverErrors: multi.errors,
+      candidatesByLinkId: multi.candidatesByLinkId,
+      trace,
+    };
+  }
+
+  const singleId = detectedLinks.length === 1 ? detectedLinks[0].id! : null;
+  const singleCandidates = singleId ? multi.candidatesByLinkId[singleId] : undefined;
+  const legacyCandidates: ResolvedLinkOption[] | undefined = singleCandidates?.map(c => ({
+    url: c.url,
+    title: c.title,
+    reason: c.reason,
+    relevanceScore: c.relevanceScore,
+    status: c.status,
+  }));
+
+  return {
+    success: true,
+    linkType: detectedLinks.length === 1 ? selectedForResolver[0].type : undefined,
+    candidates: singleCandidates,
+    selectedUrl: multi.replacements[0]?.newHref,
+    replacements: multi.replacements,
+    addedLinks: multi.addedLinks,
+    candidatesByLinkId: multi.candidatesByLinkId,
+    resolverErrors: multi.errors.length ? multi.errors : undefined,
+    legacyCandidates,
+    trace,
+  };
 }
 
 export async function getCalendarWithBlogs(projectId: string) {

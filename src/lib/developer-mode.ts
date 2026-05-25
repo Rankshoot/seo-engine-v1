@@ -22,7 +22,7 @@
  * ──────────────────────────────────────────────────────────────────────────
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 export const DEVELOPER_MODE_STORAGE_KEY = "seo_engine_developer_mode";
 
@@ -37,40 +37,47 @@ export function useDeveloperMode(): {
   forcedByEnv: boolean;
 } {
   const forcedByEnv = isDeveloperToolsEnvEnabled();
-  const [storedOn, setStoredOn] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const q = new URLSearchParams(window.location.search);
-      // ?d  →  activate   |   ?d=off  →  deactivate
-      if (q.has("d") && q.get("d") !== "off") {
-        localStorage.setItem(DEVELOPER_MODE_STORAGE_KEY, "1");
-        setStoredOn(true);
-        return;
+  const storedOn = useSyncExternalStore(
+    (onStoreChange) => {
+      if (typeof window === "undefined") return () => {};
+      window.addEventListener("storage", onStoreChange);
+      window.addEventListener("popstate", onStoreChange);
+      window.addEventListener("developer-mode-change", onStoreChange);
+      return () => {
+        window.removeEventListener("storage", onStoreChange);
+        window.removeEventListener("popstate", onStoreChange);
+        window.removeEventListener("developer-mode-change", onStoreChange);
+      };
+    },
+    () => {
+      if (typeof window === "undefined") return false;
+      try {
+        const q = new URLSearchParams(window.location.search);
+        // ?d  →  activate   |   ?d=off  →  deactivate
+        if (q.has("d") && q.get("d") !== "off") {
+          localStorage.setItem(DEVELOPER_MODE_STORAGE_KEY, "1");
+          return true;
+        }
+        if (q.get("d") === "off") {
+          localStorage.removeItem(DEVELOPER_MODE_STORAGE_KEY);
+          return false;
+        }
+        return localStorage.getItem(DEVELOPER_MODE_STORAGE_KEY) === "1";
+      } catch {
+        return false;
       }
-      if (q.get("d") === "off") {
-        localStorage.removeItem(DEVELOPER_MODE_STORAGE_KEY);
-        setStoredOn(false);
-        return;
-      }
-    } catch {
-      /* storage unavailable */
-    }
-    try {
-      if (localStorage.getItem(DEVELOPER_MODE_STORAGE_KEY) === "1") setStoredOn(true);
-    } catch {
-      /* storage unavailable */
-    }
-  }, []);
+    },
+    () => false
+  );
 
   const setDeveloperMode = useCallback(
     (v: boolean) => {
       if (forcedByEnv) return;
-      setStoredOn(v);
       try {
         if (v) localStorage.setItem(DEVELOPER_MODE_STORAGE_KEY, "1");
         else localStorage.removeItem(DEVELOPER_MODE_STORAGE_KEY);
+        window.dispatchEvent(new Event("developer-mode-change"));
       } catch {
         /* ignore */
       }

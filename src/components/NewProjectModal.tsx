@@ -88,6 +88,7 @@ function AiFillLabelButton({
 
 export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProjectModalProps) {
   const router = useRouter();
+  const formId = useRef(`project-form-${Math.random().toString(36).slice(2)}`).current;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [niche, setNiche] = useState(editProject?.niche ?? "");
@@ -136,7 +137,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
     setError("");
     setLoading(true);
     const fd = new FormData(e.currentTarget);
-    const result = await projectsApi.create({
+    const payload = {
       name: fd.get("name") as string,
       domain: fd.get("domain") as string,
       company: fd.get("company") as string,
@@ -147,13 +148,25 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
       description: fd.get("description") as string,
       competitors: competitors.filter(c => c.trim()),
       ahrefs_rank_tracker_project_id: null,
-    });
-    if (result.success && result.data) {
-      onSaved?.();
-      router.push(`/projects/${result.data.id}/keywords`);
+    };
+
+    if (editProject) {
+      const result = await projectsApi.update(editProject.id, payload);
+      if (result.success && result.data) {
+        onSaved?.();
+      } else {
+        setError(result.error ?? "Something went wrong");
+        setLoading(false);
+      }
     } else {
-      setError(result.error ?? "Something went wrong");
-      setLoading(false);
+      const result = await projectsApi.create(payload);
+      if (result.success && result.data) {
+        onSaved?.();
+        router.push(`/projects/${result.data.id}/keywords`);
+      } else {
+        setError(result.error ?? "Something went wrong");
+        setLoading(false);
+      }
     }
   }
 
@@ -183,7 +196,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
             Cancel
           </Button>
           <Button
-            form="new-project-form"
+            form={formId}
             type="submit"
             variant="primary"
             size="md"
@@ -208,7 +221,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
         </>
       }
     >
-      <form ref={formRef} id="new-project-form" onSubmit={handleSubmit} className="space-y-7">
+      <form ref={formRef} id={formId} onSubmit={handleSubmit} className="space-y-7">
         {/* ── Section 1: Basic Info ─────────────────────────────── */}
         <div>
           <SectionLabel n={1}>Basic Info</SectionLabel>

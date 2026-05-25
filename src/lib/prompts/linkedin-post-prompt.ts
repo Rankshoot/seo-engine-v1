@@ -106,7 +106,7 @@ After the post, output EXACTLY this block (valid JSON, no trailing commas):
   "audience": "${ctx.audience}",
   "tone": "${ctx.tone}",
   "primary_keyword": "${ctx.primaryKeyword}",
-  "meta_description": "≤ 160 char description used inside SerpCraft history list",
+  "meta_description": "≤ 160 char description used inside Rankit history list",
   "slug": "short-url-slug-from-the-hook"
 }`;
 }

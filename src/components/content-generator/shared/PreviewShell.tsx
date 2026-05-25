@@ -103,9 +103,12 @@ export function PreviewShell({
       clearImmersiveBarTimer();
       return;
     }
-    setImmersiveBarVisible(true);
-    const t = window.setTimeout(() => setImmersiveBarVisible(false), 2600);
-    return () => clearTimeout(t);
+    const showTimer = window.setTimeout(() => setImmersiveBarVisible(true), 0);
+    const hideTimer = window.setTimeout(() => setImmersiveBarVisible(false), 2600);
+    return () => {
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
+    };
   }, [fullscreen, immersiveFullscreen, clearImmersiveBarTimer]);
 
   const fullscreenToggle = (

@@ -90,7 +90,7 @@ export interface BlogAuditAnalysis {
   /** Type of page detected (helps the UI decide tone). */
   page_status: 'ok' | 'broken' | 'redirected' | 'empty';
   /**
-   * Deterministic checklist vs SerpCraft blog quality rules (GEO + on-page SEO).
+   * Deterministic checklist vs Rankit blog quality rules (GEO + on-page SEO).
    * Computed server-side from the live scrape — not from the LLM.
    */
   quality_rubric?: QualityRubricRow[];
@@ -200,29 +200,20 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
 
   // 1. Pre-flight — dead URLs skip scrape + LLM spend.
   const ahrefsT0 = Date.now();
-  const ahrefsCrawl = await ahrefsCrawledPages(url);
+  const ahrefsCrawl: any = null;
   trace.push({
     provider: 'ahrefs',
     step: 'site-explorer/crawled-pages',
     // Optional vendor: skip is success — Jina preflight still runs when Ahrefs has no row.
     ok: true,
-    detail: isAhrefsConfigured() ? (ahrefsCrawl ? 'ok' : 'no-row') : 'skipped — AHREFS_API_KEY unset',
+    detail: 'skipped — disabled endpoint',
     ms: Date.now() - ahrefsT0,
   });
 
-  if (ahrefsCrawl) {
-    if (ahrefsCrawl.http_code && (ahrefsCrawl.http_code === 404 || ahrefsCrawl.http_code === 410)) {
-      return { record: brokenUrlRecord(url, `Site check shows HTTP ${ahrefsCrawl.http_code}.`), trace };
-    }
-    if (ahrefsCrawl.redirects_to_target && ahrefsCrawl.redirects_to_target > 0) {
-      return { record: redirectToHomepageRecord(url, url), trace };
-    }
-  } else {
-    const pre = await preflight(url);
-    if (pre.status === 'broken') return { record: brokenUrlRecord(url, pre.reason), trace };
-    if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
-      return { record: redirectToHomepageRecord(url, pre.finalUrl), trace };
-    }
+  const pre = await preflight(url);
+  if (pre.status === 'broken') return { record: brokenUrlRecord(url, pre.reason), trace };
+  if (pre.status === 'redirected' && pre.finalUrl && pre.finalUrl !== url) {
+    return { record: redirectToHomepageRecord(url, pre.finalUrl), trace };
   }
 
   // 2. Live body + Ahrefs context (ranking + inbound links + authority).
@@ -237,18 +228,14 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
   });
 
   const ahrefsBatchT0 = Date.now();
-  const [urlKeywords, anchors, internalLinksInbound] = await Promise.all([
-    ahrefsUrlOrganicKeywords(url, region, 40),
-    ahrefsAnchors(url, 25),
-    ahrefsPagesByInternalLinks(url, 1),
-  ]);
+  const urlKeywords: AhrefsUrlKeyword[] = [];
+  const anchors: any[] = [];
+  const internalLinksInbound: any[] = [];
   trace.push({
     provider: 'ahrefs',
     step: 'organic-keywords+anchors+internal-inbound',
     ok: true,
-    detail: isAhrefsConfigured()
-      ? `keywords=${urlKeywords.length} anchors=${anchors.length}`
-      : 'skipped — AHREFS_API_KEY unset (optional)',
+    detail: 'skipped — disabled endpoint',
     ms: Date.now() - ahrefsBatchT0,
   });
 
@@ -873,9 +860,9 @@ async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalys
     ? `SITE CONTEXT (for light grounding only — do NOT penalize this blog for "not matching" the brief): ${brief.summary}`
     : '';
 
-  const prompt = `You are a senior SEO + GEO auditor for SerpCraft. Audit the blog post below on its own merits — do NOT compare it to a business brief or other pages. Decide WHY this specific blog may not be getting traffic.
+  const prompt = `You are a senior SEO + GEO auditor for Rankit. Audit the blog post below on its own merits — do NOT compare it to a business brief or other pages. Decide WHY this specific blog may not be getting traffic.
 
-SerpCraft-generated blogs target these quality bars (use them when judging issues and when picking llm_quality_score):
+Rankit-generated blogs target these quality bars (use them when judging issues and when picking llm_quality_score):
 - A direct, useful answer in the first ~80 words (AI Overviews / GEO).
 - Modular H2/H3 sections (clear hierarchy, RAG-friendly).
 - FAQ section and BOTH Article + FAQPage JSON-LD where applicable.
@@ -944,7 +931,7 @@ CATEGORY GUIDE:
 - "ux": reader experience — walls of text, no subheads, no images implied, no lists, no takeaways box.
 
 RULES:
-- Set "llm_quality_score" to an integer 0–100 (not the placeholder 0): holistic SEO+GEO quality vs the SerpCraft bars in the intro. 90+ = meets or nearly meets all bars; 70–89 = solid with gaps; 50–69 = several misses; below 50 = thin or structurally weak. Use 0 only if the body is empty or unusable.
+- Set "llm_quality_score" to an integer 0–100 (not the placeholder 0): holistic SEO+GEO quality vs the Rankit bars in the intro. 90+ = meets or nearly meets all bars; 70–89 = solid with gaps; 50–69 = several misses; below 50 = thin or structurally weak. Use 0 only if the body is empty or unusable.
 - Maximum 8 issues. Order by severity desc then impact desc.
 - "high" severity = likely blocks ranking or AI Overview citation today. "medium" = dents CTR/engagement. "low" = polish.
 - Each fix must be specific to THIS post (reference the actual topic or heading when possible). No generic "write better content".

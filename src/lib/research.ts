@@ -1,5 +1,7 @@
 /** Serper-backed SERP/video/news context for blog prompts. */
 
+import { recordSerperCall } from '@/lib/admin/logging/record-provider-call';
+
 export interface ResearchArticle {
   title: string;
   url: string;
@@ -44,7 +46,10 @@ export interface CompetitorGapKeyword {
 
 const SERPER_API_KEY = () => process.env.SERPER_API_KEY!;
 
-async function serperPost(endpoint: string, body: object): Promise<any> {
+type SerperResultRow = Record<string, unknown>;
+
+async function serperPost(endpoint: string, body: object): Promise<unknown> {
+  const started = Date.now();
   try {
     const res = await fetch(`https://google.serper.dev/${endpoint}`, {
       method: 'POST',
@@ -54,9 +59,20 @@ async function serperPost(endpoint: string, body: object): Promise<any> {
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return null;
+    const latencyMs = Date.now() - started;
+    if (!res.ok) {
+      recordSerperCall(endpoint, false, latencyMs, `HTTP ${res.status}`);
+      return null;
+    }
+    recordSerperCall(endpoint, true, latencyMs);
     return res.json();
-  } catch {
+  } catch (e) {
+    recordSerperCall(
+      endpoint,
+      false,
+      Date.now() - started,
+      e instanceof Error ? e.message : String(e)
+    );
     return null;
   }
 }
@@ -72,41 +88,67 @@ export async function researchKeyword(
     serperPost('news', { q: keyword, gl: region, hl: language, num: 5 }),
   ]);
 
-  const topArticles: ResearchArticle[] = (web?.organic ?? []).slice(0, 8).map((r: any, i: number) => {
-    let domain = r.domain ?? '';
-    if (!domain && r.link) {
-      try { domain = new URL(r.link).hostname; } catch { domain = ''; }
+  const topArticles: ResearchArticle[] = ((web as { organic?: SerperResultRow[] } | null)?.organic ?? [])
+    .slice(0, 8)
+    .map((r, i: number) => {
+    let domain = typeof r.domain === "string" ? r.domain : '';
+    const link = typeof r.link === "string" ? r.link : "";
+    if (!domain && link) {
+      try { domain = new URL(link).hostname; } catch { domain = ''; }
     }
     return {
-      title: r.title ?? '',
-      url: r.link ?? '',
-      snippet: r.snippet ?? '',
+      title: typeof r.title === "string" ? r.title : '',
+      url: link,
+      snippet: typeof r.snippet === "string" ? r.snippet : '',
       domain,
       position: i + 1,
     };
   });
 
-  const peopleAlsoAsk = (web?.peopleAlsoAsk ?? []).slice(0, 7).map((q: any) => ({
-    question: q.question ?? '',
-    answer: q.snippet ?? q.answer ?? '',
-  }));
+  const peopleAlsoAsk = ((web as { peopleAlsoAsk?: SerperResultRow[] } | null)?.peopleAlsoAsk ?? [])
+    .slice(0, 7)
+    .map((q) => ({
+      question: typeof q.question === "string" ? q.question : '',
+      answer:
+        typeof q.snippet === "string"
+          ? q.snippet
+          : typeof q.answer === "string"
+            ? q.answer
+            : '',
+    }));
 
-  const relatedSearches = (web?.relatedSearches ?? []).slice(0, 8).map((r: any) => r.query ?? '');
+  const relatedSearches = ((web as { relatedSearches?: SerperResultRow[] } | null)?.relatedSearches ?? [])
+    .slice(0, 8)
+    .map((r) => (typeof r.query === "string" ? r.query : ''));
 
-  const videoList: ResearchVideo[] = (videos?.videos ?? []).slice(0, 5).map((v: any) => ({
-    title: v.title ?? '',
-    channel: v.channel ?? v.source ?? '',
-    link: v.link ?? '',
-    snippet: v.snippet ?? v.description ?? '',
-  }));
+  const videoList: ResearchVideo[] = ((videos as { videos?: SerperResultRow[] } | null)?.videos ?? [])
+    .slice(0, 5)
+    .map((v) => ({
+      title: typeof v.title === "string" ? v.title : '',
+      channel:
+        typeof v.channel === "string"
+          ? v.channel
+          : typeof v.source === "string"
+            ? v.source
+            : '',
+      link: typeof v.link === "string" ? v.link : '',
+      snippet:
+        typeof v.snippet === "string"
+          ? v.snippet
+          : typeof v.description === "string"
+            ? v.description
+            : '',
+    }));
 
-  const newsList: ResearchNews[] = (news?.news ?? []).slice(0, 4).map((n: any) => ({
-    title: n.title ?? '',
-    source: n.source ?? '',
-    snippet: n.snippet ?? '',
-    link: n.link ?? '',
-    date: n.date ?? '',
-  }));
+  const newsList: ResearchNews[] = ((news as { news?: SerperResultRow[] } | null)?.news ?? [])
+    .slice(0, 4)
+    .map((n) => ({
+      title: typeof n.title === "string" ? n.title : '',
+      source: typeof n.source === "string" ? n.source : '',
+      snippet: typeof n.snippet === "string" ? n.snippet : '',
+      link: typeof n.link === "string" ? n.link : '',
+      date: typeof n.date === "string" ? n.date : '',
+    }));
 
   const totalSourcesFound =
     topArticles.length + videoList.length + newsList.length + peopleAlsoAsk.length;
@@ -194,14 +236,17 @@ export async function discoverCompetitorGapKeywords(
       serperPost('search', { q: `${cleanDomain} ${niche} blog`, num: 10 }),
     ]);
 
+    const siteRes = siteResult as { organic?: Array<{ title?: string; link?: string }>; relatedSearches?: Array<{ query?: string }> } | null;
+    const nicheRes = nicheResult as { organic?: Array<{ title?: string; link?: string }>; relatedSearches?: Array<{ query?: string }> } | null;
+
     const allResults = [
-      ...(siteResult?.organic ?? []),
-      ...(nicheResult?.organic ?? []),
+      ...(siteRes?.organic ?? []),
+      ...(nicheRes?.organic ?? []),
     ];
 
     const relatedFromSite = [
-      ...(siteResult?.relatedSearches ?? []).map((r: { query?: string }) => r.query ?? ''),
-      ...(nicheResult?.relatedSearches ?? []).map((r: { query?: string }) => r.query ?? ''),
+      ...(siteRes?.relatedSearches ?? []).map((r) => r.query ?? ''),
+      ...(nicheRes?.relatedSearches ?? []).map((r) => r.query ?? ''),
     ];
 
     for (const result of allResults as { title?: string; link?: string }[]) {

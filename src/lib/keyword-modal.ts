@@ -143,75 +143,29 @@ export async function getOrFetchKeywordModalDetails(
     throw new Error(kwErr?.message ?? 'Keyword not found');
   }
   const keyword: string = (keywordRow.keyword as string).trim();
-  // Supabase's typed inner-join returns the related row as either a single
-  // object or an array depending on the codegen path. Treat both shapes.
-  const projectsRel = (keywordRow as { projects?: { target_region?: string } | { target_region?: string }[] }).projects;
-  const region: string =
-    Array.isArray(projectsRel)
-      ? projectsRel[0]?.target_region ?? 'us'
-      : projectsRel?.target_region ?? 'us';
 
   // Cache lookup.
-  if (!forceRefresh) {
-    const cached = await readCachedDetails(keywordId);
-    if (cached && isFresh(cached.last_fetched_at)) {
-      console.log('[keyword-modal] cache hit', {
-        keywordId,
-        last_fetched_at: cached.last_fetched_at,
-      });
-      const ideas = await readIdeas(keywordId);
-      return shapeFromCache(keyword, cached, ideas);
-    }
+  const cached = await readCachedDetails(keywordId);
+  if (cached) {
+    console.log('[keyword-modal] returning cached details (bypass Ahrefs)', {
+      keywordId,
+      last_fetched_at: cached.last_fetched_at,
+    });
+    const ideas = await readIdeas(keywordId);
+    return shapeFromCache(keyword, cached, ideas);
   }
 
-  if (!isAhrefsConfigured()) {
-    console.warn('[keyword-modal] AHREFS_API_KEY missing — returning empty payload (no persist).');
-    return emptyResponse(keyword);
-  }
-
-  // Cache miss / stale / forced — fan out.
-  console.log('[keyword-modal] fetching fresh', { keywordId, region });
-  const fresh = await fetchFresh(keyword, region);
-
-  // Persist (best-effort; failures here are logged but never thrown back to the
-  // user — a partial cache is better than none, and the client got its data).
-  await persistFresh({ keywordId, projectId, keyword, fresh }).catch(e => {
-    console.error('[keyword-modal] persist failed:', e);
-  });
-
-  return shapeFromFresh(keyword, fresh);
+  console.log('[keyword-modal] cache miss — Ahrefs bypass enabled, returning empty response', { keywordId });
+  return emptyResponse(keyword);
 }
 
 /**
- * Fire-and-forget enrichment. Called from `updateKeywordStatus` /
- * `bulkUpdateKeywordStatus` when a keyword is approved so the modal
- * + blog-generation has cached ideas before the user clicks anything.
- *
- * Errors are swallowed — this is best-effort warming; never blocks the user
- * action that triggered it.
+ * Fire-and-forget enrichment. Disabled to avoid extra costs.
  */
 export async function enrichKeywordInBackground(
   keywordId: string
 ): Promise<void> {
-  try {
-    const { data: row, error } = await supabaseAdmin
-      .from('keywords')
-      .select('id, project_id')
-      .eq('id', keywordId)
-      .single();
-    if (error || !row) {
-      console.warn('[keyword-modal:bg] keyword not found, skipping', keywordId);
-      return;
-    }
-    await getOrFetchKeywordModalDetails({
-      keywordId: row.id,
-      projectId: row.project_id,
-      forceRefresh: false,
-    });
-    console.log('[keyword-modal:bg] enrichment done', { keywordId });
-  } catch (e) {
-    console.warn('[keyword-modal:bg] enrichment failed:', e);
-  }
+  console.log('[keyword-modal:bg] enrichment bypass active (no-op)', { keywordId });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

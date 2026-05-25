@@ -45,14 +45,16 @@ export function AddCustomKeywordModal({
   const keywordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (open) {
+    if (!open) return;
+    const timer = window.setTimeout(() => {
       setKeyword("");
       setTitle("");
       setArticleType("Blog Post");
       setWriterNotes("");
       setError(null);
-      setTimeout(() => keywordRef.current?.focus(), 60);
-    }
+      keywordRef.current?.focus();
+    }, 60);
+    return () => window.clearTimeout(timer);
   }, [open]);
 
   async function handleSubmit(e: React.FormEvent) {

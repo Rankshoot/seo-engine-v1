@@ -11,7 +11,6 @@ import {
   useAppSelector,
   selectKeywordPrefs,
   selectKeywordStatuses,
-  selectAiSuggestedKeywordIds,
 } from "@/lib/redux/hooks";
 import {
   bulkKeywordStatusChanged,
@@ -29,8 +28,8 @@ import { DataTable, ColumnDef } from "@/components/DataTable";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordActionDropdown } from "@/components/keywords/KeywordActionDropdown";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
-import { Tooltip, InfoIcon } from "@/components/Tooltip";
 import { PageTitle } from "@/components/common";
+import { Tooltip, InfoIcon } from "@/components/Tooltip";
 import { toast } from "react-hot-toast";
 import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
@@ -217,6 +216,9 @@ type SortDir = "asc" | "desc";
 
 const STATUS_ORDER: Record<KeywordStatus, number> = { pending: 0, approved: 1, rejected: 2 };
 
+/** Initial rows and each "show more" step on the keywords tables (full list is still sorted in memory). */
+const KEYWORDS_TABLE_PAGE_SIZE = 20;
+
 /** Default first-click direction when activating a column. */
 function defaultDirForSortColumn(col: TableSortColumn): SortDir {
   return col === "keyword" || col === "intent" ? "asc" : "desc";
@@ -282,7 +284,6 @@ export default function KeywordsPage() {
   const dispatch = useAppDispatch();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
-  const aiSuggestedKeywordIds = useAppSelector(state => selectAiSuggestedKeywordIds(state, projectId));
 
   const KEYWORDS_KEY = qk.keywords(projectId);
 
@@ -292,13 +293,15 @@ export default function KeywordsPage() {
   const filter = keywordPrefs.filter as FilterTab;
   const tableSort = keywordPrefs.tableSort as { column: TableSortColumn; dir: SortDir };
   const [error, setError] = useState("");
+  const [visibleKeywordRows, setVisibleKeywordRows] = useState(KEYWORDS_TABLE_PAGE_SIZE);
 
   // Industry vs domain DataForSEO paths — persisted so Re-discover matches the visible table.
   const sourceTab: SourceTab = keywordPrefs.discoverySourceTab === "domain" ? "domain" : "industry";
   const [dataSourceMenuOpen, setDataSourceMenuOpen] = useState(false);
   const dataSourceRef = useRef<HTMLDivElement>(null);
+  /** Inner scroll area of the keyword DataTable — used after “Load more” (same pattern as competitors gap table). */
+  const keywordTableScrollRef = useRef<HTMLDivElement>(null);
 
-  const aiSuggestedIds = useMemo(() => new Set(aiSuggestedKeywordIds), [aiSuggestedKeywordIds]);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -306,6 +309,29 @@ export default function KeywordsPage() {
   const [aiScoring, setAiScoring] = useState(false);
   /** Domain-tab optimistic status by normalized phrase (survives refetch/cache key mismatches). */
   const [domainPhraseStatusOverlay, setDomainPhraseStatusOverlay] = useState<Record<string, KeywordStatus>>({});
+  const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
+
+  const handleLoadMoreFromAhrefs = async () => {
+    setLoadingMoreAhrefs(true);
+    const toastId = toast.loading("Loading more keywords from Ahrefs...");
+    try {
+      const res = await keywordsApi.loadMoreFromAhrefs(projectId);
+      if (res.success) {
+        toast.success(`Loaded ${res.count ?? 0} new keywords from Ahrefs`, { id: toastId });
+        await queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+        if (res.count && res.count > 0) {
+          setVisibleKeywordRows(prev => prev + res.count!);
+        }
+      } else {
+        toast.error(res.error ?? "Failed to load more keywords from Ahrefs", { id: toastId });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg, { id: toastId });
+    } finally {
+      setLoadingMoreAhrefs(false);
+    }
+  };
 
   // Keyword drilldown modal. Stored as id (not a `Keyword` object) so the
   // modal always reflects the latest row state — including approve/reject
@@ -344,10 +370,10 @@ export default function KeywordsPage() {
 
   const { data: projectData } = useProject(projectId);
 
-  const project =
+  const projectDomain =
     projectData && "success" in projectData && projectData.success && projectData.data
-      ? projectData.data
-      : null;
+      ? projectData.data.domain
+      : "";
 
   const {
     data: domainRes,
@@ -405,36 +431,32 @@ export default function KeywordsPage() {
 
   const industryCounts = useMemo(() => {
     let all = 0;
-    let ai = 0;
     let pending = 0;
     let approved = 0;
     let rejected = 0;
     for (const k of keywords) {
       all += 1;
-      if (aiSuggestedIds.has(k.id)) ai += 1;
       if (k.status === "pending") pending += 1;
       if (k.status === "approved") approved += 1;
       if (k.status === "rejected") rejected += 1;
     }
-    return { all, ai, pending, approved, rejected };
-  }, [keywords, aiSuggestedIds]);
+    return { all, pending, approved, rejected };
+  }, [keywords]);
 
   const domainCounts = useMemo(() => {
     let all = 0;
-    let ai = 0;
     let pending = 0;
     let approved = 0;
     let rejected = 0;
     for (const d of domainKeywords) {
       all += 1;
-      if (d.matched_keyword_id && aiSuggestedIds.has(d.matched_keyword_id)) ai += 1;
       const s = effectiveDomainStatus(d);
       if (s === "pending") pending += 1;
       if (s === "approved") approved += 1;
       if (s === "rejected") rejected += 1;
     }
-    return { all, ai, pending, approved, rejected };
-  }, [domainKeywords, aiSuggestedIds, effectiveDomainStatus]);
+    return { all, pending, approved, rejected };
+  }, [domainKeywords, effectiveDomainStatus]);
 
   const displayCounts = sourceTab === "industry" ? industryCounts : domainCounts;
 
@@ -454,17 +476,13 @@ export default function KeywordsPage() {
   const filteredDomainKeywords = useMemo(() => {
     return sortedDomainKeywords.filter(row => {
       if (filter === "all") return true;
-      if (filter === "ai") {
-        const id = row.matched_keyword_id;
-        return Boolean(id && aiSuggestedIds.has(id));
-      }
       const st = effectiveDomainStatus(row);
       if (filter === "pending") return st === "pending";
       if (filter === "approved") return st === "approved";
       if (filter === "rejected") return st === "rejected";
       return true;
     });
-  }, [sortedDomainKeywords, filter, aiSuggestedIds, effectiveDomainStatus]);
+  }, [sortedDomainKeywords, filter, effectiveDomainStatus]);
 
   useEffect(() => {
     if (sourceTab !== "domain") return;
@@ -592,12 +610,6 @@ export default function KeywordsPage() {
     } finally {
       setDomainRefreshing(false);
     }
-  };
-
-  /** Re-discover: industry tab → keyword_ideas pipeline + DB; domain tab → keywords_for_site + cache. */
-  const handleRediscover = () => {
-    if (sourceTab === "domain") void handleDomainRediscover();
-    else void handleDiscover();
   };
 
   const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string): Promise<boolean> => {
@@ -768,13 +780,57 @@ export default function KeywordsPage() {
   };
 
   const filtered = useMemo(() => {
-    const list = keywords.filter(k => {
+    return keywords.filter(k => {
       if (filter === "all") return true;
-      if (filter === "ai") return aiSuggestedIds.has(k.id);
       return k.status === filter;
+    }).sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
+  }, [keywords, filter, tableSort]);
+
+  const visibleIndustryKeywords = useMemo(
+    () => filtered.slice(0, Math.min(visibleKeywordRows, filtered.length)),
+    [filtered, visibleKeywordRows]
+  );
+
+  const visibleDomainKeywords = useMemo(
+    () => filteredDomainKeywords.slice(0, Math.min(visibleKeywordRows, filteredDomainKeywords.length)),
+    [filteredDomainKeywords, visibleKeywordRows]
+  );
+
+  useEffect(() => {
+    setVisibleKeywordRows(KEYWORDS_TABLE_PAGE_SIZE);
+  }, [projectId, filter, sourceTab, tableSort.column, tableSort.dir]);
+
+  useEffect(() => {
+    const total = sourceTab === "domain" ? filteredDomainKeywords.length : filtered.length;
+    setVisibleKeywordRows(prev => (total === 0 ? KEYWORDS_TABLE_PAGE_SIZE : Math.min(prev, total)));
+  }, [sourceTab, filtered.length, filteredDomainKeywords.length]);
+
+  const scrollKeywordAnchorRowToTop = (anchorRowKey: string | null) => {
+    if (!anchorRowKey) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const root = keywordTableScrollRef.current;
+        if (!root) return;
+        for (const el of root.querySelectorAll<HTMLElement>("tbody tr[data-table-row-key]")) {
+          if (el.getAttribute("data-table-row-key") === anchorRowKey) {
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+            break;
+          }
+        }
+      });
     });
-    return [...list].sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
-  }, [keywords, filter, tableSort, aiSuggestedIds]);
+  };
+
+  const bumpVisibleKeywordRows = (total: number, anchorRowKey: string | null) => {
+    setVisibleKeywordRows(prev => Math.min(prev + KEYWORDS_TABLE_PAGE_SIZE, total));
+    scrollKeywordAnchorRowToTop(anchorRowKey);
+  };
+
+  /** Re-discover: industry → keyword_ideas + DB; domain → keywords_for_site + cache. */
+  const handleRediscover = () => {
+    if (sourceTab === "domain") void handleDomainRediscover();
+    else void handleDiscover();
+  };
 
   const toggleSortColumn = (columnId: string) => {
     const col = columnId as TableSortColumn;
@@ -917,7 +973,6 @@ export default function KeywordsPage() {
 
   const FILTER_TAB_ITEMS: Array<{ id: FilterTab; label: string; count: number }> = [
     { id: "all", label: "All", count: displayCounts.all },
-    { id: "ai", label: "AI picks", count: displayCounts.ai },
     { id: "pending", label: "Pending", count: displayCounts.pending },
     { id: "approved", label: "Approved", count: displayCounts.approved },
     { id: "rejected", label: "Rejected", count: displayCounts.rejected },
@@ -931,14 +986,9 @@ export default function KeywordsPage() {
       header: "Keyword",
       sortable: true,
       tooltip: "Search query from Google Ads keywords for your domain.",
-      cell: (kw: any) => (
+      cell: (kw: CompetitorKeywordsForSiteRow) => (
         <div className="flex items-center gap-2 max-w-[260px]">
           <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
-          {kw.matched_keyword_id && aiSuggestedIds.has(kw.matched_keyword_id) ? (
-            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-              AI pick
-            </span>
-          ) : null}
         </div>
       )
     },
@@ -948,7 +998,7 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Average monthly searches over the last 12 months.",
-      cell: (kw: any) => (
+      cell: (kw: CompetitorKeywordsForSiteRow) => (
         <span className="text-[14px] font-mono text-text-secondary tabular-nums">
           {kw.volume ? kw.volume.toLocaleString() : "—"}
         </span>
@@ -960,7 +1010,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Difficulty hint from Google Ads competition (0–100).",
-      cell: (kw: any) => kw.kd > 0 ? (
+      cell: (kw: CompetitorKeywordsForSiteRow) => kw.kd > 0 ? (
         <div className="flex items-center justify-center gap-2">
           <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
             <div
@@ -982,7 +1032,7 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Cost Per Click (USD) from Google Ads.",
-      cell: (kw: any) => (
+      cell: (kw: CompetitorKeywordsForSiteRow) => (
         <span className="text-[13px] font-mono text-text-tertiary tabular-nums">
           {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
         </span>
@@ -994,7 +1044,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "When this phrase matches a saved industry keyword, you see that row’s analysis score. Otherwise we show an estimate from volume, difficulty, and intent so you can still sort and compare.",
-      cell: (kw: any) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+      cell: (kw: CompetitorKeywordsForSiteRow) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
         <span
           className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums"
           title={
@@ -1014,7 +1064,7 @@ export default function KeywordsPage() {
       header: "Action",
       align: "center",
       sortable: true,
-      cell: (kw: any) => {
+      cell: (kw: CompetitorKeywordsForSiteRow) => {
         const effectiveStatus = effectiveDomainStatus(kw);
         const busyKey = kw.matched_keyword_id ?? `dom:${kw.keyword}`;
         return (
@@ -1028,7 +1078,7 @@ export default function KeywordsPage() {
         );
       }
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [aiSuggestedIds, busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
 
   const industryColumns = useMemo<ColumnDef<Keyword>[]>(() => [
     {
@@ -1036,17 +1086,11 @@ export default function KeywordsPage() {
       header: "Keyword",
       sortable: true,
       tooltip: `The search query. Live data from DataForSEO in ${projectData?.success && projectData.data ? regionName(projectData.data.target_region) : "your region"}.`,
-      cell: (kw: any) => {
-        const isAiPick = aiSuggestedIds.has(kw.id);
+      cell: (kw: Keyword) => {
         return (
           <div className="max-w-[260px]">
             <div className="flex items-center gap-2">
               <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
-              {isAiPick ? (
-                <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-                  AI pick
-                </span>
-              ) : null}
             </div>
             {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
             (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
@@ -1073,8 +1117,8 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Average monthly searches over the last 12 months. Hover for trend chart.",
-      cell: (kw: any) => (
-        <Tooltip placement="above" content={<MonthlySearchesChart data={kw.monthly_searches} />}>
+      cell: (kw: Keyword) => (
+        <Tooltip placement="above" interactive content={<MonthlySearchesChart data={kw.monthly_searches} />}>
           <span className="text-[14px] font-mono text-text-secondary tabular-nums border-b border-dashed border-text-tertiary/40 cursor-help pb-0.5">
             {kw.volume ? kw.volume.toLocaleString() : "—"}
           </span>
@@ -1087,7 +1131,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Keyword Difficulty (0-100). Higher means harder to rank in top 10.",
-      cell: (kw: any) => kw.kd > 0 ? (
+      cell: (kw: Keyword) => kw.kd > 0 ? (
         <div className="flex items-center justify-center gap-2">
           <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
             <div
@@ -1109,7 +1153,7 @@ export default function KeywordsPage() {
       align: "right",
       sortable: true,
       tooltip: "Cost Per Click (USD). Indicates commercial value of the keyword.",
-      cell: (kw: any) => (
+      cell: (kw: Keyword) => (
         <span className="text-[13px] font-mono text-text-tertiary tabular-nums">
           {kw.cpc > 0 ? `$${kw.cpc.toFixed(2)}` : "—"}
         </span>
@@ -1122,7 +1166,7 @@ export default function KeywordsPage() {
       sortable: true,
       tooltip:
         "SERP-style search intent from keyword data: informational, commercial, transactional, or navigational.",
-      cell: (kw: any) => kw.intent ? (
+      cell: (kw: Keyword) => kw.intent ? (
         <span
           className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
             kw.intent === "commercial" || kw.intent === "transactional"
@@ -1144,7 +1188,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Composite opportunity score from volume, KD, CPC, and relevance signals.",
-      cell: (kw: any) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
+      cell: (kw: Keyword) => typeof kw.keyword_analysis_score === "number" && kw.keyword_analysis_score > 0 ? (
         <span className="inline-block rounded-[4px] border border-brand-action/20 bg-brand-action/10 px-2 py-0.5 text-[12px] font-mono text-brand-action tabular-nums">
           {Math.round(kw.keyword_analysis_score)}
         </span>
@@ -1158,7 +1202,7 @@ export default function KeywordsPage() {
       align: "center",
       sortable: true,
       tooltip: "Strategic score from Gemini AI — evaluates business relevance, rankability, content depth, and conversion potential.",
-      cell: (kw: any) => {
+      cell: (kw: Keyword) => {
         const score = kw.ai_eval_score as number | null | undefined;
         const data = kw.ai_eval_data as AiEvalData | null | undefined;
         if (!score || !data) {
@@ -1180,7 +1224,7 @@ export default function KeywordsPage() {
       header: "Action",
       align: "center",
       sortable: true,
-      cell: (kw: any) => (
+      cell: (kw: Keyword) => (
         <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
           <KeywordActionDropdown
             status={kw.status}
@@ -1190,65 +1234,53 @@ export default function KeywordsPage() {
         </div>
       )
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [aiSuggestedIds, busyRowId, handleStatusUpdate, projectData]);
-
-  const thBtn =
-    "group inline-flex items-center gap-0.5 rounded-[6px] px-1 py-0.5 -mx-1 text-left uppercase tracking-widest hover:bg-surface-hover/80 hover:text-text-secondary transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40";
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [busyRowId, handleStatusUpdate, projectData]);
 
   return (
-    <div className="space-y-10 pb-16 pl-4 pr-4 relative">
-      {/* ── HEADER (match project overview chrome) ─────────────────────────── */}
-      <div className="pt-4 pb-8 border-b border-border-subtle">
-        <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
-          <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
-            <span className="h-2 w-2 rounded-full bg-brand-action" />
-            Keyword discovery
-          </span>
-          {project ? (
-            <>
-              <span className="font-mono text-text-primary">{project.domain}</span>
-              <span className="opacity-30">/</span>
-              <span>{regionName(project.target_region)}</span>
-              {project.niche ? (
-                <>
-                  <span className="opacity-30">/</span>
-                  <span>{project.niche}</span>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <span className="text-text-tertiary">…</span>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div>
-            <PageTitle>{project?.name ?? "…"}</PageTitle>
-            {project?.company && project.company !== project.name ? (
-              <p className="mt-3 text-[16px] text-text-tertiary">{project.company}</p>
-            ) : null}
+    <div className="space-y-4 pb-16 pl-4 pr-4 relative">
+      <header className="sticky top-0 z-40 bg-surface-primary/95 backdrop-blur-md -mx-4 px-4 pt-4 pb-4 border-b border-border-subtle">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <PageTitle>Keyword research</PageTitle>
+            <p className="mt-3 text-[15px] text-text-tertiary max-w-[600px]">
+              Discover real search demand, analyze keyword difficulty, and approve opportunities for your content calendar.
+            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-          <button
-              type="button"
-              onClick={() => void handleRediscover()}
-              disabled={discovering || domainRefreshing}
-              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
-            >
-              {!mounted ? (
-                <>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="m21 21-4.3-4.3" />
-                  </svg>
-                  Discover keywords
-                </>
-              ) : sourceTab === "domain" ? (
-                domainRefreshing ? (
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+                type="button"
+                onClick={() => void handleRediscover()}
+                disabled={discovering || domainRefreshing}
+                className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
+              >
+                {!mounted ? (
+                  <>
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="m21 21-4.3-4.3" />
+                    </svg>
+                    Discover keywords
+                  </>
+                ) : sourceTab === "domain" ? (
+                  domainRefreshing ? (
+                    <>
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
+                      Fetching…
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="m21 21-4.3-4.3" />
+                      </svg>
+                      {domainKeywords.length > 0 ? "Re-discover" : "Fetch domain keywords"}
+                    </>
+                  )
+                ) : discovering ? (
                   <>
                     <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
-                    Fetching…
+                    Discovering…
                   </>
                 ) : (
                   <>
@@ -1256,77 +1288,27 @@ export default function KeywordsPage() {
                       <circle cx="11" cy="11" r="8" />
                       <path d="m21 21-4.3-4.3" />
                     </svg>
-                    {domainKeywords.length > 0 ? "Re-discover" : "Fetch domain keywords"}
-                  </>
-                )
-              ) : discovering ? (
-                <>
-                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
-                  Discovering…
-                </>
-              ) : (
-                <>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="m21 21-4.3-4.3" />
-                  </svg>
-                  {keywords.length > 0 ? "Re-discover" : "Discover keywords"}
-                </>
-              )}
-            </button>
-            {/* AI Score button — only shown for industry tab with keywords */}
-            {sourceTab === "industry" && keywords.length > 0 && (
-              <button
-                onClick={async () => {
-                  setAiScoring(true);
-                  const res = await scoreKeywordsWithAI(projectId);
-                  setAiScoring(false);
-                  if (res.success) {
-                    toast.success(`AI scored ${res.scored} keyword${res.scored !== 1 ? "s" : ""}${res.skipped ? ` (${res.skipped} already scored)` : ""}`);
-                    void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
-                  } else {
-                    toast.error(res.error ?? "AI scoring failed");
-                  }
-                }}
-                disabled={aiScoring || discovering}
-                className="inline-flex items-center gap-2 rounded-[32px] border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-[13px] font-semibold text-violet-300 transition-all hover:bg-violet-500/20 hover:border-violet-500/50 disabled:opacity-50"
-              >
-                {aiScoring ? (
-                  <>
-                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-violet-400/40 border-t-violet-300" />
-                    Scoring…
-                  </>
-                ) : (
-                  <>
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
-                    </svg>
-                    AI Score
+                    {keywords.length > 0 ? "Re-discover" : "Discover keywords"}
                   </>
                 )}
               </button>
-            )}
-            <ProjectNavLink
-              href={`/projects/${projectId}/calendar`}
-              className="inline-flex items-center gap-2 rounded-[32px] bg-brand-primary px-4 py-2 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-            >
-              Calendar
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-              </svg>
-            </ProjectNavLink>
-           
+              <ProjectNavLink
+                href={`/projects/${projectId}/calendar`}
+                className="inline-flex items-center gap-2 rounded-[32px] bg-brand-primary px-4 py-2 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+              >
+                Calendar
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                </svg>
+              </ProjectNavLink>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* ── KEYWORD LIST ───────────────────────────────────────────────────── */}
       <section className="space-y-4">
-    
-
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {keywords.length > 0 || domainKeywords.length > 0 ? (
+            {(keywords.length > 0 || domainKeywords.length > 0) ? (
               <PillTabFilterBar<FilterTab>
                 items={FILTER_TAB_ITEMS}
                 activeId={filter}
@@ -1334,116 +1316,151 @@ export default function KeywordsPage() {
               />
             ) : (
               <p className="text-[13px] text-text-tertiary">
-                Run Discover for industry keywords. Switch data source to Domain to see Google Ads keywords for your site.
+                Run discover to pull keywords from your brief, or switch to domain data for Google Ads terms on your site.
               </p>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {((sourceTab === "industry" && keywords.length > 0) ||
-              (sourceTab === "domain" && domainKeywords.length > 0)) ? (
-              !massSelectMode ? (
+
+          <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+              {/* AI Score button — only shown for industry tab with keywords */}
+              {sourceTab === "industry" && keywords.length > 0 && (
+                <button
+                  onClick={async () => {
+                    setAiScoring(true);
+                    const res = await scoreKeywordsWithAI(projectId, {
+                      keywordIds: selectedIds.size > 0 ? Array.from(selectedIds) : undefined
+                    });
+                    setAiScoring(false);
+                    if (res.success) {
+                      const failedPart = res.skipped ? ` (${res.skipped} failed to score)` : "";
+                      toast.success(`AI scored ${res.scored} keyword${res.scored !== 1 ? "s" : ""}${failedPart}`);
+                      void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+                    } else {
+                      toast.error(res.error ?? "AI scoring failed");
+                    }
+                  }}
+                  disabled={aiScoring || discovering}
+                  className="inline-flex items-center gap-2 rounded-[32px] border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-[13px] font-semibold text-violet-300 transition-all hover:bg-violet-500/20 hover:border-violet-500/50 disabled:opacity-50"
+                >
+                  {aiScoring ? (
+                    <>
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-violet-400/40 border-t-violet-300" />
+                      Scoring…
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                      </svg>
+                      AI Score
+                    </>
+                  )}
+                </button>
+              )}
+              {((sourceTab === "industry" && keywords.length > 0) ||
+                (sourceTab === "domain" && domainKeywords.length > 0)) ? (
+                !massSelectMode ? (
+                  <button
+                    type="button"
+                    aria-label="Mass select keywords"
+                    onClick={() => {
+                      setMassSelectMode(true);
+                      setSelectedIds(new Set());
+                    }}
+                    className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-3 w-3 shrink-0 opacity-75"
+                      aria-hidden
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.85}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
+                      <path d="M14 17.5 16 19.5 21 13.5" />
+                    </svg>
+                    <span>Mass select</span>
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleBulkApproveToCalendar()}
+                      disabled={bulkApproving || selectedIds.size === 0}
+                      className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
+                        bulkApproving ? "animate-pulse cursor-wait" : ""
+                      }`}
+                    >
+                      <span
+                        className={`block max-w-full overflow-hidden truncate text-center ${bulkApproving ? "text-[13px] leading-none" : "tabular-nums"}`}
+                      >
+                        {bulkApproving ? "…" : selectedIds.size > 0 ? `Approve (${selectedIds.size})` : "Approve"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exitMassSelect}
+                      disabled={bulkApproving}
+                      className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
+                      title="Leave mass-select mode"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )
+              ) : null}
+              <div className="relative" ref={dataSourceRef}>
                 <button
                   type="button"
-                  aria-label="Mass select keywords"
-                  onClick={() => {
-                    setMassSelectMode(true);
-                    setSelectedIds(new Set());
-                  }}
-                  className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
+                  onClick={() => setDataSourceMenuOpen(o => !o)}
+                  className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
+                  aria-expanded={dataSourceMenuOpen}
+                  aria-haspopup="listbox"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="h-3 w-3 shrink-0 opacity-75"
-                    aria-hidden
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.85}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                    <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                    <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
-                    <path d="M14 17.5 16 19.5 21 13.5" />
+                  {sourceTab === "industry" ? "Industry data" : "Domain data"}
+                  <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                   </svg>
-                  <span>Mass select</span>
                 </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void handleBulkApproveToCalendar()}
-                    disabled={bulkApproving || selectedIds.size === 0}
-                    className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
-                      bulkApproving ? "animate-pulse cursor-wait" : ""
-                    }`}
+                {dataSourceMenuOpen ? (
+                  <div
+                    role="listbox"
+                    className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
                   >
-                    <span
-                      className={`block max-w-full overflow-hidden truncate text-center ${bulkApproving ? "text-[13px] leading-none" : "tabular-nums"}`}
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={sourceTab === "industry"}
+                      className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                      onClick={() => {
+                        dispatch(rememberKeywordDiscoverySourceTab({ projectId, tab: "industry" }));
+                        setDataSourceMenuOpen(false);
+                      }}
                     >
-                      {bulkApproving ? "…" : selectedIds.size > 0 ? `Approve (${selectedIds.size})` : "Approve"}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={exitMassSelect}
-                    disabled={bulkApproving}
-                    className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
-                    title="Leave mass-select mode"
-                  >
-                    Cancel
-                  </button>
-                </>
-              )
-            ) : null}
-            <div className="relative" ref={dataSourceRef}>
-              <button
-                type="button"
-                onClick={() => setDataSourceMenuOpen(o => !o)}
-                className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
-                aria-expanded={dataSourceMenuOpen}
-                aria-haspopup="listbox"
-              >
-                {sourceTab === "industry" ? "Industry data" : "Domain data"}
-                <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                </svg>
-              </button>
-              {dataSourceMenuOpen ? (
-                <div
-                  role="listbox"
-                  className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
-                >
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={sourceTab === "industry"}
-                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-                    onClick={() => {
-                      dispatch(rememberKeywordDiscoverySourceTab({ projectId, tab: "industry" }));
-                      setDataSourceMenuOpen(false);
-                    }}
-                  >
-                    Data via industry
-                  </button>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={sourceTab === "domain"}
-                    className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-                    onClick={() => {
-                      dispatch(rememberKeywordDiscoverySourceTab({ projectId, tab: "domain" }));
-                      setDataSourceMenuOpen(false);
-                    }}
-                  >
-                    Data via domain
-                  </button>
-                </div>
-              ) : null}
-            </div>
+                      Data via industry
+                    </button>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={sourceTab === "domain"}
+                      className="block w-full px-3 py-2 text-left text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                      onClick={() => {
+                        dispatch(rememberKeywordDiscoverySourceTab({ projectId, tab: "domain" }));
+                        setDataSourceMenuOpen(false);
+                      }}
+                    >
+                      Data via domain
+                    </button>
+                  </div>
+                ) : null}
+              </div>
           </div>
         </div>
-
         {/* ── DATA VIA DOMAIN ─────────────────────────────────────────── */}
         {sourceTab === "domain" && (
           <div className="space-y-4">
@@ -1477,9 +1494,10 @@ export default function KeywordsPage() {
                 </div>
               ) : (
                 <DataTable<CompetitorKeywordsForSiteRow>
-                  data={filteredDomainKeywords}
+                  data={visibleDomainKeywords}
                   columns={domainColumns}
                   keyExtractor={kw => domainSelectId(kw.keyword)}
+                  scrollContainerRef={keywordTableScrollRef}
                   sortColumn={tableSort.column}
                   sortDirection={tableSort.dir}
                   onSortToggle={toggleSortColumn}
@@ -1498,14 +1516,46 @@ export default function KeywordsPage() {
                     }`;
                   }}
                   minWidth="920px"
-                  footer={
-                    <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3">
-                      <span className="text-[12px] text-text-tertiary">
-                        Showing {filteredDomainKeywords.length} of {sortedDomainKeywords.length} for {project?.domain ?? "your domain"}
-                        {filteredDomainKeywords.length < sortedDomainKeywords.length ? " (filter active)" : ""} · use column headers to sort
-                      </span>
-                    </div>
-                  }
+                  footer={(() => {
+                    const shown = visibleDomainKeywords.length;
+                    const total = filteredDomainKeywords.length;
+                    const nextChunk = Math.min(KEYWORDS_TABLE_PAGE_SIZE, Math.max(0, total - shown));
+                    return (
+                      <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3.5">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-[13px] text-text-tertiary">
+                            Showing{" "}
+                            <span className="font-semibold tabular-nums text-text-primary">{shown}</span> of{" "}
+                            <span className="font-semibold tabular-nums text-text-primary">{total}</span> keywords
+                            {total < sortedDomainKeywords.length ? (
+                              <span className="text-text-tertiary/80">
+                                {" "}
+                                ({sortedDomainKeywords.length} total for {projectDomain ?? "your domain"})
+                              </span>
+                            ) : null}
+                          </p>
+                          {shown < total && nextChunk > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const anchor =
+                                  shown > 0
+                                    ? domainSelectId(filteredDomainKeywords[shown - 1]!.keyword)
+                                    : null;
+                                bumpVisibleKeywordRows(total, anchor);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-primary transition-colors hover:border-border-strong hover:bg-surface-hover"
+                            >
+                              Load {nextChunk} more
+                              <svg className="h-4 w-4 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                              </svg>
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 />
               )
             ) : (
@@ -1560,9 +1610,10 @@ export default function KeywordsPage() {
             />
           ) : filtered.length > 0 ? (
             <DataTable<Keyword>
-              data={filtered}
+              data={visibleIndustryKeywords}
               columns={industryColumns}
               keyExtractor={kw => kw.id}
+              scrollContainerRef={keywordTableScrollRef}
               sortColumn={tableSort.column}
               sortDirection={tableSort.dir}
               onSortToggle={toggleSortColumn}
@@ -1575,14 +1626,70 @@ export default function KeywordsPage() {
                 if (!massSelectMode && !busyRowId) setModalKeywordId(kw.id);
               }}
               rowClassName={(kw) => {
-                const isAiPick = aiSuggestedIds.has(kw.id);
                 return `group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
                   kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
-                } ${isAiPick ? "bg-[#8b5cf6]/[0.07] ring-1 ring-inset ring-[#8b5cf6]/20" : ""} ${
+                } ${
                   selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
                 }`;
               }}
               minWidth="1180px"
+              footer={(() => {
+                const shown = visibleIndustryKeywords.length;
+                const total = filtered.length;
+                const nextChunk = Math.min(KEYWORDS_TABLE_PAGE_SIZE, Math.max(0, total - shown));
+                const ahrefsState = keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.ahrefsDiscoveryState : null;
+                const hasMoreAhrefs = ahrefsState
+                  ? (ahrefsState.matching_has_more !== false || ahrefsState.related_has_more !== false)
+                  : true;
+
+                return (
+                  <div className="border-t border-border-subtle bg-surface-secondary px-5 py-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-[13px] text-text-tertiary">
+                        Showing{" "}
+                        <span className="font-semibold tabular-nums text-text-primary">{shown}</span> of{" "}
+                        <span className="font-semibold tabular-nums text-text-primary">{total}</span> keywords
+                      </p>
+                      {shown < total && nextChunk > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const anchor = shown > 0 ? filtered[shown - 1]!.id : null;
+                            bumpVisibleKeywordRows(total, anchor);
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-primary transition-colors hover:border-border-strong hover:bg-surface-hover"
+                        >
+                          Load {nextChunk} more
+                          <svg className="h-4 w-4 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                          </svg>
+                        </button>
+                      ) : shown === total && hasMoreAhrefs ? (
+                        <button
+                          type="button"
+                          disabled={loadingMoreAhrefs}
+                          onClick={handleLoadMoreFromAhrefs}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-brand-action/30 bg-brand-action/10 px-4 py-2 text-[13px] font-semibold text-brand-action transition-all hover:bg-brand-action/20 disabled:opacity-50"
+                        >
+                          {loadingMoreAhrefs ? (
+                            <>
+                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-action/40 border-t-brand-action" />
+                              Loading from Ahrefs…
+                            </>
+                          ) : (
+                            <>
+                              Load more from Ahrefs
+                              <svg className="h-4 w-4 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                              </svg>
+                            </>
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })()}
             />
           ) : keywords.length > 0 ? (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">

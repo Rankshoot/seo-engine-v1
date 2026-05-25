@@ -113,7 +113,7 @@ export async function addCustomKeywordToCalendar(
   if (existingKw) {
     keywordId = existingKw.id as string;
   } else {
-    const { data: newKw } = await supabaseAdmin
+    const res = await supabaseAdmin
       .from("keywords")
       .insert({
         project_id: input.projectId,
@@ -125,6 +125,25 @@ export async function addCustomKeywordToCalendar(
       })
       .select("id")
       .single();
+
+    let newKw = res.data;
+    const insErr = res.error;
+
+    if (insErr && insErr.message.includes("funnel_stage") && insErr.message.includes("schema cache")) {
+      const retryRes = await supabaseAdmin
+        .from("keywords")
+        .insert({
+          project_id: input.projectId,
+          keyword: kw,
+          status: "approved",
+          secondary_keywords: [],
+          source_type: "manual",
+        })
+        .select("id")
+        .single();
+      newKw = retryRes.data;
+    }
+
     if (newKw) keywordId = newKw.id as string;
   }
 

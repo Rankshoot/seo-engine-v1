@@ -33,10 +33,9 @@ import { fetchKeywordVitals, fetchGoogleAdsKeywordsForSite } from '@/lib/datafor
 import {
   ahrefsOrganicCompetitors,
   ahrefsOrganicKeywords,
-  ahrefsTopPages,
   isAhrefsConfigured,
-  type AhrefsOrganicKeyword,
 } from '@/lib/ahrefs';
+import { isProviderEnabled } from '@/lib/admin/platform-settings-runtime';
 import { getBusinessBrief } from '@/app/actions/brief-actions';
 import { addKeywordToCalendarOnDate, collectEarliestVacantDates } from '@/app/actions/calendar-actions';
 import { bestMatchingBlogUrl } from '@/lib/competitor-sitemap-match';
@@ -97,6 +96,9 @@ function normalizeDomainInput(raw: string): string {
 /** Rows per competitor from Google Ads Keywords For Site (DataForSEO). */
 const KEYWORDS_FOR_SITE_LIMIT = 100;
 
+/** Rows per competitor fetched from Ahrefs organic keywords (cost-optimised). */
+const AHREFS_KEYWORDS_PER_COMPETITOR = 10;
+
 /** Max rows written to `competitor_keywords` and `keyword_gaps`; must match `getCompetitorBenchmark` read limit. */
 const BENCHMARK_KEYWORD_CAP = 200;
 
@@ -129,6 +131,11 @@ interface RankingOpportunity {
   top_competitor_url: string;
   source_title: string;
   position: number;
+  is_informational?: boolean;
+  is_navigational?: boolean;
+  is_commercial?: boolean;
+  is_transactional?: boolean;
+  is_branded?: boolean;
 }
 
 export async function runCompetitorBenchmark(projectId: string): Promise<RunBenchmarkResult> {
@@ -146,9 +153,11 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   const project = projectRow as Project & { project_competitors?: ProjectCompetitor[] };
 
   const trace: BenchmarkTraceEntry[] = [];
-  const ahrefsAvailable = isAhrefsConfigured();
+  const ahrefsKeyConfigured = isAhrefsConfigured();
+  const ahrefsAdminEnabled = ahrefsKeyConfigured ? await isProviderEnabled('ahrefs') : false;
+  const ahrefsAvailable = ahrefsKeyConfigured && ahrefsAdminEnabled;
   console.log(
-    `[benchmark] start project=${projectId} domain=${project.domain} region=${project.target_region} ahrefs=${ahrefsAvailable ? 'on' : 'off'}`
+    `[benchmark] start project=${projectId} domain=${project.domain} region=${project.target_region} ahrefs=${ahrefsAvailable ? 'on' : 'off'} (key=${ahrefsKeyConfigured} admin=${ahrefsAdminEnabled})`
   );
 
   // 1a. Seeds come from the Business Brief.
@@ -195,19 +204,25 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
       top_url: `https://${host}`,
       top_title: host,
     }));
-    benchmarkSource = 'dataforseo';
+    // Route to Ahrefs when admin panel has it enabled; otherwise fall back to DataForSEO.
+    if (!ahrefsAvailable) {
+      benchmarkSource = 'dataforseo';
+    }
     trace.push({
       label: 'benchmark_keyword_source',
       ok: true,
       info: {
-        source: 'keywords_data/google_ads/keywords_for_site/live',
-        reason:
-          'Project has manual competitors — keyword gaps use DataForSEO Google Ads Keywords For Site, not Ahrefs organic keywords.',
+        source: ahrefsAvailable
+          ? '/site-explorer/organic-keywords'
+          : 'keywords_data/google_ads/keywords_for_site/live',
+        reason: ahrefsAvailable
+          ? 'Project has manual competitors — Ahrefs organic keywords enabled in admin panel.'
+          : 'Project has manual competitors — Ahrefs disabled, using DataForSEO Google Ads Keywords For Site.',
         competitors: userSuppliedHosts,
         own_domain: ownDomain,
         target_region: project.target_region,
         target_language: (project as { target_language?: string }).target_language ?? 'en',
-        limit_per_competitor: KEYWORDS_FOR_SITE_LIMIT,
+        limit_per_competitor: ahrefsAvailable ? AHREFS_KEYWORDS_PER_COMPETITOR : KEYWORDS_FOR_SITE_LIMIT,
       },
     });
   } else if (ahrefsAvailable && ownDomain) {
@@ -275,14 +290,13 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   // KEYWORDS_FOR_SITE_LIMIT per competitor domain).
   // ───────────────────────────────────────────────────────────────────────
   if (benchmarkSource === 'ahrefs') {
-    for (const competitor of competitorList.slice(0, 8)) {
-      const [organicKeywords, topPages] = await Promise.all([
-        ahrefsOrganicKeywords(competitor.domain, project.target_region, 60),
-        ahrefsTopPages(competitor.domain, project.target_region, 12),
-      ]);
+    // Use a smaller limit for manual competitors (cost-optimised: 10 per competitor).
+    // For auto-discovered competitors (no userSuppliedHosts) we allow more.
+    const kwLimit = userSuppliedHosts.length > 0 ? AHREFS_KEYWORDS_PER_COMPETITOR : 60;
 
-      const topPageUrls = new Set(topPages.map(p => p.url));
-      const topPageByUrl = new Map(topPages.map(p => [p.url, p]));
+    for (const competitor of competitorList.slice(0, 8)) {
+      const organicKeywords = await ahrefsOrganicKeywords(competitor.domain, project.target_region, kwLimit);
+
       const seenKeywords = new Set<string>();
 
       for (const row of organicKeywords) {
@@ -290,7 +304,6 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
         if (!keyword || seenKeywords.has(keyword)) continue;
         seenKeywords.add(keyword);
 
-        const enrichment = pageBoost(row, topPageByUrl, topPageUrls);
         rankingOpportunities.push({
           keyword,
           volume: row.volume || 0,
@@ -300,26 +313,13 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
           gap_type: classifyGap(keyword, userKwIndex),
           top_competitor_domain: competitor.domain,
           top_competitor_url: row.best_position_url,
-          source_title: enrichment.title || competitor.top_title || competitor.domain,
-          position: row.best_position ?? 0,
-        });
-      }
-
-      for (const page of topPages.slice(0, 6)) {
-        const keyword = (page.top_keyword ?? '').trim().toLowerCase();
-        if (!keyword || seenKeywords.has(keyword) || !page.url) continue;
-        seenKeywords.add(keyword);
-        rankingOpportunities.push({
-          keyword,
-          volume: page.top_keyword_volume ?? 0,
-          kd: 0,
-          trend: '+0%',
-          trend_pct: 0,
-          gap_type: classifyGap(keyword, userKwIndex),
-          top_competitor_domain: competitor.domain,
-          top_competitor_url: page.url,
           source_title: competitor.top_title || competitor.domain,
-          position: page.top_keyword_best_position ?? 0,
+          position: row.best_position ?? 0,
+          is_informational: row.is_informational,
+          is_navigational: row.is_navigational,
+          is_commercial: row.is_commercial,
+          is_transactional: row.is_transactional,
+          is_branded: row.is_branded,
         });
       }
     }
@@ -327,12 +327,10 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     trace.push({
       label: 'ahrefs_ranking_opportunities',
       ok: true,
-      info: { competitors_scanned: competitorList.length, opportunities: rankingOpportunities.length },
+      info: { competitors_scanned: competitorList.length, opportunities: rankingOpportunities.length, kw_limit: kwLimit },
     });
 
-    // Per user rule: "dataforseo api will hit when ahref api is not giving
-    // results due to any reason." If Ahrefs produced 0 opportunities despite
-    // finding competitors, switch to DataForSEO Keywords For Site.
+    // Fallback: if Ahrefs returned 0 results and DataForSEO creds exist, switch over.
     if (rankingOpportunities.length === 0 && userSuppliedHosts.length > 0) {
       trace.push({
         label: 'ahrefs_to_dataforseo_fallback',
@@ -455,24 +453,10 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
 
   // Sample a couple of pages for any discovered competitor that didn't show
   // up in the top opportunity slice — keeps the competitor list complete.
-  // Pulls from Ahrefs top-pages so we use a single data source.
+  // Use the top competitor URL as the fallback page (no additional Ahrefs calls needed).
   for (const comp of competitorList) {
     if (pagesByDomain.has(comp.domain)) continue;
-    let pages: Array<{ url: string; title: string }> = [];
-    try {
-      const top = await ahrefsTopPages(comp.domain, project.target_region, 4);
-      pages = top
-        .filter(p => Boolean(p.url))
-        .slice(0, 2)
-        .map(p => ({ url: p.url, title: p.top_keyword ?? comp.top_title }));
-    } catch (e) {
-      trace.push({
-        label: `ahrefs_top_pages: ${comp.domain}`,
-        ok: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    const sampledPages = pages.length > 0 ? pages : [{ url: comp.top_url, title: comp.top_title }];
+    const sampledPages = [{ url: comp.top_url, title: comp.top_title }];
     for (const p of sampledPages.slice(0, 2)) {
       if (!p.url || scrapedByUrl.has(p.url)) continue;
       const { snapshot } = await extractCompetitorContent(p.url, { trace });
@@ -620,6 +604,12 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
       top_competitor_domain: opportunity.top_competitor_domain,
       top_competitor_url: opportunity.top_competitor_url,
       reasoning,
+      position: opportunity.position ?? null,
+      is_informational: opportunity.is_informational ?? false,
+      is_navigational: opportunity.is_navigational ?? false,
+      is_commercial: opportunity.is_commercial ?? false,
+      is_transactional: opportunity.is_transactional ?? false,
+      is_branded: opportunity.is_branded ?? false,
       updated_at: new Date().toISOString(),
     };
   });
@@ -733,19 +723,6 @@ async function enrichRankingUrlsFromCompetitorSitemaps(
       matched_to_blog_url: matched,
     },
   });
-}
-
-function pageBoost(
-  row: AhrefsOrganicKeyword,
-  topPageByUrl: Map<string, { url: string; top_keyword: string | null; sum_traffic: number }>,
-  topPageUrls: Set<string>
-): { isTopPage: boolean; title: string } {
-  const isTopPage = topPageUrls.has(row.best_position_url);
-  const page = topPageByUrl.get(row.best_position_url);
-  return {
-    isTopPage,
-    title: page?.top_keyword ?? '',
-  };
 }
 
 /**
@@ -890,10 +867,10 @@ export async function getCompetitorBenchmark(projectId: string): Promise<Benchma
 
   const lastBenchmarkedAt = competitors.length
     ? competitors
-        .map(c => c.last_benchmarked_at)
-        .filter(Boolean)
-        .sort()
-        .at(-1) ?? null
+      .map(c => c.last_benchmarked_at)
+      .filter(Boolean)
+      .sort()
+      .at(-1) ?? null
     : null;
 
   return {
@@ -1064,4 +1041,142 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     keywordId,
     scheduledDate: dateStr,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. Load more competitor keyword gaps from Ahrefs
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How many additional keywords to fetch per competitor on "load more". */
+const LOAD_MORE_LIMIT = 30;
+
+export interface LoadMoreCompetitorGapsResult {
+  success: boolean;
+  error?: string;
+  added: number;
+  hasMore: boolean;
+}
+
+export async function loadMoreCompetitorGapsFromAhrefs(
+  projectId: string
+): Promise<LoadMoreCompetitorGapsResult> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', added: 0, hasMore: false };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id, domain, target_region, target_language')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (pErr || !project) return { success: false, error: 'Project not found', added: 0, hasMore: false };
+
+  // Get competitors already benchmarked for this project.
+  const { data: competitorRows } = await supabaseAdmin
+    .from('competitors')
+    .select('id, domain')
+    .eq('project_id', projectId)
+    .order('rank_score', { ascending: false })
+    .limit(8);
+
+  if (!competitorRows?.length) {
+    return { success: false, error: 'No competitors benchmarked yet. Run a benchmark first.', added: 0, hasMore: false };
+  }
+
+  // Count existing gaps per competitor domain so we can use it as offset.
+  const { data: existingGaps } = await supabaseAdmin
+    .from('keyword_gaps')
+    .select('keyword, top_competitor_domain')
+    .eq('project_id', projectId);
+
+  const gapCountByDomain = new Map<string, number>();
+  const existingKeywords = new Set<string>();
+  for (const g of existingGaps ?? []) {
+    existingKeywords.add((g.keyword as string).toLowerCase());
+    const d = g.top_competitor_domain as string;
+    gapCountByDomain.set(d, (gapCountByDomain.get(d) ?? 0) + 1);
+  }
+
+  // Pull user's existing keywords for gap classification.
+  const { data: userKwRows } = await supabaseAdmin
+    .from('keywords')
+    .select('keyword, status')
+    .eq('project_id', projectId);
+  const userKwIndex = new Map<string, { status: string }>(
+    (userKwRows ?? []).map(r => [r.keyword.toLowerCase(), { status: r.status as string }])
+  );
+
+  const newGapRows: Array<Record<string, unknown>> = [];
+  let hasMore = false;
+
+  for (const competitor of competitorRows) {
+    const domain = competitor.domain as string;
+    const currentCount = gapCountByDomain.get(domain) ?? 0;
+    // Fetch with a higher limit to get beyond what we already have.
+    const fetchLimit = currentCount + LOAD_MORE_LIMIT;
+    const organicKeywords = await ahrefsOrganicKeywords(
+      domain,
+      project.target_region as string,
+      fetchLimit
+    );
+
+    // If Ahrefs returned the full limit, there may be more.
+    if (organicKeywords.length >= fetchLimit) hasMore = true;
+
+    for (const row of organicKeywords) {
+      const keyword = row.keyword.trim().toLowerCase();
+      if (!keyword || existingKeywords.has(keyword)) continue;
+
+      const gap_type = classifyGap(keyword, userKwIndex);
+      const opportunity_score = scoreOpportunity({
+        volume: row.volume || 0,
+        kd: row.keyword_difficulty ?? 0,
+        trend_pct: 0,
+        competitor_weakness: 50,
+        gap_type,
+      });
+
+      newGapRows.push({
+        project_id: projectId,
+        keyword,
+        gap_type,
+        opportunity_score,
+        volume: row.volume || 0,
+        kd: row.keyword_difficulty ?? 0,
+        trend: '+0%',
+        trend_pct: 0,
+        competitor_weakness: 50,
+        top_competitor_domain: domain,
+        top_competitor_url: row.best_position_url,
+        reasoning: buildGapReasoning(gap_type, row.volume || 0, 50, 0),
+        position: row.best_position ?? null,
+        is_informational: row.is_informational ?? false,
+        is_navigational: row.is_navigational ?? false,
+        is_commercial: row.is_commercial ?? false,
+        is_transactional: row.is_transactional ?? false,
+        is_branded: row.is_branded ?? false,
+        updated_at: new Date().toISOString(),
+      });
+
+      existingKeywords.add(keyword);
+    }
+  }
+
+  if (!newGapRows.length) {
+    return { success: true, added: 0, hasMore };
+  }
+
+  // Sort by volume desc and cap total gaps.
+  newGapRows.sort((a, b) => (b.volume as number) - (a.volume as number));
+  const toInsert = newGapRows.slice(0, LOAD_MORE_LIMIT);
+
+  const { error: upsertErr } = await supabaseAdmin
+    .from('keyword_gaps')
+    .upsert(toInsert, { onConflict: 'project_id,keyword' });
+
+  if (upsertErr) {
+    return { success: false, error: upsertErr.message, added: 0, hasMore };
+  }
+
+  return { success: true, added: toInsert.length, hasMore };
 }

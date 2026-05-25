@@ -610,6 +610,14 @@ export interface KeywordGap {
   } | null;
   /** ISO timestamp of last AI evaluation. */
   ai_eval_at?: string | null;
+  /** Competitor's ranking position for this keyword (from Ahrefs best_position). */
+  position?: number | null;
+  /** Search intent flags from Ahrefs. */
+  is_informational?: boolean;
+  is_navigational?: boolean;
+  is_commercial?: boolean;
+  is_transactional?: boolean;
+  is_branded?: boolean;
 }
 
 /** Aggregated benchmark across all competitors for one project. */

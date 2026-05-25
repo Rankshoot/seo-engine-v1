@@ -471,7 +471,7 @@ function ReviewView({
         </p>
         <p className="mt-4 text-[12px] leading-relaxed text-text-tertiary">
           On generate, the engine pulls live SERP context for the primary keyword, drops in your internal link
-          pool from the project brief, and runs a Gemini 2.5 Pro pass. You'll land on the previewer when it's done.
+          pool from the project brief, and runs a Gemini 2.5 Pro pass. You&apos;ll land on the previewer when it&apos;s done.
         </p>
       </Card>
     </div>

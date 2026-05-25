@@ -25,8 +25,6 @@
 
 import {
   ahrefsKeywordOverview,
-  ahrefsOrganicCompetitors,
-  ahrefsOrganicKeywords,
   isAhrefsConfigured,
   type AhrefsCompetitor,
   type AhrefsIntentObject,
@@ -109,8 +107,8 @@ export interface DiscoveryResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TOP_COMPETITOR_COUNT = 5;
-const OWN_LIMIT = 300;
-const PER_COMP_LIMIT = 300;
+const OWN_LIMIT = 150;
+const PER_COMP_LIMIT = 100;
 const QUICK_WIN_MIN_POSITION = 4;
 const QUICK_WIN_MAX_POSITION = 20;
 const QUICK_WIN_MIN_VOLUME = 50;
@@ -473,53 +471,28 @@ export async function runKeywordDiscovery(
     };
   }
 
-  // 2 + 3. Fan out the two cheap site-explorer calls in parallel.
-  pushTrace(trace, 'fetch_own_and_competitors_start', { target, region });
-  const [ownKeywords, competitors] = await Promise.all([
-    ahrefsOrganicKeywords(target, region, OWN_LIMIT).catch(e => {
-      console.warn('[discovery] own organic-keywords failed:', e);
-      return [] as AhrefsOrganicKeyword[];
-    }),
-    ahrefsOrganicCompetitors(target, region, 10).catch(e => {
-      console.warn('[discovery] organic-competitors failed:', e);
-      return [] as AhrefsCompetitor[];
-    }),
-  ]);
-  meta.own_keyword_count = ownKeywords.length;
-  meta.competitors_returned = competitors.length;
+  // 2 + 3. Site-explorer calls (organic-keywords + competitors) are skipped in
+  // the discovery pipeline — only matching-terms and related-terms are active.
+  // Organic-keywords endpoints are reserved for the competitor benchmark flow.
+  const ownKeywords: AhrefsOrganicKeyword[] = [];
+  const competitors: AhrefsCompetitor[] = [];
+  meta.own_keyword_count = 0;
+  meta.competitors_returned = 0;
   pushTrace(trace, 'fetch_own_and_competitors_done', {
-    own_keyword_count: ownKeywords.length,
-    competitors_returned: competitors.length,
+    own_keyword_count: 0,
+    competitors_returned: 0,
+    skipped: 'organic-keywords/competitors disabled in discovery pipeline',
   });
 
-  // 4. Pick the top-5 competitors.
+  // 4. Pick the top-5 competitors (none since we skipped the API call).
   const picked = pickTopCompetitors(competitors, target, TOP_COMPETITOR_COUNT);
-  meta.competitors_picked = picked.map(p => normalizeDomain(p.competitor_domain));
-  pushTrace(trace, 'pick_top_competitors', {
-    considered: competitors.length,
-    picked: picked.map(p => ({
-      domain: p.competitor_domain,
-      pick_score: p.pick_score,
-      domain_rating: p.domain_rating,
-      keywords_common: p.keywords_common,
-      keywords_competitor: p.keywords_competitor,
-      traffic: p.traffic,
-    })),
-  });
+  meta.competitors_picked = [];
 
-  // 5. Pull each picked competitor's organic-keywords in parallel.
-  const competitorKeywordSets = await Promise.all(
-    picked.map(p =>
-      ahrefsOrganicKeywords(normalizeDomain(p.competitor_domain), region, PER_COMP_LIMIT)
-        .then(rows => ({ domain: normalizeDomain(p.competitor_domain), rows }))
-        .catch(e => {
-          console.warn(`[discovery] organic-keywords for ${p.competitor_domain} failed:`, e);
-          return { domain: normalizeDomain(p.competitor_domain), rows: [] as AhrefsOrganicKeyword[] };
-        })
-    )
-  );
+  // 5. Competitor keyword sets are empty since organic calls are skipped.
+  const competitorKeywordSets: Array<{ domain: string; rows: AhrefsOrganicKeyword[] }> = [];
   pushTrace(trace, 'fetch_competitor_keywords_done', {
-    counts: competitorKeywordSets.map(c => ({ domain: c.domain, rows: c.rows.length })),
+    counts: [],
+    skipped: 'organic-keywords disabled in discovery pipeline',
   });
 
   // 6. Build the gap pool. Strip own-ranking keywords + dedupe by lowercase
@@ -567,24 +540,63 @@ export async function runKeywordDiscovery(
     return { candidates: [], trace, meta };
   }
 
-  // 8. Bulk-enrich every candidate with Ahrefs Keywords Explorer / overview.
-  //    `ahrefsKeywordOverview` already chunks at 80 internally.
-  const allKws = [...pool.keys()];
-  const overview = await ahrefsKeywordOverview(allKws, region).catch(e => {
-    console.warn('[discovery] keyword-overview failed:', e);
-    return new Map<string, AhrefsKeywordOverviewRow>();
+  // 8. Preliminary score to filter candidate pool down to top 100 before calling Ahrefs bulk overview.
+  const ctx = buildScoringContext(input);
+  const rawCandidates = [...pool.values()];
+
+  const preScored = rawCandidates.map(raw => {
+    const competitors = [...raw.competitor_pages.entries()]
+      .filter(([dom]) => dom && dom !== target)
+      .map(([dom, url]) => ({ dom, url }));
+
+    const candidate: KeywordCandidate = {
+      keyword: raw.keyword,
+      source_type: raw.source_type,
+      source_competitors: competitors.map(c => c.dom),
+      source_urls: competitors.map(c => c.url),
+      volume: raw.initial.volume ?? 0,
+      difficulty: raw.initial.difficulty ?? 50,
+      cpc: raw.initial.cpc ?? 0,
+      parent_topic: null,
+      traffic_potential: null,
+      intents: null,
+      intent: '',
+      ai_score: 0,
+      analysis_score: 0,
+      relevance_score: 0,
+    };
+
+    const s = scoreCandidate(candidate, ctx);
+    return {
+      raw,
+      preliminary_score: s.analysis_score,
+      volume: candidate.volume,
+    };
   });
+
+  // Sort by preliminary score desc, volume desc
+  preScored.sort((a, b) => {
+    if (b.preliminary_score !== a.preliminary_score) return b.preliminary_score - a.preliminary_score;
+    return b.volume - a.volume;
+  });
+
+  // Pick top 100 for overview enrichment
+  const topCandidates = preScored.slice(0, 100).map(x => x.raw);
+  const topKws = topCandidates.map(c => c.keyword);
+
+  const overview = new Map<string, AhrefsKeywordOverviewRow>();
+
   meta.enriched_with_overview = overview.size;
   pushTrace(trace, 'enrich_overview', {
-    requested: allKws.length,
+    requested: topKws.length,
     returned: overview.size,
-    chunks_estimated: Math.ceil(allKws.length / 80),
+    chunks_estimated: Math.ceil(topKws.length / 80),
+    pool_size: rawCandidates.length,
   });
 
   // 9. Score each candidate.
-  const ctx = buildScoringContext(input);
   const scored: KeywordCandidate[] = [];
-  for (const raw of pool.values()) {
+  for (const raw of topCandidates) {
     const ov = overview.get(raw.keyword) ?? null;
     const competitors = [...raw.competitor_pages.entries()]
       .filter(([dom]) => dom && dom !== target)

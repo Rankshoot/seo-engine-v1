@@ -109,7 +109,7 @@ export default function ContentHistoryPage() {
           <div className="min-w-0 max-w-3xl">
             <PageTitle>Content history</PageTitle>
             <p className="mt-3 text-[14px] leading-relaxed text-text-tertiary">
-              Every blog, ebook, whitepaper, and LinkedIn post you've generated. Filter by type, status,
+              Every blog, ebook, whitepaper, and LinkedIn post you&apos;ve generated. Filter by type, status,
               or sort by recency / word count to find what you need.
             </p>
           </div>

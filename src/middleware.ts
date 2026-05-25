@@ -1,5 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { adminPanelPathFromProjectsAdmin } from "@/lib/projects/reserved-project-slugs";
 
 const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
@@ -12,12 +13,15 @@ const isPublicRoute = createRouteMatcher([
 
 const clerk = clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();
+  const pathname = req.nextUrl.pathname;
+  /** Let route handlers run — they use `currentUser()` and return JSON 401. Protecting here rewrites to Clerk HTML (404) and breaks `readApiJson`. */
+  const isApi = pathname.startsWith("/api/");
 
-  if (userId && isPublicRoute(req) && !req.nextUrl.pathname.startsWith("/api")) {
+  if (userId && isPublicRoute(req) && !pathname.startsWith("/api")) {
     return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
-  if (!isPublicRoute(req)) {
+  if (!isPublicRoute(req) && !isApi) {
     await auth.protect();
   }
 });
@@ -39,6 +43,13 @@ export default function middleware(...args: Parameters<typeof clerk>) {
   }
 
   if (lowerPathname === "/projects" || lowerPathname.startsWith("/projects/")) {
+    const adminRedirect = adminPanelPathFromProjectsAdmin(pathname);
+    if (adminRedirect) {
+      const url = req.nextUrl.clone();
+      url.pathname = adminRedirect;
+      return NextResponse.redirect(url);
+    }
+
     const canonical = `/projects${pathname.slice("/projects".length)}`;
     if (pathname !== canonical) {
       const url = req.nextUrl.clone();

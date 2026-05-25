@@ -270,11 +270,14 @@ function AddReferencesModal({
 
   useEffect(() => {
     if (!open) return;
-    setDraft(
-      initialRows.length > 0
-        ? cloneReferenceRows(initialRows)
-        : [newRefRow("file"), newRefRow("link")],
-    );
+    const timer = window.setTimeout(() => {
+      setDraft(
+        initialRows.length > 0
+          ? cloneReferenceRows(initialRows)
+          : [newRefRow("file"), newRefRow("link")],
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [open, initialRows]);
 
   function updateRow(id: string, patch: Partial<ReferenceRow>) {

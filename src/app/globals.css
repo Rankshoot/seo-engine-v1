@@ -26,15 +26,29 @@
   --color-brand-deep-green: var(--brand-deep-green);
   --color-brand-dark-navy: var(--brand-dark-navy);
 
-  /* Legacy mappings to prevent breaking existing code */
-  --color-brand-500: var(--brand-primary);
-  --color-brand-600: var(--brand-primary);
-  --color-brand-400: var(--brand-action);
-  --color-brand-300: var(--brand-action);
+  /* AI-native accent (Rankit) — used for glows, gradient text, hero halos. */
+  --color-brand-violet: var(--brand-violet);
+  --color-brand-violet-soft: var(--brand-violet-soft);
+  --color-brand-aqua: var(--brand-aqua);
+  --color-brand-glow: var(--brand-glow);
 
-  --font-sans: 'Unica77 Cohere Web', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'CohereMono', 'JetBrains Mono', 'Cascadia Code', monospace;
-  --font-display: 'CohereText', 'Space Grotesk', 'Inter', sans-serif;
+  /* Semantic statuses — keyword approval, calendar progress, audit health. */
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-danger: var(--status-danger);
+  --color-status-info: var(--status-info);
+
+  /* Legacy mappings to prevent breaking existing code */
+  --color-brand-500: var(--brand-violet);
+  --color-brand-600: var(--brand-violet);
+  --color-brand-400: var(--brand-violet-soft);
+  --color-brand-300: var(--brand-violet-soft);
+  --color-accent-400: var(--brand-aqua);
+  --color-accent-500: var(--brand-aqua);
+
+  --font-sans: 'Inter', 'Unica77 Cohere Web', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'CohereMono', 'Cascadia Code', monospace;
+  --font-display: 'Inter', 'CohereText', 'Space Grotesk', sans-serif;
 
   /* Radius scale — every rounded value used across the app maps here.
      Use these in `rounded-[var(--radius-card)]` or Tailwind utilities like `rounded-card`. */
@@ -52,7 +66,9 @@
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.10);
   --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.12);
-  --shadow-ring-action: 0 0 0 3px rgba(24, 99, 220, 0.18);
+  --shadow-ring-action: 0 0 0 3px rgba(99, 102, 241, 0.22);
+  --shadow-glow-sm: 0 0 24px rgba(99, 102, 241, 0.22);
+  --shadow-glow-md: 0 0 48px rgba(99, 102, 241, 0.28);
 
   /* Motion tokens — keep durations tight and easings consistent (Linear-style). */
   --duration-instant: 80ms;
@@ -66,58 +82,83 @@
   --animate-fade-in-up: fade-in-up 0.6s ease-out forwards;
   --animate-fade-in: fade-in 0.5s ease-out forwards;
   --animate-scale-in: scale-in 0.5s ease-out forwards;
+  --animate-pulse-glow: pulse-glow 8s ease-in-out infinite;
+  --animate-spin-slow: spin 80s linear infinite;
+  --animate-shimmer: shimmer 2s linear infinite;
+  --animate-float: float 6s ease-in-out infinite;
 }
 
 /* ===== BASE LAYERS ===== */
 @layer base {
   :root {
-    /* Light Mode (Cohere Default) */
-    --surface-primary: #ffffff; /* canvas */
-    --surface-secondary: #f9fafb;
-    --surface-tertiary: #f3f4f6;
+    /* Light Mode — Rankit, refined Linear/Notion-inspired neutrals */
+    --surface-primary: #ffffff;
+    --surface-secondary: #fafafa;
+    --surface-tertiary: #f4f4f6;
     --surface-elevated: #ffffff;
-    --surface-hover: #f9fafb;
+    --surface-hover: #f4f4f6;
 
-    --border-subtle: #e5e7eb; /* border-light */
-    --border-default: #d9d9dd; /* hairline */
-    --border-strong: #93939f; /* muted */
+    --border-subtle: #ebebef;
+    --border-default: #d9d9df;
+    --border-strong: #9494a0;
 
-    --text-primary: #17171c; /* primary */
-    --text-secondary: #212121; /* ink */
-    --text-tertiary: #75758a; /* slate */
+    --text-primary: #0d0d12;
+    --text-secondary: #2a2a35;
+    --text-tertiary: #6f6f80;
 
-    --brand-primary: #17171c; /* primary */
-    --brand-on-primary: #ffffff; /* on-primary */
-    --brand-action: #1863dc; /* action-blue */
-    --brand-action-hover: #4c6ee6; /* focus-blue */
-    --brand-coral: #ff7759; /* coral */
+    --brand-primary: #0d0d12;
+    --brand-on-primary: #ffffff;
+    --brand-action: #5b5bf2;
+    --brand-action-hover: #7575ff;
+    --brand-coral: #ff7759;
     --brand-deep-green: #003c33;
     --brand-dark-navy: #071829;
+
+    /* AI-native palette */
+    --brand-violet: #6366f1;
+    --brand-violet-soft: #8b8cf7;
+    --brand-aqua: #22d3ee;
+    --brand-glow: rgba(99, 102, 241, 0.32);
+
+    --status-success: #16a34a;
+    --status-warning: #d97706;
+    --status-danger: #dc2626;
+    --status-info: #2563eb;
   }
 
   :root[class~="dark"] {
-    /* Dark Mode (Cohere Agent Console/Dark Band style) */
-    --surface-primary: #000000; /* cohere-black */
-    --surface-secondary: #17171c; /* primary */
-    --surface-tertiary: #212121; /* ink */
-    --surface-elevated: #17171c;
-    --surface-hover: #212121;
+    /* Dark Mode — graphite surfaces, blue-violet accents */
+    --surface-primary: #07080d;
+    --surface-secondary: #0d0e15;
+    --surface-tertiary: #15161f;
+    --surface-elevated: #16171f;
+    --surface-hover: #1c1d27;
 
-    --border-subtle: #333333;
-    --border-default: #444444;
-    --border-strong: #666666;
+    --border-subtle: #20212c;
+    --border-default: #2a2b38;
+    --border-strong: #4a4b5e;
 
-    --text-primary: #ffffff;
-    --text-secondary: #e5e7eb;
-    --text-tertiary: #93939f;
+    --text-primary: #f4f4f7;
+    --text-secondary: #c9c9d4;
+    --text-tertiary: #7c7d8e;
 
     --brand-primary: #ffffff;
-    --brand-on-primary: #17171c;
-    --brand-action: #4c6ee6; /* focus-blue */
-    --brand-action-hover: #1863dc; /* action-blue */
-    --brand-coral: #ffad9b; /* coral-soft */
+    --brand-on-primary: #0d0d12;
+    --brand-action: #7c7eff;
+    --brand-action-hover: #9b9dff;
+    --brand-coral: #ffad9b;
     --brand-deep-green: #003c33;
     --brand-dark-navy: #071829;
+
+    --brand-violet: #8284ff;
+    --brand-violet-soft: #a5a7ff;
+    --brand-aqua: #67e8f9;
+    --brand-glow: rgba(124, 126, 255, 0.40);
+
+    --status-success: #22c55e;
+    --status-warning: #f59e0b;
+    --status-danger: #ef4444;
+    --status-info: #3b82f6;
 
     /* Deeper shadows feel right against true black */
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
@@ -125,7 +166,9 @@
     --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.50);
     --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
     --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.65);
-    --shadow-ring-action: 0 0 0 3px rgba(76, 110, 230, 0.32);
+    --shadow-ring-action: 0 0 0 3px rgba(124, 126, 255, 0.34);
+    --shadow-glow-sm: 0 0 28px rgba(124, 126, 255, 0.32);
+    --shadow-glow-md: 0 0 56px rgba(124, 126, 255, 0.40);
   }
 
   html {
@@ -142,7 +185,7 @@
   }
 
   ::selection {
-    background: rgba(24, 99, 220, 0.3);
+    background: rgba(99, 102, 241, 0.32);
     color: var(--text-primary);
   }
 
@@ -179,6 +222,38 @@
   .input-field option {
     background: var(--surface-elevated);
     color: var(--text-primary);
+  }
+
+  /* Rankit gradient text — AI-native blue→violet→aqua. */
+  .gradient-text {
+    background: linear-gradient(135deg, var(--brand-violet) 0%, var(--brand-violet-soft) 50%, var(--brand-aqua) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+
+  /* Glass / frosted surface — used by landing nav + hero cards. */
+  .bg-glass {
+    background: color-mix(in srgb, var(--surface-elevated) 70%, transparent);
+    backdrop-filter: blur(14px) saturate(160%);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+  }
+
+  .bg-glass-hover {
+    background: color-mix(in srgb, var(--surface-hover) 80%, transparent);
+    backdrop-filter: blur(14px) saturate(160%);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+  }
+
+  /* AI orb — small pulsing dot reused in assistant icons. */
+  .ai-orb {
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    background: radial-gradient(circle at 30% 30%, var(--brand-violet-soft), var(--brand-violet));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-violet) 18%, transparent), 0 0 12px var(--brand-glow);
+    animation: pulse-glow 2.4s ease-in-out infinite;
   }
 
   /* Clerk overrides for dark theme */
@@ -224,12 +299,13 @@
   }
 
   .cl-formButtonPrimary {
-    background: var(--brand-primary) !important;
-    color: var(--brand-on-primary) !important;
+    background: var(--brand-violet) !important;
+    color: #ffffff !important;
   }
 
   .cl-formButtonPrimary:hover {
-    opacity: 0.9 !important;
+    background: var(--brand-action-hover) !important;
+    opacity: 1 !important;
   }
 
   .cl-footerActionLink {
@@ -252,8 +328,6 @@
     color: var(--text-secondary) !important;
   }
 }
-
-/* ===== BLOG PAGE — INDEPENDENT SCROLLBARS ===== */
 
 /* ===== BLOG PAGE — INDEPENDENT SCROLLBARS ===== */
 
@@ -336,5 +410,35 @@
 }
 
 @keyframes shimmer {
+  0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
 }
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Convenience utilities not autogenerated by Tailwind v4. */
+.animate-fade-in-up { animation: var(--animate-fade-in-up); opacity: 0; }
+.animate-fade-in { animation: var(--animate-fade-in); opacity: 0; }
+.animate-scale-in { animation: var(--animate-scale-in); opacity: 0; }
+.animate-pulse-glow { animation: var(--animate-pulse-glow); }
+.animate-spin-slow { animation: var(--animate-spin-slow); }
+.animate-float { animation: var(--animate-float); }
+
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
+.delay-700 { animation-delay: 700ms; }

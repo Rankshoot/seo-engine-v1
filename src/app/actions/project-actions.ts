@@ -149,6 +149,12 @@ export async function createProject(data: {
     );
   }
 
+  // Fetch the full project with competitors populated before returning
+  const fullProject = await getProject(project.id);
+  if (fullProject.success && fullProject.data) {
+    return { success: true, data: fullProject.data };
+  }
+
   return { success: true, data: project as Project };
 }
 
@@ -158,7 +164,7 @@ export async function getProjects() {
 
   const { data, error } = await supabaseAdmin
     .from('projects')
-    .select('*')
+    .select('*, project_competitors(*)')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });
 
@@ -256,6 +262,12 @@ export async function updateProject(
     }
   }
 
+  // Fetch the full project with competitors populated before returning
+  const fullProject = await getProject(id);
+  if (fullProject.success && fullProject.data) {
+    return { success: true as const, data: fullProject.data };
+  }
+
   return { success: true as const, data: updated as Project };
 }
 
@@ -332,18 +344,14 @@ async function fetchAndPersistSiteExplorerSnapshot(
   region: string,
   trace: SiteExplorerTraceEntry[]
 ) {
-  const [overview, competitors, topPages] = await Promise.all([
-    ahrefsDomainOverview(target, region),
-    ahrefsOrganicCompetitors(target, region, 40),
-    ahrefsTopPages(target, region, 8),
-  ]);
+  const overview: AhrefsDomainOverview | null = null;
+  const topPages: AhrefsTopPage[] = [];
+  const competitors = await ahrefsOrganicCompetitors(target, region, 40);
 
   trace.push({
     step: 'site_explorer_metrics',
-    ok: overview != null,
-    detail: overview
-      ? `DR=${overview.domain_rating ?? '—'} organic_kw=${overview.organic_keywords ?? '—'}`
-      : 'null',
+    ok: false,
+    detail: 'skipped — disabled endpoint',
   });
   trace.push({
     step: 'organic_competitors',
@@ -352,8 +360,8 @@ async function fetchAndPersistSiteExplorerSnapshot(
   });
   trace.push({
     step: 'top_pages',
-    ok: topPages.length > 0,
-    detail: `${topPages.length} rows`,
+    ok: false,
+    detail: 'skipped — disabled endpoint',
   });
 
   const now = new Date().toISOString();

@@ -10,7 +10,7 @@ export default function DebugPage() {
   const [response, setResponse] = useState<{
     status: number;
     statusText: string;
-    data: any;
+    data: unknown;
     time: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +34,7 @@ export default function DebugPage() {
           if (body.trim()) {
             options.body = JSON.stringify(JSON.parse(body));
           }
-        } catch (e) {
+        } catch {
           throw new Error("Invalid JSON body");
         }
       }
@@ -46,7 +46,7 @@ export default function DebugPage() {
       const text = await res.text();
       try {
         data = JSON.parse(text);
-      } catch (e) {
+      } catch {
         data = text;
       }
 
@@ -56,8 +56,8 @@ export default function DebugPage() {
         data,
         time: endTime - startTime,
       });
-    } catch (err: any) {
-      setError(err.message || "An error occurred");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setLoading(false);
     }

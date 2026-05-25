@@ -8,6 +8,10 @@ import {
   type FunnelStage,
 } from '@/lib/keyword-funnel';
 import { countWordsInMarkdown, stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
+import {
+  extractGeminiTokenUsage,
+  recordGeminiCall,
+} from '@/lib/admin/logging/record-provider-call';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
@@ -63,9 +67,12 @@ function formatAhrefsContextForPrompt(ctx: {
 }
 
 export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearch = false): Promise<string> {
+  const { assertProviderEnabled } = await import('@/lib/admin/platform-settings-runtime');
+  await assertProviderEnabled('gemini');
   for (let attempt = 0; attempt < retries; attempt++) {
+    const started = Date.now();
     try {
-      const body: any = {
+      const body: Record<string, unknown> = {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
       };
@@ -84,7 +91,17 @@ export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearc
 
       if (res.status === 429) {
         const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached', 0.75);
-        if (fallback) return fallback;
+        if (fallback) {
+          recordGeminiCall({
+            model: process.env.POLLINATIONS_TEXT_MODEL || 'pollinations/gemini-fast',
+            prompt,
+            response: fallback,
+            ok: true,
+            latencyMs: Date.now() - started,
+            featureSuffix: 'blog_pollinations_fallback',
+          });
+          return fallback;
+        }
         throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
       }
 
@@ -96,9 +113,30 @@ export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearc
       const json = await res.json();
       const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error('Empty response from Gemini');
+      const usage = extractGeminiTokenUsage(json);
+      recordGeminiCall({
+        model: 'gemini-flash-latest',
+        prompt,
+        response: text,
+        tokensInput: usage.tokensInput,
+        tokensOutput: usage.tokensOutput,
+        ok: true,
+        latencyMs: Date.now() - started,
+        featureSuffix: 'blog_generate',
+      });
       return text;
     } catch (e: unknown) {
-      if (attempt === retries - 1) throw e;
+      if (attempt === retries - 1) {
+        recordGeminiCall({
+          model: 'gemini-flash-latest',
+          prompt,
+          ok: false,
+          latencyMs: Date.now() - started,
+          errorMessage: e instanceof Error ? e.message : String(e),
+          featureSuffix: 'blog_generate',
+        });
+        throw e;
+      }
       await new Promise(r => setTimeout(r, 5000));
     }
   }

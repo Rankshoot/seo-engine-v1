@@ -120,7 +120,7 @@ async function plan(
     blogOpen: Boolean(blogId),
   };
 
-  const systemPrompt = `You are the planning brain of an SEO content assistant inside a tool called SerpCraft. Read the user's message AND the recent chat transcript, then return a JSON plan.
+  const systemPrompt = `You are the planning brain of an SEO content assistant inside a tool called Rankit. Read the user's message AND the recent chat transcript, then return a JSON plan.
 
 TODAY
 - ISO date: ${today.iso}

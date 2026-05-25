@@ -859,7 +859,7 @@ export async function scheduleRemainingApprovedKeywords(params: {
     ai_source: string;
   }> = [];
   const used = new Set(takenDates);
-  let cursor = new Date(startBase);
+  const cursor = new Date(startBase);
 
   for (const k of candidates) {
     while (used.has(cursor.toISOString().split('T')[0])) {

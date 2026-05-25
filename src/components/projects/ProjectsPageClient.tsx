@@ -26,11 +26,9 @@ export default function ProjectsPageClient({
     }
   }, []);
 
-  const openNewProject = useCallback(() => setNewProjectModalOpen(true), []);
-
   return (
     <div className="min-h-screen flex bg-surface-primary">
-      <Sidebar onNewProject={openNewProject} />
+      <Sidebar />
       <main className="flex-1 min-w-0 ml-[280px] p-6 lg:p-8">
         <ProjectsClient
           projects={projects}

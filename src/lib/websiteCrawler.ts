@@ -128,7 +128,7 @@ async function readCapped(res: Response, cap: number): Promise<string> {
   const decoder = new TextDecoder('utf-8');
   let total = 0;
   let out = '';
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;

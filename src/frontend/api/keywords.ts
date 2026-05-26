@@ -1,4 +1,4 @@
-import type { Keyword, KeywordStatus } from "@/lib/types";
+import type { Keyword, KeywordStatus, ContentType } from "@/lib/types";
 import type { CompetitorKeywordsForSiteRow, DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { apiDelete, apiGet, apiPatch, apiPost } from "./http";
 import { V1Routes } from "./routes";
@@ -130,6 +130,33 @@ export const keywordsApi = {
     calendarError?: string;
   }> {
     return apiPatch(V1Routes.keywordStatus(projectId, keywordId), { status });
+  },
+
+  schedule(
+    projectId: string,
+    keywordId: string,
+    payload: {
+      contentType: ContentType;
+      keyword?: string;
+      volume?: number;
+      kd?: number;
+      cpc?: number;
+      intent?: string;
+      source?: string;
+      competitorDomain?: string;
+      rankingUrl?: string;
+      rank?: number;
+    }
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    scheduledDate?: string;
+    keywordId?: string;
+    keywordStatus?: string;
+    keyword?: any;
+    calendarEntry?: any;
+  }> {
+    return apiPost(V1Routes.keywordSchedule(projectId, keywordId), payload);
   },
 
   bulkStatus(

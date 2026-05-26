@@ -499,6 +499,15 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               approvedGapKeywords={approvedGapKeywords}
               rejectedGapKeywords={rejectedGapKeywords}
               onGapKeywordStatus={handleGapKeywordStatus}
+              onScheduleSuccess={(kwText) => {
+                const key = kwText.toLowerCase();
+                setApprovedGapKeywords(prev => {
+                  const next = new Set(prev);
+                  next.add(key);
+                  persistApprovedGapKeywords(projectId, next);
+                  return next;
+                });
+              }}
               aiGapKeywordSet={aiGapKeywordSet}
               massSelectMode={massSelectMode}
               selectedGapIds={selectedGapIds}
@@ -768,6 +777,7 @@ function OpportunityDashboard({
   approvedGapKeywords,
   rejectedGapKeywords,
   onGapKeywordStatus,
+  onScheduleSuccess,
   aiGapKeywordSet,
   massSelectMode,
   selectedGapIds,
@@ -796,6 +806,7 @@ function OpportunityDashboard({
   approvedGapKeywords: Set<string>;
   rejectedGapKeywords: Set<string>;
   onGapKeywordStatus: (keyword: string, next: KeywordStatus) => void;
+  onScheduleSuccess?: (keywordText: string) => void;
   aiGapKeywordSet: Set<string>;
   massSelectMode: boolean;
   selectedGapIds: Set<string>;
@@ -1218,6 +1229,22 @@ function OpportunityDashboard({
                           projectId={projectId}
                           keyword={g.keyword}
                           sourceType="competitor_gap"
+                          volume={g.volume}
+                          kd={g.kd}
+                          intent={
+                            g.is_transactional ? "transactional" :
+                            g.is_commercial ? "commercial" :
+                            g.is_informational ? "informational" :
+                            g.is_navigational ? "navigational" : "informational"
+                          }
+                          competitorDomain={g.top_competitor_domain}
+                          rankingUrl={g.top_competitor_url}
+                          rank={g.position ?? undefined}
+                          onScheduleSuccess={() => {
+                            if (onScheduleSuccess) {
+                              onScheduleSuccess(g.keyword);
+                            }
+                          }}
                         />
                       </td>
                     </tr>

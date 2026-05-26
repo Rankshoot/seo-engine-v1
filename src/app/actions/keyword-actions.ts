@@ -23,7 +23,7 @@ import {
   type KeywordCandidate,
 } from '@/lib/keyword-discovery';
 import { enrichKeywordInBackground } from '@/lib/keyword-modal';
-import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates } from './calendar-actions';
+import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates, collectEarliestVacantDates } from './calendar-actions';
 import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
 
 // ─── AI Evaluation types (mirrors Keyword.ai_eval_data) ──────────────────────
@@ -387,11 +387,11 @@ export async function runKeywordDiscoveryPipeline(
     };
   }
 
-  const rows = fresh.map(c => candidateToRow(projectId, c));
+  const rows = fresh.map(c => ({ ...candidateToRow(projectId, c), source: 'organic' }));
 
   const { data: inserted, error: insErr } = await supabaseAdmin
     .from('keywords')
-    .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+    .upsert(rows, { onConflict: 'project_id,keyword,source', ignoreDuplicates: true })
     .select('id');
 
   if (insErr) {
@@ -451,6 +451,7 @@ function candidateToRow(projectId: string, c: KeywordCandidate) {
     keyword_analysis_score: c.analysis_score,
     relevance_score: c.relevance_score,
     business_fit_score: 0,
+    source: 'organic',
     status: 'pending' as const,
   };
 }
@@ -650,14 +651,14 @@ export async function discoverKeywords(projectId: string) {
   // is already approved/rejected (still in the table). All other rows insert.
   let { data, error } = await supabaseAdmin
     .from('keywords')
-    .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+    .upsert(rows, { onConflict: 'project_id,keyword,source', ignoreDuplicates: true })
     .select();
 
   if (error && error.message.includes('funnel_stage') && error.message.includes('schema cache')) {
     const rowsNoFunnel = rows.map(({ funnel_stage: _, ...rest }) => rest);
     ({ data, error } = await supabaseAdmin
       .from('keywords')
-      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword,source', ignoreDuplicates: true })
       .select());
   }
 
@@ -749,13 +750,15 @@ export async function getKeywords(
   const { count } = await supabaseAdmin
     .from('keywords')
     .select('id', { count: 'exact', head: true })
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .or('source.eq.organic,source.is.null');
 
   const pendingPromise = supabaseAdmin
     .from('keywords')
     .select('*')
     .eq('project_id', projectId)
     .eq('status', 'pending')
+    .or('source.eq.organic,source.is.null')
     .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
     .order('volume', { ascending: false })
     .range(offset, offset + limit - 1);
@@ -766,6 +769,7 @@ export async function getKeywords(
         .select('*')
         .eq('project_id', projectId)
         .neq('status', 'pending')
+        .or('source.eq.organic,source.is.null')
         .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
         .order('volume', { ascending: false })
     : Promise.resolve({ data: [], error: null } as { data: unknown[]; error: { message: string } | null });
@@ -884,20 +888,21 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
       kw.keyword_analysis_score || aiScore(kw.volume, kw.kd, kw.intent),
     relevance_score: kw.relevance_score ?? null,
     business_fit_score: kw.business_fit_score ?? null,
+    source: 'organic',
     status: 'pending' as const,
   }));
 
   // 5. Upsert new keywords (ignore duplicate keywords already approved/rejected/pending)
   let { data: inserted, error: insErr } = await supabaseAdmin
     .from('keywords')
-    .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+    .upsert(rows, { onConflict: 'project_id,keyword,source', ignoreDuplicates: true })
     .select();
 
   if (insErr && insErr.message.includes('funnel_stage') && insErr.message.includes('schema cache')) {
     const rowsNoFunnel = rows.map(({ funnel_stage: _, ...rest }) => rest);
     ({ data: inserted, error: insErr } = await supabaseAdmin
       .from('keywords')
-      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword,source', ignoreDuplicates: true })
       .select());
   }
 
@@ -1420,6 +1425,7 @@ export async function upsertKeywordFromDomainSite(
     .select('id')
     .eq('project_id', projectId)
     .eq('normalized_keyword', phrase)
+    .eq('source', 'organic')
     .maybeSingle();
 
   if (exErr) return { success: false, error: exErr.message };
@@ -1448,9 +1454,10 @@ export async function upsertKeywordFromDomainSite(
         keyword_analysis_score: ai,
         relevance_score: null,
         business_fit_score: null,
+        source: 'organic',
         status: 'pending',
       },
-      { onConflict: 'project_id,keyword', ignoreDuplicates: true }
+      { onConflict: 'project_id,keyword,source', ignoreDuplicates: true }
     );
 
     if (insErr && insErr.message.includes('funnel_stage') && insErr.message.includes('schema cache')) {
@@ -1470,9 +1477,10 @@ export async function upsertKeywordFromDomainSite(
           keyword_analysis_score: ai,
           relevance_score: null,
           business_fit_score: null,
+          source: 'organic',
           status: 'pending',
         },
-        { onConflict: 'project_id,keyword', ignoreDuplicates: true }
+        { onConflict: 'project_id,keyword,source', ignoreDuplicates: true }
       ));
     }
 
@@ -1703,6 +1711,7 @@ export async function scoreKeywordsWithAI(
     .select('id, keyword, volume, kd, cpc, intent, trend, ai_eval_score, ai_eval_at')
     .eq('project_id', projectId)
     .eq('source_type', 'industry')
+    .or('source.eq.organic,source.is.null')
     .order('volume', { ascending: false })
     .limit(200);
 
@@ -1929,4 +1938,255 @@ export async function scoreCompetitorKeywordsWithAI(
   }
 
   return { success: true, scored, skipped: rows.length - scored };
+}
+
+function buildKeywordUpsertPayload(
+  projectId: string,
+  payload: {
+    keyword?: string;
+    volume?: number;
+    kd?: number;
+    cpc?: number;
+    intent?: string;
+    source?: string;
+    competitorDomain?: string;
+    rankingUrl?: string;
+    rank?: number;
+  },
+  schemaSafe: boolean = true
+) {
+  const volume = Math.max(0, Math.round(Number(payload.volume) || 0));
+  const kd = Math.max(0, Math.min(100, Math.round(Number(payload.kd) || 0)));
+  const cpc = Math.max(0, Number(payload.cpc) || 0);
+  const intentStr = payload.intent || '';
+  const ai = aiScore(volume, kd, intentStr);
+  const phrase = (payload.keyword ?? '').trim().toLowerCase();
+
+  const data: Record<string, any> = {
+    project_id: projectId,
+    keyword: payload.keyword!.trim(),
+    volume,
+    kd,
+    cpc,
+    trend: '',
+    competition_level: '',
+    intent: intentStr || null,
+    monthly_searches: [],
+    secondary_keywords: [],
+    ai_score: ai,
+    keyword_analysis_score: ai,
+    relevance_score: null,
+    business_fit_score: null,
+    gap_competitor: payload.competitorDomain || '',
+    source_url: payload.rankingUrl || '',
+    source_type: payload.source || 'competitor',
+    source: payload.source || 'competitor',
+    status: 'approved',
+  };
+
+  if (!schemaSafe) {
+    data.funnel_stage = deterministicFunnelStage(intentStr, phrase);
+  }
+
+  return data;
+}
+
+export async function scheduleKeyword(
+  projectId: string,
+  keywordId: string,
+  payload: {
+    contentType: string;
+    keyword?: string;
+    volume?: number;
+    kd?: number;
+    cpc?: number;
+    intent?: string;
+    source?: string;
+    competitorDomain?: string;
+    rankingUrl?: string;
+    rank?: number;
+  }
+): Promise<{
+  success: boolean;
+  error?: string;
+  scheduledDate?: string;
+  keywordId?: string;
+  keywordStatus?: string;
+  keyword?: any;
+  calendarEntry?: any;
+}> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  let finalKeywordId = keywordId;
+  let keywordText = '';
+  let secondaryKeywords: string[] = [];
+  const phrase = (payload.keyword ?? '').trim().toLowerCase();
+  const reqSource = payload.source === 'competitor' ? 'competitor' : 'organic';
+
+  // If keywordId === "new", check if it exists first
+  if (finalKeywordId === 'new') {
+    if (!phrase) return { success: false, error: 'Keyword text is required' };
+
+    const { data: existing, error: exErr } = await supabaseAdmin
+      .from('keywords')
+      .select('id, keyword, secondary_keywords')
+      .eq('project_id', projectId)
+      .eq('normalized_keyword', phrase)
+      .eq('source', reqSource)
+      .maybeSingle();
+
+    if (exErr) return { success: false, error: exErr.message };
+
+    if (existing) {
+      finalKeywordId = existing.id;
+      keywordText = existing.keyword;
+      secondaryKeywords = existing.secondary_keywords ?? [];
+    } else {
+      const { data: project, error: pErr } = await supabaseAdmin
+        .from('projects')
+        .select('id')
+        .eq('id', projectId)
+        .eq('user_id', user.id)
+        .single();
+
+      if (pErr || !project) return { success: false, error: 'Project not found or unauthorized' };
+
+      let insertPayload = buildKeywordUpsertPayload(projectId, payload, false);
+      let { data: newKw, error: insErr } = await supabaseAdmin
+        .from('keywords')
+        .insert(insertPayload)
+        .select('id, keyword, secondary_keywords')
+        .single();
+
+      if (insErr && insErr.message.includes('funnel_stage') && insErr.message.includes('schema cache')) {
+        console.warn('[scheduleKeyword] funnel_stage schema cache error caught, retrying with schemaSafe=true');
+        insertPayload = buildKeywordUpsertPayload(projectId, payload, true);
+        ({ data: newKw, error: insErr } = await supabaseAdmin
+          .from('keywords')
+          .insert(insertPayload)
+          .select('id, keyword, secondary_keywords')
+          .single());
+      }
+
+      if (insErr || !newKw) {
+        console.error('[scheduleKeyword] upsert competitor keyword failed:', insErr?.message);
+        return { success: false, error: insErr?.message ?? 'Failed to save keyword' };
+      }
+
+      finalKeywordId = newKw.id;
+      keywordText = newKw.keyword;
+      secondaryKeywords = newKw.secondary_keywords ?? [];
+    }
+  } else {
+    // keywordId exists
+    const { data: keyword, error: kwErr } = await supabaseAdmin
+      .from('keywords')
+      .select('id, project_id, keyword, secondary_keywords, projects!inner(user_id)')
+      .eq('id', finalKeywordId)
+      .eq('projects.user_id', user.id)
+      .single();
+
+    if (kwErr || !keyword) {
+      return { success: false, error: 'Keyword not found or unauthorized' };
+    }
+    if (projectId && String(keyword.project_id) !== String(projectId)) {
+      return { success: false, error: 'Keyword not found or unauthorized' };
+    }
+
+    keywordText = keyword.keyword;
+    secondaryKeywords = keyword.secondary_keywords ?? [];
+
+    // Ensure status is marked as approved in DB and source matches correctly
+    const { error: updateErr } = await supabaseAdmin
+      .from('keywords')
+      .update({ status: 'approved', source: reqSource })
+      .eq('id', finalKeywordId);
+
+    if (updateErr) {
+      console.error('[scheduleKeyword] failed to approve existing keyword:', updateErr.message);
+      return { success: false, error: updateErr.message };
+    }
+  }
+
+  const isCompetitor = payload.source === 'competitor';
+  const aiSource = isCompetitor ? 'competitor keyword' : 'organic keyword';
+
+  // Avoid duplicates: check if this keyword or its normalized form is already scheduled with the same source
+  const { data: existingEntry } = await supabaseAdmin
+    .from('calendar_entries')
+    .select('id, scheduled_date')
+    .eq('project_id', projectId)
+    .eq('keyword_id', finalKeywordId)
+    .eq('ai_source', aiSource)
+    .maybeSingle();
+
+  if (existingEntry) {
+    return {
+      success: false,
+      error: 'Keyword already scheduled',
+      scheduledDate: String(existingEntry.scheduled_date).slice(0, 10),
+    };
+  }
+
+  // Trigger background enrichment as usual
+  void enrichKeywordInBackground(finalKeywordId);
+
+  // Find next available empty calendar date
+  const dates = await collectEarliestVacantDates(projectId, 1);
+  const scheduledDate = dates[0];
+  if (!scheduledDate) {
+    return { success: false, error: 'No free calendar day found in the next 500 days.' };
+  }
+
+  const CONTENT_TYPE_LABEL_MAP: Record<string, string> = {
+    blog: 'Blog article',
+    ebook: 'Ebook',
+    whitepaper: 'Whitepaper',
+    linkedin: 'LinkedIn post',
+  };
+  const articleType = CONTENT_TYPE_LABEL_MAP[payload.contentType] || 'Blog article';
+  const title = keywordText.trim() || 'Scheduled topic';
+  const slug = keywordText
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+
+  const { data: calendarEntry, error: insertErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .insert({
+      project_id: projectId,
+      keyword_id: finalKeywordId,
+      scheduled_date: scheduledDate,
+      title: title,
+      article_type: articleType,
+      slug: slug,
+      focus_keyword: keywordText,
+      secondary_keywords: secondaryKeywords,
+      status: 'scheduled',
+      ai_source: aiSource,
+    })
+    .select()
+    .single();
+
+  if (insertErr) {
+    console.error('[scheduleKeyword] failed to create calendar entry:', insertErr.message);
+    return { success: false, error: insertErr.message };
+  }
+
+  const { data: keywordRow } = await supabaseAdmin
+    .from('keywords')
+    .select('*')
+    .eq('id', finalKeywordId)
+    .single();
+
+  return {
+    success: true,
+    scheduledDate,
+    keywordId: finalKeywordId,
+    keywordStatus: 'approved',
+    keyword: keywordRow,
+    calendarEntry,
+  };
 }

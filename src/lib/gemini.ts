@@ -7,7 +7,7 @@ import {
   parseFunnelStageLabel,
   type FunnelStage,
 } from '@/lib/keyword-funnel';
-import { countWordsInMarkdown, stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
+import { countWordsInMarkdown, stripEmptyFragmentAnchorTags, validateExternalUrl } from '@/lib/blog-content';
 import {
   extractGeminiTokenUsage,
   recordGeminiCall,
@@ -74,7 +74,7 @@ export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearc
     try {
       const body: Record<string, unknown> = {
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
+        generationConfig: { temperature: 0.75, maxOutputTokens: 16384 },
       };
       if (useGoogleSearch) {
         body.tools = [{ googleSearch: {} }];
@@ -543,6 +543,63 @@ function stripLeakedStepContent(raw: string): string {
   );
 }
 
+/**
+ * Strip raw JSON artifacts that leak into blog content when Gemini truncates
+ * mid-output or merges the META block into the article body.
+ *
+ * Targets:
+ *   • `"external_links": ["https://..."]`  — JSON key-value pairs
+ *   • `["https://...", "https://..."]`      — bare URL arrays
+ *   • Orphaned `---META---` + trailing JSON  — incomplete META block
+ *   • Lines that are just bare URLs (not inside markdown links)
+ *   • `"meta_description": "..."`           — leaked meta fields
+ */
+function stripLeakedJsonArtifacts(content: string): string {
+  let cleaned = content;
+
+  // 1. Remove orphaned ---META--- and everything after it (truncated output).
+  const metaIdx = cleaned.indexOf('---META---');
+  if (metaIdx !== -1) {
+    cleaned = cleaned.substring(0, metaIdx).trim();
+  }
+
+  // 2. Remove JSON key-value patterns leaked into body:
+  //    "external_links": [...], "internal_links": [...], "meta_description": "...",
+  //    "slug": "...", "seoNotes": [...]
+  cleaned = cleaned.replace(
+    /^\s*"(?:external_links|internal_links|meta_description|slug|seoNotes|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm,
+    ''
+  );
+
+  // 3. Remove bare JSON URL arrays on their own line: ["https://...", ...]
+  cleaned = cleaned.replace(
+    /^\s*\[\s*"https?:\/\/[^"]+"(?:\s*,\s*"https?:\/\/[^"]+")*\s*\]\s*$/gm,
+    ''
+  );
+
+  // 4. Remove lines that are just bare URLs (not inside markdown links).
+  //    A bare URL line starts with http(s):// and has no markdown link wrapper.
+  cleaned = cleaned.replace(
+    /^\s*"?https?:\/\/\S+"?\s*,?\s*$/gm,
+    ''
+  );
+
+  // 5. Remove orphaned JSON braces/brackets on their own line (remnants).
+  cleaned = cleaned.replace(/^\s*[{}]\s*$/gm, '');
+
+  // 6. Remove lines that look like JSON object start/end with leaked keys:
+  //    e.g. `},"internal_links":{` or `","https://..."` (trailing array items)
+  cleaned = cleaned.replace(
+    /^\s*[,}]\s*"(?:external_links|internal_links|meta_description|slug)".*$/gm,
+    ''
+  );
+
+  // 7. Clean up excessive blank lines left behind.
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+  return cleaned;
+}
+
 function parseGeneratedBlogMarkdown(
   rawText: string,
   entry: { title: string; slug: string },
@@ -570,6 +627,11 @@ function parseGeneratedBlogMarkdown(
       /* use defaults */
     }
   }
+
+  // Strip any leaked JSON artifacts (raw URL arrays, META fragments, etc.)
+  // BEFORE extracting links — otherwise the link regex picks up raw URLs
+  // that are inside JSON arrays and double-counts them.
+  content = stripLeakedJsonArtifacts(content);
 
   const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
   let match;
@@ -638,26 +700,81 @@ export async function generateBlogPost(
   //       discovered via sitemap scrape). These use absolute URLs so they
   //       actually resolve when the blog is republished on any CMS.
   //   (b) Blogs we generated in our own system (relative /slug URLs).
-  const siteLinks = (brief?.internal_link_candidates ?? [])
-    .filter(l => l.url && l.url.startsWith('http'))
+
+  // Pre-validate the internal link candidates
+  const allInternalCandidates = [
+    ...(brief?.internal_link_candidates ?? [])
+      .filter(l => l.url && l.url.startsWith('http'))
+      .map(l => ({ url: l.url, title: l.title || l.topic || 'Page', topic: l.topic, type: 'site' as const })),
+    ...(existingBlogs ?? [])
+      .filter(b => b.target_keyword !== entry.focus_keyword)
+      .map(b => ({
+        url: `https://${project.domain}/${b.slug}`,
+        title: b.title,
+        topic: b.target_keyword,
+        type: 'generated' as const
+      }))
+  ];
+
+  const validatedInternalResults = await Promise.allSettled(
+    allInternalCandidates.map(async (candidate) => {
+      const ok = await validateExternalUrl(candidate.url, 4000);
+      return { candidate, ok };
+    })
+  );
+
+  const validatedInternalLinks = validatedInternalResults
+    .filter((r): r is PromiseFulfilledResult<{ candidate: typeof allInternalCandidates[number]; ok: boolean }> => r.status === 'fulfilled' && r.value.ok)
+    .map(r => r.value.candidate);
+
+  const siteLinks = validatedInternalLinks
+    .filter(c => c.type === 'site')
     .slice(0, 12);
-  const generatedLinks = (existingBlogs ?? [])
-    .filter(b => b.target_keyword !== entry.focus_keyword)
+
+  const generatedLinks = validatedInternalLinks
+    .filter(c => c.type === 'generated')
     .slice(0, 8);
 
   let internalLinksBlock = '';
   if (siteLinks.length || generatedLinks.length) {
     const siteBlock = siteLinks.length
       ? `User's own website pages (prefer these — use the absolute URL as the link target, with natural anchor text):\n${siteLinks
-          .map(l => `- ${l.title || l.topic || 'Page'} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
+          .map(l => `- ${l.title} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
           .join('\n')}`
       : '';
     const generatedBlock = generatedLinks.length
       ? `Blog posts we've generated in this project (use absolute URLs like https://${project.domain}/blog/slug or https://${project.domain}/slug):\n${generatedLinks
-          .map(b => `- "${b.title}" → https://${project.domain}/${b.slug} (keyword: ${b.target_keyword})`)
+          .map(b => `- "${b.title}" → ${b.url} (keyword: ${b.topic})`)
           .join('\n')}`
       : '';
     internalLinksBlock = `\nINTERNAL LINKING (pick 2–4 total, split across the two pools, placed where they genuinely help the reader):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
+  }
+
+  // Pre-validate external research sources (Serper topArticles)
+  let verifiedExternalSourcesBlock = '';
+  if (research && research.topArticles && research.topArticles.length > 0) {
+    const articlesToValidate = research.topArticles.slice(0, 8);
+    const validatedResearchResults = await Promise.allSettled(
+      articlesToValidate.map(async (art) => {
+        const ok = await validateExternalUrl(art.url, 4000);
+        return { art, ok };
+      })
+    );
+
+    const verifiedArticles = validatedResearchResults
+      .filter((r): r is PromiseFulfilledResult<{ art: typeof articlesToValidate[number]; ok: boolean }> => r.status === 'fulfilled' && r.value.ok)
+      .map(r => r.value.art);
+
+    if (verifiedArticles.length > 0) {
+      verifiedExternalSourcesBlock = `\nVERIFIED EXTERNAL SOURCES (you may ONLY use these verified URLs for external links. Do NOT invent URLs or root-level-only domains):\n${verifiedArticles
+        .map(art => `- ${art.title} → ${art.url}`)
+        .join('\n')}\n`;
+    }
+
+    // Filter topArticles in-place so standard formatResearchForPrompt remains clean
+    research.topArticles = research.topArticles.filter(art =>
+      verifiedArticles.some(va => va.url === art.url)
+    );
   }
 
   // Company grounding from the Business Brief so the draft sounds like this
@@ -751,6 +868,8 @@ ${researchBlock}
 
 ${ahrefsBlock}
 
+${verifiedExternalSourcesBlock}
+
 ════════════════════════════════════════
 INTERNAL PLANNING — do this mentally, output NOTHING from these steps
 ════════════════════════════════════════
@@ -798,7 +917,7 @@ SEO SCORE REQUIREMENTS — every item below is machine-checked and scored:
 │ ✦ H3 SUB-HEADINGS   At least 2 × ### headings inside the body sections.
 │ ✦ FAQ SECTION       MUST have a heading that reads exactly "## Frequently Asked Questions". Include 7–10 Q&A pairs, each as ### Question / Answer.
 │ ✦ EXTERNAL LINKS    Include at least 5 credible external links (checker requires ≥ 3). Format: [anchor text](https://...).
-│ ✦ INTERNAL LINKS    Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or [anchor](https://domain/path).
+│ ✦ INTERNAL LINKS    Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or [anchor](https://...).
 │ ✦ META DESCRIPTION  140–165 characters. Must contain the primary keyword. Written as a sentence.
 └─────────────────────────────────────────────────────────────────────┘
 
@@ -829,10 +948,8 @@ IMAGES:
 • Never reference an image by URL.
 
 LINKS (machine-checked — these directly affect your SEO score):
-• External links: include AT LEAST 5 credible institutional citations (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Spread them across different sections. Do NOT link to competitor blogs, random marketing blogs, Medium posts, Quora, Reddit, or thin affiliate pages.
-• You have access to Google Search. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com" or "https://www.mckinsey.com". Link to the exact report, article, or statistic page that supports your claim.
+• External links: include AT LEAST 5 credible institutional citations. You MUST ONLY use the URLs provided under "VERIFIED EXTERNAL SOURCES" above. Never invent, guess, or approximate any external URLs. Never link to root domains like "https://www.gartner.com" or "https://www.mckinsey.com" unless they are explicitly listed in the VERIFIED EXTERNAL SOURCES list. If you need to cite a source not listed, write the claim without a hyperlink.
 • Internal links: include AT LEAST 3 from the INTERNAL LINKING pools above, woven naturally into body sections. Do NOT invent internal URLs. You MUST use the exact URLs provided in the pool.
-• If you genuinely cannot place 3 natural in-body internal links, add a section ## Also read immediately BEFORE "## Frequently Asked Questions" with 2–3 bullets. Each bullet must be a single markdown link from the INTERNAL LINKING pool plus one short sentence on why it matters. Do not duplicate URLs already linked in the body.
 • Format all links as [anchor text](url).
 
 KEYWORD DENSITY:
@@ -912,7 +1029,27 @@ After the article, output EXACTLY this block (no extra text, no trailing comma, 
 {"meta_description":"[140–165 chars, must include '${entry.focus_keyword}', written as a clear sentence]","slug":"url-slug-from-h1","external_links":["https://url1","https://url2","https://url3","https://url4","https://url5"],"internal_links":["/slug-or-absolute-url-1","/slug-or-absolute-url-2"]}`;
 
   const text = await geminiGenerate(prompt, 3, true);
-  return parseGeneratedBlogMarkdown(text, entry, project, research);
+  const result = parseGeneratedBlogMarkdown(text, entry, project, research);
+
+  // Post-generation validation: warn on likely truncated / malformed output.
+  if (result.word_count < 500) {
+    console.warn(
+      `[blog-gen] ⚠ word_count=${result.word_count} (target ${wordCount}) — likely truncated.`,
+      `keyword="${entry.focus_keyword}"`,
+    );
+  }
+  if (!/^##\s/m.test(result.content)) {
+    console.warn(
+      `[blog-gen] ⚠ No H2 headings found in generated blog for "${entry.focus_keyword}".`,
+    );
+  }
+  if (/"(?:external_links|internal_links)"\s*:/.test(result.content)) {
+    console.warn(
+      `[blog-gen] ⚠ Raw JSON keys still present in blog body for "${entry.focus_keyword}". Sanitizer may need updating.`,
+    );
+  }
+
+  return result;
 }
 
 export async function generateInstantWebResearchArticle(input: {

@@ -207,6 +207,7 @@ export async function addKeywordToCalendarOnDate(
     title?: string;
     article_type?: string;
     slug?: string;
+    ai_source?: string;
   }
 ) {
   const user = await currentUser();
@@ -291,6 +292,7 @@ export async function addKeywordToCalendarOnDate(
       focus_keyword: kw.keyword,
       secondary_keywords: kw.secondary_keywords ?? [],
       status: 'scheduled',
+      ai_source: options?.ai_source ?? '',
       ...auditPatch,
     })
     .select()
@@ -342,7 +344,7 @@ async function nextOpenCalendarDate(projectId: string): Promise<string | null> {
 export async function scheduleKeywordOnFirstVacantIfNeeded(
   projectId: string,
   keywordId: string,
-  createOptions?: { title?: string; article_type?: string; slug?: string }
+  createOptions?: { title?: string; article_type?: string; slug?: string; ai_source?: string }
 ): Promise<
   | { ok: true; skipped: boolean; scheduledDate?: string }
   | { ok: false; error: string }
@@ -372,6 +374,7 @@ export async function scheduleKeywordOnFirstVacantIfNeeded(
     title: createOptions?.title,
     article_type: createOptions?.article_type,
     slug: createOptions?.slug,
+    ai_source: createOptions?.ai_source ?? 'organic keyword',
   });
   if (!res.success) return { ok: false, error: res.error ?? 'Could not schedule keyword' };
   return { ok: true, skipped: false, scheduledDate: date };
@@ -411,7 +414,9 @@ export async function scheduleKeywordsOnVacantDates(
       error = error ?? 'Not enough vacant calendar days for all keywords.';
       break;
     }
-    const res = await addKeywordToCalendarOnDate(need[i], projectId, date);
+    const res = await addKeywordToCalendarOnDate(need[i], projectId, date, {
+      ai_source: 'organic keyword',
+    });
     if (!res.success) {
       error = error ?? res.error;
       continue;

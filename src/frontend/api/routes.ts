@@ -22,6 +22,8 @@ export const V1Routes = {
   keyword: (projectId: string, keywordId: string) => `/projects/${projectId}/keywords/${keywordId}`,
   keywordStatus: (projectId: string, keywordId: string) =>
     `/projects/${projectId}/keywords/${keywordId}/status`,
+  keywordSchedule: (projectId: string, keywordId: string) =>
+    `/projects/${projectId}/keywords/${keywordId}/schedule`,
   keywordDetails: (projectId: string, keywordId: string) =>
     `/projects/${projectId}/keywords/${keywordId}/details`,
 

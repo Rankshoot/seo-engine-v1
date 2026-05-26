@@ -931,12 +931,14 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     .select('id, keyword')
     .eq('project_id', projectId)
     .eq('normalized_keyword', normalized)
+    .eq('source', 'competitor')
     .maybeSingle();
   if (kwLookupErr) return { success: false as const, error: kwLookupErr.message };
 
   const statusPatch: Record<string, unknown> = {
     status: 'approved',
     source_type: 'competitor_benchmark',
+    source: 'competitor',
     funnel_stage: deterministicFunnelStage('', normalized),
   };
   if (gap) {
@@ -1006,6 +1008,7 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     .select('id, scheduled_date')
     .eq('project_id', projectId)
     .eq('keyword_id', keywordId)
+    .eq('ai_source', 'competitor keyword')
     .maybeSingle();
 
   if (existingEntry) {
@@ -1029,6 +1032,7 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     title: toTitleCase(canonicalKeyword),
     article_type: 'How-to Guide',
     slug: `${slugBase}-${Date.now().toString(36)}`,
+    ai_source: 'competitor keyword',
   });
 
   if (!calRes.success || !calRes.data) {

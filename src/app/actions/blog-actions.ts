@@ -700,7 +700,7 @@ function normalizeRepairNotesFromModel(notes: string[], analysis: BlogAuditAnaly
 }
 
 function sanitizeBlogMarkdown(markdown: string): string {
-  return stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(markdown))
+  let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(markdown))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     // Strip the LLM's leftover `![alt](IMAGE_PLACEHOLDER)` artifacts so the
@@ -710,7 +710,37 @@ function sanitizeBlogMarkdown(markdown: string): string {
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
     .replace(/Regenerat(?:e|ing) with AI[^\n]*(?:illustration|visual)?/gi, '')
-    .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '')
+    .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '');
+
+  // ── Leaked JSON / META artifact cleanup ──────────────────────────────
+  // Remove orphaned ---META--- and everything after it.
+  const metaIdx = cleaned.indexOf('---META---');
+  if (metaIdx !== -1) {
+    cleaned = cleaned.substring(0, metaIdx);
+  }
+
+  cleaned = cleaned
+    // JSON key-value pairs leaked into body (external_links, internal_links, etc.)
+    .replace(
+      /^\s*"(?:external_links|internal_links|meta_description|slug|seoNotes|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm,
+      ''
+    )
+    // Bare JSON URL arrays on their own line: ["https://...", ...]
+    .replace(
+      /^\s*\[\s*"https?:\/\/[^"]+?"(?:\s*,\s*"https?:\/\/[^"]+?")*\s*\]\s*$/gm,
+      ''
+    )
+    // Lines that are just bare URLs (not inside markdown links)
+    .replace(/^\s*"?https?:\/\/\S+"?\s*,?\s*$/gm, '')
+    // Orphaned JSON braces/brackets on their own line
+    .replace(/^\s*[{}]\s*$/gm, '')
+    // Leaked JSON key-value continuations (e.g. `},"internal_links":{`)
+    .replace(
+      /^\s*[,}]\s*"(?:external_links|internal_links|meta_description|slug)".*$/gm,
+      ''
+    );
+
+  return cleaned
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

@@ -135,8 +135,6 @@ export interface KeywordDetailModalProps {
   /** Selected row data — used to render instantly while the API fetch runs. */
   keyword: Keyword | null;
   onClose: () => void;
-  /** Approve / Reject / Reset the keyword's status. */
-  onStatusChange: (id: string, status: KeywordStatus) => Promise<void>;
 }
 
 type IdeaTab = "termsMatch" | "questions" | "alsoRankFor" | "alsoTalkAbout";
@@ -153,11 +151,10 @@ const TAB_LABELS: Record<IdeaTab, string> = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function KeywordDetailModal(props: KeywordDetailModalProps) {
-  const { open, projectId, keyword, onClose, onStatusChange } = props;
+  const { open, projectId, keyword, onClose } = props;
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<IdeaTab>("termsMatch");
-  const [statusBusy, setStatusBusy] = useState<KeywordStatus | "">("");
 
   // Reset to the first tab whenever the user navigates to a different row
   // without closing the modal — keeps tab state from leaking between keywords.
@@ -211,15 +208,7 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
 
   // Esc-to-close and body scroll lock are handled by <Dialog/>.
 
-  const handleStatus = async (status: KeywordStatus) => {
-    if (!keyword) return;
-    setStatusBusy(status);
-    try {
-      await onStatusChange(keyword.id, status);
-    } finally {
-      setStatusBusy("");
-    }
-  };
+
 
   if (!keyword) return null;
 
@@ -251,14 +240,12 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
           keyword={keyword}
           data={data}
           loading={loading}
-          statusBusy={statusBusy}
           refreshing={refreshMutation.isPending}
           refreshError={
             refreshMutation.error instanceof Error ? refreshMutation.error.message : ""
           }
           onRefresh={() => refreshMutation.mutate()}
           onClose={onClose}
-          onStatus={handleStatus}
         />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -350,22 +337,18 @@ function Header({
   keyword,
   data,
   loading,
-  statusBusy,
   refreshing,
   refreshError,
   onRefresh,
   onClose,
-  onStatus,
 }: {
   keyword: Keyword;
   data: KeywordModalApiData | null;
   loading: boolean;
-  statusBusy: KeywordStatus | "";
   refreshing: boolean;
   refreshError: string;
   onRefresh: () => void;
   onClose: () => void;
-  onStatus: (s: KeywordStatus) => void;
 }) {
   const lastUpdated = data ? relativeAge(data.lastFetchedAt) : null;
   return (
@@ -409,16 +392,6 @@ function Header({
               Last updated <span className="text-text-secondary">{lastUpdated}</span>
             </span>
           )}
-          {keyword.status === "approved" && (
-            <span className="rounded-full border border-accent-500/25 bg-accent-500/10 px-2 py-0.5 font-semibold text-accent-400">
-              Approved
-            </span>
-          )}
-          {keyword.status === "rejected" && (
-            <span className="rounded-full border border-rose-500/25 bg-rose-500/10 px-2 py-0.5 font-semibold text-rose-400">
-              Rejected
-            </span>
-          )}
         </div>
         {refreshError && (
           <p className="mt-2 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
@@ -443,38 +416,12 @@ function Header({
           ) : (
             <>
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348v4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
               </svg>
               Refresh
             </>
           )}
         </button>
-        <button
-          type="button"
-          disabled={statusBusy === "approved" || keyword.status === "approved"}
-          onClick={() => onStatus("approved")}
-          className="rounded-xl border border-accent-500/30 bg-accent-500/10 px-3 py-2 text-xs font-bold text-accent-400 transition-colors hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {statusBusy === "approved" ? "Approving…" : "Approve"}
-        </button>
-        <button
-          type="button"
-          disabled={statusBusy === "rejected" || keyword.status === "rejected"}
-          onClick={() => onStatus("rejected")}
-          className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-400 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {statusBusy === "rejected" ? "Rejecting…" : "Reject"}
-        </button>
-        {keyword.status !== "pending" && (
-          <button
-            type="button"
-            disabled={statusBusy === "pending"}
-            onClick={() => onStatus("pending")}
-            className="rounded-xl border border-border-strong bg-surface-elevated px-3 py-2 text-xs font-bold text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Reset
-          </button>
-        )}
         <button
           type="button"
           aria-label="Close keyword details"

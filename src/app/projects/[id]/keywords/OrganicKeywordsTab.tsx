@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, keywordsListQueryOptions, useProject } from "@/lib/query";
-import { Keyword, KeywordStatus, TARGET_REGIONS, KeywordSourceType } from "@/lib/types";
+import { Keyword, KeywordStatus, TARGET_REGIONS, KeywordSourceType, ContentType } from "@/lib/types";
 import {
   useAppDispatch,
   useAppSelector,
@@ -22,6 +22,7 @@ import {
   removeKeywordStatus,
 } from "@/lib/redux/keyword-workspace-slice";
 import { keywordsApi } from "@/frontend/api/keywords";
+import { calendarApi } from "@/frontend/api/calendar";
 import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
 import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { DataTable, ColumnDef } from "@/components/DataTable";
@@ -181,7 +182,7 @@ function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
   );
 }
 
-type FilterTab = "all" | "ai" | KeywordStatus;
+type FilterTab = "all" | "unscheduled" | "scheduled";
 
 type SourceTab = "industry" | "domain";
 
@@ -285,6 +286,63 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
 
+  const [rowContentTypes, setRowContentTypes] = useState<Record<string, ContentType>>({});
+
+  const getRowContentType = useCallback((keyword: string) => {
+    return rowContentTypes[keyword.toLowerCase()] ?? "blog";
+  }, [rowContentTypes]);
+
+  const setRowContentType = useCallback((keyword: string, type: ContentType) => {
+    setRowContentTypes(prev => ({
+      ...prev,
+      [keyword.toLowerCase()]: type
+    }));
+  }, []);
+
+  const { data: calendarRes } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId,
+  });
+  const calendarEntries = calendarRes?.success ? calendarRes.data : [];
+
+  const calendarMap = useMemo(() => {
+    const map = new Map<string, typeof calendarEntries[number]>();
+    if (!calendarEntries) return map;
+    for (const entry of calendarEntries) {
+      if (entry.keyword_id) {
+        map.set(entry.keyword_id, entry);
+      }
+      if (entry.focus_keyword) {
+        map.set(entry.focus_keyword.toLowerCase(), entry);
+      }
+    }
+    return map;
+  }, [calendarEntries]);
+
+  const articleTypeToContentType = (articleType: string): ContentType => {
+    const typeMap: Record<string, ContentType> = {
+      "Blog article": "blog",
+      "Ebook": "ebook",
+      "Whitepaper": "whitepaper",
+      "LinkedIn post": "linkedin",
+    };
+    return typeMap[articleType] ?? "blog";
+  };
+
+  const resolveContentType = useCallback((keywordText: string, keywordId?: string, aiEvalData?: any) => {
+    const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
+    if (entry) {
+      return articleTypeToContentType(entry.article_type);
+    }
+    const recommended = aiEvalData?.recommended_content_type;
+    const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin"];
+    if (recommended && supportedTypes.includes(recommended)) {
+      return rowContentTypes[keywordText.toLowerCase()] ?? recommended;
+    }
+    return rowContentTypes[keywordText.toLowerCase()] ?? "blog";
+  }, [calendarMap, rowContentTypes]);
+
   const KEYWORDS_KEY = qk.keywords(projectId);
 
   const [discovering, setDiscovering] = useState(false);
@@ -305,7 +363,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkApproving, setBulkApproving] = useState(false);
+  const [bulkScheduling, setBulkScheduling] = useState(false);
   const [aiScoring, setAiScoring] = useState(false);
   /** Domain-tab optimistic status by normalized phrase (survives refetch/cache key mismatches). */
   const [domainPhraseStatusOverlay, setDomainPhraseStatusOverlay] = useState<Record<string, KeywordStatus>>({});
@@ -431,32 +489,29 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
 
   const industryCounts = useMemo(() => {
     let all = 0;
-    let pending = 0;
-    let approved = 0;
-    let rejected = 0;
+    let unscheduled = 0;
+    let scheduled = 0;
     for (const k of keywords) {
       all += 1;
-      if (k.status === "pending") pending += 1;
-      if (k.status === "approved") approved += 1;
-      if (k.status === "rejected") rejected += 1;
+      const isSch = calendarMap.has(k.id) || calendarMap.has(k.keyword.toLowerCase());
+      if (isSch) scheduled += 1;
+      else unscheduled += 1;
     }
-    return { all, pending, approved, rejected };
-  }, [keywords]);
+    return { all, unscheduled, scheduled };
+  }, [keywords, calendarMap]);
 
   const domainCounts = useMemo(() => {
     let all = 0;
-    let pending = 0;
-    let approved = 0;
-    let rejected = 0;
+    let unscheduled = 0;
+    let scheduled = 0;
     for (const d of domainKeywords) {
       all += 1;
-      const s = effectiveDomainStatus(d);
-      if (s === "pending") pending += 1;
-      if (s === "approved") approved += 1;
-      if (s === "rejected") rejected += 1;
+      const isSch = calendarMap.has(d.matched_keyword_id || "") || calendarMap.has(d.keyword.toLowerCase());
+      if (isSch) scheduled += 1;
+      else unscheduled += 1;
     }
-    return { all, pending, approved, rejected };
-  }, [domainKeywords, effectiveDomainStatus]);
+    return { all, unscheduled, scheduled };
+  }, [domainKeywords, calendarMap]);
 
   const displayCounts = sourceTab === "industry" ? industryCounts : domainCounts;
 
@@ -464,25 +519,26 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     const list = [...domainKeywords];
     if (tableSort.column === "status") {
       const m = tableSort.dir === "asc" ? 1 : -1;
-      list.sort(
-        (a, b) => m * (STATUS_ORDER[effectiveDomainStatus(a)] - STATUS_ORDER[effectiveDomainStatus(b)])
-      );
+      list.sort((a, b) => {
+        const sa = calendarMap.has(a.matched_keyword_id || "") || calendarMap.has(a.keyword.toLowerCase()) ? 1 : 0;
+        const sb = calendarMap.has(b.matched_keyword_id || "") || calendarMap.has(b.keyword.toLowerCase()) ? 1 : 0;
+        return m * (sa - sb);
+      });
     } else {
       list.sort((a, b) => compareDomainRows(a, b, tableSort.column, tableSort.dir));
     }
     return list;
-  }, [domainKeywords, tableSort.column, tableSort.dir, effectiveDomainStatus]);
+  }, [domainKeywords, tableSort.column, tableSort.dir, calendarMap]);
 
   const filteredDomainKeywords = useMemo(() => {
     return sortedDomainKeywords.filter(row => {
       if (filter === "all") return true;
-      const st = effectiveDomainStatus(row);
-      if (filter === "pending") return st === "pending";
-      if (filter === "approved") return st === "approved";
-      if (filter === "rejected") return st === "rejected";
+      const isSch = calendarMap.has(row.matched_keyword_id || "") || calendarMap.has(row.keyword.toLowerCase());
+      if (filter === "scheduled") return isSch;
+      if (filter === "unscheduled") return !isSch;
       return true;
     });
-  }, [sortedDomainKeywords, filter, effectiveDomainStatus]);
+  }, [sortedDomainKeywords, filter, calendarMap]);
 
   useEffect(() => {
     if (sourceTab !== "domain") return;
@@ -784,9 +840,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const filtered = useMemo(() => {
     return keywords.filter(k => {
       if (filter === "all") return true;
-      return k.status === filter;
+      const isSch = calendarMap.has(k.id) || calendarMap.has(k.keyword.toLowerCase());
+      if (filter === "scheduled") return isSch;
+      if (filter === "unscheduled") return !isSch;
+      return true;
     }).sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
-  }, [keywords, filter, tableSort]);
+  }, [keywords, filter, tableSort, calendarMap]);
 
   const visibleIndustryKeywords = useMemo(
     () => filtered.slice(0, Math.min(visibleKeywordRows, filtered.length)),
@@ -866,7 +925,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     });
   };
 
-  const handleBulkApproveToCalendar = async () => {
+  const handleBulkScheduleToCalendar = async () => {
     const ids = [...selectedIds];
     if (!ids.length) return;
     const domPhrases = ids.map(parseDomainSelectId).filter((p): p is string => p !== null);
@@ -879,7 +938,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       uuidIds.map(id => [id, keywords.find(keyword => keyword.id === id)?.status ?? "pending"])
     ) as Record<string, KeywordStatus>;
     let bulkRes: Awaited<ReturnType<typeof keywordsApi.bulkStatus>> | undefined;
-    setBulkApproving(true);
+    setBulkScheduling(true);
     try {
       for (const phrase of domPhrases) {
         const row = domainKeywords.find(d => d.keyword === phrase);
@@ -926,7 +985,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               })
             );
           }
-          setError(bulkRes.error ?? "Could not approve keywords");
+          setError(bulkRes.error ?? "Could not schedule keywords");
           return;
         }
       }
@@ -941,9 +1000,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
 
       toast.success(
         domPhrases.length && !uuidIds.length
-          ? `${domPhrases.length} domain keyword(s) approved — placed on the next open calendar days`
+          ? `${domPhrases.length} domain keyword(s) scheduled — placed on the next open calendar days`
           : uuidIds.length
-            ? `${ids.length} keyword(s) approved${
+            ? `${ids.length} keyword(s) scheduled${
                 bulkRes?.calendarError
                   ? ` — ${bulkRes.calendarError}`
                   : bulkRes?.calendarScheduled != null
@@ -954,12 +1013,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                       }${bulkRes.firstScheduledDate ? ` (first slot ${fmtIsoDateLocal(bulkRes.firstScheduledDate)})` : ""}`
                     : ""
               }`
-            : `${ids.length} keyword(s) approved`
+            : `${ids.length} keyword(s) scheduled`
       );
       exitMassSelect();
       router.push(`/projects/${projectId}/content-calendar`);
     } finally {
-      setBulkApproving(false);
+      setBulkScheduling(false);
     }
   };
 
@@ -976,9 +1035,8 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
 
   const FILTER_TAB_ITEMS: Array<{ id: FilterTab; label: string; count: number }> = [
     { id: "all", label: "All", count: displayCounts.all },
-    { id: "pending", label: "Pending", count: displayCounts.pending },
-    { id: "approved", label: "Approved", count: displayCounts.approved },
-    { id: "rejected", label: "Rejected", count: displayCounts.rejected },
+    { id: "unscheduled", label: "Unscheduled", count: displayCounts.unscheduled },
+    { id: "scheduled", label: "Scheduled", count: displayCounts.scheduled },
   ];
 
   
@@ -990,8 +1048,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       sortable: true,
       tooltip: "Search query from Google Ads keywords for your domain.",
       cell: (kw: CompetitorKeywordsForSiteRow) => (
-        <div className="flex items-center gap-2 max-w-[260px]">
-          <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+        <div className="flex items-center gap-2 max-w-[260px] w-full min-w-0">
+          <Tooltip placement="above" content={kw.keyword} className="w-full min-w-0 !justify-start">
+            <p className="truncate text-[14px] font-medium text-text-primary cursor-help w-full min-w-0">{kw.keyword}</p>
+          </Tooltip>
         </div>
       )
     },
@@ -1063,23 +1123,70 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       )
     },
     {
+      id: "content_type",
+      header: "Content Type",
+      align: "center",
+      cell: (kw: CompetitorKeywordsForSiteRow) => {
+        const keywordText = kw.keyword;
+        const keywordId = kw.matched_keyword_id || undefined;
+        const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
+        const isScheduled = !!entry;
+        const isGenerated = !!entry?.blog;
+        const industryKw = keywords.find(k => normKeywordPhrase(k.keyword) === normKeywordPhrase(keywordText));
+        const currentType = resolveContentType(keywordText, keywordId, industryKw?.ai_eval_data);
+
+        const recommended = (industryKw?.ai_eval_data as any)?.recommended_content_type;
+        const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+        const labels: Record<ContentType, string> = {
+          blog: "Blog article",
+          ebook: "Ebook",
+          whitepaper: "Whitepaper",
+          linkedin: "LinkedIn post",
+        };
+
+        return (
+          <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+            <select
+              value={currentType}
+              onChange={(e) => setRowContentType(keywordText, e.target.value as ContentType)}
+              disabled={isScheduled || isGenerated}
+              className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {options.map(type => (
+                <option key={type} value={type}>
+                  {labels[type]}{type === recommended ? " ✨" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      }
+    },
+    {
       id: "action",
       header: "Action",
       align: "center",
       sortable: false,
       cell: (kw: CompetitorKeywordsForSiteRow) => {
+        const entry = (kw.matched_keyword_id ? calendarMap.get(kw.matched_keyword_id) : null) || calendarMap.get(kw.keyword.toLowerCase());
+        const industryKw = keywords.find(k => normKeywordPhrase(k.keyword) === normKeywordPhrase(kw.keyword));
+        const selectedType = resolveContentType(kw.keyword, kw.matched_keyword_id || undefined, industryKw?.ai_eval_data);
         return (
           <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
             <KeywordActionCell
               projectId={projectId}
               keyword={kw.keyword}
+              keywordId={kw.matched_keyword_id || undefined}
               sourceType="google_ads_domain"
+              contentType={selectedType}
+              scheduledDate={entry?.scheduled_date}
+              blogId={entry?.blog?.id}
             />
           </div>
         );
       }
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [busyRowId, handleDomainStatusUpdate, effectiveDomainStatus]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [busyRowId, handleDomainStatusUpdate, effectiveDomainStatus, calendarMap, resolveContentType, setRowContentType]);
 
   const industryColumns = useMemo<ColumnDef<Keyword>[]>(() => [
     {
@@ -1089,9 +1196,11 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       tooltip: `The search query. Live data from DataForSEO in ${projectData?.success && projectData.data ? regionName(projectData.data.target_region) : "your region"}.`,
       cell: (kw: Keyword) => {
         return (
-          <div className="max-w-[260px]">
-            <div className="flex items-center gap-2">
-              <p className="truncate text-[14px] font-medium text-text-primary">{kw.keyword}</p>
+          <div className="max-w-[260px] w-full min-w-0">
+            <div className="flex items-center gap-2 w-full min-w-0">
+              <Tooltip placement="above" content={kw.keyword} className="w-full min-w-0 !justify-start">
+                <p className="truncate text-[14px] font-medium text-text-primary cursor-help w-full min-w-0">{kw.keyword}</p>
+              </Tooltip>
             </div>
             {(typeof kw.relevance_score === "number" && kw.relevance_score > 0) ||
             (typeof kw.business_fit_score === "number" && kw.business_fit_score > 0) ? (
@@ -1133,17 +1242,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       sortable: true,
       tooltip: "Keyword Difficulty (0-100). Higher means harder to rank in top 10.",
       cell: (kw: Keyword) => kw.kd > 0 ? (
-        <div className="flex items-center justify-center gap-2">
-          <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
-              }`}
-              style={{ width: `${kw.kd}%` }}
-            />
-          </div>
-          <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
-        </div>
+        <span className={`text-[13px] font-semibold tabular-nums ${KD_COLOR(kw.kd)}`}>{kw.kd}</span>
       ) : (
         <span className="text-[13px] text-text-tertiary">—</span>
       )
@@ -1167,21 +1266,20 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       sortable: true,
       tooltip:
         "SERP-style search intent from keyword data: informational, commercial, transactional, or navigational.",
-      cell: (kw: Keyword) => kw.intent ? (
-        <span
-          className={`rounded-[4px] border px-2 py-0.5 text-[11px] font-bold capitalize ${
-            kw.intent === "commercial" || kw.intent === "transactional"
-              ? "border-brand-action/20 bg-brand-action/10 text-brand-action"
-              : kw.intent === "informational"
-                ? "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]"
-                : "border-border-subtle bg-surface-secondary text-text-tertiary"
-          }`}
-        >
-          {kw.intent}
-        </span>
-      ) : (
-        <span className="text-[13px] text-text-tertiary">—</span>
-      )
+      cell: (kw: Keyword) => {
+        if (!kw.intent) return <span className="text-[13px] text-text-tertiary">—</span>;
+        const norm = kw.intent.toLowerCase();
+        const color =
+          norm.includes("transactional") ? "text-[#10b981]" :
+          norm.includes("commercial") ? "text-[#f59e0b]" :
+          norm.includes("informational") ? "text-[#60a5fa]" :
+          norm.includes("navigational") ? "text-[#a78bfa]" : "text-text-tertiary";
+        return (
+          <span className={`text-[12px] font-semibold capitalize ${color}`}>
+            {kw.intent}
+          </span>
+        );
+      }
     },
     {
       id: "analysis_score",
@@ -1221,28 +1319,74 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       }
     },
     {
+      id: "content_type",
+      header: "Content Type",
+      align: "center",
+      cell: (kw: Keyword) => {
+        const keywordText = kw.keyword;
+        const keywordId = kw.id;
+        const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
+        const isScheduled = !!entry;
+        const isGenerated = !!entry?.blog;
+        const currentType = resolveContentType(keywordText, keywordId, kw.ai_eval_data);
+
+        const recommended = (kw.ai_eval_data as any)?.recommended_content_type;
+        const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+        const labels: Record<ContentType, string> = {
+          blog: "Blog article",
+          ebook: "Ebook",
+          whitepaper: "Whitepaper",
+          linkedin: "LinkedIn post",
+        };
+
+        return (
+          <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+            <select
+              value={currentType}
+              onChange={(e) => setRowContentType(keywordText, e.target.value as ContentType)}
+              disabled={isScheduled || isGenerated}
+              className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {options.map(type => (
+                <option key={type} value={type}>
+                  {labels[type]}{type === recommended ? " ✨" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      }
+    },
+    {
       id: "action",
       header: "Action",
       align: "center",
       sortable: false,
-      cell: (kw: Keyword) => (
-        <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
-          <KeywordActionCell
-            projectId={projectId}
-            keyword={kw.keyword}
-            keywordId={kw.id}
-            sourceType={(kw.source_type as KeywordSourceType) || "industry"}
-          />
-        </div>
-      )
+      cell: (kw: Keyword) => {
+        const entry = calendarMap.get(kw.id) || calendarMap.get(kw.keyword.toLowerCase());
+        const selectedType = resolveContentType(kw.keyword, kw.id, kw.ai_eval_data);
+        return (
+          <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+            <KeywordActionCell
+              projectId={projectId}
+              keyword={kw.keyword}
+              keywordId={kw.id}
+              sourceType={(kw.source_type as KeywordSourceType) || "industry"}
+              contentType={selectedType}
+              scheduledDate={entry?.scheduled_date}
+              blogId={entry?.blog?.id}
+            />
+          </div>
+        );
+      }
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [busyRowId, handleStatusUpdate, projectData]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [busyRowId, handleStatusUpdate, projectData, calendarMap, resolveContentType, setRowContentType]);
 
   return (
     <div className="space-y-4 relative">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between -mt-2">
         <div className="flex items-center gap-2.5 shrink-0 ml-auto">
-          <button
+          {/* <button
               type="button"
               onClick={() => void handleRediscover()}
               disabled={discovering || domainRefreshing}
@@ -1285,7 +1429,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                   {keywords.length > 0 ? "Re-discover" : "Discover keywords"}
                 </>
               )}
-            </button>
+            </button> */}
         </div>
       </div>
 
@@ -1296,7 +1440,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               <PillTabFilterBar<FilterTab>
                 items={FILTER_TAB_ITEMS}
                 activeId={filter}
-                onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab }))}
+                onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab as any }))}
               />
             ) : (
               <p className="text-[13px] text-text-tertiary">
@@ -1309,6 +1453,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               {/* AI Score button — only shown for industry tab with keywords */}
               {sourceTab === "industry" && keywords.length > 0 && (
                 <button
+                  type="button"
                   onClick={async () => {
                     setAiScoring(true);
                     const res = await scoreKeywordsWithAI(projectId, {
@@ -1324,19 +1469,23 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                     }
                   }}
                   disabled={aiScoring || discovering}
-                  className="inline-flex items-center gap-2 rounded-[32px] border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-[13px] font-semibold text-violet-300 transition-all hover:bg-violet-500/20 hover:border-violet-500/50 disabled:opacity-50"
+                  className={`inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:scale-105 ${
+                    aiScoring
+                      ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/20 text-[#8b5cf6] animate-pulse"
+                      : "border-[#8b5cf6]/30 bg-[#8b5cf6]/10 text-[#8b5cf6] hover:bg-[#8b5cf6]/20"
+                  }`}
                 >
                   {aiScoring ? (
                     <>
-                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-violet-400/40 border-t-violet-300" />
-                      Scoring…
+                      <div className="h-3 w-3 rounded-full border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] animate-spin" />
+                      <span>Scoring…</span>
                     </>
                   ) : (
                     <>
-                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                      <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.85}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
                       </svg>
-                      AI Score
+                      <span>AI Score</span>
                     </>
                   )}
                 </button>
@@ -1374,22 +1523,22 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                   <>
                     <button
                       type="button"
-                      onClick={() => void handleBulkApproveToCalendar()}
-                      disabled={bulkApproving || selectedIds.size === 0}
+                      onClick={() => void handleBulkScheduleToCalendar()}
+                      disabled={bulkScheduling || selectedIds.size === 0}
                       className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
-                        bulkApproving ? "animate-pulse cursor-wait" : ""
+                        bulkScheduling ? "animate-pulse cursor-wait" : ""
                       }`}
                     >
                       <span
-                        className={`block max-w-full overflow-hidden truncate text-center ${bulkApproving ? "text-[13px] leading-none" : "tabular-nums"}`}
+                        className={`block max-w-full overflow-hidden truncate text-center ${bulkScheduling ? "text-[13px] leading-none" : "tabular-nums"}`}
                       >
-                        {bulkApproving ? "…" : selectedIds.size > 0 ? `Approve (${selectedIds.size})` : "Approve"}
+                        {bulkScheduling ? "…" : selectedIds.size > 0 ? `Schedule (${selectedIds.size})` : "Schedule"}
                       </span>
                     </button>
                     <button
                       type="button"
                       onClick={exitMassSelect}
-                      disabled={bulkApproving}
+                      disabled={bulkScheduling}
                       className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
                       title="Leave mass-select mode"
                     >
@@ -1402,11 +1551,11 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                 <button
                   type="button"
                   onClick={() => setDataSourceMenuOpen(o => !o)}
-                  className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
+                  className="inline-flex h-8 w-[210px] justify-between items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
                   aria-expanded={dataSourceMenuOpen}
                   aria-haspopup="listbox"
                 >
-                  {sourceTab === "industry" ? "Industry data" : "Domain data"}
+                  <span>{sourceTab === "industry" ? "Industry data" : "Domain data"}</span>
                   <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                   </svg>
@@ -1414,7 +1563,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                 {dataSourceMenuOpen ? (
                   <div
                     role="listbox"
-                    className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
+                    className="absolute right-0 top-full z-50 mt-1 min-w-[14rem] rounded-[8px] border border-border-subtle bg-surface-elevated py-1 shadow-lg"
                   >
                     <button
                       type="button"
@@ -1488,12 +1637,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                   massSelectMode={massSelectMode}
                   selectedIds={selectedIds}
                   onToggleSelect={toggleRowSelected}
-                  selectionDisabled={bulkApproving}
+                  selectionDisabled={bulkScheduling}
                   isSelectable={kw => true}
                   rowClassName={(kw) => {
-                    const effectiveStatus = effectiveDomainStatus(kw);
+                    const isSch = calendarMap.has(kw.matched_keyword_id || "") || calendarMap.has(kw.keyword.toLowerCase());
                     const domainRowSelectId = domainSelectId(kw.keyword);
-                    return `${effectiveStatus === "approved" ? "bg-brand-action/[0.07]" : ""} ${
+                    return `${isSch ? "bg-brand-action/[0.07]" : ""} ${
                       selectedIds.has(domainRowSelectId)
                         ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25"
                         : ""
@@ -1604,14 +1753,15 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               massSelectMode={massSelectMode}
               selectedIds={selectedIds}
               onToggleSelect={toggleRowSelected}
-              selectionDisabled={bulkApproving}
+              selectionDisabled={bulkScheduling}
               isSelectable={kw => true}
               onRowClick={kw => {
                 if (!massSelectMode && !busyRowId) setModalKeywordId(kw.id);
               }}
               rowClassName={(kw) => {
+                const isSch = calendarMap.has(kw.id) || calendarMap.has(kw.keyword.toLowerCase());
                 return `group transition-colors duration-200 ease-out hover:bg-surface-hover/90 ${
-                  kw.status === "approved" ? "bg-brand-action/[0.07]" : ""
+                  isSch ? "bg-brand-action/[0.07]" : ""
                 } ${
                   selectedIds.has(kw.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
                 }`;
@@ -1714,9 +1864,6 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         projectId={projectId}
         keyword={modalKeyword}
         onClose={() => setModalKeywordId(null)}
-        onStatusChange={async (id, status) => {
-          await handleStatusUpdate(id, status, modalKeyword?.keyword ?? undefined);
-        }}
       />
     </div>
   );

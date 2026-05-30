@@ -38,6 +38,7 @@ export type AiEvalData = {
     contentDepth: number;
     trendGrowth: number;
     conversionPotential: number;
+    [key: string]: number;
   };
   reasoning: {
     summary: string;
@@ -46,6 +47,8 @@ export type AiEvalData = {
     rankingOpportunity: string;
     contentOpportunity: string;
   };
+  recommended_content_type?: string;
+  duplicate_of?: string | null;
 };
 
 const INTENT_REFRESH_CHUNK_SIZE = 28;
@@ -1662,6 +1665,8 @@ ${kwList}
 3. Reject / heavily penalise competitor brand names, navigational queries, celebrity terms.
 4. High KD is NOT an automatic rejection — weak SERP content creates opportunity.
 5. All string values must use plain ASCII quotes — do NOT use curly/smart quotes.
+6. Semantic Deduplication: Analyze the batch of keywords for semantic similarity/repetition (e.g. variations or minor variants of the same topic). If a keyword is a repetitive variant of another primary keyword in this list, set "duplicate_of" to the primary keyword's phrase, lower its score (to avoid cannibalization), and state this cannibalization risk in its weaknesses list.
+7. Content Type: For each keyword, recommend exactly one system-supported content type: "blog", "ebook", "whitepaper", or "linkedin" (do not suggest any other type). Suggest the best format for generating content on this query.
 
 Return a JSON array. Each element must have exactly these fields:
 - keyword (string — exact match from input)
@@ -1669,6 +1674,8 @@ Return a JSON array. Each element must have exactly these fields:
 - category (one of: high_opportunity, good_fit, moderate, low_priority, avoid)
 - analysis (object with integer fields 1-10: businessRelevance, intentQuality, trafficPotential, keywordDifficulty, serpWeakness, contentDepth, trendGrowth, conversionPotential)
 - reasoning (object with: summary string, strengths string array, weaknesses string array, rankingOpportunity string, contentOpportunity string)
+- recommended_content_type (string — one of: blog, ebook, whitepaper, linkedin)
+- duplicate_of (string or null — if this keyword is a semantic duplicate of a primary keyword in the list, set to the primary keyword phrase, otherwise null)
 
 Keep all string values short (summary ≤ 120 chars, each strength/weakness ≤ 80 chars) to avoid truncation.`;
 }
@@ -1733,7 +1740,15 @@ export async function scoreKeywordsWithAI(
     const batch = rows.slice(i, i + AI_EVAL_BATCH);
     const prompt = buildEvalPrompt(project, brief, competitors, batch as Array<{keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string}>);
 
-    let results: Array<{ keyword: string; score: number; category: string; analysis: AiEvalData['analysis']; reasoning: AiEvalData['reasoning'] }>;
+    let results: Array<{
+      keyword: string;
+      score: number;
+      category: string;
+      analysis: AiEvalData['analysis'];
+      reasoning: AiEvalData['reasoning'];
+      recommended_content_type?: string;
+      duplicate_of?: string | null;
+    }>;
     try {
       const raw = await callGeminiForEval(prompt);
       results = JSON.parse(extractJsonArray(raw));
@@ -1750,7 +1765,13 @@ export async function scoreKeywordsWithAI(
     const updates = batch.flatMap(row => {
       const hit = lookup.get(row.keyword.toLowerCase().trim());
       if (!hit) return [];
-      const evalData: AiEvalData = { category: hit.category, analysis: hit.analysis, reasoning: hit.reasoning };
+      const evalData: AiEvalData = {
+        category: hit.category,
+        analysis: hit.analysis,
+        reasoning: hit.reasoning,
+        recommended_content_type: hit.recommended_content_type,
+        duplicate_of: hit.duplicate_of
+      };
       return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
     });
 
@@ -1841,6 +1862,8 @@ ${kwList}
 4. Reject / heavily penalise competitor brand names, pure navigational queries, product-only transactional queries.
 5. B2B niche: 300 vol / KD 25 beating a thin competitor page = high score.
 6. All string values must use plain ASCII quotes.
+7. Semantic Deduplication: Analyze the batch of keywords for semantic similarity/repetition (e.g. variations or minor variants of the same topic). If a keyword is a repetitive variant of another primary keyword in this list, set "duplicate_of" to the primary keyword's phrase, lower its score (to avoid cannibalization), and state this cannibalization risk in its weaknesses list.
+8. Content Type: For each keyword, recommend exactly one system-supported content type: "blog", "ebook", "whitepaper", or "linkedin" (do not suggest any other type). Suggest the best format for generating content on this query.
 
 Return a JSON array. Each element must have exactly these fields:
 - keyword (string — exact match from input)
@@ -1848,6 +1871,8 @@ Return a JSON array. Each element must have exactly these fields:
 - category (one of: high_opportunity, good_fit, moderate, low_priority, avoid)
 - analysis (object with integer fields 1-10: businessRelevance, blogPotential, competitiveTakeover, intentQuality, trafficPotential, trendGrowth, audienceFit, contentDepth)
 - reasoning (object with: summary string, strengths string array, weaknesses string array, rankingOpportunity string, contentOpportunity string)
+- recommended_content_type (string — one of: blog, ebook, whitepaper, linkedin)
+- duplicate_of (string or null — if this keyword is a semantic duplicate of a primary keyword in the list, set to the primary keyword phrase, otherwise null)
 
 Keep all strings short (summary ≤ 120 chars, each strength/weakness ≤ 80 chars, rankingOpportunity ≤ 100 chars, contentOpportunity ≤ 100 chars) to avoid truncation.`;
 }
@@ -1907,7 +1932,15 @@ export async function scoreCompetitorKeywordsWithAI(
       batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
     );
 
-    let results: Array<{ keyword: string; score: number; category: string; analysis: Record<string, number>; reasoning: AiEvalData['reasoning'] }>;
+    let results: Array<{
+      keyword: string;
+      score: number;
+      category: string;
+      analysis: AiEvalData['analysis'];
+      reasoning: AiEvalData['reasoning'];
+      recommended_content_type?: string;
+      duplicate_of?: string | null;
+    }>;
     try {
       const raw = await callGeminiForEval(prompt);
       results = JSON.parse(extractJsonArray(raw));
@@ -1922,7 +1955,13 @@ export async function scoreCompetitorKeywordsWithAI(
     const updates = batch.flatMap(row => {
       const hit = lookup.get(row.keyword.toLowerCase().trim());
       if (!hit) return [];
-      const evalData = { category: hit.category, analysis: hit.analysis, reasoning: hit.reasoning };
+      const evalData: AiEvalData = {
+        category: hit.category,
+        analysis: hit.analysis,
+        reasoning: hit.reasoning,
+        recommended_content_type: hit.recommended_content_type,
+        duplicate_of: hit.duplicate_of
+      };
       return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
     });
 

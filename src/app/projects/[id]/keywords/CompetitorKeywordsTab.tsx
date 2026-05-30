@@ -1,14 +1,15 @@
 "use client";
 
 import type { Dispatch, RefObject, SetStateAction } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
+import { calendarApi } from "@/frontend/api/calendar";
 import { projectDomainHost } from "@/lib/project-domain-host";
-import type { Competitor, GapType, KeywordGap, KeywordStatus } from "@/lib/types";
+import type { Competitor, GapType, KeywordGap, KeywordStatus, ContentType } from "@/lib/types";
 import { KeywordActionCell } from "@/components/keywords/KeywordActionCell";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
@@ -98,80 +99,7 @@ function scoreColor(score: number) {
   return "text-text-tertiary border-border-subtle bg-surface-elevated";
 }
 
-const GAP_APPROVED_STORAGE_PREFIX = "seo-engine-gap-approved:";
-const GAP_REJECTED_STORAGE_PREFIX = "seo-engine-gap-rejected:";
-const COMPETITOR_STATUS_STORAGE_PREFIX = "seo-engine:competitor-workspace:";
 
-function loadApprovedGapKeywords(projectId: string): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = sessionStorage.getItem(`${GAP_APPROVED_STORAGE_PREFIX}${projectId}`);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw) as unknown;
-    if (!Array.isArray(arr)) return new Set();
-    return new Set(arr.map(String).map(s => s.toLowerCase()));
-  } catch {
-    return new Set();
-  }
-}
-
-function persistApprovedGapKeywords(projectId: string, next: Set<string>) {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(`${GAP_APPROVED_STORAGE_PREFIX}${projectId}`, JSON.stringify([...next]));
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-function loadRejectedGapKeywords(projectId: string): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = sessionStorage.getItem(`${GAP_REJECTED_STORAGE_PREFIX}${projectId}`);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw) as unknown;
-    if (!Array.isArray(arr)) return new Set();
-    return new Set(arr.map(String).map(s => s.toLowerCase()));
-  } catch {
-    return new Set();
-  }
-}
-
-function persistRejectedGapKeywords(projectId: string, next: Set<string>) {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(`${GAP_REJECTED_STORAGE_PREFIX}${projectId}`, JSON.stringify([...next]));
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-function loadCompetitorStatuses(projectId: string): Record<string, KeywordStatus> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(`${COMPETITOR_STATUS_STORAGE_PREFIX}${projectId}`);
-    if (!raw) return {};
-    const o = JSON.parse(raw) as unknown;
-    if (!o || typeof o !== "object") return {};
-    const out: Record<string, KeywordStatus> = {};
-    const allowed: KeywordStatus[] = ["pending", "approved", "rejected"];
-    for (const [id, v] of Object.entries(o as Record<string, unknown>)) {
-      if (typeof v === "string" && (allowed as string[]).includes(v)) out[id] = v as KeywordStatus;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function persistCompetitorStatuses(projectId: string, next: Record<string, KeywordStatus>) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(`${COMPETITOR_STATUS_STORAGE_PREFIX}${projectId}`, JSON.stringify(next));
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
 
 export default function CompetitorKeywordsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -188,11 +116,8 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const [expandedCompetitor, setExpandedCompetitor] = useState<string | null>(null);
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedGapIds, setSelectedGapIds] = useState<Set<string>>(new Set());
-  const [bulkApprovingGaps, setBulkApprovingGaps] = useState(false);
+  const [bulkSchedulingGaps, setBulkSchedulingGaps] = useState(false);
   const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null);
-  const [approvedGapKeywords, setApprovedGapKeywords] = useState<Set<string>>(new Set());
-  const [rejectedGapKeywords, setRejectedGapKeywords] = useState<Set<string>>(new Set());
-  const [competitorStatuses, setCompetitorStatuses] = useState<Record<string, KeywordStatus>>({});
   const [lastRunSummary, setLastRunSummary] = useState<string>("");
   const [aiScoring, setAiScoring] = useState(false);
   const [aiScoringDone, setAiScoringDone] = useState(false);
@@ -210,12 +135,26 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     enabled: !!projectId,
   });
 
-  useEffect(() => {
-    if (!projectId) return;
-    setApprovedGapKeywords(loadApprovedGapKeywords(projectId));
-    setRejectedGapKeywords(loadRejectedGapKeywords(projectId));
-    setCompetitorStatuses(loadCompetitorStatuses(projectId));
-  }, [projectId]);
+  const { data: calendarRes } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId,
+  });
+  const calendarEntries = calendarRes?.success ? calendarRes.data : [];
+
+  const calendarMap = useMemo(() => {
+    const map = new Map<string, typeof calendarEntries[number]>();
+    if (!calendarEntries) return map;
+    for (const entry of calendarEntries) {
+      if (entry.keyword_id) {
+        map.set(entry.keyword_id, entry);
+      }
+      if (entry.focus_keyword) {
+        map.set(entry.focus_keyword.toLowerCase(), entry);
+      }
+    }
+    return map;
+  }, [calendarEntries]);
 
   useEffect(() => {
     if (!viewMenuOpen) return;
@@ -270,13 +209,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     const res = await competitorsApi.blogFromOpportunity(projectId, keyword);
     setGeneratingKeyword(null);
     if (res.success) {
-      const key = keyword.toLowerCase();
-      setApprovedGapKeywords(prev => {
-        const next = new Set(prev);
-        next.add(key);
-        persistApprovedGapKeywords(projectId, next);
-        return next;
-      });
       void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
@@ -284,59 +216,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     } else {
       setError(res.error ?? "Could not create calendar entry.");
     }
-  };
-
-  const handleGapKeywordStatus = (keyword: string, next: KeywordStatus) => {
-    const k = keyword.toLowerCase();
-    if (next === "approved") {
-      setRejectedGapKeywords(prev => {
-        if (!prev.has(k)) return prev;
-        const n = new Set(prev);
-        n.delete(k);
-        persistRejectedGapKeywords(projectId, n);
-        return n;
-      });
-      if (!approvedGapKeywords.has(k)) void handleGenerateBlog(keyword);
-      return;
-    }
-    if (next === "rejected") {
-      setRejectedGapKeywords(prev => {
-        const n = new Set(prev);
-        n.add(k);
-        persistRejectedGapKeywords(projectId, n);
-        return n;
-      });
-      setApprovedGapKeywords(prev => {
-        if (!prev.has(k)) return prev;
-        const n = new Set(prev);
-        n.delete(k);
-        persistApprovedGapKeywords(projectId, n);
-        return n;
-      });
-      return;
-    }
-    setRejectedGapKeywords(prev => {
-      if (!prev.has(k)) return prev;
-      const n = new Set(prev);
-      n.delete(k);
-      persistRejectedGapKeywords(projectId, n);
-      return n;
-    });
-    setApprovedGapKeywords(prev => {
-      if (!prev.has(k)) return prev;
-      const n = new Set(prev);
-      n.delete(k);
-      persistApprovedGapKeywords(projectId, n);
-      return n;
-    });
-  };
-
-  const handleCompetitorStatus = (competitorId: string, next: KeywordStatus) => {
-    setCompetitorStatuses(prev => {
-      const merged = { ...prev, [competitorId]: next };
-      persistCompetitorStatuses(projectId, merged);
-      return merged;
-    });
   };
 
   const exitGapMassSelect = () => {
@@ -353,25 +232,19 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     });
   };
 
-  const handleBulkApproveGaps = async () => {
+  const handleBulkScheduleGaps = async () => {
     const rows = sortedGaps.filter(g => selectedGapIds.has(g.id));
     if (!rows.length) return;
-    setBulkApprovingGaps(true);
+    setBulkSchedulingGaps(true);
     setError("");
     let anyOk = false;
     try {
       for (const g of rows) {
         const k = g.keyword.toLowerCase();
-        if (approvedGapKeywords.has(k) || rejectedGapKeywords.has(k)) continue;
+        if (calendarMap.has(k)) continue;
         const res = await competitorsApi.blogFromOpportunity(projectId, g.keyword);
         if (res.success) {
           anyOk = true;
-          setApprovedGapKeywords(prev => {
-            const n = new Set(prev);
-            n.add(k);
-            persistApprovedGapKeywords(projectId, n);
-            return n;
-          });
         } else {
           setError(res.error ?? "Could not queue an opportunity.");
         }
@@ -384,7 +257,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         router.push(`/projects/${projectId}/content-calendar`);
       }
     } finally {
-      setBulkApprovingGaps(false);
+      setBulkSchedulingGaps(false);
     }
   };
 
@@ -408,7 +281,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const competitors = state?.competitors ?? [];
   const gaps = state?.gaps ?? [];
   const averages = state?.averages;
-  const lastBenchmarkedAt = state?.lastBenchmarkedAt;
+  // const lastBenchmarkedAt = state?.lastBenchmarkedAt;
 
   const sortedGaps = useMemo(
     () => [...gaps].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score),
@@ -418,8 +291,8 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const hasBenchmark = competitors.length > 0;
 
   return (
-    <div className="space-y-10 pb-16 max-w-full mx-auto relative">
-      <div className="pt-2 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-4 pb-16 max-w-full mx-auto relative">
+      {/* <div className="pt-2 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
           {lastBenchmarkedAt ? (
             <p className="mt-2 text-[12px] text-text-tertiary">
@@ -451,7 +324,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             )}
           </button>
         </div>
-      </div>
+      </div> */}
 
       {error && (
         <div className="rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">{error}</div>
@@ -499,23 +372,11 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               hasGapsInProject={gaps.length > 0}
               averages={averages}
               generatingKeyword={generatingKeyword}
-              approvedGapKeywords={approvedGapKeywords}
-              rejectedGapKeywords={rejectedGapKeywords}
-              onGapKeywordStatus={handleGapKeywordStatus}
-              onScheduleSuccess={(kwText) => {
-                const key = kwText.toLowerCase();
-                setApprovedGapKeywords(prev => {
-                  const next = new Set(prev);
-                  next.add(key);
-                  persistApprovedGapKeywords(projectId, next);
-                  return next;
-                });
-              }}
               aiGapKeywordSet={aiGapKeywordSet}
               massSelectMode={massSelectMode}
               selectedGapIds={selectedGapIds}
               onToggleGapSelected={toggleGapRowSelected}
-              bulkApprovingGaps={bulkApprovingGaps}
+              bulkSchedulingGaps={bulkSchedulingGaps}
               viewMenuRef={viewMenuRef}
               viewMenuOpen={viewMenuOpen}
               setViewMenuOpen={setViewMenuOpen}
@@ -527,12 +388,13 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                 setMassSelectMode(true);
                 setSelectedGapIds(new Set());
               }}
-              onBulkApproveGaps={() => void handleBulkApproveGaps()}
+              onBulkScheduleGaps={() => void handleBulkScheduleGaps()}
               aiScoring={aiScoring}
               onRunAiScoring={() => void handleRunAiScoring()}
               aiScoringDone={aiScoringDone}
               onLoadMoreAhrefs={() => void handleLoadMoreAhrefs()}
               loadingMoreAhrefs={loadingMoreAhrefs}
+              calendarMap={calendarMap}
             />
           )}
 
@@ -541,8 +403,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               competitors={competitors}
               expandedId={expandedCompetitor}
               onToggle={id => setExpandedCompetitor(prev => (prev === id ? null : id))}
-              statusById={competitorStatuses}
-              onStatusChange={handleCompetitorStatus}
               viewMenuRef={viewMenuRef}
               viewMenuOpen={viewMenuOpen}
               setViewMenuOpen={setViewMenuOpen}
@@ -561,18 +421,9 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
 // Subcomponents
 // ─────────────────────────────────────────────────────────────────────────────
 
-function gapKeywordWorkspaceStatus(
-  keyword: string,
-  approved: Set<string>,
-  rejected: Set<string>
-): KeywordStatus {
-  const k = keyword.toLowerCase();
-  if (rejected.has(k)) return "rejected";
-  if (approved.has(k)) return "approved";
-  return "pending";
-}
 
-type OpportunityWorkspaceTab = "all" | KeywordStatus;
+
+type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled";
 
 function InsightsViewDropdown({
   menuRef,
@@ -596,11 +447,11 @@ function InsightsViewDropdown({
       <button
         type="button"
         onClick={() => setMenuOpen(o => !o)}
-        className="inline-flex h-8 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
+        className="inline-flex h-8 w-[210px] justify-between items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
         aria-expanded={menuOpen}
         aria-haspopup="listbox"
       >
-        {insightsView === "opportunities" ? "Opportunity dashboard" : "Competitor list"}
+        <span>{insightsView === "opportunities" ? "Opportunity dashboard" : "Competitor list"}</span>
         <svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
           <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
         </svg>
@@ -777,15 +628,11 @@ function OpportunityDashboard({
   hasGapsInProject,
   averages,
   generatingKeyword,
-  approvedGapKeywords,
-  rejectedGapKeywords,
-  onGapKeywordStatus,
-  onScheduleSuccess,
   aiGapKeywordSet,
   massSelectMode,
   selectedGapIds,
   onToggleGapSelected,
-  bulkApprovingGaps,
+  bulkSchedulingGaps,
   viewMenuRef,
   viewMenuOpen,
   setViewMenuOpen,
@@ -794,27 +641,24 @@ function OpportunityDashboard({
   competitorsCount,
   exitGapMassSelect,
   onStartMassSelect,
-  onBulkApproveGaps,
+  onBulkScheduleGaps,
   aiScoring,
   onRunAiScoring,
   aiScoringDone,
   onLoadMoreAhrefs,
   loadingMoreAhrefs,
+  calendarMap,
 }: {
   projectId: string;
   gaps: KeywordGap[];
   hasGapsInProject: boolean;
   averages?: BenchmarkState["averages"];
   generatingKeyword: string | null;
-  approvedGapKeywords: Set<string>;
-  rejectedGapKeywords: Set<string>;
-  onGapKeywordStatus: (keyword: string, next: KeywordStatus) => void;
-  onScheduleSuccess?: (keywordText: string) => void;
   aiGapKeywordSet: Set<string>;
   massSelectMode: boolean;
   selectedGapIds: Set<string>;
   onToggleGapSelected: (gapId: string) => void;
-  bulkApprovingGaps: boolean;
+  bulkSchedulingGaps: boolean;
   viewMenuRef: RefObject<HTMLDivElement | null>;
   viewMenuOpen: boolean;
   setViewMenuOpen: Dispatch<SetStateAction<boolean>>;
@@ -823,16 +667,55 @@ function OpportunityDashboard({
   competitorsCount: number;
   exitGapMassSelect: () => void;
   onStartMassSelect: () => void;
-  onBulkApproveGaps: () => void;
+  onBulkScheduleGaps: () => void;
   aiScoring: boolean;
   onRunAiScoring: () => void;
   aiScoringDone: boolean;
   onLoadMoreAhrefs: () => void;
   loadingMoreAhrefs: boolean;
+  calendarMap: Map<string, any>;
 }) {
   const [workspaceTab, setWorkspaceTab] = useState<OpportunityWorkspaceTab>("all");
   const [sortCol, setSortCol] = useState<GapSortColumn>("volume");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const [rowContentTypes, setRowContentTypes] = useState<Record<string, ContentType>>({});
+
+  const getRowContentType = useCallback((keyword: string) => {
+    return rowContentTypes[keyword.toLowerCase()] ?? "blog";
+  }, [rowContentTypes]);
+
+  const setRowContentType = useCallback((keyword: string, type: ContentType) => {
+    setRowContentTypes(prev => ({
+      ...prev,
+      [keyword.toLowerCase()]: type
+    }));
+  }, []);
+
+
+
+  const articleTypeToContentType = (articleType: string): ContentType => {
+    const typeMap: Record<string, ContentType> = {
+      "Blog article": "blog",
+      "Ebook": "ebook",
+      "Whitepaper": "whitepaper",
+      "LinkedIn post": "linkedin",
+    };
+    return typeMap[articleType] ?? "blog";
+  };
+
+  const resolveContentType = useCallback((keywordText: string, keywordId?: string, aiEvalData?: any) => {
+    const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
+    if (entry) {
+      return articleTypeToContentType(entry.article_type);
+    }
+    const recommended = aiEvalData?.recommended_content_type;
+    const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin"];
+    if (recommended && supportedTypes.includes(recommended)) {
+      return rowContentTypes[keywordText.toLowerCase()] ?? recommended;
+    }
+    return rowContentTypes[keywordText.toLowerCase()] ?? "blog";
+  }, [calendarMap, rowContentTypes]);
 
   const toggleSort = (col: GapSortColumn) => {
     if (sortCol === col) {
@@ -854,18 +737,16 @@ function OpportunityDashboard({
 
   const workspaceCounts = useMemo(() => {
     let all = 0;
-    let pending = 0;
-    let approved = 0;
-    let rejected = 0;
+    let unscheduled = 0;
+    let scheduled = 0;
     for (const g of gaps) {
       all += 1;
-      const st = gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords);
-      if (st === "pending") pending += 1;
-      if (st === "approved") approved += 1;
-      if (st === "rejected") rejected += 1;
+      const isSch = calendarMap.has(g.keyword.toLowerCase());
+      if (isSch) scheduled += 1;
+      else unscheduled += 1;
     }
-    return { all, pending, approved, rejected };
-  }, [gaps, approvedGapKeywords, rejectedGapKeywords]);
+    return { all, unscheduled, scheduled };
+  }, [gaps, calendarMap]);
 
   const PAGE_SIZE = 20;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -895,11 +776,13 @@ function OpportunityDashboard({
   const allFilteredGaps = useMemo(() => {
     const filtered = gaps.filter(g => {
       if (workspaceTab === "all") return true;
-      const st = gapKeywordWorkspaceStatus(g.keyword, approvedGapKeywords, rejectedGapKeywords);
-      return st === workspaceTab;
+      const isSch = calendarMap.has(g.keyword.toLowerCase());
+      if (workspaceTab === "scheduled") return isSch;
+      if (workspaceTab === "unscheduled") return !isSch;
+      return true;
     });
     return [...filtered].sort((a, b) => compareGaps(a, b, sortCol, sortDir));
-  }, [gaps, workspaceTab, approvedGapKeywords, rejectedGapKeywords, sortCol, sortDir]);
+  }, [gaps, workspaceTab, calendarMap, sortCol, sortDir]);
 
   const displayedGaps = useMemo(
     () => allFilteredGaps.slice(0, visibleCount),
@@ -911,9 +794,8 @@ function OpportunityDashboard({
 
   const OPPORTUNITY_TAB_ITEMS: Array<{ id: OpportunityWorkspaceTab; label: string; count: number }> = [
     { id: "all", label: "All", count: workspaceCounts.all },
-    { id: "pending", label: "Pending", count: workspaceCounts.pending },
-    { id: "approved", label: "Approved", count: workspaceCounts.approved },
-    { id: "rejected", label: "Rejected", count: workspaceCounts.rejected },
+    { id: "unscheduled", label: "Unscheduled", count: workspaceCounts.unscheduled },
+    { id: "scheduled", label: "Scheduled", count: workspaceCounts.scheduled },
   ];
 
   return (
@@ -943,9 +825,9 @@ function OpportunityDashboard({
 
       {hasGapsInProject ? (
         <section className="space-y-4">
-          <div className="flex flex-wrap items-end justify-between gap-4">
+          {/* <div className="flex flex-wrap items-end justify-between gap-4">
             <h2 className="text-[28px] font-normal tracking-[-0.28px] text-text-primary font-display">Keyword list</h2>
-          </div>
+          </div> */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <PillTabFilterBar<OpportunityWorkspaceTab>
               className="min-w-0 flex-1"
@@ -954,48 +836,6 @@ function OpportunityDashboard({
               onChange={setWorkspaceTab}
             />
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-              {gaps.length > 0 ? (
-                <>
-                  {!massSelectMode ? (
-                    <button
-                      type="button"
-                      aria-label="Mass select opportunities"
-                      onClick={onStartMassSelect}
-                      className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
-                    >
-                      <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 opacity-75" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.85} strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                        <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                        <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
-                        <path d="M14 17.5 16 19.5 21 13.5" />
-                      </svg>
-                      <span>Mass select</span>
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={onBulkApproveGaps}
-                        disabled={bulkApprovingGaps || selectedGapIds.size === 0}
-                        className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${bulkApprovingGaps ? "animate-pulse cursor-wait" : ""}`}
-                      >
-                        <span className="block max-w-full overflow-hidden truncate text-center tabular-nums">
-                          {bulkApprovingGaps ? "…" : selectedGapIds.size > 0 ? `Approve (${selectedGapIds.size})` : "Approve"}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={exitGapMassSelect}
-                        disabled={bulkApprovingGaps}
-                        className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
-                        title="Leave mass-select mode"
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  )}
-                </>
-              ) : null}
               {gaps.length > 0 && !massSelectMode && (
                 <button
                   type="button"
@@ -1022,6 +862,48 @@ function OpportunityDashboard({
                   )}
                 </button>
               )}
+              {gaps.length > 0 ? (
+                <>
+                  {!massSelectMode ? (
+                    <button
+                      type="button"
+                      aria-label="Mass select opportunities"
+                      onClick={onStartMassSelect}
+                      className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 opacity-75" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.85} strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                        <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
+                        <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
+                        <path d="M14 17.5 16 19.5 21 13.5" />
+                      </svg>
+                      <span>Mass select</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={onBulkScheduleGaps}
+                        disabled={bulkSchedulingGaps || selectedGapIds.size === 0}
+                        className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${bulkSchedulingGaps ? "animate-pulse cursor-wait" : ""}`}
+                      >
+                        <span className="block max-w-full overflow-hidden truncate text-center tabular-nums">
+                          {bulkSchedulingGaps ? "…" : selectedGapIds.size > 0 ? `Schedule (${selectedGapIds.size})` : "Schedule"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={exitGapMassSelect}
+                        disabled={bulkSchedulingGaps}
+                        className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
+                        title="Leave mass-select mode"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  )}
+                </>
+              ) : null}
               <InsightsViewDropdown
                 menuRef={viewMenuRef}
                 menuOpen={viewMenuOpen}
@@ -1073,12 +955,6 @@ function OpportunityDashboard({
                       Keyword{sortMark("keyword")}
                     </button>
                   </th>
-                  {/* Intent */}
-                  <th className="px-4 py-3 text-center">
-                    <Tooltip placement="above" content="Search intent: Informational · Navigational · Commercial · Transactional">
-                      <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">Intent</span>
-                    </Tooltip>
-                  </th>
                   {/* Volume */}
                   <th className="px-4 py-3 text-right">
                     <button type="button" className={thBtn} onClick={() => toggleSort("volume")}>
@@ -1097,6 +973,12 @@ function OpportunityDashboard({
                       <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">Rank</span>
                     </Tooltip>
                   </th>
+                  {/* Intent */}
+                  <th className="px-4 py-3 text-center">
+                    <Tooltip placement="above" content="Search intent: Informational · Navigational · Commercial · Transactional">
+                      <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">Intent</span>
+                    </Tooltip>
+                  </th>
                   {/* AI Score */}
                   <th className="px-4 py-3 text-center">
                     <button type="button" className={thBtn} onClick={() => toggleSort("ai_eval_score")}>
@@ -1109,18 +991,14 @@ function OpportunityDashboard({
                       <span className="uppercase tracking-widest text-[12px] font-bold cursor-default">Ranking page</span>
                     </Tooltip>
                   </th>
+                  {/* Content Type */}
+                  <th className="px-4 py-3 text-center">Content Type</th>
                   {/* Action */}
                   <th className="px-4 py-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle/60">
                 {displayedGaps.map(g => {
-                  const intentTags: Array<{ label: string; abbr: string; active: boolean; color: string }> = [
-                    { label: "Informational", abbr: "I", active: Boolean(g.is_informational), color: "text-[#60a5fa] border-[#60a5fa]/25 bg-[#60a5fa]/10" },
-                    { label: "Navigational", abbr: "N", active: Boolean(g.is_navigational), color: "text-[#a78bfa] border-[#a78bfa]/25 bg-[#a78bfa]/10" },
-                    { label: "Commercial", abbr: "C", active: Boolean(g.is_commercial), color: "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" },
-                    { label: "Transactional", abbr: "T", active: Boolean(g.is_transactional), color: "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10" },
-                  ].filter(t => t.active);
                   const kd = g.kd;
                   const position = g.position;
                   return (
@@ -1129,11 +1007,11 @@ function OpportunityDashboard({
                       onClick={e => {
                         const t = e.target as HTMLElement;
                         if (t.closest("button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a")) return;
-                        if (massSelectMode && !bulkApprovingGaps) onToggleGapSelected(g.id);
+                        if (massSelectMode && !bulkSchedulingGaps) onToggleGapSelected(g.id);
                       }}
                       className={`transition-colors hover:bg-surface-hover ${
-                        rejectedGapKeywords.has(g.keyword.toLowerCase()) ? "opacity-75" : ""
-                      } ${massSelectMode && !bulkApprovingGaps ? "cursor-pointer" : ""} ${
+                        calendarMap.has(g.keyword.toLowerCase()) ? "bg-brand-action/[0.07]" : ""
+                      } ${massSelectMode && !bulkSchedulingGaps ? "cursor-pointer" : ""} ${
                         selectedGapIds.has(g.id) ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
                       }`}
                     >
@@ -1145,31 +1023,23 @@ function OpportunityDashboard({
                             checked={selectedGapIds.has(g.id)}
                             onChange={() => onToggleGapSelected(g.id)}
                             onClick={e => e.stopPropagation()}
-                            disabled={bulkApprovingGaps || !massSelectMode}
+                            disabled={bulkSchedulingGaps || !massSelectMode}
                             aria-label={`Select opportunity ${g.keyword}`}
                             className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
                           />
                         </span>
                       </td>
                       {/* Keyword */}
-                      <td className="px-4 py-3 max-w-[240px]">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
+                      <td className="px-4 py-3 max-w-[240px] w-[240px] min-w-0">
+                        <div className="flex items-center gap-2 w-full min-w-0">
+                          <Tooltip placement="above" content={g.keyword} className="w-full min-w-0 !justify-start">
+                            <p className="truncate text-[14px] font-medium text-text-primary cursor-help w-full min-w-0">{g.keyword}</p>
+                          </Tooltip>
                           {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
                             <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">AI pick</span>
                           ) : null}
                         </div>
                         <p className="mt-0.5 text-[11px] text-text-tertiary">{g.top_competitor_domain}</p>
-                      </td>
-                      {/* Intent pills */}
-                      <td className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1 flex-wrap">
-                          {intentTags.length > 0 ? intentTags.map(t => (
-                            <Tooltip key={t.abbr} placement="above" content={t.label}>
-                              <span className={`inline-flex h-5 w-5 cursor-default items-center justify-center rounded-[4px] border text-[10px] font-bold ${t.color}`}>{t.abbr}</span>
-                            </Tooltip>
-                          )) : <span className="text-[12px] text-text-tertiary">—</span>}
-                        </div>
                       </td>
                       {/* Volume */}
                       <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
@@ -1178,22 +1048,46 @@ function OpportunityDashboard({
                       {/* KD */}
                       <td className="px-4 py-3 text-center">
                         {typeof kd === "number" && kd > 0 ? (
-                          <span className={`inline-flex items-center justify-center min-w-[34px] rounded-[4px] border px-1.5 py-0.5 text-[12px] font-bold tabular-nums ${
-                            kd >= 70 ? "text-brand-coral border-brand-coral/25 bg-brand-coral/10" :
-                            kd >= 40 ? "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" :
-                            "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10"
+                          <span className={`text-[13px] font-semibold tabular-nums ${
+                            kd >= 70 ? "text-brand-coral" :
+                            kd >= 40 ? "text-[#f59e0b]" :
+                            "text-[#10b981]"
                           }`}>{kd}</span>
                         ) : <span className="text-[12px] text-text-tertiary">—</span>}
                       </td>
                       {/* Rank */}
                       <td className="px-4 py-3 text-center">
                         {typeof position === "number" && position > 0 ? (
-                          <span className={`inline-flex items-center justify-center min-w-[34px] rounded-[4px] border px-1.5 py-0.5 text-[12px] font-bold tabular-nums ${
-                            position <= 3 ? "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10" :
-                            position <= 10 ? "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" :
-                            "text-text-secondary border-border-subtle bg-surface-elevated"
+                          <span className={`text-[13px] font-semibold tabular-nums ${
+                            position <= 3 ? "text-[#10b981]" :
+                            position <= 10 ? "text-[#f59e0b]" :
+                            "text-text-secondary"
                           }`}>#{position}</span>
                         ) : <span className="text-[12px] text-text-tertiary">—</span>}
+                      </td>
+                      {/* Intent */}
+                      <td className="px-4 py-3 text-center">
+                        {(() => {
+                          const activeIntents = [
+                            g.is_transactional && { label: "Transactional", color: "text-[#10b981]" },
+                            g.is_commercial && { label: "Commercial", color: "text-[#f59e0b]" },
+                            g.is_informational && { label: "Informational", color: "text-[#60a5fa]" },
+                            g.is_navigational && { label: "Navigational", color: "text-[#a78bfa]" },
+                          ].filter((t): t is { label: string; color: string } => !!t);
+
+                          return activeIntents.length > 0 ? (
+                            <div className="flex items-center justify-center gap-1 text-[12px] font-semibold">
+                              {activeIntents.map((t, idx) => (
+                                <span key={t.label} className="flex items-center gap-1">
+                                  {idx > 0 && <span className="text-text-tertiary/40">/</span>}
+                                  <span className={t.color}>{t.label}</span>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-[12px] text-text-tertiary">—</span>
+                          );
+                        })()}
                       </td>
                       {/* AI Score */}
                       <td className="px-4 py-3 text-center">
@@ -1226,29 +1120,67 @@ function OpportunityDashboard({
                           </a>
                         ) : <span className="text-[12px] text-text-tertiary">—</span>}
                       </td>
+                      {/* Content Type */}
+                      <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                        {(() => {
+                          const keywordText = g.keyword;
+                          const entry = calendarMap.get(keywordText.toLowerCase());
+                          const isScheduled = !!entry;
+                          const isGenerated = !!entry?.blog;
+                          const currentType = resolveContentType(keywordText, undefined, g.ai_eval_data);
+
+                          const recommended = (g.ai_eval_data as any)?.recommended_content_type;
+                          const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+                          const labels: Record<ContentType, string> = {
+                            blog: "Blog article",
+                            ebook: "Ebook",
+                            whitepaper: "Whitepaper",
+                            linkedin: "LinkedIn post",
+                          };
+
+                           return (
+                            <select
+                              value={currentType}
+                              onChange={(e) => setRowContentType(keywordText, e.target.value as ContentType)}
+                              disabled={isScheduled || isGenerated}
+                              className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              {options.map(type => (
+                                <option key={type} value={type}>
+                                  {labels[type]}{type === recommended ? " ✨" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          );
+                        })()}
+                      </td>
                       {/* Action */}
                       <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
-                        <KeywordActionCell
-                          projectId={projectId}
-                          keyword={g.keyword}
-                          sourceType="competitor_gap"
-                          volume={g.volume}
-                          kd={g.kd}
-                          intent={
-                            g.is_transactional ? "transactional" :
-                            g.is_commercial ? "commercial" :
-                            g.is_informational ? "informational" :
-                            g.is_navigational ? "navigational" : "informational"
-                          }
-                          competitorDomain={g.top_competitor_domain}
-                          rankingUrl={g.top_competitor_url}
-                          rank={g.position ?? undefined}
-                          onScheduleSuccess={() => {
-                            if (onScheduleSuccess) {
-                              onScheduleSuccess(g.keyword);
-                            }
-                          }}
-                        />
+                        {(() => {
+                          const entry = calendarMap.get(g.keyword.toLowerCase());
+                          const selectedType = resolveContentType(g.keyword, undefined, g.ai_eval_data);
+                          return (
+                            <KeywordActionCell
+                              projectId={projectId}
+                              keyword={g.keyword}
+                              sourceType="competitor_gap"
+                              contentType={selectedType}
+                              scheduledDate={entry?.scheduled_date}
+                              blogId={entry?.blog?.id}
+                              volume={g.volume}
+                              kd={g.kd}
+                              intent={
+                                g.is_transactional ? "transactional" :
+                                g.is_commercial ? "commercial" :
+                                g.is_informational ? "informational" :
+                                g.is_navigational ? "navigational" : "informational"
+                              }
+                              competitorDomain={g.top_competitor_domain}
+                              rankingUrl={g.top_competitor_url}
+                              rank={g.position ?? undefined}
+                            />
+                          );
+                        })()}
                       </td>
                     </tr>
                   );
@@ -1316,8 +1248,6 @@ function CompetitorList({
   competitors,
   expandedId,
   onToggle,
-  statusById,
-  onStatusChange,
   viewMenuRef,
   viewMenuOpen,
   setViewMenuOpen,
@@ -1328,8 +1258,6 @@ function CompetitorList({
   competitors: Competitor[];
   expandedId: string | null;
   onToggle: (id: string) => void;
-  statusById: Record<string, KeywordStatus>;
-  onStatusChange: (competitorId: string, next: KeywordStatus) => void;
   viewMenuRef: RefObject<HTMLDivElement | null>;
   viewMenuOpen: boolean;
   setViewMenuOpen: Dispatch<SetStateAction<boolean>>;
@@ -1352,13 +1280,10 @@ function CompetitorList({
       </div>
       {competitors.map(c => {
         const expanded = expandedId === c.id;
-        const rowStatus = statusById[c.id] ?? "pending";
         return (
           <div
             key={c.id}
-            className={`rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden ${
-              rowStatus === "rejected" ? "opacity-75" : ""
-            }`}
+            className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden"
           >
             <div className="flex flex-wrap items-center justify-between gap-4 p-5 hover:bg-surface-hover transition-colors">
               <button

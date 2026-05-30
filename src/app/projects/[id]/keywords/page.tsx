@@ -12,7 +12,7 @@ export default function UnifiedKeywordDiscoveryPage() {
 
   return (
     <div className="space-y-4 pb-16 relative">
-      <header className="sticky top-0 z-40 bg-surface-primary/95 backdrop-blur-md px-4 pt-4 pb-4 border-b border-border-subtle">
+      <header className="sticky -top-6 lg:-top-8 z-40 bg-surface-primary/95 backdrop-blur-md -mx-6 lg:-mx-8 -mt-6 lg:-mt-8 px-10 lg:px-12 pt-6 lg:pt-8 pb-4 border-b border-border-subtle">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0 flex-1">
             <PageTitle>Keyword Discovery</PageTitle>
@@ -20,33 +20,44 @@ export default function UnifiedKeywordDiscoveryPage() {
               Discover real search demand, analyze keyword difficulty, and identify competitor gaps to approve for your content calendar.
             </p>
           </div>
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <div
+              className="inline-flex rounded-full border border-border-subtle bg-surface-secondary/70 p-0.5"
+              role="tablist"
+              aria-label="Keyword Discovery views"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "organic"}
+                onClick={() => setActiveTab("organic")}
+                className={`rounded-full px-4 py-2 text-[13px] font-semibold transition-colors ${
+                  activeTab === "organic"
+                    ? "bg-surface-elevated text-text-primary shadow-sm"
+                    : "text-text-tertiary hover:text-text-secondary"
+                }`}
+              >
+                Organic Keywords
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "competitor"}
+                onClick={() => setActiveTab("competitor")}
+                className={`rounded-full px-4 py-2 text-[13px] font-semibold transition-colors ${
+                  activeTab === "competitor"
+                    ? "bg-surface-elevated text-text-primary shadow-sm"
+                    : "text-text-tertiary hover:text-text-secondary"
+                }`}
+              >
+                Competitor Keywords
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
       <section className="space-y-4 pt-2 px-4">
-        <div className="flex gap-2 border-b border-border-subtle pb-4">
-          <button
-            onClick={() => setActiveTab("organic")}
-            className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-              activeTab === "organic"
-                ? "bg-brand-primary text-brand-on-primary"
-                : "bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-            }`}
-          >
-            Organic Keywords
-          </button>
-          <button
-            onClick={() => setActiveTab("competitor")}
-            className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-              activeTab === "competitor"
-                ? "bg-brand-primary text-brand-on-primary"
-                : "bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-            }`}
-          >
-            Competitor Keywords
-          </button>
-        </div>
-
         <div>
           <Suspense fallback={<div className="py-12 flex justify-center"><Spinner size={24} /></div>}>
             {activeTab === "organic" ? (

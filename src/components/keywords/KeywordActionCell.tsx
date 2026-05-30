@@ -1,19 +1,21 @@
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "react-hot-toast";
-import { Select, Button, Spinner } from "@/components/common";
-import { CONTENT_TYPES, ContentType, CONTENT_TYPE_LABEL, KeywordSourceType } from "@/lib/types";
+import { Button, Spinner } from "@/components/common";
+import { ContentType, KeywordSourceType } from "@/lib/types";
 import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { qk } from "@/lib/query";
 import { keywordsApi } from "@/frontend/api/keywords";
 import { useAppDispatch } from "@/lib/redux/hooks";
-import { keywordStatusChanged } from "@/lib/redux/keyword-workspace-slice";
+import { keywordStatusChanged, calendarKeywordScheduled } from "@/lib/redux/keyword-workspace-slice";
 
 interface KeywordActionCellProps {
   projectId: string;
   keyword: string;
   keywordId?: string;
   sourceType: KeywordSourceType;
+  contentType: ContentType;
+  scheduledDate?: string;
+  blogId?: string;
   // Competitor keyword fields:
   volume?: number;
   kd?: number;
@@ -35,6 +37,9 @@ export function KeywordActionCell({
   keyword,
   keywordId,
   sourceType,
+  contentType,
+  scheduledDate,
+  blogId,
   volume,
   kd,
   cpc,
@@ -47,7 +52,6 @@ export function KeywordActionCell({
   const router = useRouter();
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
-  const [contentType, setContentType] = useState<ContentType>("blog");
 
   const handleGenerate = () => {
     // Navigate to the respective generator page with autofill params
@@ -89,21 +93,44 @@ export function KeywordActionCell({
           );
         }
 
+        // Optimistically record calendar scheduling state in Redux
+        if (resolvedId && res.scheduledDate) {
+          dispatch(
+            calendarKeywordScheduled({
+              projectId,
+              keywordId: resolvedId,
+              date: res.scheduledDate,
+              status: "scheduled",
+            })
+          );
+        }
+
+        // Optimistically add the new calendar entry to the React Query cache
+        if (res.calendarEntry) {
+          const ENTRIES_KEY = qk.calendarWithBlogs(projectId);
+          queryClient.setQueryData(ENTRIES_KEY, (prev: any) => {
+            if (!prev || !prev.success) return prev;
+            const filtered = prev.data.filter((e: any) => e.id !== res.calendarEntry.id);
+            return {
+              ...prev,
+              data: [...filtered, { ...res.calendarEntry, blog: null }]
+            };
+          });
+        }
+
         if (onScheduleSuccess) {
           onScheduleSuccess(res as any);
         }
 
-        // Invalidate queries to sync with the server database correctly based on tab source
+        // Invalidate queries in background to sync fully
         if (sourceType === "competitor_gap") {
           void queryClient.invalidateQueries({ queryKey: qk.competitors(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         } else {
           void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         }
       } else {
         if (res.error === "Keyword already scheduled") {
@@ -119,36 +146,77 @@ export function KeywordActionCell({
     },
   });
 
+  const viewBlogLabel = () => {
+    return "View";
+  };
+
+  const fmtDate = (iso: string) => {
+    return new Date(iso + "T12:00:00").toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  };
+
   return (
-    <div className="flex items-center gap-2">
-      <Select
-        value={contentType}
-        onChange={(e) => setContentType(e.target.value as ContentType)}
-        className="w-32 py-1 text-xs"
-      >
-        {CONTENT_TYPES.map(type => (
-          <option key={type} value={type}>{CONTENT_TYPE_LABEL[type]}</option>
-        ))}
-      </Select>
-      <div className="flex flex-col gap-1 sm:flex-row">
+    <div className="flex items-center justify-center gap-1.5">
+      {blogId ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="px-2.5 text-[10px] h-7 rounded-full border border-border-subtle bg-surface-elevated text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-all whitespace-nowrap flex items-center justify-center"
+          onClick={() => router.push(`/projects/${projectId}/blogs/${blogId}`)}
+        >
+          View
+        </Button>
+      ) : (
         <Button
           variant="primary"
           size="sm"
-          className="text-[11px] px-2 py-1 h-auto min-h-0"
+          className="px-2.5 text-[10px] h-7 rounded-full shadow-sm transition-all whitespace-nowrap flex items-center justify-center"
           onClick={handleGenerate}
         >
           Generate
         </Button>
+      )}
+
+      {blogId ? (
+        scheduledDate ? (
+          <span
+            className="px-2.5 h-7 text-[10px] font-semibold text-text-tertiary bg-surface-secondary border border-border-subtle rounded-full whitespace-nowrap flex items-center justify-center gap-1"
+            title={`Scheduled date: ${scheduledDate}`}
+          >
+            🗓 {fmtDate(scheduledDate)}
+          </span>
+        ) : (
+          <span
+            className="px-2.5 h-7 text-[10px] font-semibold text-text-tertiary bg-surface-secondary border border-border-subtle rounded-full whitespace-nowrap flex items-center justify-center gap-1"
+            title="Blog has been generated"
+          >
+            🗓 Generated
+          </span>
+        )
+      ) : scheduledDate ? (
+        <span
+          className="px-2.5 h-7 text-[10px] font-semibold text-text-tertiary bg-surface-secondary border border-border-subtle rounded-full whitespace-nowrap flex items-center justify-center gap-1"
+          title={`Scheduled date: ${scheduledDate}`}
+        >
+          🗓 {fmtDate(scheduledDate)}
+        </span>
+      ) : (
         <Button
           variant="outline"
           size="sm"
-          className="text-[11px] px-2 py-1 h-auto min-h-0"
+          className="px-2.5 text-[10px] h-7 rounded-full border border-border-subtle bg-surface-elevated text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-all whitespace-nowrap flex items-center justify-center"
           onClick={() => scheduleMutation.mutate()}
           disabled={scheduleMutation.isPending}
         >
-          {scheduleMutation.isPending ? <Spinner size={12} /> : "Schedule"}
+          {scheduleMutation.isPending ? (
+            <Spinner size={10} />
+          ) : (
+            "Schedule"
+          )}
         </Button>
-      </div>
+      )}
     </div>
   );
 }

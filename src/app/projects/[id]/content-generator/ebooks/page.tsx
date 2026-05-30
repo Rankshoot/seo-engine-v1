@@ -27,6 +27,7 @@ import {
   StudioBreadcrumb,
 } from "@/components/content-generator/shared";
 import { useProject, qk } from "@/lib/query";
+import { calendarApi } from "@/frontend/api/calendar";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
 import { TARGET_REGIONS } from "@/lib/types";
 import {
@@ -65,6 +66,19 @@ export default function EbookGeneratorPage() {
   const queryClient = useQueryClient();
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
+
+  const entryId = searchParams?.get("entryId");
+
+  const { data: entriesData } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId && !!entryId,
+  });
+
+  const scheduledEntry = useMemo(() => {
+    if (!entriesData?.success) return null;
+    return entriesData.data.find((e) => e.id === entryId) || null;
+  }, [entriesData, entryId]);
 
   const { data: projectRes } = useProject(projectId);
   const project = projectRes?.success ? projectRes.data : undefined;
@@ -106,6 +120,21 @@ export default function EbookGeneratorPage() {
     if (tl) setLanguage(tl);
     // Stable to project signal — only fires once per project change.
   }, [project?.target_audience, project?.target_region, project?.target_language, audience]);
+
+  useEffect(() => {
+    if (scheduledEntry) {
+      if (scheduledEntry.focus_keyword) {
+        setPrimaryKeyword(scheduledEntry.focus_keyword);
+      }
+      if (scheduledEntry.title || scheduledEntry.blog_title) {
+        const t = scheduledEntry.title || scheduledEntry.blog_title;
+        setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
+      }
+      if (scheduledEntry.secondary_keywords?.length) {
+        setSecondaryKeywords(scheduledEntry.secondary_keywords);
+      }
+    }
+  }, [scheduledEntry]);
 
   const askAi = async () => {
     setAskLoading(true);
@@ -149,6 +178,7 @@ export default function EbookGeneratorPage() {
       region,
       language,
       semanticKeywords: secondaryKeywords,
+      entryId: entryId || null,
     });
     if (res.trace?.length) {
       console.log("[ebook] trace:", res.trace);

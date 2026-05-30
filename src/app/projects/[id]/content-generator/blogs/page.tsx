@@ -67,6 +67,19 @@ export default function BlogGeneratorPage() {
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
 
+  const entryId = searchParams?.get("entryId");
+
+  const { data: entriesData } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId && !!entryId,
+  });
+
+  const scheduledEntry = useMemo(() => {
+    if (!entriesData?.success) return null;
+    return entriesData.data.find((e) => e.id === entryId) || null;
+  }, [entriesData, entryId]);
+
   const { data: projectRes } = useProject(projectId);
   const project = projectRes?.success ? projectRes.data : undefined;
 
@@ -108,6 +121,21 @@ export default function BlogGeneratorPage() {
     // Stable to project signal — only fires once per project change.
   }, [project?.target_audience, project?.target_region, project?.target_language, audience]);
 
+  useEffect(() => {
+    if (scheduledEntry) {
+      if (scheduledEntry.focus_keyword) {
+        setPrimaryKeyword(scheduledEntry.focus_keyword);
+      }
+      if (scheduledEntry.title || scheduledEntry.blog_title) {
+        const t = scheduledEntry.title || scheduledEntry.blog_title;
+        setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
+      }
+      if (scheduledEntry.secondary_keywords?.length) {
+        setSecondaryKeywords(scheduledEntry.secondary_keywords);
+      }
+    }
+  }, [scheduledEntry]);
+
   const askAi = async () => {
     setAskLoading(true);
     try {
@@ -139,24 +167,28 @@ export default function BlogGeneratorPage() {
   const runGeneration = async () => {
     setPhase("generating");
     try {
-      // 1. Create a calendar entry
-      const calRes = await calendarApi.addCustomKeyword(projectId, {
-        keyword: primaryKeyword,
-        title: `[Draft] ${topic}`,
-        articleType: "blog",
-        writerNotes: `Audience: ${audience}\nTone: ${TONES.find(t => t.id === tone)?.label}\nGoal: ${goal}\nCTA: ${ctaObjective}\nSecondary Keywords: ${secondaryKeywords.join(", ")}`,
-        targetDate: new Date().toISOString().split("T")[0],
-      });
-      
-      if (!calRes.success) {
-        toast.error(calRes.error || "Failed to schedule blog");
-        setPhase("form");
-        return;
+      let finalEntryId = entryId;
+      if (!finalEntryId) {
+        // 1. Create a calendar entry
+        const calRes = await calendarApi.addCustomKeyword(projectId, {
+          keyword: primaryKeyword,
+          title: `[Draft] ${topic}`,
+          articleType: "blog",
+          writerNotes: `Audience: ${audience}\nTone: ${TONES.find(t => t.id === tone)?.label}\nGoal: ${goal}\nCTA: ${ctaObjective}\nSecondary Keywords: ${secondaryKeywords.join(", ")}`,
+          targetDate: new Date().toISOString().split("T")[0],
+        });
+        
+        if (!calRes.success) {
+          toast.error(calRes.error || "Failed to schedule blog");
+          setPhase("form");
+          return;
+        }
+        finalEntryId = calRes.data.id;
       }
 
       // 2. Generate the blog
       const genRes = await blogsApi.generate({
-        entryId: calRes.data.id,
+        entryId: finalEntryId,
         wordCount,
       });
 
@@ -164,7 +196,6 @@ export default function BlogGeneratorPage() {
         toast.success("Blog ready — opening preview.");
         void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-        // Assuming we route to content history or the calendar.
         router.push(`${base}/content-history`);
       } else {
         toast.error(genRes.error || "Failed to generate blog");

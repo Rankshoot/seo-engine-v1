@@ -26,6 +26,7 @@ import {
   StudioBreadcrumb,
 } from "@/components/content-generator/shared";
 import { useProject, qk } from "@/lib/query";
+import { calendarApi } from "@/frontend/api/calendar";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
 import { TARGET_REGIONS } from "@/lib/types";
 import type { LinkedInPostStyle } from "@/lib/types";
@@ -65,6 +66,19 @@ export default function LinkedInGeneratorPage() {
   const queryClient = useQueryClient();
   const studioBase = `/projects/${projectId}/content-generator`;
 
+  const entryId = searchParams?.get("entryId");
+
+  const { data: entriesData } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId && !!entryId,
+  });
+
+  const scheduledEntry = useMemo(() => {
+    if (!entriesData?.success) return null;
+    return entriesData.data.find((e) => e.id === entryId) || null;
+  }, [entriesData, entryId]);
+
   const { data: projectRes } = useProject(projectId);
   const project = projectRes?.success ? projectRes.data : undefined;
 
@@ -102,6 +116,18 @@ export default function LinkedInGeneratorPage() {
     const tl = project?.target_language?.toLowerCase();
     if (tl) setLanguage(tl);
   }, [project?.target_audience, project?.target_region, project?.target_language, audience]);
+
+  useEffect(() => {
+    if (scheduledEntry) {
+      if (scheduledEntry.focus_keyword) {
+        setPrimaryKeyword(scheduledEntry.focus_keyword);
+      }
+      if (scheduledEntry.title || scheduledEntry.blog_title) {
+        const t = scheduledEntry.title || scheduledEntry.blog_title;
+        setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
+      }
+    }
+  }, [scheduledEntry]);
 
   const askAi = async () => {
     setAskLoading(true);
@@ -142,6 +168,7 @@ export default function LinkedInGeneratorPage() {
       ctaObjective,
       region,
       language,
+      entryId: entryId || null,
     });
     if (res.trace?.length) {
       console.log("[linkedin] trace:", res.trace);

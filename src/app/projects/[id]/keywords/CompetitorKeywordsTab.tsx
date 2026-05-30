@@ -2,7 +2,7 @@
 
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
@@ -175,6 +175,7 @@ function persistCompetitorStatuses(projectId: string, next: Record<string, Keywo
 
 export default function CompetitorKeywordsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const COMPETITORS_KEY = qk.competitors(projectId);
 
@@ -279,6 +280,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+      router.push(`/projects/${projectId}/content-calendar`);
     } else {
       setError(res.error ?? "Could not create calendar entry.");
     }
@@ -379,6 +381,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+        router.push(`/projects/${projectId}/content-calendar`);
       }
     } finally {
       setBulkApprovingGaps(false);

@@ -139,8 +139,11 @@ export default function ProjectSidebar({
         safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
         break;
       }
+      case "Content Calendar": {
+        safePrefetch(qk.calendarWithBlogs(id), () => calendarApi.withBlogs(id));
+        break;
+      }
       case "Content History": {
-        safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
         safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
         break;
       }
@@ -213,6 +216,12 @@ export default function ProjectSidebar({
     },
     {
       icon: Icon.calendar,
+      label: "Content Calendar",
+      href: `${base}/content-calendar`,
+      prefetchLabel: "Content Calendar",
+    },
+    {
+      icon: Icon.articles,
       label: "Content History",
       href: `${base}/content-history`,
       prefetchLabel: "Content History",

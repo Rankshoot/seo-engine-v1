@@ -189,6 +189,7 @@ export async function generateEbookAction(
     language?: string;
     semanticKeywords?: string[];
     skipResearch?: boolean;
+    entryId?: string | null;
   }
 ): Promise<
   | { success: true; data: Blog; trace: ContentGenerationTraceEntry[] }
@@ -280,7 +281,7 @@ export async function generateEbookAction(
   const { data: row, error: insErr } = await supabaseAdmin
     .from('blogs')
     .insert({
-      entry_id: null,
+      entry_id: payload.entryId || null,
       project_id: projectId,
       title: result.title,
       content: sanitized.content,
@@ -305,6 +306,13 @@ export async function generateEbookAction(
     return { success: false, error: insErr?.message ?? 'Could not save ebook', trace };
   }
 
+  if (payload.entryId) {
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'generated', title: result.title })
+      .eq('id', payload.entryId);
+  }
+
   mark('db', `ebook id ${row.id}`);
   return { success: true, data: row as Blog, trace };
 }
@@ -327,6 +335,7 @@ export async function generateWhitepaperAction(
     language?: string;
     semanticKeywords?: string[];
     skipResearch?: boolean;
+    entryId?: string | null;
   }
 ): Promise<
   | { success: true; data: Blog; trace: ContentGenerationTraceEntry[] }
@@ -415,7 +424,7 @@ export async function generateWhitepaperAction(
   const { data: row, error: insErr } = await supabaseAdmin
     .from('blogs')
     .insert({
-      entry_id: null,
+      entry_id: payload.entryId || null,
       project_id: projectId,
       title: result.title,
       content: sanitized.content,
@@ -440,6 +449,13 @@ export async function generateWhitepaperAction(
     return { success: false, error: insErr?.message ?? 'Could not save whitepaper', trace };
   }
 
+  if (payload.entryId) {
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'generated', title: result.title })
+      .eq('id', payload.entryId);
+  }
+
   mark('db', `whitepaper id ${row.id}`);
   return { success: true, data: row as Blog, trace };
 }
@@ -459,6 +475,7 @@ export async function generateLinkedInPostAction(
     ctaObjective: string;
     region?: string;
     language?: string;
+    entryId?: string | null;
   }
 ): Promise<
   | { success: true; data: Blog; trace: ContentGenerationTraceEntry[] }
@@ -512,7 +529,7 @@ export async function generateLinkedInPostAction(
   const { data: row, error: insErr } = await supabaseAdmin
     .from('blogs')
     .insert({
-      entry_id: null,
+      entry_id: payload.entryId || null,
       project_id: projectId,
       title: result.title,
       content: result.content,
@@ -535,6 +552,13 @@ export async function generateLinkedInPostAction(
   if (insErr || !row) {
     mark('db', `insert failed: ${insErr?.message ?? 'unknown'}`);
     return { success: false, error: insErr?.message ?? 'Could not save LinkedIn post', trace };
+  }
+
+  if (payload.entryId) {
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'generated', title: result.title })
+      .eq('id', payload.entryId);
   }
 
   mark('db', `linkedin id ${row.id}`);

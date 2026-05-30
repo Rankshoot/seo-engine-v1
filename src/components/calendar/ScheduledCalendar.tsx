@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, keywordsListQueryOptions } from "@/lib/query";
@@ -20,8 +20,7 @@ import {
 } from "@/lib/redux/keyword-workspace-slice";
 import { calendarApi } from "@/frontend/api/calendar";
 import { keywordsApi } from "@/frontend/api/keywords";
-import { CalendarEntry, CalendarEntryWithBlog, WORD_COUNT_OPTIONS } from "@/lib/types";
-import { useGenerateContentEntry } from "@/hooks";
+import { CalendarEntry, CalendarEntryWithBlog } from "@/lib/types";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
@@ -35,12 +34,9 @@ import { toast } from "react-hot-toast";
 type CalendarResponse = Awaited<ReturnType<typeof calendarApi.withBlogs>>;
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
-/** Normalize API date strings so grid keys always match YYYY-MM-DD cells. */
 function normalizeCalendarDay(raw: string): string {
   return String(raw).slice(0, 10);
 }
-
-// ── helpers ───────────────────────────────────────────────────────────────────
 
 function fmtDate(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-US", {
@@ -63,8 +59,6 @@ function LifecycleStatusBadge({
   );
 }
 
-// ── KD cell ───────────────────────────────────────────────────────────────────
-
 function KdCell({ kd }: { kd?: number | null }) {
   if (!kd || kd <= 0) return <span className="text-text-tertiary text-[13px]">—</span>;
   if (kd < 30) return <span className="text-[12px] font-bold text-[#10b981]">Easy</span>;
@@ -72,7 +66,6 @@ function KdCell({ kd }: { kd?: number | null }) {
   return <span className="text-[12px] font-bold text-brand-coral">Hard</span>;
 }
 
-/** Blog title from the calendar entry: prefer joined `blog_title`, then placeholder `title`. */
 function entryBlogTitle(entry: CalendarEntry | null): string {
   if (!entry) return "—";
   const fromJoin = entry.blog_title?.trim();
@@ -83,10 +76,17 @@ function entryBlogTitle(entry: CalendarEntry | null): string {
   return et || entry.focus_keyword || "—";
 }
 
-// ── main page ─────────────────────────────────────────────────────────────────
+function getGeneratorSlug(articleType: string): string {
+  const t = (articleType || "").toLowerCase();
+  if (t === "ebook") return "ebooks";
+  if (t === "whitepaper") return "whitepapers";
+  if (t === "linkedin") return "linkedin";
+  return "blogs";
+}
 
-export function CalendarTab() {
+export function ScheduledCalendar() {
   const { id: projectId } = useParams<{ id: string }>();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
 
@@ -96,47 +96,37 @@ export function CalendarTab() {
   const calendarLastSyncedVersion = useAppSelector((s) =>
     selectCalendarLastSyncedVersion(s, projectId)
   );
-  // Per-keyword scheduling state: server data hydrated into Redux, updated
-  // optimistically so the action column reflects the change immediately even
-  // before the query refetch completes.
   const scheduledKeywordsMap = useAppSelector((s) =>
     selectCalendarScheduledKeywords(s, projectId)
   );
 
   const CALENDAR_KEY = qk.calendarWithBlogs(projectId);
 
-  /** Calendar entry id when the date pencil is open (list view reschedule only). */
   const [pickingDateForEntryId, setPickingDateForEntryId] = useState<string | null>(null);
   const [savingDate, setSavingDate] = useState(false);
-  /** null = closed, "" = open with no preselected date, "YYYY-MM-DD" = open pre-filled from grid click */
   const [addKeywordModalDate, setAddKeywordModalDate] = useState<string | null>(null);
   const [addKeywordBusy, setAddKeywordBusy] = useState(false);
-  const [calendarView, setCalendarView] = useState<"list" | "grid">(() => {
+  const [calendarView, setCalendarView] = useState<"list" | "grid">(DEFAULT_VIEW);
+
+  function DEFAULT_VIEW(): "list" | "grid" {
     if (typeof window === "undefined") return "list";
     const stored = localStorage.getItem("calendar-view");
     return stored === "grid" ? "grid" : "list";
-  });
+  }
+
   const handleCalendarViewChange = useCallback((view: "list" | "grid") => {
     setCalendarView(view);
     localStorage.setItem("calendar-view", view);
   }, []);
 
-  // Shared generation hook & state
-  const { generate, generatingId } = useGenerateContentEntry(projectId);
-  const [generateModalEntryId, setGenerateModalEntryId] = useState<string | null>(null);
-  const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
-  const [writerNotes, setWriterNotes] = useState<Record<string, string>>({});
-
-  const handleGenerateClick = (entryId: string) => {
-    setGenerateModalEntryId(entryId);
-  };
-
-  const handleGenerate = async (entryId: string) => {
-    const wc = wordCounts[entryId] ?? 2500;
-    const notes = writerNotes[entryId]?.trim();
-    setGenerateModalEntryId(null);
-    await generate(entryId, wc, notes);
-  };
+  const handleGenerateClick = useCallback((entry: CalendarEntry) => {
+    const slug = getGeneratorSlug(entry.article_type);
+    router.push(
+      `/projects/${projectId}/content-generator/${slug}?entryId=${entry.id}&keyword=${encodeURIComponent(
+        entry.focus_keyword
+      )}`
+    );
+  }, [projectId, router]);
 
   // ── data queries ─────────────────────────────────────────────────────────
 
@@ -164,27 +154,6 @@ export function CalendarTab() {
       : [];
   const approvedKeywords = allKeywords.filter((k) => k.status === "approved");
 
-  // ── entry lookup maps ─────────────────────────────────────────────────────
-
-  const entriesByKeywordId = useMemo(
-    () =>
-      new Map(entries.filter((e) => e.keyword_id).map((e) => [e.keyword_id!, e])),
-    [entries]
-  );
-  const entriesByFocusKeyword = useMemo(
-    () => new Map(entries.map((e) => [e.focus_keyword.toLowerCase().trim(), e])),
-    [entries]
-  );
-
-  const findEntryForKeyword = useCallback(
-    (kw: { id: string; keyword: string }) =>
-      entriesByKeywordId.get(kw.id) ??
-      entriesByFocusKeyword.get(kw.keyword.toLowerCase().trim()) ??
-      null,
-    [entriesByKeywordId, entriesByFocusKeyword]
-  );
-
-  // Pre-built Set of all already-scheduled dates for the calendar picker
   const scheduledDatesSet = useMemo(
     () => new Set(entries.map((e) => e.scheduled_date)),
     [entries]
@@ -195,8 +164,6 @@ export function CalendarTab() {
   useEffect(() => {
     if (!entriesData?.success) return;
     dispatch(calendarEntriesLoaded({ projectId, count: entriesData.data.length }));
-    // Hydrate per-keyword scheduling status into Redux so navigating away and
-    // back reflects the correct status without waiting for the query to refetch.
     dispatch(
       calendarEntriesHydrated({
         projectId,
@@ -349,15 +316,43 @@ export function CalendarTab() {
     [entries]
   );
 
-  // ── render ────────────────────────────────────────────────────────────────
-
   return (
     <div className="space-y-8 pb-20 max-w-full px-4 mx-auto">
+      {/* ── HEADER ──────────────────────────────────────────────────────── */}
+      <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <PageTitle>Content Calendar</PageTitle>
+          <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
+            Schedule approved keywords to publish dates and track asset generation.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {blogReady > 0 && (
+            <ProjectNavLink
+              href={`/projects/${projectId}/content-history`}
+              className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+            >
+              View History
+              <span className="rounded-full bg-[#10b981]/15 px-2 py-0.5 text-[11px] font-bold text-[#10b981]">
+                {blogReady} ready
+              </span>
+            </ProjectNavLink>
+          )}
+          <button
+            type="button"
+            onClick={() => setAddKeywordModalDate("")}
+            className="inline-flex h-10 items-center gap-2 rounded-[30px] bg-brand-primary px-5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            Add keyword
+          </button>
+        </div>
+      </div>
 
-      {/* ── CALENDAR: list ↔ grid (same `calendar_entries` rows) ───────── */}
       <section className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          {/* Stats inline where the heading used to be */}
           <div className="flex flex-wrap items-center gap-4 text-[13px]">
             {approvedKeywords.length > 0 || totalScheduled > 0 ? (
               <>
@@ -380,7 +375,7 @@ export function CalendarTab() {
                   <>
                     <span className="text-text-tertiary/30">·</span>
                     <span className="text-[#10b981]">
-                      <span className="font-semibold">{blogReady}</span> blog{blogReady !== 1 ? "s" : ""} ready
+                      <span className="font-semibold">{blogReady}</span> asset{blogReady !== 1 ? "s" : ""} ready
                     </span>
                   </>
                 )}
@@ -472,7 +467,7 @@ export function CalendarTab() {
                   aiSourceFromKeyword: kw?.ai_source ?? null,
                 });
                 const reduxState = entry.keyword_id ? scheduledKeywordsMap[entry.keyword_id] : undefined;
-                const effectiveStatus = generatingId === entry.id ? "generating" : (entry.status ?? reduxState?.status);
+                const effectiveStatus = entry.status ?? reduxState?.status;
                 const effectiveDate = entry.scheduled_date ?? reduxState?.date;
                 const lifecycleDisplay = resolveCalendarLifecycleStatus({
                   hasCalendarEntry: true,
@@ -583,7 +578,11 @@ export function CalendarTab() {
                       <LifecycleStatusBadge display={lifecycleDisplay} />
                       {isLocked && (
                         <ProjectNavLink
-                          href={`/projects/${projectId}/blogs/${entry.blog?.id || entry.id}`}
+                          href={
+                            entry.blog?.id 
+                              ? `/projects/${projectId}/blogs/${entry.blog.id}`
+                              : `/projects/${projectId}/blogs/${entry.id}`
+                          }
                           className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
                         >
                           View Blog
@@ -592,9 +591,8 @@ export function CalendarTab() {
                       {!isLocked && !isGenerating && (
                         <button
                           type="button"
-                          onClick={() => handleGenerateClick(entry.id)}
-                          disabled={generatingId !== null}
-                          className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary whitespace-nowrap disabled:opacity-50"
+                          onClick={() => handleGenerateClick(entry)}
+                          className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary whitespace-nowrap"
                         >
                           Generate
                         </button>
@@ -622,8 +620,11 @@ export function CalendarTab() {
             onEmptyDayClick={(date) => setAddKeywordModalDate(date)}
             scheduleBusy={savingDate || addKeywordBusy}
             onMoveEntryToDate={handleMoveEntryToDate}
-            onGenerateClick={handleGenerateClick}
-            generatingId={generatingId}
+            onGenerateClick={(entryId) => {
+              const matchedEntry = entries.find((e) => e.id === entryId);
+              if (matchedEntry) handleGenerateClick(matchedEntry);
+            }}
+            generatingId={null}
           />
         )}
       </section>
@@ -636,99 +637,6 @@ export function CalendarTab() {
         onSubmit={handleAddCustomKeyword}
         busy={addKeywordBusy}
       />
-
-      {/* ── GENERATE BLOG MODAL ────────────────────────────────────────── */}
-      {generateModalEntryId && entries.find((e) => e.id === generateModalEntryId) ? (() => {
-        const generateModalEntry = entries.find((e) => e.id === generateModalEntryId)!;
-        return (
-          <div
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="blog-gen-modal-title"
-            onClick={() => (generatingId !== null ? undefined : setGenerateModalEntryId(null))}
-          >
-            <div
-              className="w-full max-w-lg rounded-[16px] border border-border-subtle bg-surface-elevated p-5 shadow-xl ring-1 ring-border-subtle/80"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h4 id="blog-gen-modal-title" className="text-[16px] font-medium text-text-primary">
-                Generate blog
-              </h4>
-              <p className="mt-1 text-[13px] text-text-tertiary">
-                <span className="font-medium text-text-secondary">{generateModalEntry.focus_keyword}</span>
-                <span className="text-text-tertiary"> · {fmtDate(generateModalEntry.scheduled_date)}</span>
-              </p>
-
-              <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
-                Target length
-              </label>
-              <div className="relative mt-1.5">
-                <select
-                  value={wordCounts[generateModalEntry.id] ?? 2500}
-                  onChange={(e) =>
-                    setWordCounts((prev) => ({ ...prev, [generateModalEntry.id]: +e.target.value }))
-                  }
-                  disabled={generatingId === generateModalEntry.id}
-                  className="w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary outline-none appearance-none pr-9 disabled:opacity-50"
-                >
-                  {WORD_COUNT_OPTIONS.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt.toLocaleString()} words
-                    </option>
-                  ))}
-                </select>
-                <svg
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                </svg>
-              </div>
-
-              <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
-                Custom instructions &amp; angle (optional)
-              </label>
-              <p className="mt-1 text-[12px] text-text-tertiary leading-relaxed">
-                Tone, audience, sections to emphasize, competitors to mention, or anything else for the model.
-              </p>
-              <textarea
-                value={writerNotes[generateModalEntry.id] ?? ""}
-                onChange={(e) =>
-                  setWriterNotes((prev) => ({ ...prev, [generateModalEntry.id]: e.target.value }))
-                }
-                placeholder="e.g. Compare our pricing to X; keep paragraphs short for mobile readers…"
-                rows={4}
-                disabled={generatingId === generateModalEntry.id}
-                className="mt-2 w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 resize-y min-h-[96px] disabled:opacity-50"
-              />
-
-              <div className="mt-5 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setGenerateModalEntryId(null)}
-                  disabled={generatingId === generateModalEntry.id}
-                  className="rounded-full border border-border-subtle px-4 py-2 text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleGenerate(generateModalEntry.id)}
-                  disabled={generatingId !== null}
-                  className="rounded-full bg-brand-primary px-5 py-2 text-[13px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-                >
-                  {generatingId === generateModalEntry.id ? "Generating…" : "Generate"}
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })() : null}
-
     </div>
   );
 }

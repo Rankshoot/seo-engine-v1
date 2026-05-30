@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, keywordsListQueryOptions, useProject } from "@/lib/query";
@@ -280,6 +281,7 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
 export default function OrganicKeywordsTab({ projectId }: { projectId: string }) {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
+  const router = useRouter();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
 
@@ -655,6 +657,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       toast.success(`"${label}" approved${calendarApproveSuffix(res)}`);
       void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+      router.push(`/projects/${projectId}/content-calendar`);
     } else if (status === "rejected") {
       toast(`"${label}" rejected`, { icon: 'ℹ️' });
     }
@@ -748,6 +751,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       toast.success(`"${label}" approved${calendarApproveSuffix(res)}`);
       void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+      router.push(`/projects/${projectId}/content-calendar`);
     } else if (next === "pending") {
       toast(`"${label}" moved back to pending`, { icon: 'ℹ️' });
     } else if (next === "rejected") {
@@ -953,6 +957,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
             : `${ids.length} keyword(s) approved`
       );
       exitMassSelect();
+      router.push(`/projects/${projectId}/content-calendar`);
     } finally {
       setBulkApproving(false);
     }

@@ -20,7 +20,8 @@ import {
 } from "@/lib/redux/keyword-workspace-slice";
 import { calendarApi } from "@/frontend/api/calendar";
 import { keywordsApi } from "@/frontend/api/keywords";
-import type { CalendarEntry } from "@/lib/types";
+import { CalendarEntry, CalendarEntryWithBlog, WORD_COUNT_OPTIONS } from "@/lib/types";
+import { useGenerateContentEntry } from "@/hooks";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
@@ -31,7 +32,7 @@ import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordMod
 import { PageTitle } from "@/components/common";
 import { toast } from "react-hot-toast";
 
-type CalendarResponse = Awaited<ReturnType<typeof calendarApi.entries>>;
+type CalendarResponse = Awaited<ReturnType<typeof calendarApi.withBlogs>>;
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
 /** Normalize API date strings so grid keys always match YYYY-MM-DD cells. */
@@ -102,7 +103,7 @@ export function CalendarTab() {
     selectCalendarScheduledKeywords(s, projectId)
   );
 
-  const CALENDAR_KEY = qk.calendar(projectId);
+  const CALENDAR_KEY = qk.calendarWithBlogs(projectId);
 
   /** Calendar entry id when the date pencil is open (list view reschedule only). */
   const [pickingDateForEntryId, setPickingDateForEntryId] = useState<string | null>(null);
@@ -120,15 +121,32 @@ export function CalendarTab() {
     localStorage.setItem("calendar-view", view);
   }, []);
 
+  // Shared generation hook & state
+  const { generate, generatingId } = useGenerateContentEntry(projectId);
+  const [generateModalEntryId, setGenerateModalEntryId] = useState<string | null>(null);
+  const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
+  const [writerNotes, setWriterNotes] = useState<Record<string, string>>({});
+
+  const handleGenerateClick = (entryId: string) => {
+    setGenerateModalEntryId(entryId);
+  };
+
+  const handleGenerate = async (entryId: string) => {
+    const wc = wordCounts[entryId] ?? 2500;
+    const notes = writerNotes[entryId]?.trim();
+    setGenerateModalEntryId(null);
+    await generate(entryId, wc, notes);
+  };
+
   // ── data queries ─────────────────────────────────────────────────────────
 
   const { data: entriesData, isLoading: loadingEntries, refetch: refetchCalendar } =
     useQuery<CalendarResponse>({
       queryKey: CALENDAR_KEY,
-      queryFn: () => calendarApi.entries(projectId),
+      queryFn: () => calendarApi.withBlogs(projectId),
       enabled: !!projectId,
     });
-  const entries: CalendarEntry[] = useMemo(() => {
+  const entries: CalendarEntryWithBlog[] = useMemo(() => {
     if (!entriesData?.success) return [];
     return entriesData.data.map((e) => ({
       ...e,
@@ -454,7 +472,7 @@ export function CalendarTab() {
                   aiSourceFromKeyword: kw?.ai_source ?? null,
                 });
                 const reduxState = entry.keyword_id ? scheduledKeywordsMap[entry.keyword_id] : undefined;
-                const effectiveStatus = entry.status ?? reduxState?.status;
+                const effectiveStatus = generatingId === entry.id ? "generating" : (entry.status ?? reduxState?.status);
                 const effectiveDate = entry.scheduled_date ?? reduxState?.date;
                 const lifecycleDisplay = resolveCalendarLifecycleStatus({
                   hasCalendarEntry: true,
@@ -565,19 +583,21 @@ export function CalendarTab() {
                       <LifecycleStatusBadge display={lifecycleDisplay} />
                       {isLocked && (
                         <ProjectNavLink
-                          href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+                          href={`/projects/${projectId}/blogs/${entry.blog?.id || entry.id}`}
                           className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
                         >
                           View Blog
                         </ProjectNavLink>
                       )}
-                      {isRepairRow && !isLocked && !isGenerating && (
-                        <ProjectNavLink
-                          href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                          className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary whitespace-nowrap"
+                      {!isLocked && !isGenerating && (
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateClick(entry.id)}
+                          disabled={generatingId !== null}
+                          className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary whitespace-nowrap disabled:opacity-50"
                         >
                           Generate
-                        </ProjectNavLink>
+                        </button>
                       )}
                       {isGenerating && (
                         <span className="inline-flex items-center gap-1.5 rounded-full border border-[#f59e0b]/20 px-4 py-1.5 text-[12px] font-semibold text-[#f59e0b]/70 select-none whitespace-nowrap">
@@ -602,6 +622,8 @@ export function CalendarTab() {
             onEmptyDayClick={(date) => setAddKeywordModalDate(date)}
             scheduleBusy={savingDate || addKeywordBusy}
             onMoveEntryToDate={handleMoveEntryToDate}
+            onGenerateClick={handleGenerateClick}
+            generatingId={generatingId}
           />
         )}
       </section>
@@ -614,6 +636,98 @@ export function CalendarTab() {
         onSubmit={handleAddCustomKeyword}
         busy={addKeywordBusy}
       />
+
+      {/* ── GENERATE BLOG MODAL ────────────────────────────────────────── */}
+      {generateModalEntryId && entries.find((e) => e.id === generateModalEntryId) ? (() => {
+        const generateModalEntry = entries.find((e) => e.id === generateModalEntryId)!;
+        return (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="blog-gen-modal-title"
+            onClick={() => (generatingId !== null ? undefined : setGenerateModalEntryId(null))}
+          >
+            <div
+              className="w-full max-w-lg rounded-[16px] border border-border-subtle bg-surface-elevated p-5 shadow-xl ring-1 ring-border-subtle/80"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h4 id="blog-gen-modal-title" className="text-[16px] font-medium text-text-primary">
+                Generate blog
+              </h4>
+              <p className="mt-1 text-[13px] text-text-tertiary">
+                <span className="font-medium text-text-secondary">{generateModalEntry.focus_keyword}</span>
+                <span className="text-text-tertiary"> · {fmtDate(generateModalEntry.scheduled_date)}</span>
+              </p>
+
+              <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                Target length
+              </label>
+              <div className="relative mt-1.5">
+                <select
+                  value={wordCounts[generateModalEntry.id] ?? 2500}
+                  onChange={(e) =>
+                    setWordCounts((prev) => ({ ...prev, [generateModalEntry.id]: +e.target.value }))
+                  }
+                  disabled={generatingId === generateModalEntry.id}
+                  className="w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary outline-none appearance-none pr-9 disabled:opacity-50"
+                >
+                  {WORD_COUNT_OPTIONS.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt.toLocaleString()} words
+                    </option>
+                  ))}
+                </select>
+                <svg
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                </svg>
+              </div>
+
+              <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-text-tertiary">
+                Custom instructions &amp; angle (optional)
+              </label>
+              <p className="mt-1 text-[12px] text-text-tertiary leading-relaxed">
+                Tone, audience, sections to emphasize, competitors to mention, or anything else for the model.
+              </p>
+              <textarea
+                value={writerNotes[generateModalEntry.id] ?? ""}
+                onChange={(e) =>
+                  setWriterNotes((prev) => ({ ...prev, [generateModalEntry.id]: e.target.value }))
+                }
+                placeholder="e.g. Compare our pricing to X; keep paragraphs short for mobile readers…"
+                rows={4}
+                disabled={generatingId === generateModalEntry.id}
+                className="mt-2 w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 resize-y min-h-[96px] disabled:opacity-50"
+              />
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setGenerateModalEntryId(null)}
+                  disabled={generatingId === generateModalEntry.id}
+                  className="rounded-full border border-border-subtle px-4 py-2 text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleGenerate(generateModalEntry.id)}
+                  disabled={generatingId !== null}
+                  className="rounded-full bg-brand-primary px-5 py-2 text-[13px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {generatingId === generateModalEntry.id ? "Generating…" : "Generate"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
 
     </div>
   );

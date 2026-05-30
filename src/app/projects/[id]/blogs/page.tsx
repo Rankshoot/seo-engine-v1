@@ -12,6 +12,7 @@ import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { TableSkeleton } from "@/components/Skeleton";
 import { PageTitle, EmptyState } from "@/components/common";
+import { useGenerateContentEntry } from "@/hooks";
 
 type CalendarWithBlogsResponse = Awaited<ReturnType<typeof calendarApi.withBlogs>>;
 
@@ -63,7 +64,7 @@ export default function BlogsPage() {
   const ENTRIES_KEY = qk.calendarWithBlogs(projectId);
   const CALENDAR_KEY = qk.calendar(projectId);
 
-  const [generating, setGenerating] = useState<string | null>(null);
+  const { generate, generatingId } = useGenerateContentEntry(projectId);
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
   const [writerNotes, setWriterNotes] = useState<Record<string, string>>({});
   const [savingStatus, setSavingStatus] = useState<string | null>(null);
@@ -99,30 +100,7 @@ export default function BlogsPage() {
     const wc = wordCounts[entryId] ?? 2500;
     const notes = writerNotes[entryId]?.trim();
     setGenerateModalEntryId(null);
-    setGenerating(entryId);
-    setError((prev) => ({ ...prev, [entryId]: "" }));
-    patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "generating" } : e)));
-
-    const res = await blogsApi.generate({ entryId, wordCount: wc, writerNotes: notes || undefined });
-    if (res.success && res.data) {
-      patchEntries((list) =>
-        list.map((e) =>
-          e.id === entryId
-            ? { ...e, status: "generated", title: res.data!.title, blog: res.data as CalendarEntryWithBlog["blog"] }
-            : e
-        )
-      );
-      dispatch(calendarRefreshBump({ projectId }));
-      void queryClient.invalidateQueries({ queryKey: CALENDAR_KEY });
-      void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-    } else {
-      patchEntries((list) => list.map((e) => (e.id === entryId ? { ...e, status: "scheduled" } : e)));
-      setError((prev) => ({
-        ...prev,
-        [entryId]: !res.success ? res.error : "Generation failed",
-      }));
-    }
-    setGenerating(null);
+    await generate(entryId, wc, notes);
   };
 
   const handleStatusChange = async (entryId: string, blogId: string, status: BlogStatus) => {
@@ -218,7 +196,7 @@ export default function BlogsPage() {
                         ? STATUS_CONFIG[blogStatus] ?? STATUS_CONFIG.generated
                         : STATUS_CONFIG[effStatus] ?? STATUS_CONFIG.scheduled;
                   const isHighlighted = entry.id === highlightEntry;
-                  const isGenerating = generating === entry.id;
+                  const isGenerating = generatingId === entry.id;
 
                   return (
                     <tr
@@ -276,7 +254,7 @@ export default function BlogsPage() {
                                 setError((prev) => ({ ...prev, [entry.id]: "" }));
                                 setGenerateModalEntryId(entry.id);
                               }}
-                              disabled={generating !== null}
+                              disabled={generatingId !== null}
                               className="inline-flex h-8 items-center justify-center gap-1.5 rounded-full bg-brand-primary min-w-[5.5rem] px-3 text-[11px] font-semibold text-brand-on-primary disabled:opacity-50"
                             >
                               {isGenerating ? (
@@ -318,7 +296,7 @@ export default function BlogsPage() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="blog-gen-modal-title"
-          onClick={() => (generating !== null ? undefined : setGenerateModalEntryId(null))}
+          onClick={() => (generatingId !== null ? undefined : setGenerateModalEntryId(null))}
         >
           <div
             className="w-full max-w-lg rounded-[16px] border border-border-subtle bg-surface-elevated p-5 shadow-xl ring-1 ring-border-subtle/80"
@@ -341,7 +319,7 @@ export default function BlogsPage() {
                 onChange={(e) =>
                   setWordCounts((prev) => ({ ...prev, [generateModalEntry.id]: +e.target.value }))
                 }
-                disabled={generating === generateModalEntry.id}
+                disabled={generatingId === generateModalEntry.id}
                 className="w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary outline-none appearance-none pr-9 disabled:opacity-50"
               >
                 {WORD_COUNT_OPTIONS.map((opt) => (
@@ -374,7 +352,7 @@ export default function BlogsPage() {
               }
               placeholder="e.g. Compare our pricing to X; keep paragraphs short for mobile readers…"
               rows={4}
-              disabled={generating === generateModalEntry.id}
+              disabled={generatingId === generateModalEntry.id}
               className="mt-2 w-full rounded-[10px] border border-border-subtle bg-surface-secondary px-3 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action/40 resize-y min-h-[96px] disabled:opacity-50"
             />
 
@@ -382,7 +360,7 @@ export default function BlogsPage() {
               <button
                 type="button"
                 onClick={() => setGenerateModalEntryId(null)}
-                disabled={generating === generateModalEntry.id}
+                disabled={generatingId === generateModalEntry.id}
                 className="rounded-full border border-border-subtle px-4 py-2 text-[13px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
               >
                 Cancel
@@ -390,10 +368,10 @@ export default function BlogsPage() {
               <button
                 type="button"
                 onClick={() => void handleGenerate(generateModalEntry.id)}
-                disabled={generating !== null}
+                disabled={generatingId !== null}
                 className="rounded-full bg-brand-primary px-5 py-2 text-[13px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
               >
-                {generating === generateModalEntry.id ? "Generating…" : "Generate"}
+                {generatingId === generateModalEntry.id ? "Generating…" : "Generate"}
               </button>
             </div>
           </div>

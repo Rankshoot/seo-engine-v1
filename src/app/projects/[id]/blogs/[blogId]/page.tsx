@@ -869,7 +869,12 @@ export default function BlogViewerPage() {
       projectsApi.get(projectId),
       blogsApi.getEnhanced(blogId),
     ]).then(([blogRes, projRes, enhancedRes]) => {
-      if (blogRes.success && blogRes.data) setBlog(blogRes.data);
+      if (blogRes.success && blogRes.data) {
+        setBlog(blogRes.data);
+        if (blogRes.data.id !== blogId) {
+          window.history.replaceState(null, "", `/projects/${projectId}/blogs/${blogRes.data.id}${window.location.search}`);
+        }
+      }
       if (projRes.success && projRes.data) setProject(projRes.data);
       if (enhancedRes.success && enhancedRes.data) setEnhancedBlog(enhancedRes.data);
       setLoading(false);
@@ -887,7 +892,7 @@ export default function BlogViewerPage() {
       setAnalysisLoading(true);
     }
     setAnalysisError("");
-    const res = await analyzeBlogContent(blogId);
+    const res = await analyzeBlogContent(blog?.id || blogId);
     setAnalysisLoading(false);
     setAnalysisReanalysing(false);
     if (res.success) {
@@ -921,19 +926,20 @@ export default function BlogViewerPage() {
       }, 14_000);
 
       try {
-        const res = await blogsApi.runDeepAnalysis(blogId, { force });
+        const res = await blogsApi.runDeepAnalysis(blog?.id || blogId, { force });
         if (res.success) {
           setDeepAnalysis(res.data);
           if (res.trace) console.log("[deep-analysis] trace:", res.trace);
           const at = "updatedAt" in res && res.updatedAt ? res.updatedAt : new Date().toISOString();
           const score = res.data.deepAnalysisScore;
+          const currentBlogId = blog?.id || blogId;
           setBlog(prev =>
-            prev && prev.id === blogId
+            prev && prev.id === currentBlogId
               ? { ...prev, deep_analysis_score: score, deep_analysis_updated_at: at }
               : prev
           );
           setEnhancedBlog(prev =>
-            prev && prev.id === blogId
+            prev && prev.id === currentBlogId
               ? { ...prev, deep_analysis_score: score, deep_analysis_updated_at: at }
               : prev
           );
@@ -958,7 +964,7 @@ export default function BlogViewerPage() {
     if (deepAnalysis && !deepRunningAgain && !deepLoading) return;
 
     try {
-      const cached = await blogsApi.getDeepAnalysis(blogId);
+      const cached = await blogsApi.getDeepAnalysis(blog?.id || blogId);
       if (cached.cached && cached.data) {
         setDeepAnalysis(cached.data);
         return;
@@ -967,7 +973,7 @@ export default function BlogViewerPage() {
       /* run fresh below */
     }
     await runDeepAnalysis();
-  }, [blogId, deepAnalysis, deepLoading, deepRunningAgain, runDeepAnalysis]);
+  }, [blog?.id, blogId, deepAnalysis, deepLoading, deepRunningAgain, runDeepAnalysis]);
 
   const handleAnalysisEnhanced = async () => {
     if (!blog || !contentAnalysis) return;
@@ -1090,13 +1096,12 @@ export default function BlogViewerPage() {
   };
 
   const handleAddToArticles = async () => {
-    if (!blogId?.trim() || !blog) return;
+    if (!blog) return;
     setAddingToArticles(true);
     try {
-      // URL id is source of truth (matches `getById`); avoids any stale `blog.id` edge case.
-      const res = await blogsApi.addToArticlesLibrary(blogId);
+      const res = await blogsApi.addToArticlesLibrary(blog.id);
       if (res.success) {
-        setBlog((b) => (b && b.id === blogId ? { ...b, in_articles_library: true } : b));
+        setBlog((b) => (b && b.id === blog.id ? { ...b, in_articles_library: true } : b));
         if (res.alreadySaved) toast.success("Already in Articles");
         else toast.success("Added to Articles");
         void queryClient.invalidateQueries({ queryKey: qk.articlesLibrary(projectId) });

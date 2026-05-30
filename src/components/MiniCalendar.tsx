@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, type DragEvent } from "react";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
-import type { CalendarEntry } from "@/lib/types";
+import type { CalendarEntry, CalendarEntryWithBlog } from "@/lib/types";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 
@@ -40,8 +40,10 @@ export function MiniCalendar({
   onMoveEntryToDate,
   /** Called when the user clicks an empty future day in the grid. Opens the add-keyword modal. */
   onEmptyDayClick,
+  onGenerateClick,
+  generatingId = null,
 }: {
-  entries: CalendarEntry[];
+  entries: CalendarEntryWithBlog[];
   projectId: string;
   schedulingKeywordId: string | null;
   schedulingKeywordPhrase: string;
@@ -50,6 +52,8 @@ export function MiniCalendar({
   scheduleBusy?: boolean;
   onMoveEntryToDate?: (entryId: string, date: string) => boolean | Promise<boolean>;
   onEmptyDayClick?: (date: string) => void;
+  onGenerateClick?: (entryId: string) => void;
+  generatingId?: string | null;
 }) {
   const today = new Date();
   const [calendarViewYM, setCalendarViewYM] = useState(() => ({
@@ -81,7 +85,7 @@ export function MiniCalendar({
 
   /** All entries per calendar day (multiple keywords can share the same date). */
   const entriesByDate = useMemo(() => {
-    const m = new Map<string, CalendarEntry[]>();
+    const m = new Map<string, CalendarEntryWithBlog[]>();
     for (const e of entries) {
       const k = normalizeCalDay(e.scheduled_date);
       const list = m.get(k) ?? [];
@@ -355,7 +359,8 @@ export function MiniCalendar({
                       | undefined;
                     const volume = kwData?.volume;
                     const kd_ = kdLabel(kwData?.kd);
-                    const isGenerated = entry.status === "generated" || entry.status === "downloaded";
+                    const isGenerating = entry.status === "generating" || generatingId === entry.id;
+                    const isGenerated = entry.status === "generated" || entry.status === "downloaded" || entry.status === "approved" || entry.status === "published";
                     const origin = resolveCalendarKeywordOrigin({
                       contentHealthAudit: entry.content_health_audit,
                       keywordSourceType: kwData?.source_type,
@@ -363,11 +368,12 @@ export function MiniCalendar({
                       aiSourceFromEntry: entry.ai_source,
                       aiSourceFromKeyword: kwData?.ai_source ?? null,
                     });
+                    const effectiveStatus = isGenerating ? "generating" : entry.status;
                     const life = resolveCalendarLifecycleStatus({
                       hasCalendarEntry: true,
-                      calendarStatus: entry.status,
+                      calendarStatus: effectiveStatus,
                     });
-                    const canDragThisEntry = dndActive && entry.status !== "generating";
+                    const canDragThisEntry = dndActive && !isGenerating;
 
                     return (
                       <div
@@ -435,16 +441,34 @@ export function MiniCalendar({
                             <span className={`text-[9px] font-bold ${kd_.cls}`}>{kd_.text}</span>
                           ) : null}
                         </div>
-                        <ProjectNavLink
-                          href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                          className={`mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] ${
-                            isGenerated
-                              ? "bg-[#10b981]/15 text-[#10b981] hover:bg-[#10b981]/25"
-                              : "bg-brand-action/10 text-brand-action hover:bg-brand-action/20"
-                          }`}
-                        >
-                          {isGenerated ? "View Blog" : "Generate →"}
-                        </ProjectNavLink>
+                        {isGenerated ? (
+                          <ProjectNavLink
+                            href={`/projects/${projectId}/blogs/${entry.blog?.id || entry.id}`}
+                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-[#10b981]/15 text-[#10b981] hover:bg-[#10b981]/25"
+                          >
+                            View Blog
+                          </ProjectNavLink>
+                        ) : isGenerating ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide select-none border border-[#f59e0b]/20 text-[#f59e0b]/70 sm:py-1 sm:text-[9px]"
+                          >
+                            Generating…
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onGenerateClick?.(entry.id);
+                            }}
+                            disabled={generatingId !== null}
+                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-brand-action/10 text-brand-action hover:bg-brand-action/20 disabled:opacity-50"
+                          >
+                            Generate →
+                          </button>
+                        )}
                       </div>
                     );
                   })}

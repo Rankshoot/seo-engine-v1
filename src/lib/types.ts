@@ -444,7 +444,7 @@ export type ContentDataPayload =
 
 /** Calendar row plus optional blog summary from `getCalendarWithBlogs`. */
 export type CalendarEntryWithBlog = CalendarEntry & {
-  blog: Pick<Blog, "id" | "entry_id" | "title" | "word_count" | "status" | "research_sources"> | null;
+  blog?: Pick<Blog, "id" | "entry_id" | "title" | "word_count" | "status" | "research_sources"> | null;
 };
 
 /** Row shape for the Articles library table (no body content). */

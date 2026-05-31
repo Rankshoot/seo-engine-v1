@@ -1336,11 +1336,24 @@ export default function BlogViewerPage() {
       {/* ── Top strip ───────────────────────────────────────────────────── */}
       <div className="shrink-0 flex flex-col gap-2">
         <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
-          <ProjectNavLink href={historyParentHref} className="hover:text-text-primary transition-colors">
-            {historyParentLabel}
+          <ProjectNavLink
+            href={`/projects/${projectId}/content-history?tab=generated`}
+            className="inline-flex items-center gap-1.5 hover:text-text-primary transition-colors group font-medium"
+          >
+            <svg
+              className="w-3.5 h-3.5 shrink-0 transition-transform group-hover:-translate-x-0.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
+            Back
           </ProjectNavLink>
-          <span className="opacity-30">›</span>
-          <span className="font-medium text-text-primary truncate max-w-[380px]">{blog.title}</span>
         </div>
 
         {blog.source_url && blog.article_type === "Repair" && (

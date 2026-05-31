@@ -193,10 +193,10 @@ export default function BlogGeneratorPage() {
       });
 
       if (genRes.success) {
-        toast.success("Blog ready — opening preview.");
+        toast.success("Blog generated");
         void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-        router.push(`${base}/content-history`);
+        router.push(`${base}/blogs/${genRes.data.id}`);
       } else {
         toast.error(genRes.error || "Failed to generate blog");
         setPhase("form");

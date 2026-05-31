@@ -13,15 +13,6 @@ import { qk, keywordsListQueryOptions } from "@/lib/query";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
 import { projectsApi } from "@/frontend/api/projects";
-import { briefApi } from "@/frontend/api/brief";
-import { calendarApi } from "@/frontend/api/calendar";
-import { articlesApi } from "@/frontend/api/articles";
-import { contentGeneratorApi } from "@/frontend/api/content-generator";
-import { auditsApi } from "@/frontend/api/audits";
-import { competitorsApi } from "@/frontend/api/competitors";
-
-/** Passed to `prefetchQuery` so a click-prefetch does not instantly mark data stale. */
-const PREFETCH_STALE_MS = 5 * 60_000;
 
 const Icon = {
   grid: <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>,
@@ -58,7 +49,8 @@ const Icon = {
 };
 
 interface ProjectSidebarProps {
-  project: Project;
+  project?: Project | null;
+  projectId: string;
   stats?: {
     approvedKeywords: number;
     calendarEntries: number;
@@ -74,6 +66,7 @@ interface ProjectSidebarProps {
 
 export default function ProjectSidebar({ 
   project, 
+  projectId,
   stats, 
   allProjects,
   isCollapsed,
@@ -85,9 +78,9 @@ export default function ProjectSidebar({
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
   const { data: statsResponse } = useQuery({
-    queryKey: qk.projectStats(project.id),
-    queryFn: () => projectsApi.stats(project.id),
-    enabled: !!project.id,
+    queryKey: qk.projectStats(projectId),
+    queryFn: () => projectsApi.stats(projectId),
+    enabled: !!projectId,
   });
   const serverStats =
     statsResponse?.success && statsResponse.data
@@ -99,59 +92,14 @@ export default function ProjectSidebar({
           auditPending: statsResponse.data.auditPending,
         }
       : stats;
-  const liveStats = useAppSelector(state => selectProjectStats(state, project.id, serverStats));
-  const base = `/projects/${project.id}`;
+  const liveStats = useAppSelector(state => selectProjectStats(state, projectId, serverStats));
+  const base = `/projects/${projectId}`;
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   /** Nav count badges use React Query + Redux; sidebar is client-only so counts can render immediately. */
   const navCountsReady = true;
 
-  // Warm TanStack cache on nav **click** only (not hover/focus) so moving the
-  // mouse across the sidebar does not hit `/api/v1`.
-  const safePrefetch = (queryKey: readonly unknown[], queryFn: () => Promise<unknown>) => {
-    if (queryClient.isFetching({ queryKey }) > 0) return;
-    void queryClient.prefetchQuery({ queryKey, queryFn, staleTime: PREFETCH_STALE_MS });
-  };
-
-  const prefetchFor = (label: string) => {
-    const id = project.id;
-    switch (label) {
-      case "Keywords": {
-        const kwo = keywordsListQueryOptions(id);
-        safePrefetch(kwo.queryKey, kwo.queryFn);
-        safePrefetch(qk.brief(id), () => briefApi.get(id));
-        safePrefetch(qk.competitors(id), () => competitorsApi.benchmark(id));
-        break;
-      }
-      case "Content Health":
-        safePrefetch(qk.audits(id), () => auditsApi.list(id));
-        break;
-      case "Content Generator": {
-        const kwo = keywordsListQueryOptions(id);
-        safePrefetch(kwo.queryKey, kwo.queryFn);
-        safePrefetch(qk.calendar(id), () => calendarApi.entries(id));
-        safePrefetch(qk.brief(id), () => briefApi.get(id));
-        safePrefetch(qk.contentGeneratorHistory(id), () => contentGeneratorApi.history(id));
-        // Phase 5 — Content Studio (ebooks, whitepapers, LinkedIn) reads
-        // from a unified history endpoint. Prefetching it here means
-        // navigating between sub-tabs feels instant.
-        safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
-        break;
-      }
-      case "Content Calendar": {
-        safePrefetch(qk.calendarWithBlogs(id), () => calendarApi.withBlogs(id));
-        break;
-      }
-      case "Content History": {
-        safePrefetch(qk.contentStudioHistory(id), () => contentGeneratorApi.studioHistory(id));
-        break;
-      }
-      default:
-        // Overview — project + calendar data from shared React Query keys.
-        break;
-    }
-  };
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -165,10 +113,10 @@ export default function ProjectSidebar({
   }, []);
 
   useEffect(() => {
-    if (serverStats) dispatch(hydrateProjectStats({ projectId: project.id, stats: serverStats }));
+    if (serverStats) dispatch(hydrateProjectStats({ projectId, stats: serverStats }));
   }, [
     dispatch,
-    project.id,
+    projectId,
     serverStats?.approvedKeywords,
     serverStats?.calendarEntries,
     serverStats?.blogsGenerated,
@@ -294,8 +242,12 @@ export default function ProjectSidebar({
             <div className={`absolute inset-0 p-4 flex items-center justify-between transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-0 translate-x-[-20px] pointer-events-none" : "opacity-100 translate-x-0"}`}>
               <div className="flex-1 min-w-0 pr-2">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1.5">Current Project</p>
-                <p className="text-[14px] font-medium text-text-primary truncate">{project.name}</p>
-                <p className="text-[12px] text-text-tertiary truncate font-mono mt-0.5">{project.domain}</p>
+                <p className="text-[14px] font-medium text-text-primary truncate">
+                  {project ? project.name : <span className="inline-block w-24 h-4 bg-surface-tertiary animate-pulse rounded" />}
+                </p>
+                <p className="text-[12px] text-text-tertiary truncate font-mono mt-0.5">
+                  {project ? project.domain : <span className="inline-block w-32 h-3.5 bg-surface-tertiary/60 animate-pulse rounded mt-1" />}
+                </p>
               </div>
               <div className={`text-text-tertiary transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`}>
                 {Icon.chevronDown}
@@ -305,7 +257,7 @@ export default function ProjectSidebar({
             {/* Collapsed Content */}
             <div className={`absolute inset-0 p-2 flex items-center justify-center transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-100 translate-x-0" : "opacity-0 translate-x-[20px] pointer-events-none"}`}>
               <div className="w-10 h-10 rounded-[8px] bg-surface-tertiary flex items-center justify-center text-[16px] font-bold text-text-primary uppercase">
-                {project.name.charAt(0)}
+                {project ? project.name.charAt(0) : "…"}
               </div>
             </div>
           </button>
@@ -329,12 +281,12 @@ export default function ProjectSidebar({
                     className="w-full flex items-center justify-between px-3 py-2 hover:bg-surface-hover transition-colors text-left"
                   >
                     <div className="flex-1 min-w-0 pr-3">
-                      <p className={`text-[13px] font-medium truncate ${p.id === project.id ? "text-brand-action" : "text-text-primary"}`}>
+                      <p className={`text-[13px] font-medium truncate ${project && p.id === project.id ? "text-brand-action" : "text-text-primary"}`}>
                         {p.name}
                       </p>
                       <p className="text-[11px] text-text-tertiary truncate font-mono">{p.domain}</p>
                     </div>
-                    {p.id === project.id && (
+                    {project && p.id === project.id && (
                       <span className="text-brand-action shrink-0">{Icon.check}</span>
                     )}
                   </button>
@@ -367,7 +319,7 @@ export default function ProjectSidebar({
               <li key={item.label}>
                 <ProjectNavLink
                   href={item.href}
-                  onClick={() => prefetchFor(item.prefetchLabel)}
+                  enablePrefetch
                   className={`flex items-center rounded-[8px] text-[14px] font-medium transition-all duration-300 ease-in-out group relative
                     ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
                     ${active
@@ -413,7 +365,6 @@ export default function ProjectSidebar({
                         <li key={sub.href}>
                           <ProjectNavLink
                             href={sub.href}
-                            onClick={() => prefetchFor(item.prefetchLabel)}
                             className={`group flex items-center gap-2.5 rounded-[8px] px-3 py-2 text-[13px] font-medium transition-all duration-150
                               ${subActive
                                 ? "bg-brand-action/10 text-brand-action"

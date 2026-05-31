@@ -17,7 +17,7 @@ import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { qk } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
 import { projectsApi } from "@/frontend/api/projects";
 import { auditsApi } from "@/frontend/api/audits";
@@ -76,24 +76,28 @@ export default function ProjectOverviewPage() {
     queryKey: qk.project(id),
     queryFn: () => projectsApi.get(id),
     enabled: !!id,
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const { data: statsRes } = useQuery({
     queryKey: qk.projectStats(id),
     queryFn: () => projectsApi.stats(id),
     enabled: !!id,
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const { data: calRes, isLoading: calLoading } = useQuery({
     queryKey: qk.calendarWithBlogs(id),
     queryFn: () => calendarApi.withBlogs(id),
     enabled: !!id,
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const { data: auditsRes } = useQuery({
     queryKey: qk.audits(id),
     queryFn: () => auditsApi.list(id),
     enabled: !!id,
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const project = projectRes?.success ? projectRes.data : null;

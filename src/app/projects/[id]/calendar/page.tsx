@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, keywordsListQueryOptions } from "@/lib/query";
+import { qk, keywordsListQueryOptions, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import {
   useAppDispatch,
   useAppSelector,
@@ -127,6 +127,7 @@ export default function CalendarPage() {
       queryKey: CALENDAR_KEY,
       queryFn: () => calendarApi.entries(projectId),
       enabled: !!projectId,
+      ...DEFAULT_QUERY_OPTIONS,
     });
   const entries: CalendarEntry[] = useMemo(() => {
     if (!entriesData?.success) return [];

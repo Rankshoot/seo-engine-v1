@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { Button, PageTitle, Spinner } from "@/components/common";
 import {
@@ -41,30 +43,39 @@ const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px
 
 export default function LinkedInViewerPage() {
   const { id: projectId, postId } = useParams<{ id: string; postId: string }>();
+  const queryClient = useQueryClient();
   const [blog, setBlog] = useState<Blog | null>(null);
   const [project, setProject] = useState<Project | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  const { data: blogRes, isLoading: blogLoading } = useQuery({
+    queryKey: qk.blog(postId),
+    queryFn: () => blogsApi.getById(postId),
+    enabled: !!postId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const { data: projectRes, isLoading: projectLoading } = useProject(projectId);
+
+  const loading = (!blog || !project) && (blogLoading || projectLoading);
+
   const [mode, setMode] = useState<PreviewMode>("preview");
   const [draft, setDraft] = useState<LinkedInDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
 
   useEffect(() => {
-    if (!postId) return;
-    setLoading(true);
-    Promise.all([blogsApi.getById(postId), projectsApi.get(projectId)]).then(
-      ([blogRes, projRes]) => {
-        if (blogRes.success && blogRes.data) {
-          setBlog(blogRes.data);
-          setDraft(draftFromContentData(blogRes.data.content_data as Partial<LinkedInContentData>));
-        } else if (!blogRes.success) {
-          toast.error(blogRes.error || "Could not load post");
-        }
-        if (projRes.success && projRes.data) setProject(projRes.data);
-        setLoading(false);
-      },
-    );
-  }, [postId, projectId]);
+    if (blogRes?.success && blogRes.data) {
+      const data = blogRes.data;
+      setBlog(data);
+      setDraft(prev => prev ?? draftFromContentData(data.content_data as Partial<LinkedInContentData>));
+    }
+  }, [blogRes]);
+
+  useEffect(() => {
+    if (projectRes?.success && projectRes.data) {
+      setProject(projectRes.data);
+    }
+  }, [projectRes]);
 
   const studioBase = `/projects/${projectId}/content-generator`;
 
@@ -176,6 +187,7 @@ export default function LinkedInViewerPage() {
           content_data: updatedContentData as ContentDataPayload,
         };
         setBlog(patched);
+        queryClient.setQueryData(qk.blog(blog.id), { success: true, data: patched });
         setMode("preview");
         toast.success("Saved.");
       } else {

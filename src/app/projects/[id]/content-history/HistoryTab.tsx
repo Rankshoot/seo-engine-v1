@@ -11,7 +11,7 @@ import {
 } from "@/components/content-generator/shared";
 import { TableSkeleton } from "@/components/Skeleton";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
-import { qk } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { CONTENT_TYPE_LABEL, CONTENT_TYPE_PLURAL, type ContentType } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
@@ -43,8 +43,7 @@ export function HistoryTab() {
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
     enabled: !!projectId,
-    staleTime: 30_000,
-    refetchOnMount: "always",
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const allRows: ContentStudioHistoryRow[] = data?.success ? data.data : [];

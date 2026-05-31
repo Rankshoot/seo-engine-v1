@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
 import { BlogStatus, WORD_COUNT_OPTIONS, type CalendarEntryWithBlog } from "@/lib/types";
@@ -77,9 +77,7 @@ export default function BlogsPage() {
     queryKey: ENTRIES_KEY,
     queryFn: () => calendarApi.withBlogs(projectId),
     enabled: !!projectId,
-    staleTime: 0,
-    gcTime: 30 * 60_000,
-    refetchOnMount: "always",
+    ...DEFAULT_QUERY_OPTIONS,
   });
   const entries: CalendarEntryWithBlog[] = entriesData?.success ? (entriesData.data as CalendarEntryWithBlog[]) : [];
 

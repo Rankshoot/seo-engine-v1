@@ -1,16 +1,20 @@
 import { redirect } from "next/navigation";
-import { currentUser } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import ProjectLayoutClient from "@/components/dashboard/ProjectLayoutClient";
-import {
-  adminPanelPathFromProjectsAdmin,
-  isReservedProjectSlug,
-} from "@/lib/projects/reserved-project-slugs";
-import { getMaintenanceMode } from "@/lib/admin/platform-settings-runtime";
+import { isReservedProjectSlug } from "@/lib/projects/reserved-project-slugs";
 
 /**
- * Project shell — auth only on the server. Project / stats / brief / list data
- * load client-side via TanStack Query in `ProjectLayoutClient` so navigation
- * is never blocked on DB round-trips.
+ * Project shell — lightweight server component.
+ *
+ * Auth is enforced at the middleware layer (`auth.protect()` in middleware.ts).
+ * We only verify `userId` here as a fast synchronous check using the JWT that
+ * middleware already validated — no network call, unlike `currentUser()`.
+ *
+ * Maintenance mode redirect is handled at the middleware level so it does not
+ * block every in-app navigation.
+ *
+ * Project / stats / brief / list data load client-side via TanStack Query in
+ * `ProjectLayoutClient` so navigation is never blocked on DB round-trips.
  */
 export default async function ProjectLayout({
   children,
@@ -19,20 +23,12 @@ export default async function ProjectLayout({
   children: React.ReactNode;
   params: Promise<{ id: string }>;
 }) {
-  const user = await currentUser();
-  if (!user) redirect("/sign-in");
-
-  const maintenance = await getMaintenanceMode();
-  if (maintenance.enabled) {
-    const msg = maintenance.message?.trim();
-    redirect(msg ? `/maintenance?message=${encodeURIComponent(msg)}` : "/maintenance");
-  }
+  const { userId } = await auth();
+  if (!userId) redirect("/sign-in");
 
   const { id } = await params;
 
-  const adminPath = adminPanelPathFromProjectsAdmin(`/projects/${id}`);
-  if (adminPath) redirect(adminPath);
-
+  // Admin path redirect already handled in middleware.ts
   if (isReservedProjectSlug(id)) {
     if (id.toLowerCase() === "new") redirect("/projects/new");
     redirect("/dashboard");

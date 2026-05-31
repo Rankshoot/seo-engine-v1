@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { Button, PageTitle, Spinner } from "@/components/common";
 import {
@@ -28,9 +30,32 @@ const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px
 
 export default function EbookViewerPage() {
   const { id: projectId, ebookId } = useParams<{ id: string; ebookId: string }>();
+  const queryClient = useQueryClient();
   const [blog, setBlog] = useState<Blog | null>(null);
   const [project, setProject] = useState<Project | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  const { data: blogRes, isLoading: blogLoading } = useQuery({
+    queryKey: qk.blog(ebookId),
+    queryFn: () => blogsApi.getById(ebookId),
+    enabled: !!ebookId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const { data: projectRes, isLoading: projectLoading } = useProject(projectId);
+
+  const loading = (!blog || !project) && (blogLoading || projectLoading);
+
+  useEffect(() => {
+    if (blogRes?.success && blogRes.data) {
+      setBlog(blogRes.data);
+    }
+  }, [blogRes]);
+
+  useEffect(() => {
+    if (projectRes?.success && projectRes.data) {
+      setProject(projectRes.data);
+    }
+  }, [projectRes]);
 
   const [mode, setMode] = useState<PreviewMode>("preview");
   const [editSessionKey, setEditSessionKey] = useState(0);
@@ -41,19 +66,6 @@ export default function EbookViewerPage() {
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const descRef = useRef<HTMLParagraphElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!ebookId) return;
-    setLoading(true);
-    Promise.all([blogsApi.getById(ebookId), projectsApi.get(projectId)]).then(
-      ([blogRes, projRes]) => {
-        if (blogRes.success && blogRes.data) setBlog(blogRes.data);
-        else if (!blogRes.success) toast.error(blogRes.error || "Could not load ebook");
-        if (projRes.success && projRes.data) setProject(projRes.data);
-        setLoading(false);
-      },
-    );
-  }, [ebookId, projectId]);
 
   const ownSiteHost = useMemo(
     () => (project?.domain ? normalizeSiteHost(project.domain) : null),
@@ -120,7 +132,9 @@ export default function EbookViewerPage() {
       if (res.success && res.data) {
         // Preserve `content_data` (cover, ToC, FAQ) since the inline editor
         // only edits the markdown body — the API doesn't roundtrip JSONB.
-        setBlog({ ...res.data, content_data: blog.content_data });
+        const updatedBlog = { ...res.data, content_data: blog.content_data };
+        setBlog(updatedBlog);
+        queryClient.setQueryData(qk.blog(blog.id), { success: true, data: updatedBlog });
         setMode("preview");
         toast.success("Saved.");
       } else {

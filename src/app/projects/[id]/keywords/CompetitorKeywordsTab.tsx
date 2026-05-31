@@ -4,7 +4,7 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -133,12 +133,14 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     queryKey: COMPETITORS_KEY,
     queryFn: () => competitorsApi.benchmark(projectId),
     enabled: !!projectId,
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const { data: calendarRes } = useQuery({
     queryKey: qk.calendarWithBlogs(projectId),
     queryFn: () => calendarApi.withBlogs(projectId),
     enabled: !!projectId,
+    ...DEFAULT_QUERY_OPTIONS,
   });
   const calendarEntries = calendarRes?.success ? calendarRes.data : [];
 
@@ -284,7 +286,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   // const lastBenchmarkedAt = state?.lastBenchmarkedAt;
 
   const sortedGaps = useMemo(
-    () => [...gaps].sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score),
+    () => [...gaps].sort((a, b) => b.volume - a.volume),
     [gaps]
   );
 
@@ -350,10 +352,9 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               </svg>
             </div>
           </div>
-          <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No benchmark yet</h3>
+          <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No competitor keywords yet</h3>
           <p className="mb-8 text-[16px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            We&apos;ll pull the real SERP competitors for your niche, scrape their best pages via Jina, extract the
-            keywords they rank for, and score every opportunity with DataForSEO volumes.
+            We&apos;ll pull the organic keywords your competitors rank for and identify coverage gaps. Add competitor domains to get started.
           </p>
           <button
             onClick={handleRun}
@@ -401,8 +402,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
           {insightsView === "competitors" && (
             <CompetitorList
               competitors={competitors}
-              expandedId={expandedCompetitor}
-              onToggle={id => setExpandedCompetitor(prev => (prev === id ? null : id))}
               viewMenuRef={viewMenuRef}
               viewMenuOpen={viewMenuOpen}
               setViewMenuOpen={setViewMenuOpen}
@@ -1246,8 +1245,6 @@ function OpportunityDashboard({
 
 function CompetitorList({
   competitors,
-  expandedId,
-  onToggle,
   viewMenuRef,
   viewMenuOpen,
   setViewMenuOpen,
@@ -1256,8 +1253,6 @@ function CompetitorList({
   competitorsCount,
 }: {
   competitors: Competitor[];
-  expandedId: string | null;
-  onToggle: (id: string) => void;
   viewMenuRef: RefObject<HTMLDivElement | null>;
   viewMenuOpen: boolean;
   setViewMenuOpen: Dispatch<SetStateAction<boolean>>;
@@ -1279,112 +1274,19 @@ function CompetitorList({
         />
       </div>
       {competitors.map(c => {
-        const expanded = expandedId === c.id;
         return (
           <div
             key={c.id}
             className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden"
           >
             <div className="flex flex-wrap items-center justify-between gap-4 p-5 hover:bg-surface-hover transition-colors">
-              <button
-                type="button"
-                onClick={() => onToggle(c.id)}
-                className="flex flex-1 items-center gap-4 min-w-0 text-left"
-              >
+              <div className="flex flex-1 items-center gap-4 min-w-0 text-left">
                 <DomainLogo domain={c.domain} />
                 <div className="min-w-0">
                   <p className="text-[16px] font-medium text-text-primary truncate">{c.domain}</p>
-                  <p className="mt-1 text-[13px] text-text-tertiary truncate">
-                    {c.pages_scraped} pages analyzed · {c.top_pages?.length ?? 0} snapshots
-                  </p>
                 </div>
-              </button>
-              <div
-                className="flex shrink-0 items-center gap-3"
-                onClick={e => e.stopPropagation()}
-                onPointerDown={e => e.stopPropagation()}
-              >
-                {/* Note: In Competitor List, we don't schedule content directly, we just keep the expand toggle */}
-                <button
-                  type="button"
-                  onClick={() => onToggle(c.id)}
-                  aria-expanded={expanded}
-                  aria-label={expanded ? "Collapse competitor" : "Expand competitor"}
-                  className="text-text-tertiary p-1 rounded-md hover:bg-surface-secondary hover:text-text-secondary transition-colors"
-                >
-                  <svg className={`w-5 h-5 transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                  </svg>
-                </button>
               </div>
             </div>
-            {expanded ? (
-              <div className="border-t border-border-subtle p-5 space-y-6 bg-surface-secondary">
-                {c.recommendations?.length ? (
-                  <div>
-                    <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary mb-3">
-                      Recommendations
-                    </p>
-                    <ul className="space-y-1.5 text-[14px] text-text-secondary">
-                      {c.recommendations.map((r, i) => (
-                        <li key={i}>· {r}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                {c.top_pages?.length ? (
-                  <div>
-                    <p className="text-[12px] font-bold uppercase tracking-widest text-text-tertiary mb-3">
-                      Pages sampled
-                    </p>
-                    <div className="overflow-x-auto rounded-[8px] border border-border-subtle bg-surface-elevated">
-                      <table className="w-full text-left text-[13px]">
-                        <thead className="text-[11px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle bg-surface-secondary">
-                          <tr>
-                            <th className="p-3">Page</th>
-                            <th className="p-3 text-right">Words</th>
-                            <th className="p-3 text-center">H2</th>
-                            <th className="p-3 text-center">H3</th>
-                            <th className="p-3 text-center">Images</th>
-                            <th className="p-3 text-center">Int / Ext</th>
-                            <th className="p-3 text-center">FAQ</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border-subtle/60">
-                          {c.top_pages.map((p, i) => (
-                            <tr key={`${p.url}-${i}`} className="text-text-secondary hover:bg-surface-hover transition-colors">
-                              <td className="p-3 max-w-[280px] truncate">
-                                {p.url ? (
-                                  <a
-                                    href={p.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-brand-action hover:underline"
-                                    title={p.title}
-                                  >
-                                    {p.title || p.url}
-                                  </a>
-                                ) : (
-                                  <span>{p.title}</span>
-                                )}
-                              </td>
-                              <td className="p-3 text-right font-mono">{p.word_count.toLocaleString()}</td>
-                              <td className="p-3 text-center font-mono">{p.h2_count}</td>
-                              <td className="p-3 text-center font-mono">{p.h3_count}</td>
-                              <td className="p-3 text-center font-mono">{p.image_count}</td>
-                              <td className="p-3 text-center font-mono">
-                                {p.internal_link_count} / {p.external_link_count}
-                              </td>
-                              <td className="p-3 text-center font-mono">{p.has_faq ? "✓" : "—"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
           </div>
         );
       })}

@@ -25,7 +25,7 @@ import {
   StepRow,
   StudioBreadcrumb,
 } from "@/components/content-generator/shared";
-import { useProject, qk } from "@/lib/query";
+import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
 import { TARGET_REGIONS } from "@/lib/types";
@@ -72,6 +72,7 @@ export default function LinkedInGeneratorPage() {
     queryKey: qk.calendarWithBlogs(projectId),
     queryFn: () => calendarApi.withBlogs(projectId),
     enabled: !!projectId && !!entryId,
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const scheduledEntry = useMemo(() => {
@@ -101,8 +102,7 @@ export default function LinkedInGeneratorPage() {
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
     enabled: !!projectId,
-    staleTime: 60_000,
-    refetchOnMount: false,
+    ...DEFAULT_QUERY_OPTIONS,
   });
   const recent = useMemo(() => {
     const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];

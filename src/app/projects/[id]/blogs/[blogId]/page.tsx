@@ -13,8 +13,8 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { blogsApi } from "@/frontend/api/blogs";
 import { projectsApi } from "@/frontend/api/projects";
-import { useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import toast from "react-hot-toast";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat, type CalendarEntry } from "@/lib/types";
 import type { Project } from "@/lib/types";
@@ -685,7 +685,22 @@ export default function BlogViewerPage() {
 
   const [blog, setBlog]                   = useState<Blog | null>(null);
   const [project, setProject]             = useState<Project | null>(null);
-  const [loading, setLoading]             = useState(true);
+
+  const { data: blogQueryRes, isLoading: blogQueryLoading } = useQuery({
+    queryKey: qk.blog(blogId),
+    queryFn: () => blogsApi.getById(blogId),
+    enabled: !!blogId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+  const { data: projectQueryRes, isLoading: projectQueryLoading } = useProject(projectId);
+  const { data: enhancedQueryRes, isLoading: enhancedQueryLoading } = useQuery({
+    queryKey: ["blog-enhanced", blogId],
+    queryFn: () => blogsApi.getEnhanced(blogId),
+    enabled: !!blogId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const loading = (!blog || !project) && (blogQueryLoading || projectQueryLoading || enhancedQueryLoading);
   const [downloading, setDownloading]     = useState<ExportFormat | null>(null);
   const [regenerating, setRegenerating]   = useState(false);
   const [copied, setCopied]               = useState(false);
@@ -760,12 +775,24 @@ export default function BlogViewerPage() {
       const apply = (prev: Blog): Blog =>
         typeof next === "function" ? (next as (b: Blog) => Blog)(prev) : next;
       if (isAfterView) {
-        setEnhancedBlog(prev => (prev ? apply(prev) : prev));
+        setEnhancedBlog(prev => {
+          const nextVal = prev ? apply(prev) : prev;
+          if (nextVal) {
+            queryClient.setQueryData(["blog-enhanced", blogId], { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
       } else {
-        setBlog(prev => (prev ? apply(prev) : prev));
+        setBlog(prev => {
+          const nextVal = prev ? apply(prev) : prev;
+          if (nextVal) {
+            queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
       }
     },
-    [isAfterView]
+    [isAfterView, blogId, queryClient]
   );
 
   const analysisIsStale = Boolean(
@@ -857,32 +884,37 @@ export default function BlogViewerPage() {
   }, [editMode]);
 
   useEffect(() => {
-    setLoading(true);
     setBlog(null);
     setEnhancedBlog(null);
     setCompareView("before");
-    // Fetch the original blog + project up front; the enhanced version (if
-    // any) is fetched in parallel so the Before / After toggle can re-appear
-    // after a hard reload or history navigation.
-    Promise.all([
-      blogsApi.getById(blogId),
-      projectsApi.get(projectId),
-      blogsApi.getEnhanced(blogId),
-    ]).then(([blogRes, projRes, enhancedRes]) => {
-      if (blogRes.success && blogRes.data) {
-        setBlog(blogRes.data);
-        if (blogRes.data.id !== blogId) {
-          window.history.replaceState(null, "", `/projects/${projectId}/blogs/${blogRes.data.id}${window.location.search}`);
-        }
+  }, [blogId]);
+
+  useEffect(() => {
+    if (blogQueryRes?.success && blogQueryRes.data) {
+      setBlog(blogQueryRes.data);
+      if (blogQueryRes.data.id !== blogId) {
+        window.history.replaceState(null, "", `/projects/${projectId}/blogs/${blogQueryRes.data.id}${window.location.search}`);
       }
-      if (projRes.success && projRes.data) setProject(projRes.data);
-      if (enhancedRes.success && enhancedRes.data) setEnhancedBlog(enhancedRes.data);
-      setLoading(false);
-    });
+    }
+  }, [blogQueryRes, blogId, projectId]);
+
+  useEffect(() => {
+    if (projectQueryRes?.success && projectQueryRes.data) {
+      setProject(projectQueryRes.data);
+    }
+  }, [projectQueryRes]);
+
+  useEffect(() => {
+    if (enhancedQueryRes?.success && enhancedQueryRes.data) {
+      setEnhancedBlog(enhancedQueryRes.data);
+    }
+  }, [enhancedQueryRes]);
+
+  useEffect(() => {
     void blogsApi.getDeepAnalysis(blogId).then(cached => {
       if (cached.cached && cached.data) setDeepAnalysis(cached.data);
     });
-  }, [blogId, projectId]);
+  }, [blogId]);
 
   const runAnalysis = async (opts?: { reanalyse?: boolean }) => {
     if (opts?.reanalyse) {
@@ -1079,7 +1111,13 @@ export default function BlogViewerPage() {
         toast.success(
           res.rescheduled ? `Moved to ${niceDate}.` : `Scheduled for ${niceDate}.`,
         );
-        setBlog((b) => (b ? { ...b, entry_id: res.data.id } : b));
+        setBlog((b) => {
+          const nextVal = b ? { ...b, entry_id: res.data.id } : b;
+          if (nextVal) {
+            queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
         setScheduleVersion((v) => v + 1);
         void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
@@ -1101,7 +1139,13 @@ export default function BlogViewerPage() {
     try {
       const res = await blogsApi.addToArticlesLibrary(blog.id);
       if (res.success) {
-        setBlog((b) => (b && b.id === blog.id ? { ...b, in_articles_library: true } : b));
+        setBlog((b) => {
+          const nextVal = b && b.id === blog.id ? { ...b, in_articles_library: true } : b;
+          if (nextVal) {
+            queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
         if (res.alreadySaved) toast.success("Already in Articles");
         else toast.success("Added to Articles");
         void queryClient.invalidateQueries({ queryKey: qk.articlesLibrary(projectId) });
@@ -1154,6 +1198,7 @@ export default function BlogViewerPage() {
       const res = await blogsApi.generate({ entryId: blog.entry_id, wordCount: blog.word_count || 2500 });
       if (res.success && res.data) {
         setBlog(res.data);
+        queryClient.setQueryData(qk.blog(blogId), { success: true, data: res.data });
       } else if (!res.success) {
         setEditError(res.error || "Failed to generate blog.");
       } else {

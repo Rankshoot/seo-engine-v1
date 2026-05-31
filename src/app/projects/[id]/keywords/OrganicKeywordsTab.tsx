@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, keywordsListQueryOptions, useProject } from "@/lib/query";
+import { qk, keywordsListQueryOptions, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { Keyword, KeywordStatus, TARGET_REGIONS, KeywordSourceType, ContentType } from "@/lib/types";
 import {
   useAppDispatch,
@@ -303,6 +303,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     queryKey: qk.calendarWithBlogs(projectId),
     queryFn: () => calendarApi.withBlogs(projectId),
     enabled: !!projectId,
+    ...DEFAULT_QUERY_OPTIONS,
   });
   const calendarEntries = calendarRes?.success ? calendarRes.data : [];
 

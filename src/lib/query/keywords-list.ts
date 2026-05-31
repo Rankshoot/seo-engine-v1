@@ -1,5 +1,6 @@
 import { keywordsApi } from "@/frontend/api/keywords";
 import { qk } from "./keys";
+import { DEFAULT_QUERY_OPTIONS } from "./defaults";
 
 /** First `getKeywords` pending page size — server clamps this request to 200. */
 export const KEYWORDS_LIST_INITIAL_LIMIT = 200;
@@ -29,5 +30,7 @@ export function keywordsListQueryOptions(projectId: string) {
   return {
     queryKey: qk.keywords(projectId),
     queryFn: () => fetchAllKeywordsPages(projectId),
+    ...DEFAULT_QUERY_OPTIONS,
   } as const;
 }
+

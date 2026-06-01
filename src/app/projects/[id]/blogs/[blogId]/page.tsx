@@ -21,6 +21,7 @@ import type { Project } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
+import { computeSEOScore } from "@/lib/seo-analyzer";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { BlogDeepAnalysisModal } from "@/components/BlogDeepAnalysisModal";
 import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
@@ -767,7 +768,35 @@ export default function BlogViewerPage() {
   const [enhancedBlog, setEnhancedBlog] = useState<Blog | null>(null);
   const [compareView, setCompareView] = useState<"before" | "after">("before");
   const isAfterView = compareView === "after" && enhancedBlog !== null;
-  const displayBlog: Blog | null = isAfterView ? enhancedBlog : blog;
+
+  const [beforeDeepEnhance, setBeforeDeepEnhance] = useState<{
+    title: string;
+    metaDescription: string;
+    content: string;
+  } | null>(null);
+  const [deepEnhancedResult, setDeepEnhancedResult] = useState<{
+    enhancedTitle: string;
+    enhancedMetaDescription: string;
+    enhancedContentMarkdown: string;
+    appliedFixes: string[];
+    unresolvedIssues: string[];
+    improvementSummary: string;
+  } | null>(null);
+  const [deepCompareView, setDeepCompareView] = useState<"before" | "after">("after");
+  const [deepEnhancing, setDeepEnhancing] = useState(false);
+
+  const isDeepBefore = deepCompareView === "before" && beforeDeepEnhance !== null;
+
+  const displayBlog: Blog | null = isDeepBefore
+    ? (blog
+        ? {
+            ...blog,
+            title: beforeDeepEnhance!.title,
+            meta_description: beforeDeepEnhance!.metaDescription,
+            content: beforeDeepEnhance!.content,
+          }
+        : null)
+    : (isAfterView ? enhancedBlog : blog);
 
   /** Updates the currently-displayed blog (Before → `blog`, After → `enhancedBlog`). */
   const updateDisplayBlog = useCallback(
@@ -1043,6 +1072,70 @@ export default function BlogViewerPage() {
       setAnalysisEnhancing(false);
     }
   };
+
+  const handleDeepAnalysisEnhanced = useCallback(async () => {
+    if (!blog || !deepAnalysis) return;
+    setDeepEnhancing(true);
+    try {
+      const seoScore = computeSEOScore(blog, project?.domain);
+      const seoIssues = seoScore.checks.filter(c => !c.pass);
+
+      const res = await blogsApi.enhance(projectId, blog.id, {
+        deepAnalysisResult: deepAnalysis,
+        seoIssues,
+      });
+
+      if (!res.success) {
+        toast.error(res.error || "Could not generate enhanced version.");
+        return;
+      }
+
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 8000 });
+      } else {
+        toast.success("Enhanced version generated!");
+      }
+
+      const result = res.data;
+      if (result) {
+        setBeforeDeepEnhance({
+          title: blog.title,
+          metaDescription: blog.meta_description || "",
+          content: blog.content,
+        });
+
+        setDeepEnhancedResult({
+          enhancedTitle: result.enhancedTitle,
+          enhancedMetaDescription: result.enhancedMetaDescription,
+          enhancedContentMarkdown: result.enhancedContentMarkdown,
+          appliedFixes: result.appliedFixes,
+          unresolvedIssues: result.unresolvedIssues,
+          improvementSummary: result.improvementSummary,
+        });
+
+        setDeepCompareView("after");
+        setDeepModalOpen(false);
+
+        if (res.saved) {
+          void queryClient.invalidateQueries({ queryKey: qk.blog(blogId) });
+          void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+          
+          setScoreVersion(v => v + 1);
+
+          void blogsApi.getDeepAnalysis(blogId).then(cached => {
+            if (cached.data) setDeepAnalysis(cached.data);
+          });
+        }
+      }
+    } catch (ex) {
+      toast.error(ex instanceof Error ? ex.message : "Could not generate enhanced version.");
+    } finally {
+      setDeepEnhancing(false);
+    }
+  }, [blog, deepAnalysis, projectId, blogId, project?.domain, queryClient]);
 
   const handleAnalysisSchedule = async () => {
     if (!blog) return;
@@ -1347,7 +1440,14 @@ export default function BlogViewerPage() {
   // Resolved non-null view target — Before defaults to `blog`, After swaps in
   // the freshly-generated enhancedBlog. All content + sidebar rendering keys
   // off `currentBlog` so toggling the pill flips the entire view.
-  const currentBlog: Blog = isAfterView && enhancedBlog ? enhancedBlog : blog;
+  const currentBlog: Blog = isDeepBefore
+    ? {
+        ...blog,
+        title: beforeDeepEnhance!.title,
+        meta_description: beforeDeepEnhance!.metaDescription,
+        content: beforeDeepEnhance!.content,
+      }
+    : (isAfterView && enhancedBlog ? enhancedBlog : blog);
 
   const hasSavedDeepAnalysis =
     Boolean(deepAnalysis) ||
@@ -1444,18 +1544,36 @@ export default function BlogViewerPage() {
 
           {/* Sticky toolbar */}
           <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-2.5 border-b border-border-subtle bg-surface-primary">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle">
-              {(["preview", "raw"] as const).map(v => (
-                <button
-                  key={v}
-                  onClick={() => !editMode && setActiveView(v)}
-                  disabled={editMode && v === "raw"}
-                  className="px-4 py-1 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                  style={activeView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
-                >
-                  {v}
-                </button>
-              ))}
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle">
+                {(["preview", "raw"] as const).map(v => (
+                  <button
+                    key={v}
+                    onClick={() => !editMode && setActiveView(v)}
+                    disabled={editMode && v === "raw"}
+                    className="px-4 py-1 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                    style={activeView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+              {beforeDeepEnhance && (
+                <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-secondary/60">
+                  {(["before", "after"] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => !editMode && setDeepCompareView(v)}
+                      disabled={editMode}
+                      className="px-3.5 py-1 rounded-full text-[11px] font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                      style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {editMode ? (
@@ -1487,6 +1605,44 @@ export default function BlogViewerPage() {
           {editError && (
             <div className="px-5 py-2.5 text-[12px] text-rose-500 bg-rose-500/5 border-b border-border-subtle">
               {editError}
+            </div>
+          )}
+
+          {deepEnhancedResult && deepCompareView === "after" && (
+            <div className="mx-5 my-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-[13px]">
+              <div className="flex items-start gap-2.5">
+                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold text-text-primary mb-1">Deep Enhancement Summary</p>
+                  <p className="text-text-secondary leading-relaxed mb-3">{deepEnhancedResult.improvementSummary}</p>
+                  
+                  {deepEnhancedResult.appliedFixes?.length > 0 && (
+                    <div className="space-y-1 mb-3">
+                      <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-wider">Applied Fixes</p>
+                      <ul className="list-inside list-disc space-y-0.5 text-[12px] text-text-secondary">
+                        {deepEnhancedResult.appliedFixes.map((fix, idx) => (
+                          <li key={idx}>{fix}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {deepEnhancedResult.unresolvedIssues?.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-wider">Unresolved / Needs Manual Work</p>
+                      <ul className="list-inside list-disc space-y-0.5 text-[12px] text-text-tertiary">
+                        {deepEnhancedResult.unresolvedIssues.map((issue, idx) => (
+                          <li key={idx}>{issue}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1584,6 +1740,25 @@ export default function BlogViewerPage() {
             )}
 
             {/* Deep Analysis — SERP competitor gap vs our blog */}
+            {beforeDeepEnhance && (
+              <div className="px-4 pt-3 pb-1">
+                <div className="flex w-full items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-primary/40">
+                  {(["before", "after"] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => !editMode && setDeepCompareView(v)}
+                      disabled={editMode}
+                      className="flex-1 px-4 py-1.5 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                      style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                      title={v === "before" ? "Original draft" : "AI-enhanced rewrite"}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className={`px-4 pb-3 ${fromAnalyzeContentPage ? "pt-2" : "pt-4"} ${sidebarMuted ? "opacity-25 pointer-events-none" : ""}`}>
               <button
                 type="button"
@@ -1908,8 +2083,8 @@ export default function BlogViewerPage() {
         loadingStage={deepStage}
         error={deepError}
         onClose={() => setDeepModalOpen(false)}
-        onRunAgain={() => void runDeepAnalysis({ force: true })}
-        runningAgain={deepRunningAgain}
+        onGenerateEnhanced={() => void handleDeepAnalysisEnhanced()}
+        enhancing={deepEnhancing}
       />
 
       <BlogAiRewriterModal

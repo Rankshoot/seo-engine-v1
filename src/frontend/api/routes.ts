@@ -68,6 +68,7 @@ export const V1Routes = {
   blogRewriteSelection: (blogId: string) => `/blogs/${blogId}/rewrite-selection`,
   blogEnhanced: (blogId: string) => `/blogs/${blogId}/enhanced`,
   blogDeepAnalysis: (blogId: string) => `/blogs/${blogId}/deep-analysis`,
+  blogEnhance: (projectId: string, blogId: string) => `/projects/${projectId}/blogs/${blogId}/enhance`,
 
   // ── Admin (platform) ─────────────────────────────────────────────────────
   adminMe: "/admin/me",

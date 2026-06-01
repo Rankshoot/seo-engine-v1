@@ -194,4 +194,29 @@ export const blogsApi = {
   > {
     return apiPost(V1Routes.blogDeepAnalysis(blogId), body);
   },
+
+  enhance(
+    projectId: string,
+    blogId: string,
+    body: {
+      deepAnalysisResult: BlogDeepAnalysisResult;
+      seoIssues: any[];
+    }
+  ): Promise<{
+    success: boolean;
+    saved: boolean;
+    warning?: string;
+    error?: string;
+    data?: {
+      enhancedTitle: string;
+      enhancedMetaDescription: string;
+      enhancedContentMarkdown: string;
+      appliedFixes: string[];
+      unresolvedIssues: string[];
+      improvementSummary: string;
+      blog?: Blog;
+    };
+  }> {
+    return apiPost(V1Routes.blogEnhance(projectId, blogId), body);
+  },
 };

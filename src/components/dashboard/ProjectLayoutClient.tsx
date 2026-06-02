@@ -1,11 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense, lazy } from "react";
 import { notFound } from "next/navigation";
 import ProjectSidebar from "./ProjectSidebar";
 import type { Project } from "@/lib/types";
-import { ContextualAIChatbot, type AIMode } from "@/features/ai-assistant/components/ContextualAIChatbot";
 import { useProject, useProjects } from "@/lib/query";
+
+// Lazy load AI Assistant to improve initial page load performance
+const ContextualAIChatbot = lazy(() =>
+  import("@/features/ai-assistant/components/ContextualAIChatbot").then(m => ({
+    default: m.ContextualAIChatbot,
+  }))
+);
+
+type AIMode = "closed" | "mini" | "full";
 
 export default function ProjectLayoutClient({
   projectId,
@@ -47,7 +55,11 @@ export default function ProjectLayoutClient({
         }`}
       >
         {children}
-        {project && <ContextualAIChatbot project={project} aiMode={aiMode} setAiMode={setAiMode} />}
+        {project && aiMode !== "closed" && (
+          <Suspense fallback={null}>
+            <ContextualAIChatbot project={project} aiMode={aiMode} setAiMode={setAiMode} />
+          </Suspense>
+        )}
       </main>
     </div>
   );

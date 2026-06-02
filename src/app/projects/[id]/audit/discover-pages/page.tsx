@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, lazy, Suspense } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { auditsApi } from "@/frontend/api/audits";
@@ -11,7 +11,13 @@ import type { PersistedBlogAudit, SitemapPage } from "@/app/actions/audit-action
 import { getAuditByUrl } from "@/app/actions/audit-actions";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { DataTable, type ColumnDef } from "@/components/DataTable";
-import { AuditDetailModal } from "@/components/AuditDetailModal";
+
+// Lazy load heavy modal to improve initial page load
+const AuditDetailModal = lazy(() =>
+  import("@/components/AuditDetailModal").then(m => ({
+    default: m.AuditDetailModal,
+  }))
+);
 import { calendarApi } from "@/frontend/api/calendar";
 import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
 import {
@@ -364,16 +370,18 @@ export default function DiscoverPagesPage() {
       </CHPageShell>
 
       {/* ── Exact same modal as Site audit ───────────────────────────────── */}
-      <AuditDetailModal
-        open={modalOpen}
-        loading={modalLoading}
-        row={modalAudit}
-        projectId={projectId}
-        onClose={closeModal}
-        onScheduleToCalendar={handleScheduleToCalendar}
-        scheduleBusy={!!modalAudit && calendarAddingUrl === modalAudit.url}
-        onCalendar={!!modalAudit && !!calendarLinkedByUrl[modalAudit.url]}
-      />
+      <Suspense fallback={null}>
+        <AuditDetailModal
+          open={modalOpen}
+          loading={modalLoading}
+          row={modalAudit}
+          projectId={projectId}
+          onClose={closeModal}
+          onScheduleToCalendar={handleScheduleToCalendar}
+          scheduleBusy={!!modalAudit && calendarAddingUrl === modalAudit.url}
+          onCalendar={!!modalAudit && !!calendarLinkedByUrl[modalAudit.url]}
+        />
+      </Suspense>
     </>
   );
 }

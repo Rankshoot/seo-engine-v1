@@ -12,7 +12,7 @@
  * entries use `qk.calendarWithBlogs` with long-lived cache.
  */
 
-import { useMemo } from "react";
+import { useMemo, Suspense } from "react";
 import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useParams } from "next/navigation";
@@ -220,7 +220,9 @@ export default function ProjectOverviewPage() {
       />
 
       {/* ── BUSINESS BRIEF (preserved) ────────────────────────── */}
-      <BusinessBriefSection projectId={id} />
+      <Suspense fallback={<div className="h-40 w-full rounded-lg bg-surface-elevated animate-pulse" />}>
+        <BusinessBriefSection projectId={id} />
+      </Suspense>
 
       {/* ── UPCOMING CONTENT ──────────────────────────────────── */}
       <section>

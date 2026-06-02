@@ -488,7 +488,7 @@ function ResultsBody({
   analysis: BlogDeepAnalysisResult;
   onGenerateEnhanced?: () => void;
   enhancing?: boolean;
-  busy: boolean;
+  busy?: boolean;
 }) {
   const sectionGaps = analysis.sectionGaps ?? [];
   return (

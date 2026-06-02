@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo,
+  useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo, lazy, Suspense,
   type AnchorHTMLAttributes, type ComponentType,
   type HTMLAttributes, type ImgHTMLAttributes, type ReactNode,
   type RefObject,
@@ -23,8 +23,14 @@ import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-co
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { computeSEOScore } from "@/lib/seo-analyzer";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
-import { BlogDeepAnalysisModal } from "@/components/BlogDeepAnalysisModal";
 import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
+
+// Lazy load heavy modals to improve initial page load
+const BlogDeepAnalysisModal = lazy(() =>
+  import("@/components/BlogDeepAnalysisModal").then(m => ({
+    default: m.BlogDeepAnalysisModal,
+  }))
+);
 import { extractInlineMarkdownLinks, type BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
 import { rangeSelectionToMarkdown, rangeSelectionHtmlFragment } from "@/lib/editor-selection-markdown";
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
@@ -2076,16 +2082,18 @@ export default function BlogViewerPage() {
         scheduling={analysisScheduling}
       />
 
-      <BlogDeepAnalysisModal
-        open={deepModalOpen}
-        analysis={deepAnalysis}
-        loading={deepLoading}
-        loadingStage={deepStage}
-        error={deepError}
-        onClose={() => setDeepModalOpen(false)}
-        onGenerateEnhanced={() => void handleDeepAnalysisEnhanced()}
-        enhancing={deepEnhancing}
-      />
+      <Suspense fallback={null}>
+        <BlogDeepAnalysisModal
+          open={deepModalOpen}
+          analysis={deepAnalysis}
+          loading={deepLoading}
+          loadingStage={deepStage}
+          error={deepError}
+          onClose={() => setDeepModalOpen(false)}
+          onGenerateEnhanced={() => void handleDeepAnalysisEnhanced()}
+          enhancing={deepEnhancing}
+        />
+      </Suspense>
 
       <BlogAiRewriterModal
         open={aiRewriter.open}

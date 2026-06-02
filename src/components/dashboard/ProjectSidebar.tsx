@@ -81,6 +81,10 @@ export default function ProjectSidebar({
     queryKey: qk.projectStats(projectId),
     queryFn: () => projectsApi.stats(projectId),
     enabled: !!projectId,
+    staleTime: 5 * 60 * 1000, // 5 minutes - stats don't change frequently
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
   });
   const serverStats =
     statsResponse?.success && statsResponse.data

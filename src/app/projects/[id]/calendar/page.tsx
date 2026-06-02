@@ -173,6 +173,12 @@ export default function CalendarPage() {
     [entries]
   );
 
+  // Memoize approved keywords to avoid filtering on every render
+  const approvedKeywordsMemo = useMemo(
+    () => allKeywords.filter((k) => k.status === "approved"),
+    [allKeywords]
+  );
+
   // ── Redux sync ────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -212,7 +218,7 @@ export default function CalendarPage() {
   const handleScheduleKeyword = useCallback(
     async (keywordId: string, date: string): Promise<boolean> => {
       setSavingDate(true);
-      const kw = approvedKeywords.find((k) => k.id === keywordId);
+      const kw = approvedKeywordsMemo.find((k) => k.id === keywordId);
       try {
         const res = await calendarApi.addKeywordOnDate(projectId, { keywordId, date });
         if (res.success) {
@@ -236,7 +242,7 @@ export default function CalendarPage() {
         setSavingDate(false);
       }
     },
-    [approvedKeywords, projectId, dispatch, refetchCalendar, queryClient]
+    [approvedKeywordsMemo, projectId, dispatch, refetchCalendar, queryClient]
   );
 
   const handleMoveEntryToDate = useCallback(

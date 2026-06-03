@@ -1023,17 +1023,6 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     }
   };
 
-  const sortMark = (col: TableSortColumn) =>
-    tableSort.column !== col ? (
-      <span className="ml-1 text-[11px] font-normal normal-case tracking-normal text-text-tertiary/40" aria-hidden>
-        ↕
-      </span>
-    ) : (
-      <span className="ml-1 text-brand-action" aria-hidden>
-        {tableSort.dir === "asc" ? "↑" : "↓"}
-      </span>
-    );
-
   const FILTER_TAB_ITEMS: Array<{ id: FilterTab; label: string; count: number }> = [
     { id: "all", label: "All", count: displayCounts.all },
     { id: "unscheduled", label: "Unscheduled", count: displayCounts.unscheduled },
@@ -1385,59 +1374,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
 
   return (
     <div className="space-y-4 relative">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between -mt-2">
-        <div className="flex items-center gap-2.5 shrink-0 ml-auto">
-          {/* <button
-              type="button"
-              onClick={() => void handleRediscover()}
-              disabled={discovering || domainRefreshing}
-              className="inline-flex items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-elevated px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
-            >
-              {!mounted ? (
-                <>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="m21 21-4.3-4.3" />
-                  </svg>
-                  Discover keywords
-                </>
-              ) : sourceTab === "domain" ? (
-                domainRefreshing ? (
-                  <>
-                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
-                    Fetching…
-                  </>
-                ) : (
-                  <>
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <circle cx="11" cy="11" r="8" />
-                      <path d="m21 21-4.3-4.3" />
-                    </svg>
-                    {domainKeywords.length > 0 ? "Re-discover" : "Fetch domain keywords"}
-                  </>
-                )
-              ) : discovering ? (
-                <>
-                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-text-tertiary/40 border-t-text-secondary" />
-                  Discovering…
-                </>
-              ) : (
-                <>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="m21 21-4.3-4.3" />
-                  </svg>
-                  {keywords.length > 0 ? "Re-discover" : "Discover keywords"}
-                </>
-              )}
-            </button> */}
-        </div>
-      </div>
 
-      <section className="space-y-4">
+
+      <section className="space-y-4 ">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {(keywords.length > 0 || domainKeywords.length > 0) ? (
+            {(keywords.length > 0 || domainKeywords.length > 0 || loading || discovering || domainFetching || domainRefreshing) ? (
               <PillTabFilterBar<FilterTab>
                 items={FILTER_TAB_ITEMS}
                 activeId={filter}
@@ -1452,7 +1394,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
 
           <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
               {/* AI Score button — only shown for industry tab with keywords */}
-              {sourceTab === "industry" && keywords.length > 0 && (
+              {sourceTab === "industry" && (keywords.length > 0 || loading || discovering) && (
                 <button
                   type="button"
                   onClick={async () => {
@@ -1469,7 +1411,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                       toast.error(res.error ?? "AI scoring failed");
                     }
                   }}
-                  disabled={aiScoring || discovering}
+                  disabled={aiScoring || discovering || loading}
                   className={`inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:scale-105 ${
                     aiScoring
                       ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/20 text-[#8b5cf6] animate-pulse"
@@ -1491,8 +1433,8 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                   )}
                 </button>
               )}
-              {((sourceTab === "industry" && keywords.length > 0) ||
-                (sourceTab === "domain" && domainKeywords.length > 0)) ? (
+              {((sourceTab === "industry" && (keywords.length > 0 || loading || discovering)) ||
+                (sourceTab === "domain" && (domainKeywords.length > 0 || domainFetching || domainRefreshing))) ? (
                 !massSelectMode ? (
                   <button
                     type="button"
@@ -1501,7 +1443,8 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                       setMassSelectMode(true);
                       setSelectedIds(new Set());
                     }}
-                    className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 motion-safe:hover:scale-105"
+                    disabled={loading || discovering || domainFetching || domainRefreshing}
+                    className="inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed motion-safe:hover:scale-105"
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -1525,7 +1468,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                     <button
                       type="button"
                       onClick={() => void handleBulkScheduleToCalendar()}
-                      disabled={bulkScheduling || selectedIds.size === 0}
+                      disabled={bulkScheduling || selectedIds.size === 0 || loading || discovering || domainFetching || domainRefreshing}
                       className={`inline-flex h-8 w-38 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-brand-action/70 bg-brand-action px-2 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-brand-on-primary shadow-sm transition-[transform,box-shadow,opacity] duration-200 ease-out hover:-translate-y-px hover:shadow-md hover:shadow-brand-action/20 active:translate-y-0 active:scale-95 disabled:pointer-events-none disabled:opacity-35 motion-safe:hover:scale-105 ${
                         bulkScheduling ? "animate-pulse cursor-wait" : ""
                       }`}
@@ -1539,7 +1482,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                     <button
                       type="button"
                       onClick={exitMassSelect}
-                      disabled={bulkScheduling}
+                      disabled={bulkScheduling || loading || discovering || domainFetching || domainRefreshing}
                       className="inline-flex h-8 min-w-19 shrink-0 cursor-pointer flex-col justify-center whitespace-nowrap rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:border-border-strong hover:text-text-primary hover:-translate-y-px active:scale-95 disabled:opacity-35 motion-safe:hover:scale-105"
                       title="Leave mass-select mode"
                     >
@@ -1552,7 +1495,8 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                 <button
                   type="button"
                   onClick={() => setDataSourceMenuOpen(o => !o)}
-                  className="inline-flex h-8 w-[210px] justify-between items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary"
+                  disabled={loading || discovering || domainFetching || domainRefreshing}
+                  className="inline-flex h-8 w-[210px] justify-between items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,colors] duration-200 hover:border-border-strong hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   aria-expanded={dataSourceMenuOpen}
                   aria-haspopup="listbox"
                 >
@@ -1722,7 +1666,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         {/* ── DATA VIA INDUSTRY ───────────────────────────────────────── */}
         {sourceTab === "industry" && (
           <div className="space-y-4">
-            {keywords.length === 0 ? (
+            {keywords.length === 0 && !loading && !discovering ? (
               <p className="text-[14px] text-text-tertiary">Run Discover to load keywords.</p>
             ) : null}
 

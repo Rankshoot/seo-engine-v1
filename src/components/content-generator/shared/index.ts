@@ -21,6 +21,8 @@ export {
 } from "./section-helpers";
 export { GenerationProgress } from "./GenerationProgress";
 export type { GenerationStage } from "./GenerationProgress";
+export { ThinkingPanel } from "./ThinkingPanel";
+
 export { LongFormMarkdown, stripHeroH1 } from "./LongFormMarkdown";
 export type { LongFormMarkdownProps, LongFormReaderInk } from "./LongFormMarkdown";
 export { StudioBrandMasthead } from "./StudioBrandMasthead";

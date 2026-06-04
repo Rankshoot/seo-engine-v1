@@ -25,8 +25,8 @@ const PROVIDER_LABELS: { key: keyof AdminPlatformProviders; label: string }[] = 
   { key: "dataforseo_enabled", label: "DataForSEO" },
   { key: "dataforseo_fallback_enabled", label: "DataForSEO fallback" },
   { key: "gemini_enabled", label: "Gemini" },
-  { key: "openai_enabled", label: "OpenAI (future)" },
-  { key: "claude_enabled", label: "Claude (future)" },
+  { key: "openai_enabled", label: "OpenAI (active)" },
+  { key: "claude_enabled", label: "Claude (active)" },
 ];
 
 const AHREFS_DETAIL_LABELS: { key: keyof AdminPlatformProviders; label: string }[] = [
@@ -55,6 +55,8 @@ const ENV_LABELS: { key: keyof AdminSettingsData["envKeys"]; label: string }[] =
   { key: "ahrefs", label: "AHREFS_API_KEY" },
   { key: "dataforseo", label: "DATAFORSEO_LOGIN/PASSWORD" },
   { key: "gemini", label: "GEMINI_API_KEY" },
+  { key: "anthropic", label: "ANTHROPIC_API_KEY" },
+  { key: "openai", label: "OPENAI_API_KEY" },
   { key: "serper", label: "SERPER_API_KEY" },
   { key: "clerk", label: "Clerk keys" },
   { key: "supabase", label: "Supabase keys" },
@@ -133,6 +135,8 @@ export function AdminSettingsDashboard() {
       gemini: activeDraft.gemini,
       debug: activeDraft.debug,
       maintenance: activeDraft.maintenance,
+      routing: activeDraft.routing,
+      cost_controls: activeDraft.cost_controls,
     };
     try {
       await updateMutation.mutateAsync(patch);
@@ -406,6 +410,167 @@ export function AdminSettingsDashboard() {
               }
               placeholder="Shown to users when maintenance is on"
             />
+          </div>
+        </Card>
+
+        <Card padding="md">
+          <h2 className="text-[14px] font-semibold text-text-primary mb-4">Model Routing</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {(["blog", "ebook", "whitepaper", "linkedin", "assistant", "fallback"] as const).map((key) => (
+              <div key={key}>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5 capitalize">
+                  {key} Model
+                </label>
+                <select
+                  disabled={!canEdit}
+                  value={draft.routing[key]}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      routing: {
+                        ...draft.routing,
+                        [key]: e.target.value,
+                      },
+                    })
+                  }
+                  className="w-full h-9 rounded-md border border-border-subtle bg-surface-elevated px-3 text-[13px] text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-action"
+                >
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                  <option value="claude-opus-4-8">Claude Opus 4.8</option>
+                  <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+                  <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (20251001)</option>
+                  <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                </select>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card padding="md">
+          <h2 className="text-[14px] font-semibold text-text-primary mb-4">Cost Controls & Budgets</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+                Global Monthly Limit (USD)
+              </label>
+              <Input
+                type="number"
+                min={0}
+                disabled={!canEdit}
+                value={draft.cost_controls.global_monthly_limit_usd}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    cost_controls: {
+                      ...draft.cost_controls,
+                      global_monthly_limit_usd: Number(e.target.value) || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+                Global Daily Limit (USD)
+              </label>
+              <Input
+                type="number"
+                min={0}
+                disabled={!canEdit}
+                value={draft.cost_controls.global_daily_limit_usd}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    cost_controls: {
+                      ...draft.cost_controls,
+                      global_daily_limit_usd: Number(e.target.value) || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+                Project Monthly Limit (USD)
+              </label>
+              <Input
+                type="number"
+                min={0}
+                disabled={!canEdit}
+                value={draft.cost_controls.project_monthly_limit_usd}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    cost_controls: {
+                      ...draft.cost_controls,
+                      project_monthly_limit_usd: Number(e.target.value) || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+                User Monthly Limit (USD)
+              </label>
+              <Input
+                type="number"
+                min={0}
+                disabled={!canEdit}
+                value={draft.cost_controls.user_monthly_limit_usd}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    cost_controls: {
+                      ...draft.cost_controls,
+                      user_monthly_limit_usd: Number(e.target.value) || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+                Soft Limit Alert Threshold (%)
+              </label>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                disabled={!canEdit}
+                value={draft.cost_controls.soft_limit_percent}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    cost_controls: {
+                      ...draft.cost_controls,
+                      soft_limit_percent: Number(e.target.value) || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+                Warning Threshold (USD)
+              </label>
+              <Input
+                type="number"
+                min={0}
+                disabled={!canEdit}
+                value={draft.cost_controls.warning_threshold_usd}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    cost_controls: {
+                      ...draft.cost_controls,
+                      warning_threshold_usd: Number(e.target.value) || 0,
+                    },
+                  })
+                }
+              />
+            </div>
           </div>
         </Card>
 

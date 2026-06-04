@@ -23,7 +23,7 @@ import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-co
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { computeSEOScore } from "@/lib/seo-analyzer";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
-import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
+import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis-types";
 
 // Lazy load heavy modals to improve initial page load
 const BlogDeepAnalysisModal = lazy(() =>

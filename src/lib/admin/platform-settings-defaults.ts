@@ -5,6 +5,8 @@ import type {
   AdminPlatformLimits,
   AdminPlatformMaintenance,
   AdminPlatformProviders,
+  AdminPlatformRouting,
+  AdminPlatformCostControls,
 } from "@/types/admin-settings";
 
 export const DEFAULT_PLATFORM_PROVIDERS: AdminPlatformProviders = {
@@ -12,8 +14,8 @@ export const DEFAULT_PLATFORM_PROVIDERS: AdminPlatformProviders = {
   dataforseo_enabled: true,
   dataforseo_fallback_enabled: true,
   gemini_enabled: true,
-  openai_enabled: false,
-  claude_enabled: false,
+  openai_enabled: true,
+  claude_enabled: true,
   // ── Active Ahrefs endpoints (cost-optimised set) ──────────────────────────
   // Keyword discovery: matching-terms + related-terms only
   ahrefs_matching_terms_enabled: true,
@@ -55,6 +57,24 @@ export const DEFAULT_PLATFORM_DEBUG: AdminPlatformDebug = {
 export const DEFAULT_PLATFORM_MAINTENANCE: AdminPlatformMaintenance = {
   enabled: false,
   message: "",
+};
+
+export const DEFAULT_PLATFORM_ROUTING: AdminPlatformRouting = {
+  blog: "claude-sonnet-4-6",
+  ebook: "claude-sonnet-4-6",
+  whitepaper: "claude-sonnet-4-6",
+  linkedin: "claude-sonnet-4-6",
+  assistant: "claude-sonnet-4-6",
+  fallback: "gemini-2.5-pro",
+};
+
+export const DEFAULT_PLATFORM_COST_CONTROLS: AdminPlatformCostControls = {
+  global_monthly_limit_usd: 500.00,
+  global_daily_limit_usd: 50.00,
+  project_monthly_limit_usd: 50.00,
+  user_monthly_limit_usd: 25.00,
+  soft_limit_percent: 80.0,
+  warning_threshold_usd: 10.00,
 };
 
 export function mergeSettingsSection<T>(defaults: T, stored: unknown): T {

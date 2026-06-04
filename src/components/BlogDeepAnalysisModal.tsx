@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
-import { DEEP_ANALYSIS_SCORE_PARAMETER_DEFS } from "@/lib/blog-deep-analysis";
+import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis-types";
+import { DEEP_ANALYSIS_SCORE_PARAMETER_DEFS } from "@/lib/blog-deep-analysis-types";
 
 const STAGES = [
   "Fetching top competitors",

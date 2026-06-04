@@ -61,7 +61,6 @@ interface ProjectSidebarProps {
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
-  onOpenAI?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -71,7 +70,6 @@ export default function ProjectSidebar({
   allProjects,
   isCollapsed,
   setIsCollapsed,
-  onOpenAI,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -396,28 +394,6 @@ export default function ProjectSidebar({
 
         <div className={`border-t border-border-subtle pt-6 transition-all duration-300 ease-in-out ${isCollapsed ? "flex justify-center" : ""}`}>
           <ul className="space-y-1.5 w-full">
-            {onOpenAI && (
-              <li>
-                <button
-                  onClick={onOpenAI}
-                  className={`w-full flex items-center rounded-[8px] text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all duration-300 ease-in-out border border-transparent group relative
-                    ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
-                  `}
-                >
-                  <span className="text-text-tertiary group-hover:text-brand-action transition-colors shrink-0">
-                    {Icon.ai}
-                  </span>
-                  <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
-                    AI Assistant
-                  </span>
-                  {isCollapsed && (
-                    <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
-                      AI Assistant
-                    </div>
-                  )}
-                </button>
-              </li>
-            )}
             <li>
               <ProjectNavLink
                 href="/projects"

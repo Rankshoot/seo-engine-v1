@@ -98,7 +98,7 @@ export type AIState = "idle" | "thinking" | "streaming" | "tool" | "error";
 
 /* ───────────────────────── AI source ───────────────────────── */
 
-export type AISource = "gemini" | "claude" | "openai" | "pollinations";
+export type AISource = "gemini" | "claude" | "openai";
 
 /* ───────────────────────── Content type display ───────────────────────── */
 

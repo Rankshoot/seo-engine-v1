@@ -1,19 +1,10 @@
 "use client";
 
-import { useState, Suspense, lazy } from "react";
+import { useState } from "react";
 import { notFound } from "next/navigation";
 import ProjectSidebar from "./ProjectSidebar";
 import type { Project } from "@/lib/types";
 import { useProject, useProjects } from "@/lib/query";
-
-// Lazy load AI Assistant to improve initial page load performance
-const ContextualAIChatbot = lazy(() =>
-  import("@/features/ai-assistant/components/ContextualAIChatbot").then(m => ({
-    default: m.ContextualAIChatbot,
-  }))
-);
-
-type AIMode = "closed" | "mini" | "full";
 
 export default function ProjectLayoutClient({
   projectId,
@@ -23,7 +14,6 @@ export default function ProjectLayoutClient({
   children: React.ReactNode;
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [aiMode, setAiMode] = useState<AIMode>("closed");
 
   const { data: projectRes, isFetched } = useProject(projectId);
   const { data: projectsListRes } = useProjects();
@@ -47,7 +37,6 @@ export default function ProjectLayoutClient({
         allProjects={allProjects}
         isCollapsed={isCollapsed}
         setIsCollapsed={setIsCollapsed}
-        onOpenAI={() => setAiMode("full")}
       />
       <main
         className={`flex-1 min-w-0 overflow-y-auto p-6 lg:p-8 transition-all duration-300 ease-in-out ${
@@ -55,11 +44,6 @@ export default function ProjectLayoutClient({
         }`}
       >
         {children}
-        {project && aiMode !== "closed" && (
-          <Suspense fallback={null}>
-            <ContextualAIChatbot project={project} aiMode={aiMode} setAiMode={setAiMode} />
-          </Suspense>
-        )}
       </main>
     </div>
   );

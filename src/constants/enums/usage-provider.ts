@@ -6,7 +6,6 @@ export const API_USAGE_PROVIDERS = [
   "serper",
   "jina",
   "scraper",
-  "pollinations",
   "openai",
   "claude",
 ] as const;

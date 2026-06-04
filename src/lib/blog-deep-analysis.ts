@@ -1,102 +1,20 @@
 import { geminiGenerate } from '@/lib/gemini';
+import { parseLooseJson } from '@/services/ai/providers';
 import { readUrlViaJinaReader } from '@/lib/jina';
 import { fetchGoogleOrganicSerpTopUrls, type DataForSEOTraceEntry } from '@/lib/dataforseo';
 import { locationCodeFromTargetRegion } from '@/lib/types';
-
-export type DeepAnalysisImpact = 'High' | 'Medium' | 'Low';
-
-export interface CompetitorPageExtract {
-  url: string;
-  title: string;
-  metaDescription: string;
-  headings: { h1: string[]; h2: string[]; h3: string[] };
-  wordCount: number;
-  faqs: string[];
-  tables: string[];
-  lists: string[];
-  entities: string[];
-  semanticKeywords: string[];
-  schema: string[];
-  images: string[];
-  links: { internal: string[]; external: string[] };
-  publishDate: string;
-  updatedDate: string;
-  author: string;
-  ctas: string[];
-  content: string;
-  scrapeError?: string;
-}
-
-export interface BlogDeepAnalysisPriorityFix {
-  issue: string;
-  impact: DeepAnalysisImpact;
-  recommendation: string;
-}
-
-/** Weighted rubric dimension — scores roll up to deepAnalysisScore. */
-export interface BlogDeepAnalysisScoreParameter {
-  id: string;
-  label: string;
-  weight: number;
-  score: number;
-  detail: string;
-}
-
-/** Maps a specific part of OUR blog to a specific competitor URL/section. */
-export interface BlogSectionCompetitorGap {
-  blogSection: string;
-  blogExcerpt: string;
-  competitorUrl: string;
-  competitorSection: string;
-  gap: string;
-  impact: DeepAnalysisImpact;
-}
-
-export interface BlogDeepAnalysisResult {
-  deepAnalysisScore: number;
-  summary: string;
-  /** Weighted parameters used to compute deepAnalysisScore (weights sum to 100). */
-  scoreParameters: BlogDeepAnalysisScoreParameter[];
-  /** Section-level gaps tied to a specific competitor URL. */
-  sectionGaps: BlogSectionCompetitorGap[];
-  competitorUrls: string[];
-  missingTopics: string[];
-  missingEntities: string[];
-  missingSemanticKeywords: string[];
-  weakSections: string[];
-  competitorAdvantages: string[];
-  contentOpportunities: string[];
-  recommendedAdditions: string[];
-  faqSuggestions: string[];
-  tableSuggestions: string[];
-  eeatSuggestions: string[];
-  linkingSuggestions: string[];
-  priorityFixes: BlogDeepAnalysisPriorityFix[];
-}
-
-export const DEEP_ANALYSIS_SCORE_PARAMETER_DEFS: ReadonlyArray<{
-  id: string;
-  label: string;
-  weight: number;
-}> = [
-  { id: 'topic_coverage', label: 'Topic coverage vs SERP', weight: 18 },
-  { id: 'heading_structure', label: 'Heading structure & depth', weight: 12 },
-  { id: 'intent_match', label: 'Search intent satisfaction', weight: 14 },
-  { id: 'faq_richness', label: 'FAQ & question coverage', weight: 10 },
-  { id: 'tables_comparisons', label: 'Tables & comparisons', weight: 8 },
-  { id: 'examples_stats', label: 'Examples & statistics', weight: 10 },
-  { id: 'eeat_signals', label: 'E-E-A-T & trust signals', weight: 12 },
-  { id: 'internal_links', label: 'Internal linking', weight: 8 },
-  { id: 'external_citations', label: 'External citations', weight: 8 },
-  { id: 'freshness_cta', label: 'Freshness & CTA quality', weight: 10 },
-] as const;
-
-export interface DeepAnalysisTraceEntry {
-  stage: string;
-  ok: boolean;
-  detail?: string;
-  url?: string;
-}
+import {
+  type DeepAnalysisImpact,
+  type CompetitorPageExtract,
+  type BlogDeepAnalysisPriorityFix,
+  type BlogDeepAnalysisScoreParameter,
+  type BlogSectionCompetitorGap,
+  type BlogDeepAnalysisResult,
+  DEEP_ANALYSIS_SCORE_PARAMETER_DEFS,
+  type DeepAnalysisTraceEntry,
+  type RunBlogDeepAnalysisInput,
+  type RunBlogDeepAnalysisOutput,
+} from './blog-deep-analysis-types';
 
 function safeHost(url: string): string {
   try {
@@ -578,28 +496,20 @@ Rules:
 - competitorUrls must be exactly: ${JSON.stringify(input.competitorUrls)}
 - priorityFixes: 3-8 items, High impact first.`;
 
-  const raw = await geminiGenerate(prompt, 4);
-  const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-  const parsed = JSON.parse(cleaned) as unknown;
+  const raw = await geminiGenerate(prompt, 4, false, 'application/json', null, null, 8192);
+  const parsed = parseLooseJson<unknown>(raw);
+  if (!parsed) {
+    throw new Error('Failed to parse deep analysis response. The AI response might have been cut off or is malformed.');
+  }
   const result = normalizeAnalysis(parsed);
   if (!result.competitorUrls.length) result.competitorUrls = [...input.competitorUrls];
   return result;
 }
 
-export interface RunBlogDeepAnalysisInput {
-  keyword: string;
-  blogTitle: string;
-  blogContent: string;
-  blogMeta: string;
-  targetRegion?: string;
-  ownDomain?: string;
-}
-
-export interface RunBlogDeepAnalysisOutput {
-  analysis: BlogDeepAnalysisResult;
-  trace: DeepAnalysisTraceEntry[];
-  dfsTrace: DataForSEOTraceEntry[];
-}
+export {
+  type RunBlogDeepAnalysisInput,
+  type RunBlogDeepAnalysisOutput,
+} from './blog-deep-analysis-types';
 
 export async function runBlogDeepAnalysisPipeline(
   input: RunBlogDeepAnalysisInput

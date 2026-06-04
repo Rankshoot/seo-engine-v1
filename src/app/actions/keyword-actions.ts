@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
+import { aiGenerate } from '@/services/ai/providers';
 import {
   discoverKeywordsForProject,
   fetchGoogleAdsKeywordsForSite,
@@ -1554,12 +1555,6 @@ export async function upsertKeywordFromDomainSite(
 // Smaller batches = shorter output = less risk of truncation / malformed JSON.
 const AI_EVAL_BATCH = 15;
 
-// Use JSON-mode capable models (responseMimeType forces valid JSON).
-const GEMINI_EVAL_URLS = [
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
-];
-
 /** Extracts the first JSON array from raw text (handles trailing commentary / partial fences). */
 function extractJsonArray(raw: string): string {
   // Strip any markdown fences
@@ -1571,37 +1566,13 @@ function extractJsonArray(raw: string): string {
   return s.slice(start, end + 1);
 }
 
-async function callGeminiForEval(prompt: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY!;
-
-  for (const url of GEMINI_EVAL_URLS) {
-    try {
-      const body = {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 16384,
-          responseMimeType: 'application/json',
-        },
-      };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => res.status.toString());
-        console.error(`[callGeminiForEval] ${url} HTTP ${res.status}: ${errText.slice(0, 200)}`);
-        continue;
-      }
-      const json = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      if (text) return text;
-    } catch (e) {
-      console.error('[callGeminiForEval] fetch error', e);
-    }
-  }
-  throw new Error('All Gemini endpoints failed for keyword evaluation');
+async function callGeminiForEval(prompt: string, projectId: string): Promise<string> {
+  return aiGenerate("keyword-eval", prompt, {
+    projectId,
+    jsonMode: true,
+    temperature: 0.2,
+    retries: 2,
+  });
 }
 
 function buildEvalPrompt(
@@ -1750,7 +1721,7 @@ export async function scoreKeywordsWithAI(
       duplicate_of?: string | null;
     }>;
     try {
-      const raw = await callGeminiForEval(prompt);
+      const raw = await callGeminiForEval(prompt, projectId);
       results = JSON.parse(extractJsonArray(raw));
     } catch (e) {
       // Skip this batch but continue with others
@@ -1942,7 +1913,7 @@ export async function scoreCompetitorKeywordsWithAI(
       duplicate_of?: string | null;
     }>;
     try {
-      const raw = await callGeminiForEval(prompt);
+      const raw = await callGeminiForEval(prompt, projectId);
       results = JSON.parse(extractJsonArray(raw));
     } catch (e) {
       console.error('[scoreCompetitorKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);

@@ -4,7 +4,7 @@
  * (suggestions) and produces a normalized result the server actions persist.
  */
 
-import { geminiPro, geminiFlash, parseLooseJson } from '@/services/ai/providers';
+import { aiGenerate, parseLooseJson } from '@/services/ai/providers';
 import {
   buildEbookPrompt,
   type EbookPromptContext,
@@ -105,10 +105,11 @@ export async function generateEbook(
   ownDomain: string,
 ): Promise<GeneratedEbook> {
   const prompt = buildEbookPrompt(ctx);
-  const raw = await geminiPro(prompt, {
+  const raw = await aiGenerate('ebook', prompt, {
     temperature: 0.78,
     maxOutputTokens: 24576,
     useGoogleSearch: true,
+    cachePrompt: true,
   });
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
@@ -193,10 +194,11 @@ export async function generateWhitepaper(
   ownDomain: string,
 ): Promise<GeneratedWhitepaper> {
   const prompt = buildWhitepaperPrompt(ctx);
-  const raw = await geminiPro(prompt, {
+  const raw = await aiGenerate('whitepaper', prompt, {
     temperature: 0.7,
     maxOutputTokens: 20480,
     useGoogleSearch: true,
+    cachePrompt: true,
   });
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
@@ -270,10 +272,11 @@ export async function generateLinkedInPost(
   ctx: LinkedInPromptContext,
 ): Promise<GeneratedLinkedInPost> {
   const prompt = buildLinkedInPostPrompt(ctx);
-  const raw = await geminiPro(prompt, {
+  const raw = await aiGenerate('linkedin', prompt, {
     temperature: 0.85,
     maxOutputTokens: 4096,
     useGoogleSearch: false,
+    cachePrompt: true,
   });
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
@@ -463,7 +466,7 @@ Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
   // budget so the schema's array field never truncates mid-suggestion.
   let raw = '';
   try {
-    raw = await geminiFlash(prompt, {
+    raw = await aiGenerate('assistant', prompt, {
       temperature: 0.6,
       maxOutputTokens: 2048,
       jsonMode: true,
@@ -485,10 +488,10 @@ Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
     console.warn('[content-studio] Flash returned unparseable suggestion. Raw output:', raw.slice(0, 600));
   }
 
-  // Pass 2 — Gemini Pro (slower, much more reliable) with the same schema.
+  // Pass 2 — Routed Pro (slower, much more reliable) with the same schema.
   let proRaw = '';
   try {
-    proRaw = await geminiPro(prompt, {
+    proRaw = await aiGenerate('assistant', prompt, {
       temperature: 0.78,
       maxOutputTokens: 1024,
       jsonMode: true,

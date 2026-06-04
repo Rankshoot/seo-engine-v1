@@ -30,6 +30,9 @@ export interface LogAiUsageInput {
   response?: string | null;
   tokensInput?: number | null;
   tokensOutput?: number | null;
+  tokensCachedRead?: number | null;
+  tokensCachedWrite?: number | null;
+  costSavingsUsd?: number | null;
   estimatedCostUsd?: number | null;
   status: AiUsageStatus;
   errorMessage?: string | null;

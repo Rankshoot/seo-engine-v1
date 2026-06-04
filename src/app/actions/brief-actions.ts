@@ -111,6 +111,8 @@ export async function generateBusinessBrief(
     competitors: (project.project_competitors ?? [])
       .map((c: { domain: string }) => c.domain)
       .filter(Boolean),
+    projectId,
+    userId: user.id,
   });
 
   const { error: upsertErr } = await supabaseAdmin.from('project_briefs').upsert(

@@ -351,11 +351,16 @@ export async function getBlogById(blogId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: null };
 
-  const { data, error } = await supabaseAdmin
-    .from('blogs')
-    .select('*')
-    .eq('id', blogId)
-    .single();
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(blogId);
+
+  let query = supabaseAdmin.from('blogs').select('*');
+  if (isUuid) {
+    query = query.eq('id', blogId);
+  } else {
+    query = query.eq('entry_id', blogId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error || !data) return { success: false, error: error?.message ?? 'Not found', data: null };
 
@@ -386,12 +391,25 @@ export async function getEnhancedBlogForOriginal(originalBlogId: string) {
     return { success: false as const, error: 'Not authenticated', data: null };
   }
 
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(originalBlogId);
+  let resolvedBlogId = originalBlogId;
+  if (!isUuid) {
+    const { data: blogByEntry } = await supabaseAdmin
+      .from('blogs')
+      .select('id')
+      .eq('entry_id', originalBlogId)
+      .maybeSingle();
+    if (blogByEntry) {
+      resolvedBlogId = blogByEntry.id;
+    }
+  }
+
   // 1. Confirm the caller owns the original blog (prevents IDOR — we use
   //    the source_url marker, which is otherwise scoped only by project).
   const { data: original, error: oErr } = await supabaseAdmin
     .from('blogs')
     .select('id, project_id')
-    .eq('id', originalBlogId)
+    .eq('id', resolvedBlogId)
     .maybeSingle();
 
   if (oErr || !original) {
@@ -413,7 +431,7 @@ export async function getEnhancedBlogForOriginal(originalBlogId: string) {
   //    (see `repairBlogFromContent` in `repair-actions.ts`). Pull the most
   //    recent one — there should usually only be one, but if the user
   //    re-enhances we want the freshest copy.
-  const sourceMarker = `blog://${originalBlogId}`;
+  const sourceMarker = `blog://${resolvedBlogId}`;
   const { data: enhanced, error: eErr } = await supabaseAdmin
     .from('blogs')
     .select('*')
@@ -700,7 +718,7 @@ function normalizeRepairNotesFromModel(notes: string[], analysis: BlogAuditAnaly
 }
 
 function sanitizeBlogMarkdown(markdown: string): string {
-  return stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(markdown))
+  let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(markdown))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     // Strip the LLM's leftover `![alt](IMAGE_PLACEHOLDER)` artifacts so the
@@ -710,7 +728,37 @@ function sanitizeBlogMarkdown(markdown: string): string {
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
     .replace(/Regenerat(?:e|ing) with AI[^\n]*(?:illustration|visual)?/gi, '')
-    .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '')
+    .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '');
+
+  // ── Leaked JSON / META artifact cleanup ──────────────────────────────
+  // Remove orphaned ---META--- and everything after it.
+  const metaIdx = cleaned.indexOf('---META---');
+  if (metaIdx !== -1) {
+    cleaned = cleaned.substring(0, metaIdx);
+  }
+
+  cleaned = cleaned
+    // JSON key-value pairs leaked into body (external_links, internal_links, etc.)
+    .replace(
+      /^\s*"(?:external_links|internal_links|meta_description|slug|seoNotes|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm,
+      ''
+    )
+    // Bare JSON URL arrays on their own line: ["https://...", ...]
+    .replace(
+      /^\s*\[\s*"https?:\/\/[^"]+?"(?:\s*,\s*"https?:\/\/[^"]+?")*\s*\]\s*$/gm,
+      ''
+    )
+    // Lines that are just bare URLs (not inside markdown links)
+    .replace(/^\s*"?https?:\/\/\S+"?\s*,?\s*$/gm, '')
+    // Orphaned JSON braces/brackets on their own line
+    .replace(/^\s*[{}]\s*$/gm, '')
+    // Leaked JSON key-value continuations (e.g. `},"internal_links":{`)
+    .replace(
+      /^\s*[,}]\s*"(?:external_links|internal_links|meta_description|slug)".*$/gm,
+      ''
+    );
+
+  return cleaned
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

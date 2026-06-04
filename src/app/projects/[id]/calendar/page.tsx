@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, keywordsListQueryOptions } from "@/lib/query";
+import { qk, keywordsListQueryOptions, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import {
   useAppDispatch,
   useAppSelector,
@@ -127,6 +127,7 @@ export default function CalendarPage() {
       queryKey: CALENDAR_KEY,
       queryFn: () => calendarApi.entries(projectId),
       enabled: !!projectId,
+      ...DEFAULT_QUERY_OPTIONS,
     });
   const entries: CalendarEntry[] = useMemo(() => {
     if (!entriesData?.success) return [];
@@ -172,6 +173,12 @@ export default function CalendarPage() {
     [entries]
   );
 
+  // Memoize approved keywords to avoid filtering on every render
+  const approvedKeywordsMemo = useMemo(
+    () => allKeywords.filter((k) => k.status === "approved"),
+    [allKeywords]
+  );
+
   // ── Redux sync ────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -211,7 +218,7 @@ export default function CalendarPage() {
   const handleScheduleKeyword = useCallback(
     async (keywordId: string, date: string): Promise<boolean> => {
       setSavingDate(true);
-      const kw = approvedKeywords.find((k) => k.id === keywordId);
+      const kw = approvedKeywordsMemo.find((k) => k.id === keywordId);
       try {
         const res = await calendarApi.addKeywordOnDate(projectId, { keywordId, date });
         if (res.success) {
@@ -235,7 +242,7 @@ export default function CalendarPage() {
         setSavingDate(false);
       }
     },
-    [approvedKeywords, projectId, dispatch, refetchCalendar, queryClient]
+    [approvedKeywordsMemo, projectId, dispatch, refetchCalendar, queryClient]
   );
 
   const handleMoveEntryToDate = useCallback(

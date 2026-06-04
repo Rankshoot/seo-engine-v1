@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -25,7 +25,8 @@ import {
   StepRow,
   StudioBreadcrumb,
 } from "@/components/content-generator/shared";
-import { useProject, qk } from "@/lib/query";
+import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
+import { calendarApi } from "@/frontend/api/calendar";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
 import { TARGET_REGIONS } from "@/lib/types";
 import type { LinkedInPostStyle } from "@/lib/types";
@@ -61,15 +62,30 @@ type Phase = "form" | "review" | "generating";
 export default function LinkedInGeneratorPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const studioBase = `/projects/${projectId}/content-generator`;
+
+  const entryId = searchParams?.get("entryId");
+
+  const { data: entriesData } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId && !!entryId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const scheduledEntry = useMemo(() => {
+    if (!entriesData?.success) return null;
+    return entriesData.data.find((e) => e.id === entryId) || null;
+  }, [entriesData, entryId]);
 
   const { data: projectRes } = useProject(projectId);
   const project = projectRes?.success ? projectRes.data : undefined;
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
-  const [primaryKeyword, setPrimaryKeyword] = useState("");
+  const [primaryKeyword, setPrimaryKeyword] = useState(searchParams?.get("keyword") || "");
   const [audience, setAudience] = useState("");
   const [tone, setTone] = useState(TONE_OPTIONS[0]);
   const [postStyle, setPostStyle] = useState<LinkedInPostStyle>("educational");
@@ -86,8 +102,7 @@ export default function LinkedInGeneratorPage() {
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
     enabled: !!projectId,
-    staleTime: 60_000,
-    refetchOnMount: false,
+    ...DEFAULT_QUERY_OPTIONS,
   });
   const recent = useMemo(() => {
     const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
@@ -102,12 +117,25 @@ export default function LinkedInGeneratorPage() {
     if (tl) setLanguage(tl);
   }, [project?.target_audience, project?.target_region, project?.target_language, audience]);
 
+  useEffect(() => {
+    if (scheduledEntry) {
+      if (scheduledEntry.focus_keyword) {
+        setPrimaryKeyword(scheduledEntry.focus_keyword);
+      }
+      if (scheduledEntry.title || scheduledEntry.blog_title) {
+        const t = scheduledEntry.title || scheduledEntry.blog_title;
+        setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
+      }
+    }
+  }, [scheduledEntry]);
+
   const askAi = async () => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "linkedin",
         avoidPhrases: [],
+        seedKeyword: primaryKeyword.trim() || undefined,
       });
       if (res.success) {
         setTopic(res.topic);
@@ -140,6 +168,7 @@ export default function LinkedInGeneratorPage() {
       ctaObjective,
       region,
       language,
+      entryId: entryId || null,
     });
     if (res.trace?.length) {
       console.log("[linkedin] trace:", res.trace);

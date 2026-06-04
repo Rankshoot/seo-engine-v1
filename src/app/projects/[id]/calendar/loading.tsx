@@ -1,40 +1,33 @@
-import { Skeleton, TableSkeleton } from "@/components/Skeleton";
-
 export default function CalendarLoading() {
   return (
-    <div className="space-y-10 pb-16 pl-4 pr-4">
-      {/* Header */}
-      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-8 pb-20 max-w-full px-4 mx-auto">
+      <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-3">
-          <Skeleton className="h-[48px] w-80" rounded="lg" />
-          <Skeleton className="h-4 w-[520px] max-w-full" rounded="sm" />
+          <div className="h-8 w-48 rounded-lg bg-surface-elevated animate-pulse" />
+          <div className="h-4 w-80 rounded-full bg-surface-elevated animate-pulse" />
         </div>
-        <div className="flex items-center gap-3">
-          <Skeleton className="h-10 w-28" rounded="full" />
-          <Skeleton className="h-10 w-32" rounded="lg" />
-          <Skeleton className="h-10 w-40" rounded="full" />
+        <div className="flex gap-2">
+          <div className="h-10 w-32 rounded-full bg-surface-elevated animate-pulse" />
+          <div className="h-10 w-28 rounded-full bg-surface-elevated animate-pulse" />
         </div>
       </div>
-
-      {/* Stats cards */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        {[0, 1, 2, 3].map(i => (
-          <div key={i} className="rounded-[16px] border border-border-subtle bg-surface-elevated p-5 flex flex-col gap-3">
-            <Skeleton className="h-3 w-24" rounded="sm" style={{ animationDelay: `${i * 80}ms` }} />
-            <Skeleton className="h-8 w-16" rounded="md" style={{ animationDelay: `${i * 80 + 40}ms` }} />
-            <Skeleton className="h-3 w-32" rounded="sm" style={{ animationDelay: `${i * 80 + 80}ms` }} />
-          </div>
-        ))}
-      </div>
-
-      {/* Table */}
-      <div className="rounded-[16px] border border-border-subtle bg-surface-elevated">
-        <div className="border-b border-border-subtle bg-surface-secondary px-4 py-3 grid gap-4" style={{ gridTemplateColumns: "6rem 1fr 10rem 11rem 8rem 7rem" }}>
-          {["Day", "Title", "Type", "Keyword", "Status", "Action"].map((_, i) => (
-            <Skeleton key={i} className="h-3 w-3/4" rounded="sm" style={{ animationDelay: `${i * 50}ms` }} />
+      <div className="space-y-3">
+        <div className="flex gap-4">
+          <div className="h-5 w-24 rounded-full bg-surface-elevated animate-pulse" />
+          <div className="h-5 w-24 rounded-full bg-surface-elevated animate-pulse" />
+        </div>
+        <div className="rounded-card border border-border-subtle bg-surface-elevated">
+          {[1, 2, 3, 4, 5, 6].map(i => (
+            <div key={i} className={`flex gap-4 p-4 ${i > 1 ? 'border-t border-border-subtle' : ''}`}>
+              <div className="h-12 w-12 shrink-0 rounded-lg bg-surface-elevated animate-pulse" />
+              <div className="flex-1 space-y-2">
+                <div className="h-4 w-3/4 rounded-full bg-surface-elevated animate-pulse" />
+                <div className="h-3 w-1/2 rounded-full bg-surface-elevated animate-pulse" />
+              </div>
+              <div className="h-6 w-20 shrink-0 rounded-full bg-surface-elevated animate-pulse" />
+            </div>
           ))}
         </div>
-        <TableSkeleton rows={8} columns={6} />
       </div>
     </div>
   );

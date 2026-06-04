@@ -419,6 +419,7 @@ export async function suggestContentTopicWithFlash(input: {
   briefSummary: string | null;
   approvedKeywords: string[];
   avoidPhrases: string[];
+  seedKeyword?: string;
 }): Promise<ContentTopicSuggestion> {
   const seedBlock = input.approvedKeywords.length
     ? input.approvedKeywords.slice(0, 14).map(k => `- ${k}`).join('\n')
@@ -432,6 +433,10 @@ export async function suggestContentTopicWithFlash(input: {
     ? `Avoid these phrases (already used):\n${input.avoidPhrases.map(p => `- ${p}`).join('\n')}`
     : '(no banned phrases)';
 
+  const seedRule = input.seedKeyword?.trim()
+    ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one. Design the topic, semantic_keywords, and rationale specifically for this keyword.`
+    : `APPROVED KEYWORDS (prefer one of these as the primary keyword if it fits):\n${seedBlock}`;
+
   const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankit content engine should produce next.
 
 CONTEXT
@@ -440,8 +445,7 @@ CONTEXT
 - Target audience: ${input.audience}
 ${briefBlock}
 
-APPROVED KEYWORDS (prefer one of these as the primary keyword if it fits):
-${seedBlock}
+${seedRule}
 
 ${avoidBlock}
 

@@ -238,18 +238,19 @@ export async function importGapKeywords(projectId: string, gaps: CompetitorGapKe
     source_url: g.sourceUrl || '',
     gap_competitor: g.competitorDomain || '',
     funnel_stage: deterministicFunnelStage('', g.keyword),
+    source: 'competitor',
   }));
 
   let { data, error } = await supabaseAdmin
     .from('keywords')
-    .upsert(rows, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+    .upsert(rows, { onConflict: 'project_id,keyword,source', ignoreDuplicates: true })
     .select();
 
   if (error && error.message.includes('funnel_stage') && error.message.includes('schema cache')) {
     const rowsNoFunnel = rows.map(({ funnel_stage: _, ...rest }) => rest);
     ({ data, error } = await supabaseAdmin
       .from('keywords')
-      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword', ignoreDuplicates: true })
+      .upsert(rowsNoFunnel, { onConflict: 'project_id,keyword,source', ignoreDuplicates: true })
       .select());
   }
 

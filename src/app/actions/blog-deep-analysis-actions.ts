@@ -64,11 +64,16 @@ async function assertBlogAccess(blogId: string) {
   const user = await currentUser();
   if (!user) return { ok: false as const, error: 'Not authenticated' };
 
-  const { data: blog, error: bErr } = await supabaseAdmin
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(blogId);
+  let query = supabaseAdmin
     .from('blogs')
-    .select('id, project_id, title, content, meta_description, target_keyword')
-    .eq('id', blogId)
-    .single();
+    .select('id, project_id, title, content, meta_description, target_keyword');
+  if (isUuid) {
+    query = query.eq('id', blogId);
+  } else {
+    query = query.eq('entry_id', blogId);
+  }
+  const { data: blog, error: bErr } = await query.maybeSingle();
 
   if (bErr || !blog) return { ok: false as const, error: 'Blog not found' };
 

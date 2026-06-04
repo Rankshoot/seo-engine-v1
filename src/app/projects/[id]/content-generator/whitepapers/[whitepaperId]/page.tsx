@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { Button, PageTitle, Spinner } from "@/components/common";
 import {
@@ -28,9 +30,33 @@ const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px
 
 export default function WhitepaperViewerPage() {
   const { id: projectId, whitepaperId } = useParams<{ id: string; whitepaperId: string }>();
+  const queryClient = useQueryClient();
   const [blog, setBlog] = useState<Blog | null>(null);
   const [project, setProject] = useState<Project | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  const { data: blogRes, isLoading: blogLoading } = useQuery({
+    queryKey: qk.blog(whitepaperId),
+    queryFn: () => blogsApi.getById(whitepaperId),
+    enabled: !!whitepaperId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const { data: projectRes, isLoading: projectLoading } = useProject(projectId);
+
+  const loading = (!blog || !project) && (blogLoading || projectLoading);
+
+  useEffect(() => {
+    if (blogRes?.success && blogRes.data) {
+      setBlog(blogRes.data);
+    }
+  }, [blogRes]);
+
+  useEffect(() => {
+    if (projectRes?.success && projectRes.data) {
+      setProject(projectRes.data);
+    }
+  }, [projectRes]);
+
   const [mode, setMode] = useState<PreviewMode>("preview");
   const [editSessionKey, setEditSessionKey] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -38,19 +64,6 @@ export default function WhitepaperViewerPage() {
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const descRef = useRef<HTMLParagraphElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!whitepaperId) return;
-    setLoading(true);
-    Promise.all([blogsApi.getById(whitepaperId), projectsApi.get(projectId)]).then(
-      ([blogRes, projRes]) => {
-        if (blogRes.success && blogRes.data) setBlog(blogRes.data);
-        else if (!blogRes.success) toast.error(blogRes.error || "Could not load whitepaper");
-        if (projRes.success && projRes.data) setProject(projRes.data);
-        setLoading(false);
-      },
-    );
-  }, [whitepaperId, projectId]);
 
   const ownSiteHost = useMemo(
     () => (project?.domain ? normalizeSiteHost(project.domain) : null),
@@ -115,7 +128,9 @@ export default function WhitepaperViewerPage() {
       const md = `# ${title}\n\n${bodyMd}`.replace(/\n{3,}/g, "\n\n").trim();
       const res = await blogsApi.updateContent(blog.id, { content: md, title, metaDescription });
       if (res.success && res.data) {
-        setBlog({ ...res.data, content_data: blog.content_data });
+        const updatedBlog = { ...res.data, content_data: blog.content_data };
+        setBlog(updatedBlog);
+        queryClient.setQueryData(qk.blog(blog.id), { success: true, data: updatedBlog });
         setMode("preview");
         toast.success("Saved.");
       } else {

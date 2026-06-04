@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQueryClient } from "@tanstack/react-query";
@@ -8,7 +8,13 @@ import { qk } from "@/lib/query";
 import type { AuditCoverage, PersistedBlogAudit } from "@/app/actions/audit-actions";
 import { auditsApi } from "@/frontend/api/audits";
 import { calendarApi } from "@/frontend/api/calendar";
-import { AuditDetailModal } from "@/components/AuditDetailModal";
+
+// Lazy load heavy modal to improve initial page load
+const AuditDetailModal = lazy(() =>
+  import("@/components/AuditDetailModal").then(m => ({
+    default: m.AuditDetailModal,
+  }))
+);
 import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
 import { criticalityFromScore } from "@/lib/audit-criticality";
 import { Tooltip, InfoIcon } from "@/components/Tooltip";
@@ -460,15 +466,17 @@ export default function ContentHealthPage() {
         </div>
       </div>
 
-      <AuditDetailModal
-        open={!!modalAudit}
-        row={modalAudit}
-        projectId={projectId}
-        onClose={() => setModalAudit(null)}
-        onScheduleToCalendar={() => (modalAudit ? handleAddToCalendar(modalAudit) : Promise.resolve())}
-        scheduleBusy={!!modalAudit && calendarAddingUrl === modalAudit.url}
-        onCalendar={!!modalAudit && !!calendarLinkedByUrl[modalAudit.url]}
-      />
+      <Suspense fallback={null}>
+        <AuditDetailModal
+          open={!!modalAudit}
+          row={modalAudit}
+          projectId={projectId}
+          onClose={() => setModalAudit(null)}
+          onScheduleToCalendar={() => (modalAudit ? handleAddToCalendar(modalAudit) : Promise.resolve())}
+          scheduleBusy={!!modalAudit && calendarAddingUrl === modalAudit.url}
+          onCalendar={!!modalAudit && !!calendarLinkedByUrl[modalAudit.url]}
+        />
+      </Suspense>
     </CHPageShell>
   );
 }

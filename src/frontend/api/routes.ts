@@ -22,6 +22,8 @@ export const V1Routes = {
   keyword: (projectId: string, keywordId: string) => `/projects/${projectId}/keywords/${keywordId}`,
   keywordStatus: (projectId: string, keywordId: string) =>
     `/projects/${projectId}/keywords/${keywordId}/status`,
+  keywordSchedule: (projectId: string, keywordId: string) =>
+    `/projects/${projectId}/keywords/${keywordId}/schedule`,
   keywordDetails: (projectId: string, keywordId: string) =>
     `/projects/${projectId}/keywords/${keywordId}/details`,
 
@@ -66,6 +68,7 @@ export const V1Routes = {
   blogRewriteSelection: (blogId: string) => `/blogs/${blogId}/rewrite-selection`,
   blogEnhanced: (blogId: string) => `/blogs/${blogId}/enhanced`,
   blogDeepAnalysis: (blogId: string) => `/blogs/${blogId}/deep-analysis`,
+  blogEnhance: (projectId: string, blogId: string) => `/projects/${projectId}/blogs/${blogId}/enhance`,
 
   // ── Admin (platform) ─────────────────────────────────────────────────────
   adminMe: "/admin/me",

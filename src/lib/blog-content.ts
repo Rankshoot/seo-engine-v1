@@ -188,16 +188,71 @@ export function isCredibleDomain(url: string): boolean {
   return false;
 }
 
+const VALIDATION_CACHE = new Map<string, { valid: boolean; checkedAt: number }>();
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+async function isHardReject(url: string, timeoutMs = 5000): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'user-agent': 'Mozilla/5.0 (compatible; SEOEngineBot/1.0; +https://seo-engine.app/bot)',
+        accept: 'text/html,*/*',
+      },
+    });
+    clearTimeout(timeout);
+    
+    if (res.status === 404 || res.status === 410 || res.status >= 500) {
+      return true;
+    }
+    
+    const ct = res.headers.get('content-type') ?? '';
+    if (ct.includes('text/html')) {
+      const text = await res.text();
+      const firstKb = text.slice(0, 4000).toLowerCase();
+      const errorMarkers = [
+        '404 not found',
+        'page not found',
+        'page cannot be found',
+        '404 error',
+        'error 404',
+        'we can\'t find that page',
+        'oops! page not found',
+        'cannot find the page',
+        'site under construction',
+      ];
+      if (errorMarkers.some(m => firstKb.includes(m))) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    // Network/timeout failure is not a hard reject (could be transient)
+    return false;
+  }
+}
+
 /**
  * Probe a URL with a short timeout. We try HEAD first (cheap), then GET on
  * 405 because some CDNs don't allow HEAD. Anything outside 2xx/3xx is
  * considered broken. Network errors short-circuit to `false`.
  */
-export async function validateExternalUrl(url: string, timeoutMs = 5000): Promise<boolean> {
+export async function validateExternalUrl(url: string, timeoutMs = 5000, deepCheck = true): Promise<boolean> {
   if (!/^https?:\/\//i.test(url)) return false;
+
+  const now = Date.now();
+  const cached = VALIDATION_CACHE.get(url);
+  if (cached && now - cached.checkedAt < CACHE_TTL_MS) {
+    return cached.valid;
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let ok = false;
   try {
     let res = await fetch(url, {
       method: 'HEAD',
@@ -223,19 +278,43 @@ export async function validateExternalUrl(url: string, timeoutMs = 5000): Promis
         },
       });
     }
-    return res.status >= 200 && res.status < 400;
+    
+    ok = res.status >= 200 && res.status < 400;
+
+    if (ok && deepCheck) {
+      const ct = res.headers.get('content-type') ?? '';
+      if (ct.includes('text/html') && res.status === 200) {
+        const bodyText = await res.text();
+        const firstKb = bodyText.slice(0, 4000).toLowerCase();
+        const errorMarkers = [
+          '404 not found',
+          'page not found',
+          'page cannot be found',
+          '404 error',
+          'error 404',
+          'we can\'t find that page',
+          'oops! page not found',
+          'cannot find the page',
+          'site under construction',
+        ];
+        if (errorMarkers.some(m => firstKb.includes(m))) {
+          ok = false;
+        }
+      }
+    }
   } catch {
-    return false;
+    ok = false;
   } finally {
     clearTimeout(timeout);
   }
+
+  VALIDATION_CACHE.set(url, { valid: ok, checkedAt: now });
+  return ok;
 }
 
 /**
  * Validate a list of URLs in parallel with a small concurrency cap. Returns
- * a Set of urls that passed validation. Entries on the credible allow-list
- * skip the network probe entirely so we don't drop authoritative citations
- * when their CDN is being slow.
+ * a Set of urls that passed validation.
  */
 export async function validateExternalUrls(urls: string[]): Promise<Set<string>> {
   const unique = [...new Set(urls)];
@@ -243,11 +322,13 @@ export async function validateExternalUrls(urls: string[]): Promise<Set<string>>
     unique.map(async (url) => {
       const credible = isCredibleDomain(url);
       const ok = await validateExternalUrl(url);
-      // Credible host that returned anything other than a hard network failure:
-      // we trust it. We still try the probe so genuinely-404'd Gartner pages
-      // (rare) get dropped — but a transient timeout doesn't kill the link.
-      if (credible && ok) return [url, true] as const;
-      if (credible) return [url, true] as const;
+      
+      if (ok) return [url, true] as const;
+      
+      if (credible) {
+        const hardReject = await isHardReject(url);
+        return [url, !hardReject] as const;
+      }
       return [url, ok] as const;
     })
   );
@@ -370,24 +451,61 @@ export async function sanitizeBlogContent(
     }
   }
 
-  // Phase 4 — collect every external link and validate. Internal/relative
-  // links are kept as-is. Broken externals are rewritten to plain text so
-  // we don't leave dangling brackets.
+  // Phase 4 — collect every external and internal link and validate.
+  // Broken links are rewritten to plain text so we don't leave dangling brackets.
   const linkRegex = /\[([^\]]+)\]\(([^)\s]+)\)/g;
   const externalUrls: string[] = [];
-  // Walk once to gather URLs; we mutate the markdown in a second pass so
-  // negative lookbehinds for `!` still work consistently.
+  const internalUrls: string[] = [];
+
+  const getInternalProbeUrl = (url: string): string | null => {
+    if (!ownHost) return null;
+    const trimmed = url.trim();
+    if (trimmed.startsWith('#')) return null;
+    if (/^https?:\/\//i.test(trimmed)) {
+      const host = getHost(trimmed);
+      if (host && (host === ownHost || host.endsWith(`.${ownHost}`))) {
+        return trimmed;
+      }
+      return null;
+    }
+    if (trimmed.startsWith('/') || !trimmed.includes(':')) {
+      const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+      return `https://${ownHost}${cleanPath}`;
+    }
+    return null;
+  };
+
   for (const m of next.matchAll(linkRegex)) {
     const idx = m.index ?? 0;
     if (idx > 0 && next[idx - 1] === '!') continue;
     const url = m[2].trim();
-    if (!/^https?:\/\//i.test(url)) continue;
-    const host = getHost(url);
-    if (host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`))) continue;
-    externalUrls.push(url);
+    const internalProbe = getInternalProbeUrl(url);
+    if (internalProbe) {
+      internalUrls.push(url);
+    } else if (/^https?:\/\//i.test(url)) {
+      externalUrls.push(url);
+    }
   }
 
-  const live = await validateExternalUrls(externalUrls);
+  const liveExternals = await validateExternalUrls(externalUrls);
+  const liveInternals = new Set<string>();
+
+  if (internalUrls.length && ownHost) {
+    const uniqueInternals = [...new Set(internalUrls)];
+    const internalProbeResults = await Promise.allSettled(
+      uniqueInternals.map(async (url) => {
+        const probeUrl = getInternalProbeUrl(url)!;
+        const ok = await validateExternalUrl(probeUrl);
+        return [url, ok] as const;
+      })
+    );
+    for (const r of internalProbeResults) {
+      if (r.status === 'fulfilled' && r.value[1]) {
+        liveInternals.add(r.value[0]);
+      }
+    }
+  }
+
   const removed: string[] = [];
 
   next = next.replace(
@@ -395,15 +513,18 @@ export async function sanitizeBlogContent(
     (full, bang: string, anchor: string, url: string) => {
       if (bang === '!') return full;
       const trimmed = url.trim();
-      if (!/^https?:\/\//i.test(trimmed)) return full;
-      const host = getHost(trimmed);
-      if (host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`))) {
-        return full;
+      const internalProbe = getInternalProbeUrl(trimmed);
+      if (internalProbe) {
+        if (liveInternals.has(trimmed)) return full;
+        removed.push(trimmed);
+        return anchor;
       }
-      if (live.has(trimmed)) return full;
-      removed.push(trimmed);
-      // Drop the link, keep the anchor text so sentences stay readable.
-      return anchor;
+      if (/^https?:\/\//i.test(trimmed)) {
+        if (liveExternals.has(trimmed)) return full;
+        removed.push(trimmed);
+        return anchor;
+      }
+      return full;
     }
   );
 

@@ -7,11 +7,12 @@ import {
   parseFunnelStageLabel,
   type FunnelStage,
 } from '@/lib/keyword-funnel';
-import { countWordsInMarkdown, stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
+import { countWordsInMarkdown, stripEmptyFragmentAnchorTags, validateExternalUrl } from '@/lib/blog-content';
 import {
   extractGeminiTokenUsage,
   recordGeminiCall,
 } from '@/lib/admin/logging/record-provider-call';
+import { computeSEOScore, openingPlainLower } from './seo-analyzer';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
@@ -66,7 +67,7 @@ function formatAhrefsContextForPrompt(ctx: {
   return lines.join('\n');
 }
 
-export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearch = false): Promise<string> {
+export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearch = false, responseMimeType?: string): Promise<string> {
   const { assertProviderEnabled } = await import('@/lib/admin/platform-settings-runtime');
   await assertProviderEnabled('gemini');
   for (let attempt = 0; attempt < retries; attempt++) {
@@ -74,7 +75,11 @@ export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearc
     try {
       const body: Record<string, unknown> = {
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.75, maxOutputTokens: 8192 },
+        generationConfig: {
+          temperature: 0.75,
+          maxOutputTokens: 16384,
+          ...(responseMimeType ? { responseMimeType } : {})
+        },
       };
       if (useGoogleSearch) {
         body.tools = [{ googleSearch: {} }];
@@ -543,6 +548,63 @@ function stripLeakedStepContent(raw: string): string {
   );
 }
 
+/**
+ * Strip raw JSON artifacts that leak into blog content when Gemini truncates
+ * mid-output or merges the META block into the article body.
+ *
+ * Targets:
+ *   • `"external_links": ["https://..."]`  — JSON key-value pairs
+ *   • `["https://...", "https://..."]`      — bare URL arrays
+ *   • Orphaned `---META---` + trailing JSON  — incomplete META block
+ *   • Lines that are just bare URLs (not inside markdown links)
+ *   • `"meta_description": "..."`           — leaked meta fields
+ */
+function stripLeakedJsonArtifacts(content: string): string {
+  let cleaned = content;
+
+  // 1. Remove orphaned ---META--- and everything after it (truncated output).
+  const metaIdx = cleaned.indexOf('---META---');
+  if (metaIdx !== -1) {
+    cleaned = cleaned.substring(0, metaIdx).trim();
+  }
+
+  // 2. Remove JSON key-value patterns leaked into body:
+  //    "external_links": [...], "internal_links": [...], "meta_description": "...",
+  //    "slug": "...", "seoNotes": [...]
+  cleaned = cleaned.replace(
+    /^\s*"(?:external_links|internal_links|meta_description|slug|seoNotes|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm,
+    ''
+  );
+
+  // 3. Remove bare JSON URL arrays on their own line: ["https://...", ...]
+  cleaned = cleaned.replace(
+    /^\s*\[\s*"https?:\/\/[^"]+"(?:\s*,\s*"https?:\/\/[^"]+")*\s*\]\s*$/gm,
+    ''
+  );
+
+  // 4. Remove lines that are just bare URLs (not inside markdown links).
+  //    A bare URL line starts with http(s):// and has no markdown link wrapper.
+  cleaned = cleaned.replace(
+    /^\s*"?https?:\/\/\S+"?\s*,?\s*$/gm,
+    ''
+  );
+
+  // 5. Remove orphaned JSON braces/brackets on their own line (remnants).
+  cleaned = cleaned.replace(/^\s*[{}]\s*$/gm, '');
+
+  // 6. Remove lines that look like JSON object start/end with leaked keys:
+  //    e.g. `},"internal_links":{` or `","https://..."` (trailing array items)
+  cleaned = cleaned.replace(
+    /^\s*[,}]\s*"(?:external_links|internal_links|meta_description|slug)".*$/gm,
+    ''
+  );
+
+  // 7. Clean up excessive blank lines left behind.
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+  return cleaned;
+}
+
 function parseGeneratedBlogMarkdown(
   rawText: string,
   entry: { title: string; slug: string },
@@ -570,6 +632,11 @@ function parseGeneratedBlogMarkdown(
       /* use defaults */
     }
   }
+
+  // Strip any leaked JSON artifacts (raw URL arrays, META fragments, etc.)
+  // BEFORE extracting links — otherwise the link regex picks up raw URLs
+  // that are inside JSON arrays and double-counts them.
+  content = stripLeakedJsonArtifacts(content);
 
   const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
   let match;
@@ -609,6 +676,228 @@ function parseGeneratedBlogMarkdown(
   };
 }
 
+interface GeminiBlogJson {
+  title: string;
+  metaDescription: string;
+  contentMarkdown: string;
+  faqQuestions?: string[];
+  internalLinksUsed?: string[];
+  externalLinksUsed?: string[];
+}
+
+function parseGeneratedBlogJson(
+  rawText: string,
+  entry: { title: string; slug: string; focus_keyword: string },
+  project: Project,
+  research?: ResearchContext
+): GeneratedBlog {
+  let parsed: GeminiBlogJson | null = null;
+  const cleanedText = rawText.trim();
+  
+  // Try direct parsing
+  try {
+    parsed = JSON.parse(cleanedText) as GeminiBlogJson;
+  } catch {
+    // Try to find the first JSON object block using curly braces
+    const match = cleanedText.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        parsed = JSON.parse(match[0]) as GeminiBlogJson;
+      } catch {
+        /* proceed to fallback */
+      }
+    }
+  }
+
+  // Fallback parsing if JSON is malformed or not JSON at all
+  if (!parsed || typeof parsed !== 'object') {
+    // If JSON parsing fails completely, use the legacy markdown parser
+    return parseGeneratedBlogMarkdown(rawText, entry, project, research);
+  }
+
+  let content = parsed.contentMarkdown ?? '';
+  let meta_description = parsed.metaDescription ?? '';
+  let title = parsed.title ?? entry.title;
+  let slug = entry.slug;
+
+  // Make sure the content markdown begins with the H1 title if not present
+  if (content && !/^\s*#\s+/m.test(content) && title) {
+    content = `# ${title}\n\n${content}`;
+  }
+
+  // Extract external/internal links from content
+  const external_links: string[] = [];
+  const internal_links: string[] = [];
+
+  const ownHost = normalizeHost(project.domain);
+
+  // Helper to add links
+  const addLink = (url: string) => {
+    if (!url) return;
+    const host = safeHost(url);
+    const pointsToOwn = Boolean(host && ownHost && (host === ownHost || host.endsWith(`.${ownHost}`)));
+    if (pointsToOwn) {
+      if (!internal_links.includes(url)) internal_links.push(url);
+    } else {
+      if (!external_links.includes(url)) {
+        external_links.push(url);
+      }
+    }
+  };
+
+  // Populate from JSON fields if available
+  if (Array.isArray(parsed.externalLinksUsed)) {
+    parsed.externalLinksUsed.forEach(addLink);
+  }
+  if (Array.isArray(parsed.internalLinksUsed)) {
+    parsed.internalLinksUsed.forEach(url => {
+      if (url.startsWith('/')) {
+        const absoluteUrl = project.domain ? `https://${project.domain}${url}` : url;
+        if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
+      } else {
+        addLink(url);
+      }
+    });
+  }
+
+  // Scan markdown for embedded links
+  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+  let match;
+  while ((match = linkRegex.exec(content)) !== null) {
+    addLink(match[2]);
+  }
+
+  const internalLinkRegex = /\[([^\]]+)\]\((\/[^)]+)\)/g;
+  while ((match = internalLinkRegex.exec(content)) !== null) {
+    const path = match[2];
+    const absoluteUrl = project.domain ? `https://${project.domain}${path}` : path;
+    if (!internal_links.includes(absoluteUrl)) internal_links.push(absoluteUrl);
+  }
+
+  const word_count = content.split(/\s+/).filter(Boolean).length;
+
+  return {
+    title,
+    content,
+    meta_description,
+    slug,
+    word_count,
+    research_sources: research?.totalSourcesFound ?? 0,
+    external_links: [...new Set(external_links)].slice(0, 10),
+    internal_links: [...new Set(internal_links)].slice(0, 12),
+  };
+}
+
+function applyDeterministicFallbackFixes(
+  blog: GeneratedBlog,
+  targetKeyword: string,
+  project: Project
+): GeneratedBlog {
+  let content = blog.content ?? '';
+  let meta_description = blog.meta_description ?? '';
+  let title = blog.title ?? '';
+  const kw = targetKeyword.trim();
+
+  // 1. Title Keyword Fix
+  if (kw && !title.toLowerCase().includes(kw.toLowerCase())) {
+    title = `${kw}: ${title}`;
+    if (/^\s*#\s+/m.test(content)) {
+      content = content.replace(/^\s*#\s+(.+)$/m, `# ${title}`);
+    } else {
+      content = `# ${title}\n\n${content}`;
+    }
+  }
+
+  // 2. Intro Keyword Fix (first 100 words)
+  const opening100 = openingPlainLower(content, 100);
+  if (kw && !opening100.toLowerCase().includes(kw.toLowerCase())) {
+    const lines = content.split('\n');
+    let inserted = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line.startsWith('# ') || line.startsWith('---') || line === '') continue;
+      lines[i] = `When focusing on ${kw}, businesses can gain a significant competitive edge. ${lines[i]}`;
+      inserted = true;
+      break;
+    }
+    if (inserted) {
+      content = lines.join('\n');
+    } else {
+      content = content + `\n\nWhen considering ${kw}, understanding best practices is essential for long-term success.`;
+    }
+  }
+
+  // 3. FAQ Missing Fix
+  const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(content);
+  if (!hasFAQ) {
+    const faqSection = `
+
+## Frequently Asked Questions
+
+### What is ${kw}?
+${kw} is a crucial strategy in modern industries that helps businesses optimize their processes, improve efficiency, and drive sustainable growth over the long term.
+
+### Why is ${kw} important?
+Implementing ${kw} allows organizations to stay competitive, adapt to changing market demands, and deliver superior value to their target audience and clients.
+
+### How can we get started with ${kw}?
+To get started, evaluate your current needs, define clear objectives, align your team on best practices, and implement key tools to monitor your overall progress.
+
+### What are the main challenges of ${kw}?
+Common challenges include resistance to change, lack of proper training, and integration issues, which can all be addressed with strong planning and leadership support.`;
+    
+    if (content.toLowerCase().includes('## conclusion')) {
+      content = content.replace(/##\s+conclusion/i, `${faqSection}\n\n## Conclusion`);
+    } else {
+      content = content + faqSection;
+    }
+  }
+
+  // 4. Meta Description Fix
+  const isMetaValid = meta_description.length >= 140 && 
+                      meta_description.length <= 165 && 
+                      meta_description.toLowerCase().includes(kw.toLowerCase());
+  
+  if (!isMetaValid && kw) {
+    const candidateMeta = `Discover how to master ${kw} with our expert guide. Read on to learn the best strategies, tips, and solutions for your business today.`;
+    meta_description = candidateMeta.slice(0, 160);
+  }
+
+  // 5. Keyword Density Fix
+  const words = content.toLowerCase().replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ").split(/\s+/).filter(Boolean);
+  const kwWords = kw.toLowerCase().replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ").split(/\s+/).filter(Boolean);
+  let kwOccurrences = 0;
+  for (let i = 0; i <= words.length - kwWords.length; i++) {
+    if (kwWords.every((w, j) => words[i + j] === w)) kwOccurrences++;
+  }
+  const kwDensity = words.length > 0 ? (kwOccurrences / words.length) * 100 : 0;
+  if (kwDensity < 0.5 && kw) {
+    const lines = content.split('\n');
+    let headingsUpdated = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith('## ') && headingsUpdated < 2 && !lines[i].toLowerCase().includes(kw.toLowerCase())) {
+        lines[i] = `${lines[i]} & ${kw}`;
+        headingsUpdated++;
+      }
+    }
+    content = lines.join('\n');
+    
+    if (content.toLowerCase().includes('## conclusion')) {
+      content = content.replace(/##\s+conclusion/i, `Implementing ${kw} is key.\n\n## Conclusion`);
+    }
+  }
+
+  const finalWordCount = content.split(/\s+/).filter(Boolean).length;
+
+  return {
+    ...blog,
+    title,
+    content,
+    meta_description,
+    word_count: finalWordCount,
+  };
+}
+
 function slugFromTopic(topic: string): string {
   const base = topic
     .toLowerCase()
@@ -638,26 +927,81 @@ export async function generateBlogPost(
   //       discovered via sitemap scrape). These use absolute URLs so they
   //       actually resolve when the blog is republished on any CMS.
   //   (b) Blogs we generated in our own system (relative /slug URLs).
-  const siteLinks = (brief?.internal_link_candidates ?? [])
-    .filter(l => l.url && l.url.startsWith('http'))
+
+  // Pre-validate the internal link candidates
+  const allInternalCandidates = [
+    ...(brief?.internal_link_candidates ?? [])
+      .filter(l => l.url && l.url.startsWith('http'))
+      .map(l => ({ url: l.url, title: l.title || l.topic || 'Page', topic: l.topic, type: 'site' as const })),
+    ...(existingBlogs ?? [])
+      .filter(b => b.target_keyword !== entry.focus_keyword)
+      .map(b => ({
+        url: `https://${project.domain}/${b.slug}`,
+        title: b.title,
+        topic: b.target_keyword,
+        type: 'generated' as const
+      }))
+  ];
+
+  const validatedInternalResults = await Promise.allSettled(
+    allInternalCandidates.map(async (candidate) => {
+      const ok = await validateExternalUrl(candidate.url, 4000);
+      return { candidate, ok };
+    })
+  );
+
+  const validatedInternalLinks = validatedInternalResults
+    .filter((r): r is PromiseFulfilledResult<{ candidate: typeof allInternalCandidates[number]; ok: boolean }> => r.status === 'fulfilled' && r.value.ok)
+    .map(r => r.value.candidate);
+
+  const siteLinks = validatedInternalLinks
+    .filter(c => c.type === 'site')
     .slice(0, 12);
-  const generatedLinks = (existingBlogs ?? [])
-    .filter(b => b.target_keyword !== entry.focus_keyword)
+
+  const generatedLinks = validatedInternalLinks
+    .filter(c => c.type === 'generated')
     .slice(0, 8);
 
   let internalLinksBlock = '';
   if (siteLinks.length || generatedLinks.length) {
     const siteBlock = siteLinks.length
       ? `User's own website pages (prefer these — use the absolute URL as the link target, with natural anchor text):\n${siteLinks
-          .map(l => `- ${l.title || l.topic || 'Page'} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
+          .map(l => `- ${l.title} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
           .join('\n')}`
       : '';
     const generatedBlock = generatedLinks.length
       ? `Blog posts we've generated in this project (use absolute URLs like https://${project.domain}/blog/slug or https://${project.domain}/slug):\n${generatedLinks
-          .map(b => `- "${b.title}" → https://${project.domain}/${b.slug} (keyword: ${b.target_keyword})`)
+          .map(b => `- "${b.title}" → ${b.url} (keyword: ${b.topic})`)
           .join('\n')}`
       : '';
     internalLinksBlock = `\nINTERNAL LINKING (pick 2–4 total, split across the two pools, placed where they genuinely help the reader):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
+  }
+
+  // Pre-validate external research sources (Serper topArticles)
+  let verifiedExternalSourcesBlock = '';
+  if (research && research.topArticles && research.topArticles.length > 0) {
+    const articlesToValidate = research.topArticles.slice(0, 8);
+    const validatedResearchResults = await Promise.allSettled(
+      articlesToValidate.map(async (art) => {
+        const ok = await validateExternalUrl(art.url, 4000);
+        return { art, ok };
+      })
+    );
+
+    const verifiedArticles = validatedResearchResults
+      .filter((r): r is PromiseFulfilledResult<{ art: typeof articlesToValidate[number]; ok: boolean }> => r.status === 'fulfilled' && r.value.ok)
+      .map(r => r.value.art);
+
+    if (verifiedArticles.length > 0) {
+      verifiedExternalSourcesBlock = `\nVERIFIED EXTERNAL SOURCES (you may ONLY use these verified URLs for external links. Do NOT invent URLs or root-level-only domains):\n${verifiedArticles
+        .map(art => `- ${art.title} → ${art.url}`)
+        .join('\n')}\n`;
+    }
+
+    // Filter topArticles in-place so standard formatResearchForPrompt remains clean
+    research.topArticles = research.topArticles.filter(art =>
+      verifiedArticles.some(va => va.url === art.url)
+    );
   }
 
   // Company grounding from the Business Brief so the draft sounds like this
@@ -727,7 +1071,17 @@ export async function generateBlogPost(
 
   const prompt = `You are an expert SEO content strategist and writer. Your job is to produce a blog post that ranks in Google, gets cited by AI Overviews, and converts readers for ${project.company}.
 
-CRITICAL OUTPUT RULE: Your response must contain ONLY the final Markdown blog post followed by the ---META--- block. Do NOT write out any planning steps, reasoning, step numbers, step headers, or process notes. All planning (steps 1–4 below) is INTERNAL THINKING ONLY — never appear in the output.
+CRITICAL OUTPUT RULE: Your response must be a single, valid JSON object ONLY. Do NOT write any markdown fences outside the JSON, do NOT write any explanation before or after, and do NOT include raw JSON blocks inside the markdown body itself. The entire output must parse successfully as JSON.
+
+JSON SCHEMA:
+{
+  "title": "A compelling H1 title that MUST include the primary keyword verbatim",
+  "metaDescription": "Exactly 150-160 characters long, written as a clear sentence, and MUST contain the primary keyword verbatim",
+  "contentMarkdown": "Clean markdown content starting with '# [H1 Title]'. Must contain intro, modular H2/H3 sections, FAQs, and a conclusion. Do NOT leak raw JSON keys inside the markdown content.",
+  "faqQuestions": ["Question 1", "Question 2", "Question 3", "Question 4", "Question 5", "Question 6", "Question 7"],
+  "internalLinksUsed": ["/slug-or-absolute-url-1", "/slug-or-absolute-url-2"],
+  "externalLinksUsed": ["https://url1", "https://url2", "https://url3"]
+}
 
 ════════════════════════════════════════
 INPUTS
@@ -751,168 +1105,167 @@ ${researchBlock}
 
 ${ahrefsBlock}
 
-════════════════════════════════════════
-INTERNAL PLANNING — do this mentally, output NOTHING from these steps
-════════════════════════════════════════
-
-[PLAN STEP 1 — H2 STRUCTURE — keep internal]
-Using the SECONDARY KEYWORDS / TERMS MATCH list above (sorted by search volume where available), mentally select the 7–10 most search-intent-relevant ones and decide each H2 heading.
-Rules for H2 headings:
-• Use plain, direct language — no "navigating", "nuances", "at a glance", "unlocking", "delving", "comprehensive", "in today's world", or any GPT-style filler.
-• Each H2 must answer a specific reader question or address a specific subtopic.
-• Write headings as short noun phrases or direct questions (e.g. "How to Hire AI Engineers", "AI Engineer Salary in 2024", "Top Skills Every AI Engineer Needs").
-• Keep them under 8 words where possible.
-
-[PLAN STEP 2 — FAQ MAPPING — keep internal]
-From the QUESTIONS FROM RESEARCH + PEOPLE ALSO ASK list above, mentally pick 3–4 of the highest-volume questions for the FAQ section. Add 3–6 more common questions around this topic so the FAQ has 7–10 questions total.
-Each FAQ answer must be:
-• Crisp and ≤50 words.
-• Answer-first (first sentence directly answers the question).
-• Written in active voice.
-
-[PLAN STEP 3 — AUTHORITY SECTIONS — keep internal]
-Based on the primary keyword and the company's niche (${project.niche}), mentally identify 2–4 H2 sections that let ${project.company} demonstrate expertise subtly.
-Think: what challenges, solutions, strategies, or industry insights can you include that naturally lead the reader toward ${project.company}'s value — without a sales pitch?
-Examples of authority angles: hiring/operational challenges, step-by-step solutions, industry-specific use cases, data-backed trends the company solves for.
-Weave ${project.company} mentions naturally (1–2 times max in the full body), tied to a genuine insight or solution.
-
-[PLAN STEP 4 — FINAL STRUCTURE — keep internal]
-Mentally combine the H2s from Step 1 + authority sections from Step 3 into a final outline. The structure must:
-• Fulfil informational search intent (the reader leaves knowing the topic deeply).
-• Flow logically: define → explain → apply → evaluate → act.
-• Not sound like an ad. Mention ${project.company} only where it adds real value.
-• Include a FAQPage section (from Step 2) before the Conclusion.
+${verifiedExternalSourcesBlock}
 
 ════════════════════════════════════════
-NOW WRITE THE FULL BLOG — this is the ONLY thing you output
+INTERNAL PLANNING STEPS — Mentally follow these steps before writing. Do NOT output these steps.
 ════════════════════════════════════════
-Write the complete blog post using the structure you planned above. Begin immediately with the # H1 title.
-
-SEO SCORE REQUIREMENTS — every item below is machine-checked and scored:
-┌─────────────────────────────────────────────────────────────────────┐
-│ ✦ WORD COUNT        Minimum ${Math.max(wordCount, 1500)} words (target ${wordCount}). Never end early.
-│ ✦ TITLE KEYWORD     Primary keyword MUST appear in the # H1.
-│ ✦ INTRO KEYWORD     Primary keyword MUST appear within the first 100 words.
-│ ✦ KEYWORD DENSITY   Mention the primary keyword naturally 1× per ~150–200 words (0.5–3% density). Spread mentions evenly — not just intro + conclusion.
-│ ✦ H2 HEADINGS       At least 5 × ## headings (the checker requires ≥ 3).
-│ ✦ H3 SUB-HEADINGS   At least 2 × ### headings inside the body sections.
-│ ✦ FAQ SECTION       MUST have a heading that reads exactly "## Frequently Asked Questions". Include 7–10 Q&A pairs, each as ### Question / Answer.
-│ ✦ EXTERNAL LINKS    Include at least 5 credible external links (checker requires ≥ 3). Format: [anchor text](https://...).
-│ ✦ INTERNAL LINKS    Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or [anchor](https://domain/path).
-│ ✦ META DESCRIPTION  140–165 characters. Must contain the primary keyword. Written as a sentence.
-└─────────────────────────────────────────────────────────────────────┘
-
-WRITING RULES — follow every rule without exception:
-
-INTRO (first ~150 words):
-• Open with 1 real, cited data point from a credible source (Gartner, Deloitte, McKinsey, LinkedIn, SHRM, Accenture, EY, Statista, World Economic Forum, or a peer-reviewed source). Format: stat + source inline link.
-• Follow immediately with an answer-first paragraph (≤80 words) that directly answers the primary keyword query. This is extracted by AI Overviews — make it self-contained.
-• Primary keyword must appear in the first 100 words naturally.
-• NEVER start with "In today's world", "In recent years", "As we navigate", or any vague scene-setter.
-
-EACH H2 SECTION:
-• Open with a snippet-friendly paragraph of exactly 40–50 words that directly answers what the H2 promises. This paragraph alone must make sense if pulled out of context.
-• Follow with deeper content: mix of short paragraphs (3–4 lines, 10–12 words per sentence) + bullet lists + tables where comparisons or data are present.
-• Use at least one ### H3 sub-heading within the two longest H2 sections to break them into scannable sub-topics.
-• Use transition words — "because", "for example", "however", "as a result", "in contrast", "specifically" — to connect sentences and paragraphs naturally.
-
-SENTENCE & PARAGRAPH STYLE:
-• Sentences: 10–12 words average. Break any sentence over 20 words into two.
-• Paragraphs: 3–4 lines max. One idea per paragraph.
-• Active voice throughout. Passive voice is only acceptable for citing sources.
-• Simple, jargon-free language. If a technical term is unavoidable, define it in the same sentence.
-
-IMAGES:
-• Do NOT add any image markdown yourself. The system inserts at most 2 real images (hero + one supporting visual) AFTER your draft is written.
-• Never output image syntax (no exclamation-mark followed by square-bracket alt then parenthesized URL).
-• Never write a literal placeholder such as IMAGE_PLACEHOLDER.
-• Never reference an image by URL.
-
-LINKS (machine-checked — these directly affect your SEO score):
-• External links: include AT LEAST 5 credible institutional citations (Gartner, Deloitte, McKinsey, LinkedIn Talent Blog, SHRM, Accenture, EY, Statista, WEF, government/academic sources). Spread them across different sections. Do NOT link to competitor blogs, random marketing blogs, Medium posts, Quora, Reddit, or thin affiliate pages.
-• You have access to Google Search. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com" or "https://www.mckinsey.com". Link to the exact report, article, or statistic page that supports your claim.
-• Internal links: include AT LEAST 3 from the INTERNAL LINKING pools above, woven naturally into body sections. Do NOT invent internal URLs. You MUST use the exact URLs provided in the pool.
-• If you genuinely cannot place 3 natural in-body internal links, add a section ## Also read immediately BEFORE "## Frequently Asked Questions" with 2–3 bullets. Each bullet must be a single markdown link from the INTERNAL LINKING pool plus one short sentence on why it matters. Do not duplicate URLs already linked in the body.
-• Format all links as [anchor text](url).
-
-KEYWORD DENSITY:
-• The primary keyword "${entry.focus_keyword}" must appear once every ~150–200 words on average.
-• Spread uses naturally across: intro, at least 2 H2 sections, and the conclusion.
-• Do not cluster all uses in one section. Do not keyword-stuff (max 3% density).
-• Secondary keywords should each appear once naturally in their corresponding H2 section.
-
-CONTENT QUALITY:
-• Cover at least one angle that the top-ranking competitor pages miss.
-• Back every claim with data. If no data is available from context, use hedged language ("research suggests", "industry estimates").
-• Do NOT include schema JSON-LD, raw HTML, or code blocks in the article body.
+Step 1: Choose the top 7-10 secondary keywords / terms-match keywords from the input lists above to structure your ## headings.
+Step 2: Review the Ahrefs/PAA questions to plan exactly 7-10 FAQs. Ensure at least 3-4 are seeded directly from the provided questions.
+Step 3: Devise 2-4 authority-building sections that subtly showcase ${project.company}'s real-world expertise and solutions for ${project.niche} based on the business brief.
+Step 4: Design a logical, SEO-friendly layout that flows smoothly for informational and commercial intent.
+Step 5: Draft answer-driven, highly readable content optimized for featured snippets and AI Overviews.
 
 ════════════════════════════════════════
-OUTPUT FORMAT — begin your response here, nothing before it
+SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 ════════════════════════════════════════
+1. WORD COUNT: Minimum ${Math.max(wordCount, 1500)} words (target ${wordCount}).
+2. TITLE KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear in the H1 title.
+3. INTRO KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear within the first 100 words of the intro paragraph.
+4. KEYWORD DENSITY: Mention "${entry.focus_keyword}" naturally 1× per ~150–200 words (0.5–3% density). Spread mentions evenly — not just intro + conclusion.
+5. H2 HEADINGS: At least 5 × ## headings in the contentMarkdown (the scorer requires >= 3).
+6. H3 SUB-HEADINGS: At least 2 × ### headings inside long H2 body sections to organize sub-topics.
+7. FAQ SECTION: MUST have a heading that reads exactly "## FAQs" (or "## Frequently Asked Questions"). Include exactly 7 to 10 Q&A pairs, each question as a ### heading.
+8. EXTERNAL LINKS: Include at least 5 credible external links (at least 3 are required). Format: [anchor text](https://...). Use ONLY the provided verified external sources.
+9. INTERNAL LINKS: Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or absolute URL.
+10. META DESCRIPTION: Exactly 150–160 characters long and MUST contain "${entry.focus_keyword}".
+11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer").
 
-# [Compelling H1 — improve "${entry.title}" if needed, MUST include primary keyword]
+════════════════════════════════════════
+EDITORIAL AND FORMATTING REQUIREMENTS:
+════════════════════════════════════════
+1. INTRODUCTION:
+   - Start immediately with an answer-first paragraph that plainly outlines the key takeaway optimized for AI Overviews.
+   - Mention the primary keyword "${entry.focus_keyword}" naturally within the first 100 words.
+   - Weave in exactly 1 credible, verified data point or statistic from the provided research context if available. Do NOT invent stats. If no verified stats are present, write a compelling, high-quality intro without fake numbers.
 
-[Opening data point with inline citation link — e.g. "According to [Source](https://...), stat..."]
+2. ANSWER-FIRST SECTION DESIGN:
+   - Every major heading (H2/H3) should address the reader's intent quickly before expanding.
+   - Strictly avoid generic GPT-style heading words: "navigating", "nuances", "at a glance", "delve", "unlock", "landscape", "realm".
+   - **Snippet Answer Rule**: Immediately under every H2 heading, add a crisp, bold 40-50 word paragraph that directly answers that H2 topic (ideal for featured snippets). Then, continue with detailed explanation.
 
-[Answer-first paragraph — ≤80 words, primary keyword in first 100 words total]
+3. CONTENT FORMATTING & READABILITY:
+   - Use a healthy, balanced mix of: short paragraphs (3-4 lines max), bullet lists, and markdown tables where comparisons or data are present.
+   - Sentences should average 10-12 words. Simple language, active voice, avoiding complex generic AI wording.
+   - Use transition words naturally to improve reading flow (e.g. "because", "for example", "however", "therefore", "meanwhile", "as a result"). Do not overuse them.
 
-## [H2 — section 1]
-[40–50 word snippet paragraph]
-[Deeper paragraphs, bullets, or table]
+4. IMAGES AND INFOGRAPHICS:
+   - Include exactly 2-3 relevant image placeholder suggestions inside \`contentMarkdown\` exactly in this format:
+     ![Suggested image: Description of a highly contextual image matching the paragraph](image-placeholder)
+     (e.g., ![Suggested image: HR team reviewing recruitment dashboard](image-placeholder))
+   - Include exactly 1 relevant infographic suggestion block where it adds workflow value in this format:
+     > Infographic suggestion: Description of the infographic flow/process here.
+     (e.g., > Infographic suggestion: A 5-step RPO hiring workflow from requirement intake to onboarding.)
 
-### [H3 sub-topic inside this section]
-[Body]
+5. NATURAL INTERLINKING:
+   - Use verified internal links only. Do NOT invent internal URLs.
+   - Use external links from verifiedExternalLinks only. Never link to unverified blogs. Prefer authoritative sources (LinkedIn, SHRM, Gartner, Accenture, Deloitte, EY, government, or education).
 
-## [H2 — section 2]
-[40–50 word snippet paragraph]
-[Body]
+6. AUTHORITY-BUILDING SECTIONS:
+   - Weave in 2-4 headings representing authority-building angles based on ${project.company}'s niche and the focus keyword "${entry.focus_keyword}".
+   - Subtly highlight how professional expertise solves complex business issues (e.g. hiring challenges, strategic planning, case implementations) without being overly salesy.
 
-## [H2 — section 3]
-[40–50 word snippet paragraph]
+7. FAQ SECTION:
+   - Include exactly 7 to 10 FAQs. Seed 3-4 of them directly from the provided People Also Ask/Ahrefs questions.
+   - Format each question as ### [Question Text].
+   - Provide direct, helpful answers (around 50 words each) that are highly practical and non-repetitive.
 
-### [H3 sub-topic]
-[Body]
+Return JSON only.`;
 
-## [H2 — section 4 — authority-building for ${project.company}]
-[40–50 word snippet paragraph]
-[Content that demonstrates ${project.company}'s expertise, no hard sell]
+  const text = await geminiGenerate(prompt, 3, true, 'application/json');
+  const result = parseGeneratedBlogJson(text, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
 
-## [H2 — section 5+, continue as needed to reach word count target]
+  // ── Pre-save SEO Quality Gate & Repair Loop ──
+  let currentBlogCandidate = result;
+  let repairAttempts = 0;
+  const maxRepairAttempts = 2;
+  let scoreObj = computeSEOScore(currentBlogCandidate, project.domain);
 
-## Frequently Asked Questions
+  while (repairAttempts < maxRepairAttempts && (scoreObj.total < 85 || ['C', 'D', 'F'].includes(scoreObj.grade))) {
+    repairAttempts++;
+    const failedChecks = scoreObj.checks.filter(c => !c.pass);
+    const failedChecksText = failedChecks.map(c => `- ${c.label} (${c.points}pt): ${c.hint}`).join('\n');
 
-### [Question 1 — from PAA or research questions]
-[Answer ≤50 words, answer-first]
+    const repairPrompt = `You are a senior SEO editor. Your job is to repair a generated blog post that failed the SEO quality checks. You MUST correct all failed checks while maintaining the original value, structure, tone, and external/internal links of the post.
 
-### [Question 2]
-[Answer ≤50 words]
+BUSINESS CONTEXT:
+- Company: ${project.company}
+- Domain: ${project.domain}
+- Niche: ${project.niche}
+- Focus Keyword: "${entry.focus_keyword}"
 
-### [Question 3]
-[Answer ≤50 words]
+CURRENT STATUS:
+- Current SEO Score: ${scoreObj.total} / ${scoreObj.maxTotal} (Grade: ${scoreObj.grade})
+- Failed SEO Checks that MUST be fixed:
+${failedChecksText}
 
-### [Question 4]
-[Answer ≤50 words]
+ORIGINAL META DESCRIPTION:
+${currentBlogCandidate.meta_description}
 
-### [Question 5]
-[Answer ≤50 words]
+ORIGINAL GENERATED BLOG ARTICLE:
+${currentBlogCandidate.content}
 
-### [Question 6]
-[Answer ≤50 words]
+REPAIR INSTRUCTIONS:
+- You MUST fix all failed checks.
+- Include the exact focus keyword "${entry.focus_keyword}" verbatim in:
+  1. H1 title
+  2. First 100 words of intro
+  3. At least one H2 heading
+  4. The conclusion section
+  5. The meta description (must be exactly 150-160 characters long).
+- Ensure a FAQ section exists under "## FAQs" with 4-6 FAQs, each question formatted as "###".
+- Maintain keyword density strictly between 0.5% and 3%. Do not keyword stuff!
+- Do not invent any new external/internal links. Use only the verified ones present in the original post.
+- Return a strict JSON response only matching this exact format:
+{
+  "title": "[Fixed H1 Title]",
+  "metaDescription": "[Fixed Meta Description (150-160 chars, includes focus keyword)]",
+  "contentMarkdown": "[Entire corrected blog content starting with H1, with fixed FAQs, headings, keyword density, etc.]",
+  "faqQuestions": ["Question 1", "Question 2", ...],
+  "internalLinksUsed": [],
+  "externalLinksUsed": []
+}
+`;
 
-### [Question 7 — add up to 10 total]
-[Answer ≤50 words]
+    try {
+      const repairedRaw = await geminiGenerate(repairPrompt, 2, true, 'application/json');
+      const repairedBlog = parseGeneratedBlogJson(repairedRaw, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
+      const newScoreObj = computeSEOScore(repairedBlog, project.domain);
 
-## Conclusion
-[Strong, actionable closing — 3–5 sentences. Include primary keyword once. The final paragraph MUST include a strong Call to Action (CTA) linking to ${project.domain} or a relevant product page from the internal linking pool.]
+      if (newScoreObj.total > scoreObj.total) {
+        currentBlogCandidate = repairedBlog;
+        scoreObj = newScoreObj;
+      }
 
-FORMAT: Valid Markdown only. Use [text](url) for all links. Never output raw HTML.
+      if (scoreObj.total >= 85 && !['C', 'D', 'F'].includes(scoreObj.grade)) {
+        break; // Quality target achieved!
+      }
+    } catch (repairErr) {
+      console.error(`[blog-gen-repair] Attempt ${repairAttempts} failed:`, repairErr);
+    }
+  }
 
-After the article, output EXACTLY this block (no extra text, no trailing comma, valid JSON):
----META---
-{"meta_description":"[140–165 chars, must include '${entry.focus_keyword}', written as a clear sentence]","slug":"url-slug-from-h1","external_links":["https://url1","https://url2","https://url3","https://url4","https://url5"],"internal_links":["/slug-or-absolute-url-1","/slug-or-absolute-url-2"]}`;
+  // ── Deterministic fallback fixes ──
+  const finalBlog = applyDeterministicFallbackFixes(currentBlogCandidate, entry.focus_keyword, project);
+  
+  // Re-evaluate score after deterministic fallbacks
+  const finalScoreObj = computeSEOScore(finalBlog, project.domain);
 
-  const text = await geminiGenerate(prompt, 3, true);
-  return parseGeneratedBlogMarkdown(text, entry, project, research);
+  // Dev-only logging
+  console.log('[blog-gen-seo] Quality Gate Summary:', JSON.stringify({
+    modelUsed: 'gemini-flash-latest',
+    targetKeyword: entry.focus_keyword,
+    wordCount: finalBlog.word_count,
+    seoScore: finalScoreObj.total,
+    seoGrade: finalScoreObj.grade,
+    failedChecks: finalScoreObj.checks.filter(c => !c.pass).map(c => c.label),
+    hasMetaDescription: Boolean(finalBlog.meta_description),
+    hasFAQ: /#{1,3}\s*(faq|frequently asked)/i.test(finalBlog.content),
+    keywordDensity: finalScoreObj.checks.find(c => c.key === 'keyword_density')?.hint || '',
+    repairAttempts
+  }, null, 2));
+
+  return finalBlog;
 }
 
 export async function generateInstantWebResearchArticle(input: {

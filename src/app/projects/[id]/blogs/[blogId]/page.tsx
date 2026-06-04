@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo,
+  useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo, lazy, Suspense,
   type AnchorHTMLAttributes, type ComponentType,
   type HTMLAttributes, type ImgHTMLAttributes, type ReactNode,
   type RefObject,
@@ -13,17 +13,24 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { blogsApi } from "@/frontend/api/blogs";
 import { projectsApi } from "@/frontend/api/projects";
-import { useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import toast from "react-hot-toast";
 import { Blog, BlogSeoIssueKey, BlogStatus, WORD_COUNT_OPTIONS, ExportFormat, type CalendarEntry } from "@/lib/types";
 import type { Project } from "@/lib/types";
 import { exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload } from "@/lib/export";
 import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
+import { computeSEOScore } from "@/lib/seo-analyzer";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
-import { BlogDeepAnalysisModal } from "@/components/BlogDeepAnalysisModal";
 import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
+
+// Lazy load heavy modals to improve initial page load
+const BlogDeepAnalysisModal = lazy(() =>
+  import("@/components/BlogDeepAnalysisModal").then(m => ({
+    default: m.BlogDeepAnalysisModal,
+  }))
+);
 import { extractInlineMarkdownLinks, type BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
 import { rangeSelectionToMarkdown, rangeSelectionHtmlFragment } from "@/lib/editor-selection-markdown";
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
@@ -685,7 +692,22 @@ export default function BlogViewerPage() {
 
   const [blog, setBlog]                   = useState<Blog | null>(null);
   const [project, setProject]             = useState<Project | null>(null);
-  const [loading, setLoading]             = useState(true);
+
+  const { data: blogQueryRes, isLoading: blogQueryLoading } = useQuery({
+    queryKey: qk.blog(blogId),
+    queryFn: () => blogsApi.getById(blogId),
+    enabled: !!blogId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+  const { data: projectQueryRes, isLoading: projectQueryLoading } = useProject(projectId);
+  const { data: enhancedQueryRes, isLoading: enhancedQueryLoading } = useQuery({
+    queryKey: ["blog-enhanced", blogId],
+    queryFn: () => blogsApi.getEnhanced(blogId),
+    enabled: !!blogId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const loading = (!blog || !project) && (blogQueryLoading || projectQueryLoading || enhancedQueryLoading);
   const [downloading, setDownloading]     = useState<ExportFormat | null>(null);
   const [regenerating, setRegenerating]   = useState(false);
   const [copied, setCopied]               = useState(false);
@@ -752,7 +774,35 @@ export default function BlogViewerPage() {
   const [enhancedBlog, setEnhancedBlog] = useState<Blog | null>(null);
   const [compareView, setCompareView] = useState<"before" | "after">("before");
   const isAfterView = compareView === "after" && enhancedBlog !== null;
-  const displayBlog: Blog | null = isAfterView ? enhancedBlog : blog;
+
+  const [beforeDeepEnhance, setBeforeDeepEnhance] = useState<{
+    title: string;
+    metaDescription: string;
+    content: string;
+  } | null>(null);
+  const [deepEnhancedResult, setDeepEnhancedResult] = useState<{
+    enhancedTitle: string;
+    enhancedMetaDescription: string;
+    enhancedContentMarkdown: string;
+    appliedFixes: string[];
+    unresolvedIssues: string[];
+    improvementSummary: string;
+  } | null>(null);
+  const [deepCompareView, setDeepCompareView] = useState<"before" | "after">("after");
+  const [deepEnhancing, setDeepEnhancing] = useState(false);
+
+  const isDeepBefore = deepCompareView === "before" && beforeDeepEnhance !== null;
+
+  const displayBlog: Blog | null = isDeepBefore
+    ? (blog
+        ? {
+            ...blog,
+            title: beforeDeepEnhance!.title,
+            meta_description: beforeDeepEnhance!.metaDescription,
+            content: beforeDeepEnhance!.content,
+          }
+        : null)
+    : (isAfterView ? enhancedBlog : blog);
 
   /** Updates the currently-displayed blog (Before → `blog`, After → `enhancedBlog`). */
   const updateDisplayBlog = useCallback(
@@ -760,12 +810,24 @@ export default function BlogViewerPage() {
       const apply = (prev: Blog): Blog =>
         typeof next === "function" ? (next as (b: Blog) => Blog)(prev) : next;
       if (isAfterView) {
-        setEnhancedBlog(prev => (prev ? apply(prev) : prev));
+        setEnhancedBlog(prev => {
+          const nextVal = prev ? apply(prev) : prev;
+          if (nextVal) {
+            queryClient.setQueryData(["blog-enhanced", blogId], { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
       } else {
-        setBlog(prev => (prev ? apply(prev) : prev));
+        setBlog(prev => {
+          const nextVal = prev ? apply(prev) : prev;
+          if (nextVal) {
+            queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
       }
     },
-    [isAfterView]
+    [isAfterView, blogId, queryClient]
   );
 
   const analysisIsStale = Boolean(
@@ -857,27 +919,37 @@ export default function BlogViewerPage() {
   }, [editMode]);
 
   useEffect(() => {
-    setLoading(true);
     setBlog(null);
     setEnhancedBlog(null);
     setCompareView("before");
-    // Fetch the original blog + project up front; the enhanced version (if
-    // any) is fetched in parallel so the Before / After toggle can re-appear
-    // after a hard reload or history navigation.
-    Promise.all([
-      blogsApi.getById(blogId),
-      projectsApi.get(projectId),
-      blogsApi.getEnhanced(blogId),
-    ]).then(([blogRes, projRes, enhancedRes]) => {
-      if (blogRes.success && blogRes.data) setBlog(blogRes.data);
-      if (projRes.success && projRes.data) setProject(projRes.data);
-      if (enhancedRes.success && enhancedRes.data) setEnhancedBlog(enhancedRes.data);
-      setLoading(false);
-    });
+  }, [blogId]);
+
+  useEffect(() => {
+    if (blogQueryRes?.success && blogQueryRes.data) {
+      setBlog(blogQueryRes.data);
+      if (blogQueryRes.data.id !== blogId) {
+        window.history.replaceState(null, "", `/projects/${projectId}/blogs/${blogQueryRes.data.id}${window.location.search}`);
+      }
+    }
+  }, [blogQueryRes, blogId, projectId]);
+
+  useEffect(() => {
+    if (projectQueryRes?.success && projectQueryRes.data) {
+      setProject(projectQueryRes.data);
+    }
+  }, [projectQueryRes]);
+
+  useEffect(() => {
+    if (enhancedQueryRes?.success && enhancedQueryRes.data) {
+      setEnhancedBlog(enhancedQueryRes.data);
+    }
+  }, [enhancedQueryRes]);
+
+  useEffect(() => {
     void blogsApi.getDeepAnalysis(blogId).then(cached => {
       if (cached.cached && cached.data) setDeepAnalysis(cached.data);
     });
-  }, [blogId, projectId]);
+  }, [blogId]);
 
   const runAnalysis = async (opts?: { reanalyse?: boolean }) => {
     if (opts?.reanalyse) {
@@ -887,7 +959,7 @@ export default function BlogViewerPage() {
       setAnalysisLoading(true);
     }
     setAnalysisError("");
-    const res = await analyzeBlogContent(blogId);
+    const res = await analyzeBlogContent(blog?.id || blogId);
     setAnalysisLoading(false);
     setAnalysisReanalysing(false);
     if (res.success) {
@@ -921,19 +993,20 @@ export default function BlogViewerPage() {
       }, 14_000);
 
       try {
-        const res = await blogsApi.runDeepAnalysis(blogId, { force });
+        const res = await blogsApi.runDeepAnalysis(blog?.id || blogId, { force });
         if (res.success) {
           setDeepAnalysis(res.data);
           if (res.trace) console.log("[deep-analysis] trace:", res.trace);
           const at = "updatedAt" in res && res.updatedAt ? res.updatedAt : new Date().toISOString();
           const score = res.data.deepAnalysisScore;
+          const currentBlogId = blog?.id || blogId;
           setBlog(prev =>
-            prev && prev.id === blogId
+            prev && prev.id === currentBlogId
               ? { ...prev, deep_analysis_score: score, deep_analysis_updated_at: at }
               : prev
           );
           setEnhancedBlog(prev =>
-            prev && prev.id === blogId
+            prev && prev.id === currentBlogId
               ? { ...prev, deep_analysis_score: score, deep_analysis_updated_at: at }
               : prev
           );
@@ -958,7 +1031,7 @@ export default function BlogViewerPage() {
     if (deepAnalysis && !deepRunningAgain && !deepLoading) return;
 
     try {
-      const cached = await blogsApi.getDeepAnalysis(blogId);
+      const cached = await blogsApi.getDeepAnalysis(blog?.id || blogId);
       if (cached.cached && cached.data) {
         setDeepAnalysis(cached.data);
         return;
@@ -967,7 +1040,7 @@ export default function BlogViewerPage() {
       /* run fresh below */
     }
     await runDeepAnalysis();
-  }, [blogId, deepAnalysis, deepLoading, deepRunningAgain, runDeepAnalysis]);
+  }, [blog?.id, blogId, deepAnalysis, deepLoading, deepRunningAgain, runDeepAnalysis]);
 
   const handleAnalysisEnhanced = async () => {
     if (!blog || !contentAnalysis) return;
@@ -1005,6 +1078,70 @@ export default function BlogViewerPage() {
       setAnalysisEnhancing(false);
     }
   };
+
+  const handleDeepAnalysisEnhanced = useCallback(async () => {
+    if (!blog || !deepAnalysis) return;
+    setDeepEnhancing(true);
+    try {
+      const seoScore = computeSEOScore(blog, project?.domain);
+      const seoIssues = seoScore.checks.filter(c => !c.pass);
+
+      const res = await blogsApi.enhance(projectId, blog.id, {
+        deepAnalysisResult: deepAnalysis,
+        seoIssues,
+      });
+
+      if (!res.success) {
+        toast.error(res.error || "Could not generate enhanced version.");
+        return;
+      }
+
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 8000 });
+      } else {
+        toast.success("Enhanced version generated!");
+      }
+
+      const result = res.data;
+      if (result) {
+        setBeforeDeepEnhance({
+          title: blog.title,
+          metaDescription: blog.meta_description || "",
+          content: blog.content,
+        });
+
+        setDeepEnhancedResult({
+          enhancedTitle: result.enhancedTitle,
+          enhancedMetaDescription: result.enhancedMetaDescription,
+          enhancedContentMarkdown: result.enhancedContentMarkdown,
+          appliedFixes: result.appliedFixes,
+          unresolvedIssues: result.unresolvedIssues,
+          improvementSummary: result.improvementSummary,
+        });
+
+        setDeepCompareView("after");
+        setDeepModalOpen(false);
+
+        if (res.saved) {
+          void queryClient.invalidateQueries({ queryKey: qk.blog(blogId) });
+          void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+          
+          setScoreVersion(v => v + 1);
+
+          void blogsApi.getDeepAnalysis(blogId).then(cached => {
+            if (cached.data) setDeepAnalysis(cached.data);
+          });
+        }
+      }
+    } catch (ex) {
+      toast.error(ex instanceof Error ? ex.message : "Could not generate enhanced version.");
+    } finally {
+      setDeepEnhancing(false);
+    }
+  }, [blog, deepAnalysis, projectId, blogId, project?.domain, queryClient]);
 
   const handleAnalysisSchedule = async () => {
     if (!blog) return;
@@ -1073,7 +1210,13 @@ export default function BlogViewerPage() {
         toast.success(
           res.rescheduled ? `Moved to ${niceDate}.` : `Scheduled for ${niceDate}.`,
         );
-        setBlog((b) => (b ? { ...b, entry_id: res.data.id } : b));
+        setBlog((b) => {
+          const nextVal = b ? { ...b, entry_id: res.data.id } : b;
+          if (nextVal) {
+            queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
         setScheduleVersion((v) => v + 1);
         void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
@@ -1090,13 +1233,18 @@ export default function BlogViewerPage() {
   };
 
   const handleAddToArticles = async () => {
-    if (!blogId?.trim() || !blog) return;
+    if (!blog) return;
     setAddingToArticles(true);
     try {
-      // URL id is source of truth (matches `getById`); avoids any stale `blog.id` edge case.
-      const res = await blogsApi.addToArticlesLibrary(blogId);
+      const res = await blogsApi.addToArticlesLibrary(blog.id);
       if (res.success) {
-        setBlog((b) => (b && b.id === blogId ? { ...b, in_articles_library: true } : b));
+        setBlog((b) => {
+          const nextVal = b && b.id === blog.id ? { ...b, in_articles_library: true } : b;
+          if (nextVal) {
+            queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+          }
+          return nextVal;
+        });
         if (res.alreadySaved) toast.success("Already in Articles");
         else toast.success("Added to Articles");
         void queryClient.invalidateQueries({ queryKey: qk.articlesLibrary(projectId) });
@@ -1149,6 +1297,7 @@ export default function BlogViewerPage() {
       const res = await blogsApi.generate({ entryId: blog.entry_id, wordCount: blog.word_count || 2500 });
       if (res.success && res.data) {
         setBlog(res.data);
+        queryClient.setQueryData(qk.blog(blogId), { success: true, data: res.data });
       } else if (!res.success) {
         setEditError(res.error || "Failed to generate blog.");
       } else {
@@ -1297,7 +1446,14 @@ export default function BlogViewerPage() {
   // Resolved non-null view target — Before defaults to `blog`, After swaps in
   // the freshly-generated enhancedBlog. All content + sidebar rendering keys
   // off `currentBlog` so toggling the pill flips the entire view.
-  const currentBlog: Blog = isAfterView && enhancedBlog ? enhancedBlog : blog;
+  const currentBlog: Blog = isDeepBefore
+    ? {
+        ...blog,
+        title: beforeDeepEnhance!.title,
+        meta_description: beforeDeepEnhance!.metaDescription,
+        content: beforeDeepEnhance!.content,
+      }
+    : (isAfterView && enhancedBlog ? enhancedBlog : blog);
 
   const hasSavedDeepAnalysis =
     Boolean(deepAnalysis) ||
@@ -1331,11 +1487,24 @@ export default function BlogViewerPage() {
       {/* ── Top strip ───────────────────────────────────────────────────── */}
       <div className="shrink-0 flex flex-col gap-2">
         <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
-          <ProjectNavLink href={historyParentHref} className="hover:text-text-primary transition-colors">
-            {historyParentLabel}
+          <ProjectNavLink
+            href={`/projects/${projectId}/content-history?tab=generated`}
+            className="inline-flex items-center gap-1.5 hover:text-text-primary transition-colors group font-medium"
+          >
+            <svg
+              className="w-3.5 h-3.5 shrink-0 transition-transform group-hover:-translate-x-0.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
+            Back
           </ProjectNavLink>
-          <span className="opacity-30">›</span>
-          <span className="font-medium text-text-primary truncate max-w-[380px]">{blog.title}</span>
         </div>
 
         {blog.source_url && blog.article_type === "Repair" && (
@@ -1381,18 +1550,36 @@ export default function BlogViewerPage() {
 
           {/* Sticky toolbar */}
           <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-2.5 border-b border-border-subtle bg-surface-primary">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle">
-              {(["preview", "raw"] as const).map(v => (
-                <button
-                  key={v}
-                  onClick={() => !editMode && setActiveView(v)}
-                  disabled={editMode && v === "raw"}
-                  className="px-4 py-1 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                  style={activeView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
-                >
-                  {v}
-                </button>
-              ))}
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle">
+                {(["preview", "raw"] as const).map(v => (
+                  <button
+                    key={v}
+                    onClick={() => !editMode && setActiveView(v)}
+                    disabled={editMode && v === "raw"}
+                    className="px-4 py-1 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                    style={activeView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+              {beforeDeepEnhance && (
+                <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-secondary/60">
+                  {(["before", "after"] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => !editMode && setDeepCompareView(v)}
+                      disabled={editMode}
+                      className="px-3.5 py-1 rounded-full text-[11px] font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                      style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {editMode ? (
@@ -1424,6 +1611,44 @@ export default function BlogViewerPage() {
           {editError && (
             <div className="px-5 py-2.5 text-[12px] text-rose-500 bg-rose-500/5 border-b border-border-subtle">
               {editError}
+            </div>
+          )}
+
+          {deepEnhancedResult && deepCompareView === "after" && (
+            <div className="mx-5 my-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-[13px]">
+              <div className="flex items-start gap-2.5">
+                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold text-text-primary mb-1">Deep Enhancement Summary</p>
+                  <p className="text-text-secondary leading-relaxed mb-3">{deepEnhancedResult.improvementSummary}</p>
+                  
+                  {deepEnhancedResult.appliedFixes?.length > 0 && (
+                    <div className="space-y-1 mb-3">
+                      <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-wider">Applied Fixes</p>
+                      <ul className="list-inside list-disc space-y-0.5 text-[12px] text-text-secondary">
+                        {deepEnhancedResult.appliedFixes.map((fix, idx) => (
+                          <li key={idx}>{fix}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {deepEnhancedResult.unresolvedIssues?.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-wider">Unresolved / Needs Manual Work</p>
+                      <ul className="list-inside list-disc space-y-0.5 text-[12px] text-text-tertiary">
+                        {deepEnhancedResult.unresolvedIssues.map((issue, idx) => (
+                          <li key={idx}>{issue}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1521,6 +1746,25 @@ export default function BlogViewerPage() {
             )}
 
             {/* Deep Analysis — SERP competitor gap vs our blog */}
+            {beforeDeepEnhance && (
+              <div className="px-4 pt-3 pb-1">
+                <div className="flex w-full items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-primary/40">
+                  {(["before", "after"] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => !editMode && setDeepCompareView(v)}
+                      disabled={editMode}
+                      className="flex-1 px-4 py-1.5 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                      style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                      title={v === "before" ? "Original draft" : "AI-enhanced rewrite"}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className={`px-4 pb-3 ${fromAnalyzeContentPage ? "pt-2" : "pt-4"} ${sidebarMuted ? "opacity-25 pointer-events-none" : ""}`}>
               <button
                 type="button"
@@ -1838,16 +2082,18 @@ export default function BlogViewerPage() {
         scheduling={analysisScheduling}
       />
 
-      <BlogDeepAnalysisModal
-        open={deepModalOpen}
-        analysis={deepAnalysis}
-        loading={deepLoading}
-        loadingStage={deepStage}
-        error={deepError}
-        onClose={() => setDeepModalOpen(false)}
-        onRunAgain={() => void runDeepAnalysis({ force: true })}
-        runningAgain={deepRunningAgain}
-      />
+      <Suspense fallback={null}>
+        <BlogDeepAnalysisModal
+          open={deepModalOpen}
+          analysis={deepAnalysis}
+          loading={deepLoading}
+          loadingStage={deepStage}
+          error={deepError}
+          onClose={() => setDeepModalOpen(false)}
+          onGenerateEnhanced={() => void handleDeepAnalysisEnhanced()}
+          enhancing={deepEnhancing}
+        />
+      </Suspense>
 
       <BlogAiRewriterModal
         open={aiRewriter.open}

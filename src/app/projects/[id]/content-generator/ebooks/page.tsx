@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -26,7 +26,8 @@ import {
   StepRow,
   StudioBreadcrumb,
 } from "@/components/content-generator/shared";
-import { useProject, qk } from "@/lib/query";
+import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
+import { calendarApi } from "@/frontend/api/calendar";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
 import { TARGET_REGIONS } from "@/lib/types";
 import {
@@ -61,16 +62,31 @@ type Phase = "form" | "review" | "generating";
 export default function EbookGeneratorPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
+
+  const entryId = searchParams?.get("entryId");
+
+  const { data: entriesData } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId && !!entryId,
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const scheduledEntry = useMemo(() => {
+    if (!entriesData?.success) return null;
+    return entriesData.data.find((e) => e.id === entryId) || null;
+  }, [entriesData, entryId]);
 
   const { data: projectRes } = useProject(projectId);
   const project = projectRes?.success ? projectRes.data : undefined;
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
-  const [primaryKeyword, setPrimaryKeyword] = useState("");
+  const [primaryKeyword, setPrimaryKeyword] = useState(searchParams?.get("keyword") || "");
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
   const [tone, setTone] = useState<(typeof TONES)[number]["id"]>("premium-educational");
@@ -87,8 +103,7 @@ export default function EbookGeneratorPage() {
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
     enabled: !!projectId,
-    staleTime: 60_000,
-    refetchOnMount: false,
+    ...DEFAULT_QUERY_OPTIONS,
   });
   const recentEbooks = useMemo(() => {
     const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
@@ -106,12 +121,28 @@ export default function EbookGeneratorPage() {
     // Stable to project signal — only fires once per project change.
   }, [project?.target_audience, project?.target_region, project?.target_language, audience]);
 
+  useEffect(() => {
+    if (scheduledEntry) {
+      if (scheduledEntry.focus_keyword) {
+        setPrimaryKeyword(scheduledEntry.focus_keyword);
+      }
+      if (scheduledEntry.title || scheduledEntry.blog_title) {
+        const t = scheduledEntry.title || scheduledEntry.blog_title;
+        setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
+      }
+      if (scheduledEntry.secondary_keywords?.length) {
+        setSecondaryKeywords(scheduledEntry.secondary_keywords);
+      }
+    }
+  }, [scheduledEntry]);
+
   const askAi = async () => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "ebook",
         avoidPhrases: secondaryKeywords,
+        seedKeyword: primaryKeyword.trim() || undefined,
       });
       if (res.success) {
         setTopic(res.topic);
@@ -147,6 +178,7 @@ export default function EbookGeneratorPage() {
       region,
       language,
       semanticKeywords: secondaryKeywords,
+      entryId: entryId || null,
     });
     if (res.trace?.length) {
       console.log("[ebook] trace:", res.trace);

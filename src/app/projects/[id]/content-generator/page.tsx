@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { PageTitle } from "@/components/common";
 import { contentGeneratorApi } from "@/frontend/api/content-generator";
-import { qk } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import type { ContentType } from "@/lib/types";
 
 interface ContentTypeCard {
@@ -81,7 +81,7 @@ export default function ContentGeneratorHubPage() {
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
     enabled: !!projectId,
-    staleTime: 60_000,
+    ...DEFAULT_QUERY_OPTIONS,
   });
 
   const counts = useMemo(() => {

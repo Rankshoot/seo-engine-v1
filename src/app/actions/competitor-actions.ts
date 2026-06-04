@@ -22,29 +22,19 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { deterministicFunnelStage } from '@/lib/keyword-funnel';
 import { currentUser } from '@clerk/nextjs/server';
 import {
-  benchmarkContentQuality,
-  classifyGap,
-  competitorWeaknessFromSnapshot,
-  extractCompetitorContent,
-  scoreOpportunity,
   type BenchmarkTraceEntry,
 } from '@/lib/competitor-benchmark';
 import { fetchKeywordVitals, fetchGoogleAdsKeywordsForSite } from '@/lib/dataforseo';
 import {
-  ahrefsOrganicCompetitors,
   ahrefsOrganicKeywords,
   isAhrefsConfigured,
 } from '@/lib/ahrefs';
 import { isProviderEnabled } from '@/lib/admin/platform-settings-runtime';
-import { getBusinessBrief } from '@/app/actions/brief-actions';
 import { addKeywordToCalendarOnDate, collectEarliestVacantDates } from '@/app/actions/calendar-actions';
-import { bestMatchingBlogUrl } from '@/lib/competitor-sitemap-match';
-import { fetchBlogUrls } from '@/lib/jina';
 import type {
   BenchmarkAverages,
   Competitor,
   CompetitorKeyword,
-  CompetitorPageSnapshot,
   KeywordGap,
   Project,
   ProjectCompetitor,
@@ -102,9 +92,6 @@ const AHREFS_KEYWORDS_PER_COMPETITOR = 10;
 /** Max rows written to `competitor_keywords` and `keyword_gaps`; must match `getCompetitorBenchmark` read limit. */
 const BENCHMARK_KEYWORD_CAP = 200;
 
-/** Max blog-style URLs to load per competitor sitemap for keyword ↔ URL matching. */
-const COMPETITOR_SITEMAP_BLOG_CAP = 3000;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Run the full benchmark pipeline
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,18 +147,6 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     `[benchmark] start project=${projectId} domain=${project.domain} region=${project.target_region} ahrefs=${ahrefsAvailable ? 'on' : 'off'} (key=${ahrefsKeyConfigured} admin=${ahrefsAdminEnabled})`
   );
 
-  // 1a. Seeds come from the Business Brief.
-  const briefRes = await getBusinessBrief(projectId);
-  const seeds = briefRes.brief?.seed_phrases?.length
-    ? briefRes.brief.seed_phrases
-    : [project.niche, `best ${project.niche}`, `${project.niche} for ${project.target_audience}`];
-
-  trace.push({
-    label: 'seeds',
-    ok: true,
-    info: { seed_count: seeds.length, source: briefRes.brief ? 'business_brief' : 'fallback' },
-  });
-
   const ownDomain = normalizeDomainInput(project.domain);
   const knownDomains = (project.project_competitors ?? []).map(c => c.domain);
   const userSuppliedHosts = [
@@ -179,120 +154,49 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
       knownDomains.map(d => normalizeDomainInput(d)).filter((h): h is string => Boolean(h))
     ),
   ];
-  let competitorList: Array<{
-    domain: string;
-    rank_score: number;
-    top_url: string;
-    top_title: string;
-  }> = [];
-  const rankingOpportunities: RankingOpportunity[] = [];
 
-  // ───────────────────────────────────────────────────────────────────────
-  // 1b. Competitor discovery
-  //
-  // If the user added competitors on the project, we **only** use DataForSEO
-  // Google Ads `keywords_for_site/live` for keyword gaps (per competitor).
-  // Otherwise Ahrefs discovers competitors + organic keywords (DataForSEO
-  // is still the fallback when Ahrefs is off or returns nothing useful).
-  // ───────────────────────────────────────────────────────────────────────
-  let benchmarkSource: 'ahrefs' | 'dataforseo' = ahrefsAvailable ? 'ahrefs' : 'dataforseo';
-
-  if (userSuppliedHosts.length > 0) {
-    competitorList = userSuppliedHosts.map(host => ({
-      domain: host,
-      rank_score: 1,
-      top_url: `https://${host}`,
-      top_title: host,
-    }));
-    // Route to Ahrefs when admin panel has it enabled; otherwise fall back to DataForSEO.
-    if (!ahrefsAvailable) {
-      benchmarkSource = 'dataforseo';
-    }
-    trace.push({
-      label: 'benchmark_keyword_source',
-      ok: true,
-      info: {
-        source: ahrefsAvailable
-          ? '/site-explorer/organic-keywords'
-          : 'keywords_data/google_ads/keywords_for_site/live',
-        reason: ahrefsAvailable
-          ? 'Project has manual competitors — Ahrefs organic keywords enabled in admin panel.'
-          : 'Project has manual competitors — Ahrefs disabled, using DataForSEO Google Ads Keywords For Site.',
-        competitors: userSuppliedHosts,
-        own_domain: ownDomain,
-        target_region: project.target_region,
-        target_language: (project as { target_language?: string }).target_language ?? 'en',
-        limit_per_competitor: ahrefsAvailable ? AHREFS_KEYWORDS_PER_COMPETITOR : KEYWORDS_FOR_SITE_LIMIT,
-      },
-    });
-  } else if (ahrefsAvailable && ownDomain) {
-    const ahrefsCompetitors = await ahrefsOrganicCompetitors(
-      ownDomain,
-      project.target_region,
-      12
-    );
-    if (ahrefsCompetitors.length) {
-      competitorList = ahrefsCompetitors.map((c, i) => ({
-        domain: normalizeDomainInput(c.competitor_domain),
-        rank_score: c.keywords_common || ahrefsCompetitors.length - i,
-        top_url: `https://${c.competitor_domain}`,
-        top_title: c.competitor_domain,
-      }));
-      trace.push({
-        label: 'ahrefs_organic_competitors',
-        ok: true,
-        info: {
-          domain: ownDomain,
-          returned: ahrefsCompetitors.length,
-          merged_with_user: competitorList.length,
-        },
-      });
-    } else {
-      trace.push({
-        label: 'ahrefs_organic_competitors',
-        ok: false,
-        error: 'no rows returned by Ahrefs',
-      });
-      benchmarkSource = 'dataforseo';
-    }
-  }
-
-  if (!competitorList.length) {
+  if (userSuppliedHosts.length === 0) {
     return {
       success: false,
-      error:
-        'No competitors found. Add competitor domains on the project overview and try again.',
+      error: 'Please add competitor domains on the project overview page to show competitor keywords.',
       trace,
     };
   }
 
-  console.log(
-    `[benchmark] competitors=${competitorList.length} via=${benchmarkSource} domains=${competitorList
-      .slice(0, 5)
-      .map(c => c.domain)
-      .join(',')}${competitorList.length > 5 ? ',…' : ''}`
-  );
+  const competitorList = userSuppliedHosts.map(host => ({
+    domain: host,
+    rank_score: 1,
+    top_url: `https://${host}`,
+    top_title: host,
+  }));
 
-  // Pull user's existing keywords up-front (used by every gap classification).
-  const { data: userKwRows } = await supabaseAdmin
-    .from('keywords')
-    .select('keyword, status')
-    .eq('project_id', projectId);
-  const userKwIndex = new Map<string, { status: string }>(
-    (userKwRows ?? []).map(r => [r.keyword.toLowerCase(), { status: r.status as string }])
-  );
+  let benchmarkSource: 'ahrefs' | 'dataforseo' = ahrefsAvailable ? 'ahrefs' : 'dataforseo';
+
+  trace.push({
+    label: 'benchmark_keyword_source',
+    ok: true,
+    info: {
+      source: ahrefsAvailable
+        ? '/site-explorer/organic-keywords'
+        : 'keywords_data/google_ads/keywords_for_site/live',
+      reason: ahrefsAvailable
+        ? 'Project has manual competitors — Ahrefs organic keywords enabled.'
+        : 'Project has manual competitors — Ahrefs disabled, using DataForSEO Google Ads Keywords For Site.',
+      competitors: userSuppliedHosts,
+      own_domain: ownDomain,
+      target_region: project.target_region,
+      target_language: (project as { target_language?: string }).target_language ?? 'en',
+      limit_per_competitor: ahrefsAvailable ? AHREFS_KEYWORDS_PER_COMPETITOR : KEYWORDS_FOR_SITE_LIMIT,
+    },
+  });
+
+  const rankingOpportunities: RankingOpportunity[] = [];
 
   // ───────────────────────────────────────────────────────────────────────
   // 1c. Build ranking opportunities.
-  //
-  // Ahrefs path: organic-keywords + top-pages per competitor.
-  // DataForSEO path: keywords_data/google_ads/keywords_for_site/live (limit
-  // KEYWORDS_FOR_SITE_LIMIT per competitor domain).
   // ───────────────────────────────────────────────────────────────────────
   if (benchmarkSource === 'ahrefs') {
-    // Use a smaller limit for manual competitors (cost-optimised: 10 per competitor).
-    // For auto-discovered competitors (no userSuppliedHosts) we allow more.
-    const kwLimit = userSuppliedHosts.length > 0 ? AHREFS_KEYWORDS_PER_COMPETITOR : 60;
+    const kwLimit = AHREFS_KEYWORDS_PER_COMPETITOR;
 
     for (const competitor of competitorList.slice(0, 8)) {
       const organicKeywords = await ahrefsOrganicKeywords(competitor.domain, project.target_region, kwLimit);
@@ -310,9 +214,9 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
           kd: row.keyword_difficulty ?? 0,
           trend: '+0%',
           trend_pct: 0,
-          gap_type: classifyGap(keyword, userKwIndex),
+          gap_type: 'missing',
           top_competitor_domain: competitor.domain,
-          top_competitor_url: row.best_position_url,
+          top_competitor_url: row.best_position_url || `https://${competitor.domain}`,
           source_title: competitor.top_title || competitor.domain,
           position: row.best_position ?? 0,
           is_informational: row.is_informational,
@@ -329,29 +233,9 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
       ok: true,
       info: { competitors_scanned: competitorList.length, opportunities: rankingOpportunities.length, kw_limit: kwLimit },
     });
-
-    // Fallback: if Ahrefs returned 0 results and DataForSEO creds exist, switch over.
-    if (rankingOpportunities.length === 0 && userSuppliedHosts.length > 0) {
-      trace.push({
-        label: 'ahrefs_to_dataforseo_fallback',
-        ok: true,
-        info: {
-          reason:
-            'Ahrefs returned 0 keyword opportunities — falling back to DataForSEO keywords_for_site/live',
-        },
-      });
-      benchmarkSource = 'dataforseo';
-      competitorList = userSuppliedHosts.map(host => ({
-        domain: host,
-        rank_score: 1,
-        top_url: `https://${host}`,
-        top_title: host,
-      }));
-    }
   }
 
   if (benchmarkSource === 'dataforseo') {
-    // DataForSEO Google Ads Keywords For Site — one call per competitor domain.
     const languageCode = (project as { target_language?: string }).target_language ?? 'en';
     console.log(
       `[benchmark] dataforseo keywords_for_site × ${competitorList.length} competitor(s), ${KEYWORDS_FOR_SITE_LIMIT} keywords each`
@@ -384,33 +268,21 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
           kd: row.kd,
           trend: '+0%',
           trend_pct: 0,
-          gap_type: classifyGap(row.keyword, userKwIndex),
+          gap_type: 'missing',
           top_competitor_domain: competitor.domain,
-          top_competitor_url: row.competitor_url,
-          source_title: competitor.top_title || competitor.domain,
-          position: row.competitor_position,
+          top_competitor_url: `https://${competitor.domain}`,
+          source_title: competitor.domain,
+          position: 0,
         });
       }
     }
-
-    trace.push({
-      label: 'dataforseo_keywords_for_site',
-      ok: true,
-      info: {
-        competitors_scanned: competitorList.length,
-        opportunities: rankingOpportunities.length,
-        source: 'keywords_data/google_ads/keywords_for_site/live',
-      },
-    });
   }
 
-  // Dedupe per (keyword, competitor) — KEEPS all competitors that rank for
-  // the same keyword as separate rows. With N competitors × limit rows each,
-  // competitor_keywords can hold up to N × KEYWORDS_FOR_SITE_LIMIT rows.
   const dedupedOpportunities = dedupeOpportunities(rankingOpportunities);
   dedupedOpportunities.sort(
     (a, b) => b.volume - a.volume || a.position - b.position
   );
+
   console.log(
     `[benchmark] raw=${rankingOpportunities.length} deduped=${dedupedOpportunities.length} unique_keywords=${new Set(dedupedOpportunities.map(o => o.keyword)).size}`
   );
@@ -418,57 +290,19 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   if (!dedupedOpportunities.length) {
     return {
       success: false,
-      error: 'No keyword ranking pages found. Try refreshing the business brief or adding more competitor domains.',
+      error: 'No competitor keywords found. Please check competitor domains or try again later.',
       trace,
     };
   }
 
-  await enrichRankingUrlsFromCompetitorSitemaps(dedupedOpportunities, competitorList, trace);
-
   // ───────────────────────────────────────────────────────────────────────
-  // 1d. Selectively scrape ranking pages for structural signals.
+  // 1d. Persist basic competitors
   // ───────────────────────────────────────────────────────────────────────
   const persistedCompetitors: Array<{
     id: string;
     domain: string;
-    pages: CompetitorPageSnapshot[];
+    pages: any[];
   }> = [];
-
-  const allPages: CompetitorPageSnapshot[] = [];
-  const pagesByDomain = new Map<string, CompetitorPageSnapshot[]>();
-  const scrapedByUrl = new Map<string, CompetitorPageSnapshot>();
-  let pagesScraped = 0;
-
-  for (const opportunity of dedupedOpportunities.slice(0, 30)) {
-    if (scrapedByUrl.has(opportunity.top_competitor_url)) continue;
-    const { snapshot } = await extractCompetitorContent(opportunity.top_competitor_url, { trace });
-    if (!snapshot) continue;
-    scrapedByUrl.set(opportunity.top_competitor_url, snapshot);
-    allPages.push(snapshot);
-    pagesScraped += 1;
-    const domainPages = pagesByDomain.get(opportunity.top_competitor_domain) ?? [];
-    domainPages.push(snapshot);
-    pagesByDomain.set(opportunity.top_competitor_domain, domainPages);
-  }
-
-  // Sample a couple of pages for any discovered competitor that didn't show
-  // up in the top opportunity slice — keeps the competitor list complete.
-  // Use the top competitor URL as the fallback page (no additional Ahrefs calls needed).
-  for (const comp of competitorList) {
-    if (pagesByDomain.has(comp.domain)) continue;
-    const sampledPages = [{ url: comp.top_url, title: comp.top_title }];
-    for (const p of sampledPages.slice(0, 2)) {
-      if (!p.url || scrapedByUrl.has(p.url)) continue;
-      const { snapshot } = await extractCompetitorContent(p.url, { trace });
-      if (!snapshot) continue;
-      scrapedByUrl.set(p.url, snapshot);
-      allPages.push(snapshot);
-      pagesScraped += 1;
-      const domainPages = pagesByDomain.get(comp.domain) ?? [];
-      domainPages.push(snapshot);
-      pagesByDomain.set(comp.domain, domainPages);
-    }
-  }
 
   const allBenchmarkDomains = [
     ...new Set([
@@ -479,39 +313,22 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
 
   for (const domain of allBenchmarkDomains) {
     const comp = competitorList.find(c => c.domain === domain);
-    const scraped = pagesByDomain.get(domain) ?? [];
-    if (!scraped.length) {
-      scraped.push({
-        url: comp?.top_url ?? `https://${domain}`,
-        title: comp?.top_title ?? domain,
-        h1: '',
-        h2_count: 0,
-        h3_count: 0,
-        word_count: 0,
-        image_count: 0,
-        internal_link_count: 0,
-        external_link_count: 0,
-        has_faq: false,
-      });
-    }
-
-    const compAverages = benchmarkContentQuality(scraped.filter(p => p.word_count > 0));
     const compRow = {
       project_id: projectId,
       domain,
-      title: (comp?.top_title ?? scraped[0]?.title ?? domain).slice(0, 300),
+      title: (comp?.top_title ?? domain).slice(0, 300),
       rank_score:
         comp?.rank_score ?? dedupedOpportunities.filter(o => o.top_competitor_domain === domain).length,
-      pages_scraped: scraped.filter(p => p.word_count > 0).length,
-      avg_word_count: compAverages.avg_word_count,
-      avg_h2: compAverages.avg_h2,
-      avg_h3: compAverages.avg_h3,
-      avg_images: compAverages.avg_images,
-      avg_internal_links: compAverages.avg_internal_links,
-      avg_external_links: compAverages.avg_external_links,
-      faq_pages_pct: compAverages.faq_pages_pct,
-      top_pages: scraped,
-      recommendations: compAverages.recommendations,
+      pages_scraped: 0,
+      avg_word_count: 0,
+      avg_h2: 0,
+      avg_h3: 0,
+      avg_images: 0,
+      avg_internal_links: 0,
+      avg_external_links: 0,
+      faq_pages_pct: 0,
+      top_pages: [],
+      recommendations: [],
       last_benchmarked_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -530,7 +347,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     persistedCompetitors.push({
       id: upserted.id as string,
       domain,
-      pages: scraped,
+      pages: [],
     });
   }
 
@@ -556,8 +373,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     if (ckErr) trace.push({ label: 'competitor_keywords_insert', ok: false, error: ckErr.message });
   }
 
-  // 1f. Hydrate volumes/trends for any rows that came back from Ahrefs / SERP
-  // without a usable volume. Keeps DataForSEO as a fallback enrichment layer.
+  // 1f. Hydrate volumes/trends for any rows that came back from Ahrefs / SERP without volume.
   const missingVolume = dedupedOpportunities
     .filter(o => o.volume <= 0)
     .map(o => o.keyword);
@@ -571,8 +387,6 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
   });
 
   // 1g. Score + persist keyword_gaps.
-  //     `keyword_gaps` has UNIQUE(project_id, keyword), so collapse all rows
-  //     for the same keyword down to the best-ranking competitor.
   await supabaseAdmin.from('keyword_gaps').delete().eq('project_id', projectId);
   const bestCompetitorPerKeyword = pickBestCompetitorPerKeyword(dedupedOpportunities);
   const gapRows = bestCompetitorPerKeyword.map(opportunity => {
@@ -581,29 +395,19 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     const trend = opportunity.trend || v?.trend || '+0%';
     const trend_pct = opportunity.trend_pct || v?.trend_pct || 0;
     const kd = opportunity.kd || 0;
-    const pageSnapshot = scrapedByUrl.get(opportunity.top_competitor_url);
-    const weakness = pageSnapshot ? competitorWeaknessFromSnapshot(pageSnapshot) : 50;
-    const opportunity_score = scoreOpportunity({
-      volume,
-      kd,
-      trend_pct,
-      competitor_weakness: weakness,
-      gap_type: opportunity.gap_type,
-    });
-    const reasoning = buildGapReasoning(opportunity.gap_type, volume, weakness, trend_pct);
     return {
       project_id: projectId,
       keyword: opportunity.keyword,
-      gap_type: opportunity.gap_type,
-      opportunity_score,
+      gap_type: 'missing',
+      opportunity_score: 0,
       volume,
       kd,
       trend,
       trend_pct,
-      competitor_weakness: weakness,
+      competitor_weakness: 0,
       top_competitor_domain: opportunity.top_competitor_domain,
       top_competitor_url: opportunity.top_competitor_url,
-      reasoning,
+      reasoning: '',
       position: opportunity.position ?? null,
       is_informational: opportunity.is_informational ?? false,
       is_navigational: opportunity.is_navigational ?? false,
@@ -614,7 +418,7 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     };
   });
 
-  gapRows.sort((a, b) => b.volume - a.volume || b.opportunity_score - a.opportunity_score);
+  gapRows.sort((a, b) => b.volume - a.volume);
   const topGapRows = gapRows.slice(0, BENCHMARK_KEYWORD_CAP);
 
   if (topGapRows.length) {
@@ -624,16 +428,26 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     if (gapErr) trace.push({ label: 'keyword_gaps_upsert', ok: false, error: gapErr.message });
   }
 
-  const averages = benchmarkContentQuality(allPages);
+  const averages: BenchmarkAverages = {
+    avg_word_count: 0,
+    avg_h2: 0,
+    avg_h3: 0,
+    avg_images: 0,
+    avg_internal_links: 0,
+    avg_external_links: 0,
+    faq_pages_pct: 0,
+    pages_analyzed: 0,
+    recommendations: [],
+  };
 
   console.log(
-    `[benchmark] done project=${projectId} via=${String(benchmarkSource)} competitors=${persistedCompetitors.length} pages=${pagesScraped} keywords=${dedupedOpportunities.length} gaps=${topGapRows.length}`
+    `[benchmark] done project=${projectId} via=${String(benchmarkSource)} competitors=${persistedCompetitors.length} keywords=${dedupedOpportunities.length} gaps=${topGapRows.length}`
   );
 
   return {
     success: true,
     competitorsFound: persistedCompetitors.length,
-    pagesScraped,
+    pagesScraped: 0,
     keywordsExtracted: dedupedOpportunities.length,
     gapsFound: topGapRows.length,
     averages,
@@ -645,93 +459,6 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** True when URL is the competitor site root (or subdomain root) with no path — not a specific page. */
-function isLikelyHomepageOnlyUrl(url: string, competitorDomain: string): boolean {
-  const comp = normalizeDomainInput(competitorDomain);
-  if (!comp || !url.trim()) return false;
-  let u: URL;
-  try {
-    u = new URL(url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`);
-  } catch {
-    return false;
-  }
-  const host = safeHostFromUrl(u.href);
-  if (!host) return false;
-  if (host !== comp && !host.endsWith(`.${comp}`)) return false;
-  const path = u.pathname.replace(/\/+$/, '') || '';
-  return path === '';
-}
-
-/**
- * For rows that only have the site homepage (typical for DataForSEO keywords
- * for site), pick the best-matching blog URL from each competitor’s sitemap.
- */
-async function enrichRankingUrlsFromCompetitorSitemaps(
-  opportunities: RankingOpportunity[],
-  competitors: Array<{ domain: string }>,
-  trace: BenchmarkTraceEntry[]
-): Promise<void> {
-  const domains = [
-    ...new Set(
-      [
-        ...competitors.map(c => normalizeDomainInput(c.domain)),
-        ...opportunities.map(o => normalizeDomainInput(o.top_competitor_domain)),
-      ].filter(Boolean)
-    ),
-  ];
-  if (!domains.length) return;
-
-  const blogUrlsByDomain = new Map<string, string[]>();
-  await Promise.all(
-    domains.map(async d => {
-      try {
-        const urls = await fetchBlogUrls(d, COMPETITOR_SITEMAP_BLOG_CAP);
-        blogUrlsByDomain.set(d, urls);
-        trace.push({
-          label: `competitor_sitemap_blogs:${d}`,
-          ok: true,
-          info: { blog_urls: urls.length, cap: COMPETITOR_SITEMAP_BLOG_CAP },
-        });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        trace.push({ label: `competitor_sitemap_blogs:${d}`, ok: false, error: msg });
-        blogUrlsByDomain.set(d, []);
-      }
-    })
-  );
-
-  let candidates = 0;
-  let matched = 0;
-  for (const opp of opportunities) {
-    if (!isLikelyHomepageOnlyUrl(opp.top_competitor_url, opp.top_competitor_domain)) continue;
-    candidates += 1;
-    const blogs = blogUrlsByDomain.get(opp.top_competitor_domain) ?? [];
-    const hit = bestMatchingBlogUrl(opp.keyword, blogs);
-    if (hit) {
-      opp.top_competitor_url = hit.url;
-      opp.source_title = hit.titleHint;
-      matched += 1;
-    }
-  }
-
-  trace.push({
-    label: 'competitor_sitemap_keyword_match',
-    ok: true,
-    info: {
-      competitors_with_sitemap: domains.length,
-      homepage_placeholder_rows: candidates,
-      matched_to_blog_url: matched,
-    },
-  });
-}
-
-/**
- * Dedupe only within (keyword, competitor) pairs. If both Ahrefs organic-keywords
- * and top-pages surface the same keyword for the same competitor we keep the
- * better row, but DIFFERENT competitors that rank for the same keyword each
- * keep their own row. This is what lets N competitors × M keywords each
- * persist N×M rows into `competitor_keywords` instead of collapsing to M.
- */
 function dedupeOpportunities(rows: RankingOpportunity[]): RankingOpportunity[] {
   const map = new Map<string, RankingOpportunity>();
   for (const row of rows) {
@@ -749,10 +476,6 @@ function dedupeOpportunities(rows: RankingOpportunity[]): RankingOpportunity[] {
   return [...map.values()];
 }
 
-/**
- * For `keyword_gaps` (UNIQUE project_id + keyword) we need exactly one row per
- * keyword — pick the competitor with the biggest volume / best ranking.
- */
 function pickBestCompetitorPerKeyword(rows: RankingOpportunity[]): RankingOpportunity[] {
   const byKeyword = new Map<string, RankingOpportunity>();
   for (const row of rows) {
@@ -771,26 +494,6 @@ function pickBestCompetitorPerKeyword(rows: RankingOpportunity[]): RankingOpport
     }
   }
   return [...byKeyword.values()];
-}
-
-function buildGapReasoning(
-  gapType: 'missing' | 'weak' | 'untapped',
-  volume: number,
-  weakness: number,
-  trendPct: number
-): string {
-  const bits: string[] = [];
-  if (gapType === 'missing') bits.push("You don't cover this keyword yet.");
-  else if (gapType === 'weak') bits.push('You have this keyword in your list but it is not approved yet.');
-  else bits.push("You're approved for this but competitors still out-rank.");
-
-  if (weakness >= 60) bits.push('Competitor content is thin — an easy one to beat.');
-  else if (weakness >= 35) bits.push('Competitor content is moderate — beatable with depth.');
-  else bits.push('Competitor content is strong — plan a deeper, more original piece.');
-  if (trendPct > 20) bits.push('Demand trending up.');
-  else if (trendPct < -20) bits.push('Demand trending down.');
-
-  return bits.join(' ');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -857,13 +560,22 @@ export async function getCompetitorBenchmark(projectId: string): Promise<Benchma
       .from('keyword_gaps')
       .select('*')
       .eq('project_id', projectId)
-      .order('opportunity_score', { ascending: false })
+      .order('volume', { ascending: false })
       .limit(BENCHMARK_KEYWORD_CAP),
   ]);
 
   const competitors = (competitorsRows ?? []) as Competitor[];
-  const allPages = competitors.flatMap(c => (c.top_pages ?? []).filter(p => p.word_count > 0));
-  const averages = benchmarkContentQuality(allPages);
+  const averages: BenchmarkAverages = {
+    avg_word_count: 0,
+    avg_h2: 0,
+    avg_h3: 0,
+    avg_images: 0,
+    avg_internal_links: 0,
+    avg_external_links: 0,
+    faq_pages_pct: 0,
+    pages_analyzed: 0,
+    recommendations: [],
+  };
 
   const lastBenchmarkedAt = competitors.length
     ? competitors
@@ -923,20 +635,19 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
   const gap =
     (gapRows ?? []).find(r => (r.keyword as string).trim().toLowerCase() === normalized) ?? null;
 
-  // Reuse an existing `keywords` row when the normalized phrase already exists (e.g. discovery
-  // saved "HR Software" and the gap row says "hr software"). Upsert on `(project_id, keyword)`
-  // alone would try to INSERT a second row and hit `idx_keywords_project_normalized`.
   const { data: existingKw, error: kwLookupErr } = await supabaseAdmin
     .from('keywords')
     .select('id, keyword')
     .eq('project_id', projectId)
     .eq('normalized_keyword', normalized)
+    .eq('source', 'competitor')
     .maybeSingle();
   if (kwLookupErr) return { success: false as const, error: kwLookupErr.message };
 
   const statusPatch: Record<string, unknown> = {
     status: 'approved',
     source_type: 'competitor_benchmark',
+    source: 'competitor',
     funnel_stage: deterministicFunnelStage('', normalized),
   };
   if (gap) {
@@ -945,8 +656,8 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     statusPatch.trend = gap.trend;
     statusPatch.source_url = gap.top_competitor_url ?? '';
     statusPatch.gap_competitor = gap.top_competitor_domain ?? '';
-    statusPatch.ai_score = gap.opportunity_score ?? 0;
-    statusPatch.keyword_analysis_score = gap.opportunity_score ?? 0;
+    statusPatch.ai_score = 0;
+    statusPatch.keyword_analysis_score = 0;
   }
 
   let keywordId: string;
@@ -977,8 +688,8 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
       trend: gap?.trend ?? '+0%',
       source_url: gap?.top_competitor_url ?? '',
       gap_competitor: gap?.top_competitor_domain ?? '',
-      ai_score: gap?.opportunity_score ?? 0,
-      keyword_analysis_score: gap?.opportunity_score ?? 0,
+      ai_score: 0,
+      keyword_analysis_score: 0,
       ...statusPatch,
     };
     let { data: insRow, error: insErr } = await supabaseAdmin
@@ -1006,6 +717,7 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     .select('id, scheduled_date')
     .eq('project_id', projectId)
     .eq('keyword_id', keywordId)
+    .eq('ai_source', 'competitor keyword')
     .maybeSingle();
 
   if (existingEntry) {
@@ -1029,6 +741,7 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     title: toTitleCase(canonicalKeyword),
     article_type: 'How-to Guide',
     slug: `${slugBase}-${Date.now().toString(36)}`,
+    ai_source: 'competitor keyword',
   });
 
   if (!calRes.success || !calRes.data) {
@@ -1097,22 +810,12 @@ export async function loadMoreCompetitorGapsFromAhrefs(
     gapCountByDomain.set(d, (gapCountByDomain.get(d) ?? 0) + 1);
   }
 
-  // Pull user's existing keywords for gap classification.
-  const { data: userKwRows } = await supabaseAdmin
-    .from('keywords')
-    .select('keyword, status')
-    .eq('project_id', projectId);
-  const userKwIndex = new Map<string, { status: string }>(
-    (userKwRows ?? []).map(r => [r.keyword.toLowerCase(), { status: r.status as string }])
-  );
-
   const newGapRows: Array<Record<string, unknown>> = [];
   let hasMore = false;
 
   for (const competitor of competitorRows) {
     const domain = competitor.domain as string;
     const currentCount = gapCountByDomain.get(domain) ?? 0;
-    // Fetch with a higher limit to get beyond what we already have.
     const fetchLimit = currentCount + LOAD_MORE_LIMIT;
     const organicKeywords = await ahrefsOrganicKeywords(
       domain,
@@ -1120,35 +823,25 @@ export async function loadMoreCompetitorGapsFromAhrefs(
       fetchLimit
     );
 
-    // If Ahrefs returned the full limit, there may be more.
     if (organicKeywords.length >= fetchLimit) hasMore = true;
 
     for (const row of organicKeywords) {
       const keyword = row.keyword.trim().toLowerCase();
       if (!keyword || existingKeywords.has(keyword)) continue;
 
-      const gap_type = classifyGap(keyword, userKwIndex);
-      const opportunity_score = scoreOpportunity({
-        volume: row.volume || 0,
-        kd: row.keyword_difficulty ?? 0,
-        trend_pct: 0,
-        competitor_weakness: 50,
-        gap_type,
-      });
-
       newGapRows.push({
         project_id: projectId,
         keyword,
-        gap_type,
-        opportunity_score,
+        gap_type: 'missing',
+        opportunity_score: 0,
         volume: row.volume || 0,
         kd: row.keyword_difficulty ?? 0,
         trend: '+0%',
         trend_pct: 0,
-        competitor_weakness: 50,
+        competitor_weakness: 0,
         top_competitor_domain: domain,
-        top_competitor_url: row.best_position_url,
-        reasoning: buildGapReasoning(gap_type, row.volume || 0, 50, 0),
+        top_competitor_url: row.best_position_url || `https://${domain}`,
+        reasoning: '',
         position: row.best_position ?? null,
         is_informational: row.is_informational ?? false,
         is_navigational: row.is_navigational ?? false,
@@ -1166,7 +859,6 @@ export async function loadMoreCompetitorGapsFromAhrefs(
     return { success: true, added: 0, hasMore };
   }
 
-  // Sort by volume desc and cap total gaps.
   newGapRows.sort((a, b) => (b.volume as number) - (a.volume as number));
   const toInsert = newGapRows.slice(0, LOAD_MORE_LIMIT);
 
@@ -1180,3 +872,4 @@ export async function loadMoreCompetitorGapsFromAhrefs(
 
   return { success: true, added: toInsert.length, hasMore };
 }
+

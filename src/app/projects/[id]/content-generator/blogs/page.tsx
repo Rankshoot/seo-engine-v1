@@ -86,6 +86,7 @@ export default function BlogGeneratorPage() {
   const studioBase = `${base}/content-generator`;
 
   const entryId = searchParams?.get("entryId");
+  const shouldSchedule = searchParams?.get("shouldSchedule") !== "false"; // Default to true
 
   const { data: entriesData } = useQuery({
     queryKey: qk.calendarWithBlogs(projectId),
@@ -196,7 +197,8 @@ export default function BlogGeneratorPage() {
 
     try {
       let finalEntryId = entryId;
-      if (!finalEntryId) {
+      // Only create calendar entry if shouldSchedule is true and no entryId exists
+      if (!finalEntryId && shouldSchedule) {
         const calRes = await calendarApi.addCustomKeyword(projectId, {
           keyword: primaryKeyword,
           title: `[Draft] ${topic}`,
@@ -212,6 +214,59 @@ export default function BlogGeneratorPage() {
         finalEntryId = calRes.data.id;
       }
 
+      // If no entryId and shouldSchedule is false, generate without calendar entry
+      if (!finalEntryId) {
+        // Use the direct generation API that doesn't require entryId
+        for await (const event of blogsApi.generateStreamDirect({
+          projectId: projectId!,
+          keyword: primaryKeyword,
+          topic,
+          audience,
+          tone: TONES.find(t => t.id === tone)?.label || tone,
+          goal,
+          ctaObjective,
+          secondaryKeywords,
+          wordCount,
+        })) {
+          if (event.event === "stage") {
+            const stageIdx = STAGE_ORDER.indexOf(event.stage as StreamStage);
+            const progressAtStage = stageIdx === 0 ? 0.02 : STAGE_CUMULATIVE[stageIdx - 1];
+            setStreamProgress(progressAtStage);
+            if (event.stage === "polish") setIsThinking(false);
+            if (event.detail) {
+              setStreamStages(prev =>
+                prev.map(s => s.id === event.stage ? { ...s, detail: event.detail } : s)
+              );
+            }
+          } else if (event.event === "thinking") {
+            setIsThinking(true);
+            setThinkingText(prev => prev + event.chunk);
+          } else if (event.event === "thinking_done") {
+            setIsThinking(false);
+          } else if (event.event === "done") {
+            setStreamProgress(1);
+            setIsThinking(false);
+            toast.success("Blog generated!");
+            void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+            void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+            router.push(`${base}/blogs/${event.blogId}`);
+            return;
+          } else if (event.event === "error") {
+            toast.error(event.message || "Generation failed");
+            setPhase("form");
+            setIsThinking(false);
+            setStreamProgress(undefined);
+            return;
+          }
+        }
+        // Stream ended without a "done" event
+        toast.error("Generation ended unexpectedly. Please try again.");
+        setPhase("form");
+        setStreamProgress(undefined);
+        return;
+      }
+
+      // Existing flow: use entryId-based generation
       for await (const event of blogsApi.generateStream({ entryId: finalEntryId!, wordCount })) {
         if (event.event === "stage") {
           const stageIdx = STAGE_ORDER.indexOf(event.stage as StreamStage);

@@ -21,6 +21,7 @@ import {
 import { calendarApi } from "@/frontend/api/calendar";
 import { keywordsApi } from "@/frontend/api/keywords";
 import { CalendarEntry, CalendarEntryWithBlog } from "@/lib/types";
+import { useGeneratedContentMap, generatedContentKey } from "@/hooks/useGeneratedContentMap";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
@@ -89,6 +90,8 @@ export function ScheduledCalendar() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
+
+  const { generatedMap } = useGeneratedContentMap(projectId);
 
   const calendarRefreshVersion = useAppSelector((s) =>
     selectCalendarRefreshVersion(s, projectId)
@@ -469,11 +472,21 @@ export function ScheduledCalendar() {
                 const reduxState = entry.keyword_id ? scheduledKeywordsMap[entry.keyword_id] : undefined;
                 const effectiveStatus = entry.status ?? reduxState?.status;
                 const effectiveDate = entry.scheduled_date ?? reduxState?.date;
+
+                const calendarBlogId = entry.blog?.id;
+                const historyKey = generatedContentKey(
+                  entry.focus_keyword,
+                  entry.article_type ?? "blog"
+                );
+                const historyEntry = generatedMap.get(historyKey);
+                const resolvedBlogId = calendarBlogId ?? historyEntry?.id;
+
                 const lifecycleDisplay = resolveCalendarLifecycleStatus({
                   hasCalendarEntry: true,
-                  calendarStatus: effectiveStatus,
+                  calendarStatus: resolvedBlogId ? "generated" : effectiveStatus,
                 });
                 const isLocked =
+                  !!resolvedBlogId ||
                   effectiveStatus === "generated" ||
                   effectiveStatus === "downloaded" ||
                   effectiveStatus === "approved" ||
@@ -579,8 +592,8 @@ export function ScheduledCalendar() {
                       {isLocked && (
                         <ProjectNavLink
                           href={
-                            entry.blog?.id 
-                              ? `/projects/${projectId}/blogs/${entry.blog.id}`
+                            resolvedBlogId
+                              ? `/projects/${projectId}/blogs/${resolvedBlogId}`
                               : `/projects/${projectId}/blogs/${entry.id}`
                           }
                           className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"

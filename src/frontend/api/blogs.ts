@@ -89,6 +89,68 @@ export const blogsApi = {
     }
   },
 
+  /**
+   * Direct blog generation without calendar entry. Used when generating from
+   * Keyword Discovery with shouldSchedule=false. Returns an async generator that
+   * yields typed SSE events as the generation progresses:
+   *   { event: "stage", stage: string, detail?: string }
+   *   { event: "done",  blogId: string }
+   *   { event: "error", message: string }
+   */
+  async *generateStreamDirect(body: {
+    projectId: string;
+    keyword: string;
+    topic: string;
+    audience: string;
+    tone: string;
+    goal: string;
+    ctaObjective: string;
+    secondaryKeywords: string[];
+    wordCount: number;
+  }): AsyncGenerator<
+    | { event: "stage"; stage: "context" | "research" | "outline" | "draft" | "polish"; detail?: string }
+    | { event: "thinking"; chunk: string }
+    | { event: "thinking_done" }
+    | { event: "done"; blogId: string }
+    | { event: "error"; message: string }
+  > {
+    const response = await fetch("/api/v1/blogs/generate/direct-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok || !response.body) {
+      yield { event: "error", message: `HTTP ${response.status}: Failed to start generation` };
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE lines end with \n\n; process all complete events
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const payload = JSON.parse(line.slice(6));
+          yield payload;
+        } catch {
+          // malformed event — skip
+        }
+      }
+    }
+  },
+
   updateContent(
     blogId: string,
     body: { content: string; title?: string; metaDescription?: string }

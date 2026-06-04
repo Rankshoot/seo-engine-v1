@@ -9,3 +9,4 @@ export { useScrolledPast } from "./useScrollPosition";
 export { useClickOutside } from "./useClickOutside";
 export { useHotkey } from "./useHotkey";
 export { useGenerateContentEntry } from "./useGenerateContentEntry";
+export { useGeneratedContentMap, generatedContentKey, normalizeKeyword, normalizeContentType } from "./useGeneratedContentMap";

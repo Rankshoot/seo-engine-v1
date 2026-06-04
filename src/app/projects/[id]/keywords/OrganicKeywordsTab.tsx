@@ -23,6 +23,7 @@ import {
 } from "@/lib/redux/keyword-workspace-slice";
 import { keywordsApi } from "@/frontend/api/keywords";
 import { calendarApi } from "@/frontend/api/calendar";
+import { useGeneratedContentMap, generatedContentKey } from "@/hooks/useGeneratedContentMap";
 import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
 import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { DataTable, ColumnDef } from "@/components/DataTable";
@@ -285,6 +286,8 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const router = useRouter();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
+
+  const { generatedMap } = useGeneratedContentMap(projectId);
 
   const [rowContentTypes, setRowContentTypes] = useState<Record<string, ContentType>>({});
 
@@ -1161,6 +1164,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         const entry = (kw.matched_keyword_id ? calendarMap.get(kw.matched_keyword_id) : null) || calendarMap.get(kw.keyword.toLowerCase());
         const industryKw = keywords.find(k => normKeywordPhrase(k.keyword) === normKeywordPhrase(kw.keyword));
         const selectedType = resolveContentType(kw.keyword, kw.matched_keyword_id || undefined, industryKw?.ai_eval_data);
+        const historyKey = generatedContentKey(kw.keyword, selectedType);
+        const historyEntry = generatedMap.get(historyKey);
+        const resolvedBlogId = entry?.blog?.id ?? historyEntry?.id;
         return (
           <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
             <KeywordActionCell
@@ -1170,13 +1176,13 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               sourceType="google_ads_domain"
               contentType={selectedType}
               scheduledDate={entry?.scheduled_date}
-              blogId={entry?.blog?.id}
+              blogId={resolvedBlogId}
             />
           </div>
         );
       }
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [busyRowId, handleDomainStatusUpdate, effectiveDomainStatus, calendarMap, resolveContentType, setRowContentType]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [busyRowId, handleDomainStatusUpdate, effectiveDomainStatus, calendarMap, resolveContentType, setRowContentType, generatedMap]);
 
   const industryColumns = useMemo<ColumnDef<Keyword>[]>(() => [
     {
@@ -1355,6 +1361,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       cell: (kw: Keyword) => {
         const entry = calendarMap.get(kw.id) || calendarMap.get(kw.keyword.toLowerCase());
         const selectedType = resolveContentType(kw.keyword, kw.id, kw.ai_eval_data);
+        const historyKey = generatedContentKey(kw.keyword, selectedType);
+        const historyEntry = generatedMap.get(historyKey);
+        const resolvedBlogId = entry?.blog?.id ?? historyEntry?.id;
         return (
           <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
             <KeywordActionCell
@@ -1364,13 +1373,13 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               sourceType={(kw.source_type as KeywordSourceType) || "industry"}
               contentType={selectedType}
               scheduledDate={entry?.scheduled_date}
-              blogId={entry?.blog?.id}
+              blogId={resolvedBlogId}
             />
           </div>
         );
       }
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [busyRowId, handleStatusUpdate, projectData, calendarMap, resolveContentType, setRowContentType]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [busyRowId, handleStatusUpdate, projectData, calendarMap, resolveContentType, setRowContentType, generatedMap]);
 
   return (
     <div className="space-y-4 relative">

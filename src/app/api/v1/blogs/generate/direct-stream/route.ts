@@ -15,7 +15,8 @@ function getAnthropicClient(): Anthropic {
 }
 
 /**
- * SSE streaming endpoint for blog generation with real Claude thinking tokens.
+ * SSE streaming endpoint for blog generation without calendar entry.
+ * Used when generating from Keyword Discovery with shouldSchedule=false.
  *
  * Event types (newline-delimited JSON with "data: " prefix):
  *   { event: "stage",         stage: "context"|"research"|"outline"|"draft"|"polish", detail?: string }
@@ -33,10 +34,21 @@ export async function POST(req: Request) {
     );
   }
 
-  const body = (await req.json()) as { entryId: string; wordCount?: number; writerNotes?: string };
-  if (!body.entryId) {
+  const body = (await req.json()) as {
+    projectId: string;
+    keyword: string;
+    topic: string;
+    audience: string;
+    tone: string;
+    goal: string;
+    ctaObjective: string;
+    secondaryKeywords: string[];
+    wordCount: number;
+  };
+
+  if (!body.projectId || !body.keyword) {
     return new Response(
-      `data: ${JSON.stringify({ event: "error", message: "Expected { entryId, wordCount?, writerNotes? }" })}\n\n`,
+      `data: ${JSON.stringify({ event: "error", message: "Expected { projectId, keyword, topic, audience, tone, goal, ctaObjective, secondaryKeywords, wordCount }" })}\n\n`,
       { status: 400, headers: { "Content-Type": "text/event-stream" } }
     );
   }
@@ -55,19 +67,10 @@ export async function POST(req: Request) {
 
       try {
         // ── Stage 1: Load context ─────────────────────────────────────────
-        emit({ event: "stage", stage: "context", detail: "Loading project brief and calendar entry…" });
-
-        const { data: entry, error: eErr } = await supabaseAdmin
-          .from("calendar_entries").select("*").eq("id", body.entryId).single();
-
-        if (eErr || !entry) {
-          emit({ event: "error", message: "Calendar entry not found" });
-          controller.close();
-          return;
-        }
+        emit({ event: "stage", stage: "context", detail: "Loading project brief…" });
 
         const { data: project, error: pErr } = await supabaseAdmin
-          .from("projects").select("*").eq("id", entry.project_id).eq("user_id", user.id).single();
+          .from("projects").select("*").eq("id", body.projectId).eq("user_id", user.id).single();
 
         if (pErr || !project) {
           emit({ event: "error", message: "Project not found or unauthorized" });
@@ -75,12 +78,10 @@ export async function POST(req: Request) {
           return;
         }
 
-        await supabaseAdmin.from("calendar_entries").update({ status: "generating" }).eq("id", body.entryId);
-
         let brief: any = null;
         try {
           const { data: briefRow } = await supabaseAdmin
-            .from("project_briefs").select("brief").eq("project_id", entry.project_id).maybeSingle();
+            .from("project_briefs").select("brief").eq("project_id", body.projectId).maybeSingle();
           brief = briefRow?.brief ?? null;
         } catch { /* optional */ }
 
@@ -90,32 +91,43 @@ export async function POST(req: Request) {
         const { researchKeyword } = await import("@/lib/research");
         let research: any = null;
         try {
-          research = await researchKeyword(entry.focus_keyword, project.target_region, project.target_language);
+          research = await researchKeyword(body.keyword, project.target_region, project.target_language);
         } catch (e) {
-          console.warn("[blog stream] Research failed, continuing:", e);
+          console.warn("[blog direct stream] Research failed, continuing:", e);
         }
 
         let existingBlogs: { title: string; slug: string; target_keyword: string }[] = [];
         try {
           const { data: blogs } = await supabaseAdmin
             .from("blogs").select("title, slug, target_keyword")
-            .eq("project_id", entry.project_id).in("status", ["generated", "approved", "published"])
-            .neq("entry_id", body.entryId).limit(15);
+            .eq("project_id", body.projectId).in("status", ["generated", "approved", "published"])
+            .limit(15);
           existingBlogs = blogs ?? [];
         } catch { /* optional */ }
 
         // ── Stage 3: Outline ──────────────────────────────────────────────
         emit({ event: "stage", stage: "outline", detail: "Building SEO structure and topical outline…" });
 
-        const { formatContentHealthAuditForWriter } = await import("@/lib/content-health-calendar");
-        const contentHealthRaw = (entry as any).content_health_audit;
-        const auditWriterBlock = formatContentHealthAuditForWriter(contentHealthRaw);
-        const mergedWriterNotes = [body.writerNotes?.trim(), auditWriterBlock || ""]
-          .filter(Boolean).join("\n\n---\n\n");
+        // Build a synthetic entry object for the prompt builder
+        const syntheticEntry = {
+          focus_keyword: body.keyword,
+          title: body.topic,
+          article_type: "Blog Post",
+          secondary_keywords: body.secondaryKeywords,
+          content_health_audit: null,
+          slug: body.keyword.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80),
+        };
+
+        const writerNotes = `Audience: ${body.audience}\nTone: ${body.tone}\nGoal: ${body.goal}\nCTA: ${body.ctaObjective}\nSecondary Keywords: ${body.secondaryKeywords.join(", ")}`;
 
         // Build the blog prompt (same structure as generateBlogPost in gemini.ts)
         const blogPrompt = await buildBlogPrompt({
-          entry, project, research, existingBlogs, brief, writerNotes: mergedWriterNotes || undefined,
+          entry: syntheticEntry,
+          project,
+          research,
+          existingBlogs,
+          brief,
+          writerNotes,
           wordCount: body.wordCount ?? 2500,
         });
 
@@ -129,7 +141,6 @@ export async function POST(req: Request) {
         const claudeModel = routedModel.startsWith("claude") ? routedModel : "claude-sonnet-4-6";
 
         // Stream with extended thinking enabled
-        let fullThinking = "";
         let fullContent = "";
         let thinkingEmitted = false;
 
@@ -149,7 +160,6 @@ export async function POST(req: Request) {
             }
           } else if (event.type === "content_block_delta") {
             if (event.delta.type === "thinking_delta") {
-              fullThinking += event.delta.thinking;
               // Stream thinking in larger chunks (min 40 chars) to avoid flooding
               if (event.delta.thinking.length >= 10) {
                 emit({ event: "thinking", chunk: event.delta.thinking });
@@ -170,17 +180,17 @@ export async function POST(req: Request) {
 
         // Parse the JSON from Claude's text response
         const { parseGeneratedBlogJson } = await import("@/lib/gemini");
-        const blogData = parseGeneratedBlogJson(fullContent, entry, project, research);
+        const blogData = parseGeneratedBlogJson(fullContent, syntheticEntry, project, research);
 
         const { generateBlogImages, insertBlogImages } = await import("@/services/openAiImages");
         const { sanitizeBlogContent } = await import("@/lib/blog-content");
 
         const images = await generateBlogImages({
           title: blogData.title,
-          targetKeyword: entry.focus_keyword,
-          articleType: entry.article_type,
+          targetKeyword: body.keyword,
+          articleType: "Blog Post",
           niche: project.niche,
-          audience: project.target_audience,
+          audience: body.audience,
           company: project.company,
           wordCount: blogData.word_count,
         });
@@ -190,52 +200,35 @@ export async function POST(req: Request) {
         const finalContent = sanitizeBlogMarkdown(sanitized.content);
         const finalWordCount = countWords(finalContent);
 
-        // ── Save to DB ────────────────────────────────────────────────────
-        const { data: existing } = await supabaseAdmin
-          .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
-
+        // ── Save to DB (without calendar entry) ───────────────────────────
         const upsertPayload = {
           title: blogData.title,
           content: finalContent,
           meta_description: blogData.meta_description,
           slug: blogData.slug,
           word_count: finalWordCount,
-          target_keyword: entry.focus_keyword,
-          article_type: entry.article_type,
-          status: "generated",
+          target_keyword: body.keyword,
+          article_type: "Blog Post",
+          status: "generated" as const,
           research_sources: blogData.research_sources,
           external_links: sanitized.externalLinks.slice(0, 10),
           internal_links: sanitized.internalLinks.slice(0, 12),
           source_url: "",
           repair_notes: [] as string[],
           updated_at: new Date().toISOString(),
+          project_id: body.projectId,
+          entry_id: null, // No calendar entry for direct generation
         };
 
-        let blogId: string;
-        if (existing) {
-          const { data, error } = await supabaseAdmin
-            .from("blogs").update(upsertPayload).eq("id", existing.id).select("id").single();
-          if (error) throw error;
-          blogId = data.id;
-        } else {
-          const { data, error } = await supabaseAdmin
-            .from("blogs").insert({ ...upsertPayload, entry_id: body.entryId, project_id: entry.project_id })
-            .select("id").single();
-          if (error) throw error;
-          blogId = data.id;
-        }
+        const { data, error } = await supabaseAdmin
+          .from("blogs").insert(upsertPayload).select("id").single();
 
-        await supabaseAdmin
-          .from("calendar_entries").update({ status: "generated", title: blogData.title })
-          .eq("id", body.entryId);
+        if (error) throw error;
 
-        emit({ event: "done", blogId });
+        emit({ event: "done", blogId: data.id });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Generation failed";
-        console.error("[blog stream] Error:", message);
-        try {
-          await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
-        } catch { /* best effort */ }
+        console.error("[blog direct stream] Error:", message);
         emit({ event: "error", message });
       } finally {
         controller.close();
@@ -251,6 +244,28 @@ export async function POST(req: Request) {
       "X-Accel-Buffering": "no",
     },
   });
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function countWords(markdown: string): number {
+  return markdown.replace(/```[\s\S]*?```/g, " ").replace(/`[^`]*`/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, " ").replace(/\[[^\]]+\]\([^)]+\)/g, " ")
+    .replace(/[#>*_\-[\]()` ~]/g, " ").split(/\s+/).filter(Boolean).length;
+}
+
+function sanitizeBlogMarkdown(markdown: string): string {
+  let cleaned = markdown
+    .replace(/^\s*```(?:markdown|md)?\s*/i, "").replace(/\s*```\s*$/i, "")
+    .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, "")
+    .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, "");
+
+  const metaIdx = cleaned.indexOf("---META---");
+  if (metaIdx !== -1) cleaned = cleaned.substring(0, metaIdx);
+
+  return cleaned
+    .replace(/^\s*"(?:external_links|internal_links|meta_description|slug|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm, "")
+    .replace(/^\s*[{}]\s*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // ── Prompt builder (mirrors generateBlogPost in gemini.ts) ───────────────────
@@ -353,32 +368,10 @@ SEO REQUIREMENTS:
 1. Minimum ${Math.max(wordCount, 1500)} words
 2. Primary keyword "${entry.focus_keyword}" in H1, first 100 words, and meta description
 3. At least 5 H2 headings, 2 H3 sub-headings
-4. FAQ section under "## FAQs" with 7-10 Q&A pairs (### headings)
+4. FAQ section under "## FAQs" with 7–10 Q&A pairs (### headings)
 5. At least 5 external links (from verified sources only), 2 internal links
 6. Meta description 150-160 characters exactly
 7. No filler: avoid "In today's world", "game-changer", "delve", "unlock", "landscape"
 
 Return JSON only.`;
-}
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
-function countWords(markdown: string): number {
-  return markdown.replace(/```[\s\S]*?```/g, " ").replace(/`[^`]*`/g, " ")
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, " ").replace(/\[[^\]]+\]\([^)]+\)/g, " ")
-    .replace(/[#>*_\-[\]()` ~]/g, " ").split(/\s+/).filter(Boolean).length;
-}
-
-function sanitizeBlogMarkdown(markdown: string): string {
-  let cleaned = markdown
-    .replace(/^\s*```(?:markdown|md)?\s*/i, "").replace(/\s*```\s*$/i, "")
-    .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, "")
-    .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, "");
-
-  const metaIdx = cleaned.indexOf("---META---");
-  if (metaIdx !== -1) cleaned = cleaned.substring(0, metaIdx);
-
-  return cleaned
-    .replace(/^\s*"(?:external_links|internal_links|meta_description|slug|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm, "")
-    .replace(/^\s*[{}]\s*$/gm, "")
-    .replace(/\n{3,}/g, "\n\n").trim();
 }

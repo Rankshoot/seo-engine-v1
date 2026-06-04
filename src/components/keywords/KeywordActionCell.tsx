@@ -55,8 +55,9 @@ export function KeywordActionCell({
 
   const handleGenerate = () => {
     // Navigate to the respective generator page with autofill params
+    // shouldSchedule=false indicates this is a generate-only action, not a schedule action
     const slug = contentType === "blog" ? "blogs" : contentType === "linkedin" ? "linkedin" : `${contentType}s`;
-    const params = new URLSearchParams({ keyword, source: sourceType });
+    const params = new URLSearchParams({ keyword, source: sourceType, shouldSchedule: "false" });
     router.push(`/projects/${projectId}/content-generator/${slug}?${params.toString()}`);
   };
 
@@ -111,9 +112,12 @@ export function KeywordActionCell({
           queryClient.setQueryData(ENTRIES_KEY, (prev: any) => {
             if (!prev || !prev.success) return prev;
             const filtered = prev.data.filter((e: any) => e.id !== res.calendarEntry.id);
+            const blogStub = blogId
+              ? { id: blogId, entry_id: res.calendarEntry.id, title: "", status: "generated", word_count: 0 }
+              : null;
             return {
               ...prev,
-              data: [...filtered, { ...res.calendarEntry, blog: null }]
+              data: [...filtered, { ...res.calendarEntry, blog: blogStub }]
             };
           });
         }
@@ -126,11 +130,14 @@ export function KeywordActionCell({
         if (sourceType === "competitor_gap") {
           void queryClient.invalidateQueries({ queryKey: qk.competitors(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         } else {
           void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.domainKeywords(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
         }
       } else {
         if (res.error === "Keyword already scheduled") {
@@ -179,23 +186,7 @@ export function KeywordActionCell({
         </Button>
       )}
 
-      {blogId ? (
-        scheduledDate ? (
-          <span
-            className="px-2.5 h-7 text-[10px] font-semibold text-text-tertiary bg-surface-secondary border border-border-subtle rounded-full whitespace-nowrap flex items-center justify-center gap-1"
-            title={`Scheduled date: ${scheduledDate}`}
-          >
-            🗓 {fmtDate(scheduledDate)}
-          </span>
-        ) : (
-          <span
-            className="px-2.5 h-7 text-[10px] font-semibold text-text-tertiary bg-surface-secondary border border-border-subtle rounded-full whitespace-nowrap flex items-center justify-center gap-1"
-            title="Blog has been generated"
-          >
-            🗓 Generated
-          </span>
-        )
-      ) : scheduledDate ? (
+      {scheduledDate ? (
         <span
           className="px-2.5 h-7 text-[10px] font-semibold text-text-tertiary bg-surface-secondary border border-border-subtle rounded-full whitespace-nowrap flex items-center justify-center gap-1"
           title={`Scheduled date: ${scheduledDate}`}

@@ -319,6 +319,28 @@ export default function ProjectOverviewPage() {
               </dd>
             </div>
           </div>
+          {(project.brand_voice || project.brand_values || project.brand_description) && (
+            <div className="grid grid-cols-1 gap-px border-t border-border-subtle bg-border-subtle md:grid-cols-3">
+              <div className="bg-surface-elevated p-5">
+                <dt className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+                  Brand Voice / Tone
+                </dt>
+                <dd className="mt-2 text-[14px] text-text-secondary">{project.brand_voice || "—"}</dd>
+              </div>
+              <div className="bg-surface-elevated p-5">
+                <dt className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+                  Core Values / Messaging
+                </dt>
+                <dd className="mt-2 text-[14px] text-text-secondary">{project.brand_values || "—"}</dd>
+              </div>
+              <div className="bg-surface-elevated p-5">
+                <dt className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+                  Personality / Bio
+                </dt>
+                <dd className="mt-2 text-[14px] text-text-secondary">{project.brand_description || "—"}</dd>
+              </div>
+            </div>
+          )}
         </div>
 
         <p className="mt-3 text-[11.5px] text-text-tertiary">

@@ -42,6 +42,9 @@ export const projectsApi = {
     description: string;
     competitors: string[];
     ahrefs_rank_tracker_project_id?: number | null;
+    brand_voice?: string;
+    brand_values?: string;
+    brand_description?: string;
   }): Promise<{ success: boolean; error?: string; data?: Project }> {
     return apiPost(V1Routes.projects, payload);
   },
@@ -58,6 +61,9 @@ export const projectsApi = {
       description: string;
       competitors?: string[];
       ahrefs_rank_tracker_project_id?: number | null;
+      brand_voice?: string;
+      brand_values?: string;
+      brand_description?: string;
     }
   ): Promise<{ success: boolean; error?: string; data?: Project }> {
     return apiPatch(V1Routes.project(projectId), payload);

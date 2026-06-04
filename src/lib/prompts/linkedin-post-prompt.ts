@@ -22,6 +22,9 @@ export interface LinkedInPromptContext {
   companyDomain: string;
   niche: string;
   brief: BusinessBrief | null;
+  brandVoice?: string;
+  brandValues?: string;
+  brandDescription?: string;
 }
 
 const STYLE_GUIDE: Record<LinkedInPostStyle, string> = {
@@ -40,19 +43,25 @@ const STYLE_GUIDE: Record<LinkedInPostStyle, string> = {
 };
 
 export function buildLinkedInPostPrompt(ctx: LinkedInPromptContext): string {
+  const brandPersonaBlock = (ctx.brandVoice || ctx.brandValues || ctx.brandDescription)
+    ? `\nBRAND PERSONA & IDENTITY:
+${ctx.brandVoice ? `- Brand Voice/Tone: ${ctx.brandVoice}\n` : ''}${ctx.brandValues ? `- Core Values/Messaging: ${ctx.brandValues}\n` : ''}${ctx.brandDescription ? `- Personality/Description: ${ctx.brandDescription}\n` : ''}`
+    : '';
+
   const briefBlock = ctx.brief
     ? `BRAND CONTEXT (use for voice, do NOT pitch):
 - Company: ${ctx.companyName} (${ctx.companyDomain})
 - Niche: ${ctx.niche}
 - USPs: ${ctx.brief.usps.slice(0, 3).join(' | ') || '(none)'}
 - Audience: ${ctx.brief.audiences.slice(0, 3).join(' | ') || ctx.audience}
-- Tone bias: ${ctx.brief.tone || ctx.tone}`
-    : `BRAND CONTEXT:\n- Company: ${ctx.companyName} (${ctx.companyDomain})\n- Niche: ${ctx.niche}`;
+- Tone bias: ${ctx.brief.tone || ctx.tone}
+${brandPersonaBlock}`
+    : `BRAND CONTEXT:\n- Company: ${ctx.companyName} (${ctx.companyDomain})\n- Niche: ${ctx.niche}\n${brandPersonaBlock}`;
 
   const voiceBlock =
     ctx.voicePerspective === 'first_person'
-      ? `Write in first person as the ${ctx.authorRole || 'founder'} of ${ctx.companyName}. Use "I" / "we". Sound like a real human posting from their phone.`
-      : `Write as the ${ctx.companyName} brand voice. Use "we" sparingly. Stay human, not corporate.`;
+      ? `Write in first person as the ${ctx.authorRole || 'founder'} of ${ctx.companyName}. Use "I" / "we". Sound like a real human posting from their phone. ${ctx.brandVoice ? `Align the personality with the brand voice: ${ctx.brandVoice}` : ''}`
+      : `Write as the ${ctx.companyName} brand voice. Use "we" sparingly. Stay human, not corporate. ${ctx.brandVoice ? `Align the personality and tone with: ${ctx.brandVoice}` : ''}`;
 
   return `You are a senior LinkedIn ghostwriter who has shipped 1,000+ posts that pulled real engagement (>2% engagement rate) WITHOUT clickbait. Write ONE post.
 

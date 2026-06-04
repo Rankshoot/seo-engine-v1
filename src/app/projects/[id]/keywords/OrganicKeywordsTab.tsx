@@ -1388,17 +1388,11 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       <section className="space-y-4 ">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {(keywords.length > 0 || domainKeywords.length > 0 || loading || discovering || domainFetching || domainRefreshing) ? (
-              <PillTabFilterBar<FilterTab>
-                items={FILTER_TAB_ITEMS}
-                activeId={filter}
-                onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab as any }))}
-              />
-            ) : (
-              <p className="text-[13px] text-text-tertiary">
-                Run discover to pull keywords from your brief, or switch to domain data for Google Ads terms on your site.
-              </p>
-            )}
+            <PillTabFilterBar<FilterTab>
+              items={FILTER_TAB_ITEMS}
+              activeId={filter}
+              onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab as any }))}
+            />
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">

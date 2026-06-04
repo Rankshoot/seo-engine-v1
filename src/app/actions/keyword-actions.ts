@@ -496,35 +496,26 @@ export async function discoverKeywords(projectId: string) {
     };
   }
 
-  // 1. In parallel: ensure a Business Brief exists (Jina scrape — cached in
-  //    `project_briefs`) and run the lightweight SEO crawler against the
-  //    user's domain. `crawlWebsite` NEVER throws — it always resolves to a
-  //    WebsiteCrawlResult, even when the domain is empty or the target is
-  //    down (the returned object then carries an `error` field). We use that
-  //    guarantee to always forward a real object into `discoverKeywordsForProject`
-  //    so the `(crawled_website_context)` trace can never read "skipped".
-  const [briefRes, crawlRaw] = await Promise.all([
-    generateBusinessBrief(projectId, { force: false }),
-    crawlWebsite(websiteDomain).catch(
-      (e): WebsiteCrawlResult => ({
-        url: websiteDomain,
-        finalUrl: websiteDomain,
-        status: 0,
-        title: '',
-        metaDescription: '',
-        headings: { h1: [], h2: [], h3: [] },
-        navText: [],
-        paragraphs: [],
-        urlSlugs: [],
-        linkTexts: [],
-        topPhrases: [],
-        wordCount: 0,
-        error: e instanceof Error ? e.message : String(e),
-      })
-    ),
-  ]);
-  const crawl: WebsiteCrawlResult = crawlRaw;
-  const brief = briefRes.brief;
+  // 1. Load the current brief if one exists, but do not generate/scrape a new one.
+  //    Also bypass the lightweight SEO crawler to avoid any hybrid scraping or Jina queries.
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.success && briefRes.brief ? briefRes.brief : undefined;
+
+  const crawl: WebsiteCrawlResult = {
+    url: websiteDomain,
+    finalUrl: websiteDomain,
+    status: 0,
+    title: '',
+    metaDescription: '',
+    headings: { h1: [], h2: [], h3: [] },
+    navText: [],
+    paragraphs: [],
+    urlSlugs: [],
+    linkTexts: [],
+    topPhrases: [],
+    wordCount: 0,
+    error: 'Crawling disabled on keyword discovery',
+  };
 
   // 2. Seeds. We DO NOT use the brief's AI-generated seed_phrases here —
   //    they're inferred from the website scrape and were drifting into
@@ -1576,7 +1567,16 @@ async function callGeminiForEval(prompt: string, projectId: string): Promise<str
 }
 
 function buildEvalPrompt(
-  project: { name: string; domain: string; niche: string; target_audience: string; target_region: string },
+  project: {
+    name: string;
+    domain: string;
+    niche: string;
+    target_audience: string;
+    target_region: string;
+    brand_voice?: string;
+    brand_values?: string;
+    brand_description?: string;
+  },
   brief: BusinessBrief | null,
   competitors: string[],
   keywords: Array<{ keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string }>
@@ -1589,6 +1589,10 @@ function buildEvalPrompt(
         brief.usps?.length ? `USPs: ${brief.usps.slice(0, 4).join('; ')}` : '',
       ].filter(Boolean).join('\n')
     : `Company: ${project.name}, Niche: ${project.niche}, Audience: ${project.target_audience}`;
+
+  const brandPersonaSnippet = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\n## BRAND PERSONA & IDENTITY\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Personality Description: ${project.brand_description}\n` : ""}`
+    : "";
 
   const kwList = keywords
     .map((k, i) =>
@@ -1608,9 +1612,10 @@ Competitors: ${competitors.slice(0, 6).join(', ') || 'unknown'}
 
 ## BUSINESS BRIEF
 ${briefSnippet}
+${brandPersonaSnippet}
 
 ## EVALUATION FRAMEWORK (weighted scoring)
-- Business Relevance (25%): Does keyword align with company services, audience, goals?
+- Business Relevance (25%): Does keyword align with company services, audience, goals, and brand voice/values?
 - Intent Match (15%): Is intent commercial/transactional > informational > navigational?
 - Traffic Potential (15%): Organic CTR opportunity, SERP type, ad density
 - Search Volume (10%): Volume appropriate for niche (B2B 500–5k can beat B2C 100k)
@@ -1638,6 +1643,7 @@ ${kwList}
 5. All string values must use plain ASCII quotes — do NOT use curly/smart quotes.
 6. Semantic Deduplication: Analyze the batch of keywords for semantic similarity/repetition (e.g. variations or minor variants of the same topic). If a keyword is a repetitive variant of another primary keyword in this list, set "duplicate_of" to the primary keyword's phrase, lower its score (to avoid cannibalization), and state this cannibalization risk in its weaknesses list.
 7. Content Type: For each keyword, recommend exactly one system-supported content type: "blog", "ebook", "whitepaper", or "linkedin" (do not suggest any other type). Suggest the best format for generating content on this query.
+8. Brand Persona Alignment: Evaluate whether the keyword and its search intent align with the brand persona, values, tone, and character. Penalize or lower scores for keywords that mismatch the brand's identity or messaging guidelines.
 
 Return a JSON array. Each element must have exactly these fields:
 - keyword (string — exact match from input)
@@ -1666,7 +1672,7 @@ export async function scoreKeywordsWithAI(
   // Ownership check
   const { data: project } = await supabaseAdmin
     .from('projects')
-    .select('id, name, domain, niche, target_audience, target_region')
+    .select('id, name, domain, niche, target_audience, target_region, brand_voice, brand_values, brand_description')
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();
@@ -1769,7 +1775,16 @@ export async function scoreKeywordsWithAI(
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildCompetitorEvalPrompt(
-  project: { name: string; domain: string; niche: string; target_audience: string; target_region: string },
+  project: {
+    name: string;
+    domain: string;
+    niche: string;
+    target_audience: string;
+    target_region: string;
+    brand_voice?: string;
+    brand_values?: string;
+    brand_description?: string;
+  },
   brief: BusinessBrief | null,
   competitors: string[],
   gaps: Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
@@ -1782,6 +1797,10 @@ function buildCompetitorEvalPrompt(
         brief.usps?.length ? `USPs: ${brief.usps.slice(0, 3).join('; ')}` : '',
       ].filter(Boolean).join('\n')
     : `Company: ${project.name}, Niche: ${project.niche}, Audience: ${project.target_audience}`;
+
+  const brandPersonaSnippet = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\n## BRAND PERSONA & IDENTITY\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Personality Description: ${project.brand_description}\n` : ""}`
+    : "";
 
   const kwList = gaps
     .map((g, i) =>
@@ -1801,6 +1820,7 @@ Main competitors: ${competitors.slice(0, 6).join(', ') || 'unknown'}
 
 ## BUSINESS BRIEF
 ${briefSnippet}
+${brandPersonaSnippet}
 
 ## GAP TYPE DEFINITIONS
 - missing: You have no content for this keyword — competitor ranks, you don't
@@ -1808,7 +1828,7 @@ ${briefSnippet}
 - untapped: High-value keyword neither you nor competitors dominate yet
 
 ## EVALUATION FRAMEWORK (weighted scoring for competitor gap keywords)
-- Business Relevance (20%): Does this keyword align with company services / audience goals?
+- Business Relevance (20%): Does this keyword align with company services / audience goals / brand persona?
 - Blog Writing Potential (20%): Can a high-quality 1500+ word article be written on this topic? Rich subtopics, FAQs, use cases?
 - Competitive Takeover Opportunity (20%): Gap type + competitor weakness score — how realistic is outranking the current result?
 - Search Intent Quality (15%): Informational / commercial intent that drives discovery and consideration. Avoid pure transactional or navigational.
@@ -1835,6 +1855,7 @@ ${kwList}
 6. All string values must use plain ASCII quotes.
 7. Semantic Deduplication: Analyze the batch of keywords for semantic similarity/repetition (e.g. variations or minor variants of the same topic). If a keyword is a repetitive variant of another primary keyword in this list, set "duplicate_of" to the primary keyword's phrase, lower its score (to avoid cannibalization), and state this cannibalization risk in its weaknesses list.
 8. Content Type: For each keyword, recommend exactly one system-supported content type: "blog", "ebook", "whitepaper", or "linkedin" (do not suggest any other type). Suggest the best format for generating content on this query.
+9. Brand Persona Alignment: Verify if the keyword fits the brand's core values, brand voice, and personality. Penalize keywords that mismatch the brand's identity or messaging guidelines.
 
 Return a JSON array. Each element must have exactly these fields:
 - keyword (string — exact match from input)
@@ -1862,7 +1883,7 @@ export async function scoreCompetitorKeywordsWithAI(
 
   const { data: project } = await supabaseAdmin
     .from('projects')
-    .select('id, name, domain, niche, target_audience, target_region')
+    .select('id, name, domain, niche, target_audience, target_region, brand_voice, brand_values, brand_description')
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();

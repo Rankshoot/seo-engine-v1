@@ -378,7 +378,7 @@ export async function fetchKeywordsFromAhrefs(
 ): Promise<KeywordResearchResult> {
   const trace: KeywordResearchTraceEntry[] = [];
   const seeds = cleanSeeds(input.seeds);
-  const limit = 10;
+  const limit = 20;
   const region = (input.region || 'us').toLowerCase();
 
   if (!seeds.length) {
@@ -404,7 +404,7 @@ export async function fetchKeywordsFromAhrefs(
   }
 
   const queryMatching = input.queryMatching !== false;
-  const queryRelated = input.queryRelated !== false;
+  const queryRelated = false; // Refrain from using related-terms
 
   const calls = ahrefsResearchCalls(
     seeds,
@@ -520,11 +520,11 @@ export async function fetchKeywordsFromAhrefs(
     );
   }
 
-  if (queryMatching && queryRelated && !keywords.length) {
+  if (queryMatching && !keywords.length) {
     throw new KeywordProviderError(
       'ahrefs',
       'empty',
-      'Ahrefs answered but yielded zero keywords across matching/related terms.',
+      'Ahrefs answered but yielded zero keywords.',
       trace
     );
   }

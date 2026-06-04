@@ -839,6 +839,10 @@ export async function generateBlogPost(
       ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, writerCap)}\n`
       : "";
 
+  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
+    : "";
+
   const briefBlock = brief
     ? `\nCOMPANY CONTEXT (use as grounding — the article must sound like it was written by ${project.company}, for their audience; weave products/entities in naturally; do NOT pitch competitor names)
 - Summary: ${brief.summary || '(none)'}
@@ -846,9 +850,9 @@ export async function generateBlogPost(
 - Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
 - Audience segments: ${brief.audiences.slice(0, 6).join(' | ') || project.target_audience}
 - USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
-- Tone: ${brief.tone || 'professional, expert, helpful'}
-`
-    : '';
+- Tone: ${project.brand_voice || brief.tone || 'professional, expert, helpful'}
+${brandPersonaBlock}`
+    : brandPersonaBlock ? `\nBRAND PERSONA:\n${brandPersonaBlock}\n` : "";
 
   // Research context block
   const researchBlock = research ? formatResearchForPrompt(research) : '';
@@ -1152,15 +1156,20 @@ export async function generateInstantWebResearchArticle(input: {
     internalLinksBlock = 'INTERNAL LINKING: No internal URL pool is available for this project yet — do not invent internal links.';
   }
 
+  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
+    : "";
+
   const briefBlock = brief
     ? `
 - Summary: ${brief.summary || '(none)'}
 - Products / offerings: ${brief.products.slice(0, 10).join(', ') || '(none)'}
 - Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
 - USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
-- Default tone from brief: ${brief.tone || 'professional, expert, helpful'}
-`
-    : '(No cached business brief — infer tone from the company name and niche.)';
+- Default tone from brief: ${project.brand_voice || brief.tone || 'professional, expert, helpful'}
+${brandPersonaBlock}`
+    : `(No cached business brief — infer tone from the company name and niche.)
+${brandPersonaBlock}`;
 
   const researchBlock = formatResearchForPrompt(research);
 

@@ -39,6 +39,9 @@ interface ProjectRow {
   target_audience: string;
   target_region: string;
   target_language: string;
+  brand_voice?: string;
+  brand_values?: string;
+  brand_description?: string;
 }
 
 const LANG_LABEL: Record<string, string> = {
@@ -260,6 +263,9 @@ export async function generateEbookAction(
         research,
         internalLinks,
         semanticKeywords: payload.semanticKeywords ?? [],
+        brandVoice: project.brand_voice,
+        brandValues: project.brand_values,
+        brandDescription: project.brand_description,
       },
       project.domain,
     );
@@ -403,6 +409,9 @@ export async function generateWhitepaperAction(
         research,
         internalLinks,
         semanticKeywords: payload.semanticKeywords ?? [],
+        brandVoice: project.brand_voice,
+        brandValues: project.brand_values,
+        brandDescription: project.brand_description,
       },
       project.domain,
     );
@@ -515,6 +524,9 @@ export async function generateLinkedInPostAction(
       companyDomain: project.domain,
       niche: project.niche,
       brief,
+      brandVoice: project.brand_voice,
+      brandValues: project.brand_values,
+      brandDescription: project.brand_description,
     });
     mark('gemini-pro', `${result.word_count} words drafted`, Date.now() - t1);
   } catch (e) {

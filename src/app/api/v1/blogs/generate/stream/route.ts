@@ -303,9 +303,13 @@ async function buildBlogPrompt(opts: {
   const writerNotesBlock = writerNotes?.length
     ? `\nWRITER NOTES (follow closely):\n${writerNotes.slice(0, 2500)}\n` : "";
 
-  const briefBlock = brief
-    ? `\nCOMPANY CONTEXT:\n- Summary: ${brief.summary || "(none)"}\n- Products: ${brief.products?.slice(0, 10).join(", ") || "(none)"}\n- Audience: ${brief.audiences?.slice(0, 6).join(" | ") || project.target_audience}\n- USPs: ${brief.usps?.slice(0, 6).join(" | ") || "(none)"}\n- Tone: ${brief.tone || "professional, expert, helpful"}\n`
+  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\nBRAND PERSONA & IDENTITY:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
     : "";
+
+  const briefBlock = brief
+    ? `\nCOMPANY CONTEXT:\n- Summary: ${brief.summary || "(none)"}\n- Products: ${brief.products?.slice(0, 10).join(", ") || "(none)"}\n- Audience: ${brief.audiences?.slice(0, 6).join(" | ") || project.target_audience}\n- USPs: ${brief.usps?.slice(0, 6).join(" | ") || "(none)"}\n- Tone: ${project.brand_voice || brief.tone || "professional, expert, helpful"}\n${brandPersonaBlock}`
+    : brandPersonaBlock ? `\nBRAND PERSONA & IDENTITY:\n${brandPersonaBlock}\n` : "";
 
   const researchBlock = research ? formatResearchForPrompt(research) : "";
 

@@ -28,6 +28,9 @@ export interface EbookPromptContext {
   research: ResearchContext | null;
   internalLinks: string[];
   semanticKeywords: string[];
+  brandVoice?: string;
+  brandValues?: string;
+  brandDescription?: string;
 }
 
 const DEPTH_GUIDE: Record<EbookPromptContext['chapterDepth'], { chapters: string; words: string }> = {
@@ -38,14 +41,21 @@ const DEPTH_GUIDE: Record<EbookPromptContext['chapterDepth'], { chapters: string
 
 export function buildEbookPrompt(ctx: EbookPromptContext): string {
   const depth = DEPTH_GUIDE[ctx.chapterDepth];
+  const brandPersonaBlock = (ctx.brandVoice || ctx.brandValues || ctx.brandDescription)
+    ? `\nBRAND PERSONA & IDENTITY:
+${ctx.brandVoice ? `- Brand Voice/Tone: ${ctx.brandVoice}\n` : ''}${ctx.brandValues ? `- Core Values/Messaging: ${ctx.brandValues}\n` : ''}${ctx.brandDescription ? `- Personality/Description: ${ctx.brandDescription}\n` : ''}`
+    : '';
+
   const briefBlock = ctx.brief
     ? `COMPANY GROUNDING (voice + credibility, not sales):
 - Summary: ${ctx.brief.summary || '(none)'}
 - Products / offerings: ${ctx.brief.products.slice(0, 8).join(', ') || '(none)'}
 - Audiences: ${ctx.brief.audiences.slice(0, 4).join(' | ') || ctx.audience}
 - USPs: ${ctx.brief.usps.slice(0, 4).join(' | ') || '(none)'}
-- Tone bias from brief: ${ctx.brief.tone || ctx.tone}`
-    : '(No cached brief — infer voice from the company name and niche.)';
+- Tone bias from brief: ${ctx.brief.tone || ctx.tone}
+${brandPersonaBlock}`
+    : `(No cached brief — infer voice from the company name and niche.)
+${brandPersonaBlock}`;
 
   const researchBlock = ctx.research ? formatResearchForPrompt(ctx.research) : '';
   const semanticBlock = ctx.semanticKeywords.length
@@ -127,7 +137,7 @@ CRITICAL RULES — every bullet is enforced:
 - Every chapter answers a real reader question implicit in the topic.
 - No filler ("in today's world", "in recent years", "navigating", "delving", "comprehensive", "unlock").
 - Every claim of fact gets a source, either inline or in References.
-- ${ctx.brief?.tone ? `Match the brand tone above.` : 'Use the requested tone (' + ctx.tone + ').'}
+- ${ctx.brandVoice ? `Strictly align the style and tone with the Brand Voice: ${ctx.brandVoice}.` : ctx.brief?.tone ? `Match the brand tone above.` : 'Use the requested tone (' + ctx.tone + ').'}
 - Use Google Search to find SPECIFIC, deep-linked URLs (reports, regulator pages, vendor docs). No bare root domains. No Wikipedia.
 - Use at least 8 external Markdown links across the body, plus 2–4 internal links from the pool.
 - Cover the semantic keyword cluster across multiple chapters. Never bullet-dump them.

@@ -16,7 +16,7 @@ import { Project } from '@/lib/types';
 import { getBlogAudits } from '@/app/actions/audit-actions';
 import { geminiGenerate } from '@/lib/gemini';
 
-export type ProjectTargetingSuggestField = 'niche' | 'target_audience';
+export type ProjectTargetingSuggestField = 'niche' | 'target_audience' | 'brand_voice' | 'brand_values' | 'brand_description';
 
 export type ProjectTargetingSuggestTraceEntry = {
   step: string;
@@ -67,32 +67,66 @@ export async function suggestProjectTargetingField(input: {
     trace.push({ step: 'validate', ok: false, detail: 'company and domain required' });
     return {
       success: false,
-      error: 'Add company name and website domain first so AI can infer niche and audience.',
+      error: 'Add company name and website domain first so AI can infer niche, audience, and brand persona.',
       trace,
     };
   }
 
   const isNiche = input.field === 'niche';
+  const isAudience = input.field === 'target_audience';
+  const isVoice = input.field === 'brand_voice';
+  const isValues = input.field === 'brand_values';
+  const isDescription = input.field === 'brand_description';
+
   const t0 = Date.now();
-  const prompt = isNiche
-    ? `You help configure SEO projects. Infer concise industry / niche labels for keyword discovery (not generic fluff).
+  let prompt = '';
+  if (isNiche) {
+    prompt = `You help configure SEO projects. Infer concise industry / niche labels for keyword discovery (not generic fluff).
 
 Company: ${company}
 Website domain: ${domain}
 Project notes (may be empty): ${description || '(none)'}
 
-Reply with ONE line only: exactly 4 short niche or industry phrases, comma-separated, no numbering, bullets, quotes, or explanation. Each phrase: 2–4 words. Ground guesses in the company name and domain.`
-    : `You help configure SEO projects. Infer plausible target reader / buyer segments for content marketing.
+Reply with ONE line only: exactly 4 short niche or industry phrases, comma-separated, no numbering, bullets, quotes, or explanation. Each phrase: 2–4 words. Ground guesses in the company name and domain.`;
+  } else if (isAudience) {
+    prompt = `You help configure SEO projects. Infer plausible target reader / buyer segments for content marketing.
 
 Company: ${company}
 Website domain: ${domain}
 Project notes (may be empty): ${description || '(none)'}
 
 Reply with ONE line only: exactly 4 short audience descriptions, comma-separated, no numbering, bullets, quotes, or explanation. Each segment: 2-4 words (role + context, e.g. "HR directors at 200–2000 employee firms"). Ground guesses in the company name and domain.`;
+  } else if (isVoice) {
+    prompt = `You help configure SEO projects. Infer a concise brand voice or tone description (e.g. "professional, authoritative, and helpful" or "conversational, witty, and bold").
+
+Company: ${company}
+Website domain: ${domain}
+Project notes (may be empty): ${description || '(none)'}
+
+Reply with ONE line only: exactly 3-4 comma-separated adjectives describing the brand voice, no numbering, bullets, quotes, or explanation. Ground guesses in the company name and domain.`;
+  } else if (isValues) {
+    prompt = `You help configure SEO projects. Infer plausible core brand values or key messaging themes.
+
+Company: ${company}
+Website domain: ${domain}
+Project notes (may be empty): ${description || '(none)'}
+
+Reply with ONE line only: exactly 3 short values or message themes, comma-separated, no numbering, bullets, quotes, or explanation. Ground guesses in the company name and domain.`;
+  } else {
+    prompt = `You help configure SEO projects. Infer a brief brand persona description as if the brand were a person (e.g., "An expert advisor who explains complex topics simply and avoids corporate jargon").
+
+Company: ${company}
+Website domain: ${domain}
+Project notes (may be empty): ${description || '(none)'}
+
+Reply with ONE paragraph only: a brief 1-2 sentence description of the brand's personality. Do not include quotes, numbering, or bullet points. Ground guesses in the company name and domain.`;
+  }
 
   try {
     const raw = (await geminiGenerate(prompt, 2)).trim();
-    const value = parseFourCommaSeparatedPhrases(raw);
+    const value = isDescription
+      ? raw.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim().replace(/^["']|["']$/g, '')
+      : parseFourCommaSeparatedPhrases(raw);
     const ms = Date.now() - t0;
     if (!value) {
       trace.push({ step: 'gemini_targeting_suggest', ok: false, ms, detail: 'empty after parse' });
@@ -124,6 +158,9 @@ export async function createProject(data: {
   description: string;
   competitors: string[];
   ahrefs_rank_tracker_project_id?: number | null;
+  brand_voice?: string;
+  brand_values?: string;
+  brand_description?: string;
 }) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
@@ -218,6 +255,9 @@ export async function updateProject(
     description: string;
     competitors?: string[];
     ahrefs_rank_tracker_project_id?: number | null;
+    brand_voice?: string;
+    brand_values?: string;
+    brand_description?: string;
   }
 ) {
   const user = await currentUser();

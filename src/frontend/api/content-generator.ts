@@ -29,11 +29,29 @@ export const contentGeneratorApi = {
    */
   studioHistory(
     projectId: string,
-    filter: { types?: ContentType[]; statuses?: string[] } = {},
-  ): Promise<{ success: boolean; error?: string; data: ContentStudioHistoryRow[] }> {
+    filter: {
+      types?: ContentType[];
+      statuses?: string[];
+      limit?: number;
+      offset?: number;
+      search?: string;
+      sort?: string;
+    } = {},
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    data: ContentStudioHistoryRow[];
+    total: number;
+    hasMore: boolean;
+    counts: Record<ContentType, number>;
+  }> {
     const search = new URLSearchParams();
     if (filter.types?.length) search.set("types", filter.types.join(","));
     if (filter.statuses?.length) search.set("statuses", filter.statuses.join(","));
+    if (filter.limit !== undefined) search.set("limit", String(filter.limit));
+    if (filter.offset !== undefined) search.set("offset", String(filter.offset));
+    if (filter.search) search.set("search", filter.search);
+    if (filter.sort) search.set("sort", filter.sort);
     const qs = search.toString();
     const path = qs
       ? `${V1Routes.projectContentStudioHistory(projectId)}?${qs}`

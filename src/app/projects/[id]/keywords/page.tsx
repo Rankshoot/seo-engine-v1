@@ -65,7 +65,7 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
       </header>
 
       <section className="space-y-4 pt-2 px-4">
-        <div className="h-96 w-full">
+        <div className="w-full">
           <Suspense key={activeTab} fallback={<KeywordTableSkeleton />}>
             {activeTab === "organic" ? (
               <OrganicKeywordsTab projectId={id} />

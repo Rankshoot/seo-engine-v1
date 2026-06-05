@@ -160,6 +160,12 @@ export default function ProjectSidebar({
       prefetchLabel: "Keywords",
     },
     {
+      icon: Icon.calendar,
+      label: "Content Calendar",
+      href: `${base}/content-calendar`,
+      prefetchLabel: "Content Calendar",
+    },
+    {
       icon: Icon.contentGen,
       label: "Content Generator",
       href: `${base}/content-generator`,
@@ -170,12 +176,6 @@ export default function ProjectSidebar({
         { label: "Whitepapers", href: `${base}/content-generator/whitepapers` },
         { label: "LinkedIn posts", href: `${base}/content-generator/linkedin` },
       ],
-    },
-    {
-      icon: Icon.calendar,
-      label: "Content Calendar",
-      href: `${base}/content-calendar`,
-      prefetchLabel: "Content Calendar",
     },
     {
       icon: Icon.articles,

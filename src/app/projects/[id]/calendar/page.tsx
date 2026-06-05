@@ -115,9 +115,11 @@ export default function CalendarPage() {
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
   const [entryToRemove, setEntryToRemove] = useState<{ id: string; keyword: string } | null>(null);
   const [calendarView, setCalendarView] = useState<"list" | "grid">(() => {
-    if (typeof window === "undefined") return "list";
+    if (typeof window === "undefined") return "grid";
     const stored = localStorage.getItem("calendar-view");
-    return stored === "grid" ? "grid" : "list";
+    if (stored === "list") return "list";
+    localStorage.setItem("calendar-view", "grid");
+    return "grid";
   });
   const handleCalendarViewChange = useCallback((view: "list" | "grid") => {
     setCalendarView(view);

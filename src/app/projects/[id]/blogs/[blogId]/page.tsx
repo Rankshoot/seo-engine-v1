@@ -2325,7 +2325,7 @@ function buildMarkdownComponents(internalSet: Set<string>, ownSiteHost: string |
   const Img: ComponentType<ImgHTMLAttributes<HTMLImageElement>> = ({ alt = "", src, ...r }) => {
     const safeSrc = typeof src === "string" ? markdownUrlTransform(src) : "";
     if (!safeSrc)
-      return <span className="my-8 block rounded-[8px] px-4 py-5 text-[12px] text-text-tertiary border border-dashed border-border-subtle bg-surface-secondary">Image could not be displayed.</span>;
+      return null;
     return (
       <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle">
         <img alt={alt} src={safeSrc} loading="lazy" className="aspect-video w-full object-cover" {...r} />

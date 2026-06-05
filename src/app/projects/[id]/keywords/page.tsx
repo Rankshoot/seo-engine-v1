@@ -1,8 +1,7 @@
 import { Suspense } from "react";
-import Link from "next/link";
 import dynamicComponent from "next/dynamic";
-import { PageTitle } from "@/components/common";
 import { KeywordTableSkeleton } from "@/components/Skeleton";
+import { KeywordTabSwitcher } from "./KeywordTabSwitcher";
 
 const OrganicKeywordsTab = dynamicComponent(() => import("./OrganicKeywordsTab"));
 const CompetitorKeywordsTab = dynamicComponent(() => import("./CompetitorKeywordsTab"));
@@ -20,51 +19,51 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
   const activeTab = tab === "competitor" ? "competitor" : "organic";
 
   return (
-    <div className="space-y-4 pb-16 relative">
-      <header className="sticky -top-6 lg:-top-8 z-40 bg-surface-primary/95 backdrop-blur-md -mx-6 lg:-mx-8 -mt-6 lg:-mt-8 px-10 lg:px-12 pt-6 lg:pt-8 pb-4 border-b border-border-subtle">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-0 pb-16 relative">
+      {/* ── Sticky Header ─────────────────────────────────────────────── */}
+      <header className="sticky -top-6 lg:-top-8 z-40 bg-surface-primary/95 backdrop-blur-md -mx-6 lg:-mx-8 -mt-6 lg:-mt-8 px-6 lg:px-8 pt-6 lg:pt-8 pb-0">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          {/* Title area */}
           <div className="min-w-0 flex-1">
-            <PageTitle>Keyword Discovery</PageTitle>
-            <p className="mt-3 text-[15px] text-text-tertiary max-w-[600px]">
+            {/* Eyebrow label */}
+            <div className="mb-4">
+              <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
+                <span className="h-2 w-2 rounded-full bg-brand-action" />
+                Keyword Discovery
+              </span>
+            </div>
+
+            <h1 className="text-[28px] sm:text-[34px] font-semibold tracking-tight text-text-primary leading-none">
+              Find & Schedule Keywords
+            </h1>
+            <p className="mt-2 text-[13px] text-text-tertiary max-w-[520px] leading-relaxed">
               Discover real search demand, analyze keyword difficulty, and identify competitor gaps to approve for your content calendar.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3 shrink-0">
-            <div
-              className="inline-flex rounded-full border border-border-subtle bg-surface-secondary/70 p-0.5"
-              role="tablist"
-              aria-label="Keyword Discovery views"
+
+          {/* Tab switcher */}
+          <div className="flex flex-wrap items-center gap-3 shrink-0 pb-1">
+            <Suspense
+              fallback={
+                <div className="inline-flex rounded-[12px] border border-border-subtle bg-surface-secondary/60 p-1 gap-1">
+                  <div className="h-9 w-36 rounded-[8px] bg-surface-elevated animate-pulse" />
+                  <div className="h-9 w-40 rounded-[8px] bg-surface-elevated animate-pulse" />
+                </div>
+              }
             >
-              <Link
-                href={`/projects/${id}/keywords?tab=organic`}
-                role="tab"
-                aria-selected={activeTab === "organic"}
-                className={`rounded-full px-4 py-2 text-[13px] font-semibold transition-colors ${
-                  activeTab === "organic"
-                    ? "bg-surface-elevated text-text-primary shadow-sm"
-                    : "text-text-tertiary hover:text-text-secondary"
-                }`}
-              >
-                Organic Keywords
-              </Link>
-              <Link
-                href={`/projects/${id}/keywords?tab=competitor`}
-                role="tab"
-                aria-selected={activeTab === "competitor"}
-                className={`rounded-full px-4 py-2 text-[13px] font-semibold transition-colors ${
-                  activeTab === "competitor"
-                    ? "bg-surface-elevated text-text-primary shadow-sm"
-                    : "text-text-tertiary hover:text-text-secondary"
-                }`}
-              >
-                Competitor Keywords
-              </Link>
-            </div>
+              <KeywordTabSwitcher projectId={id} activeTab={activeTab} />
+            </Suspense>
           </div>
         </div>
+
+        {/* Gradient separator — replaces the hard border */}
+        <div className="mt-5 h-px bg-gradient-to-r from-transparent via-border-subtle to-transparent" />
+        {/* Subtle brand glow under active area */}
+        <div className="h-px bg-gradient-to-r from-transparent via-brand-action/20 to-transparent" />
       </header>
 
-      <section className="space-y-4 pt-2 px-4">
+      {/* ── Content ───────────────────────────────────────────────────── */}
+      <section className="space-y-4 pt-5 px-0">
         <div className="w-full">
           <Suspense key={activeTab} fallback={<KeywordTableSkeleton />}>
             {activeTab === "organic" ? (
@@ -78,4 +77,3 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
     </div>
   );
 }
-

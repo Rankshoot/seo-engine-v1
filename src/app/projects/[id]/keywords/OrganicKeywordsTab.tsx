@@ -172,7 +172,7 @@ function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
   );
 }
 
-type FilterTab = "all" | "unscheduled" | "scheduled";
+type FilterTab = "all" | "unscheduled" | "scheduled" | "generated";
 
 type SourceTab = "industry" | "domain";
 
@@ -544,26 +544,34 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     let all = 0;
     let unscheduled = 0;
     let scheduled = 0;
+    let generated = 0;
     for (const k of keywords) {
       all += 1;
-      const isSch = calendarMap.has(k.id) || calendarMap.has(k.keyword.toLowerCase());
+      const entry = calendarMap.get(k.id) || calendarMap.get(k.keyword.toLowerCase());
+      const isSch = !!entry;
+      const isGen = !!(entry?.blog);
       if (isSch) scheduled += 1;
       else unscheduled += 1;
+      if (isGen) generated += 1;
     }
-    return { all, unscheduled, scheduled };
+    return { all, unscheduled, scheduled, generated };
   }, [keywords, calendarMap]);
 
   const domainCounts = useMemo(() => {
     let all = 0;
     let unscheduled = 0;
     let scheduled = 0;
+    let generated = 0;
     for (const d of domainKeywords) {
       all += 1;
-      const isSch = calendarMap.has(d.matched_keyword_id || "") || calendarMap.has(d.keyword.toLowerCase());
+      const entry = calendarMap.get(d.matched_keyword_id || "") || calendarMap.get(d.keyword.toLowerCase());
+      const isSch = !!entry;
+      const isGen = !!(entry?.blog);
       if (isSch) scheduled += 1;
       else unscheduled += 1;
+      if (isGen) generated += 1;
     }
-    return { all, unscheduled, scheduled };
+    return { all, unscheduled, scheduled, generated };
   }, [domainKeywords, calendarMap]);
 
   const displayCounts = sourceTab === "industry" ? industryCounts : domainCounts;
@@ -586,9 +594,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const filteredDomainKeywords = useMemo(() => {
     return sortedDomainKeywords.filter(row => {
       if (filter === "all") return true;
-      const isSch = calendarMap.has(row.matched_keyword_id || "") || calendarMap.has(row.keyword.toLowerCase());
+      const entry = calendarMap.get(row.matched_keyword_id || "") || calendarMap.get(row.keyword.toLowerCase());
+      const isSch = !!entry;
+      const isGen = !!(entry?.blog);
       if (filter === "scheduled") return isSch;
       if (filter === "unscheduled") return !isSch;
+      if (filter === "generated") return isGen;
       return true;
     });
   }, [sortedDomainKeywords, filter, calendarMap]);
@@ -726,9 +737,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const filtered = useMemo(() => {
     return keywords.filter(k => {
       if (filter === "all") return true;
-      const isSch = calendarMap.has(k.id) || calendarMap.has(k.keyword.toLowerCase());
+      const entry = calendarMap.get(k.id) || calendarMap.get(k.keyword.toLowerCase());
+      const isSch = !!entry;
+      const isGen = !!(entry?.blog);
       if (filter === "scheduled") return isSch;
       if (filter === "unscheduled") return !isSch;
+      if (filter === "generated") return isGen;
       return true;
     }).sort((a, b) => compareKeywords(a, b, tableSort.column, tableSort.dir));
   }, [keywords, filter, tableSort, calendarMap]);
@@ -908,6 +922,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     { id: "all", label: "All", count: displayCounts.all },
     { id: "unscheduled", label: "Unscheduled", count: displayCounts.unscheduled },
     { id: "scheduled", label: "Scheduled", count: displayCounts.scheduled },
+    { id: "generated", label: "Generated", count: displayCounts.generated },
   ];
 
   
@@ -1180,10 +1195,11 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, projectData]);
 
   return (
-    <div className="space-y-4 relative">
+    <div className="space-y-4 relative animate-slide-in-left">
+
+      <section className="space-y-3 ">
 
 
-      <section className="space-y-4 ">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             <PillTabFilterBar<FilterTab>
@@ -1340,6 +1356,75 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               </div>
           </div>
         </div>
+
+        {/* ── Search bar and rediscover button commented out ──────────────── */}
+        {/*
+        <div className="flex items-center gap-3">
+          <div className="relative flex-none">
+            <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+              <svg className="h-3.5 w-3.5 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+              </svg>
+            </div>
+            <input
+              id="keyword-search"
+              type="search"
+              placeholder="Search keywords…"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="h-9 w-64 rounded-full border border-border-subtle bg-surface-elevated pl-8 pr-8 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none transition-all duration-200 focus:border-brand-action/50 focus:ring-2 focus:ring-brand-action/15 hover:border-border-strong"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute inset-y-0 right-2.5 flex items-center text-text-tertiary hover:text-text-primary transition-colors"
+                aria-label="Clear search"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <span className="text-[12px] text-text-tertiary">
+              {(sourceTab === "industry" ? filtered.length : filteredDomainKeywords.length)}
+              {" "}result{(sourceTab === "industry" ? filtered.length : filteredDomainKeywords.length) !== 1 ? "s" : ""}
+            </span>
+          )}
+          {sourceTab === "industry" && keywords.length > 0 && (
+            <button
+              type="button"
+              onClick={handleDiscover}
+              disabled={discovering || loading}
+              title="Re-run keyword discovery to find new keywords"
+              className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3.5 text-[12px] font-semibold text-text-secondary shadow-sm transition-all duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px disabled:opacity-40 disabled:pointer-events-none"
+            >
+              {discovering ? (
+                <><div className="h-3 w-3 rounded-full border-2 border-text-tertiary/30 border-t-text-secondary animate-spin" /><span>Discovering…</span></>
+              ) : (
+                <><svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg><span>Re‑discover</span></>
+              )}
+            </button>
+          )}
+          {sourceTab === "domain" && domainKeywords.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void handleDomainRediscover()}
+              disabled={domainRefreshing || domainFetching}
+              title="Refresh domain keyword data"
+              className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3.5 text-[12px] font-semibold text-text-secondary shadow-sm transition-all duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px disabled:opacity-40 disabled:pointer-events-none"
+            >
+              {domainRefreshing ? (
+                <><div className="h-3 w-3 rounded-full border-2 border-text-tertiary/30 border-t-text-secondary animate-spin" /><span>Refreshing…</span></>
+              ) : (
+                <><svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg><span>Refresh</span></>
+              )}
+            </button>
+          )}
+        </div>
+        */}
         {/* ── DATA VIA DOMAIN ─────────────────────────────────────────── */}
         {sourceTab === "domain" && (
           <div className="space-y-4">

@@ -13,6 +13,8 @@ export function selectKeywordPrefs(state: RootState, projectId: string) {
     ...p,
     tableSort: { ...defaultPrefs.tableSort, ...p.tableSort },
     discoverySourceTab: p.discoverySourceTab ?? defaultPrefs.discoverySourceTab,
+    mainTab: p.mainTab ?? defaultPrefs.mainTab,
+    competitorFilter: p.competitorFilter ?? defaultPrefs.competitorFilter,
   };
 }
 

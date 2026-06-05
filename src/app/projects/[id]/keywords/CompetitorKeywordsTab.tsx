@@ -14,7 +14,7 @@ import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks"
 import { EmptyState } from "@/components/common";
 import { scoreCompetitorKeywordsWithAI } from "@/app/actions/keyword-actions";
 import { Tooltip } from "@/components/Tooltip";
-import { TableSkeleton, KeywordTableSkeleton } from "@/components/Skeleton";
+import { KeywordTableSkeleton } from "@/components/Skeleton";
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled";
@@ -212,7 +212,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   );
 
   // Memoized Variables
-  const calendarEntries = calendarRes?.success ? calendarRes.data : [];
+  const calendarEntries = useMemo(() => calendarRes?.success ? calendarRes.data : [], [calendarRes]);
 
   const calendarMap = useMemo(() => {
     const map = new Map<string, typeof calendarEntries[number]>();
@@ -232,9 +232,8 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     return new Set((aiSuggestedGapKeywords ?? []).map(k => k.toLowerCase()));
   }, [aiSuggestedGapKeywords]);
 
-  const competitors = state?.competitors ?? [];
-  const gaps = state?.gaps ?? [];
-  const averages = state?.averages;
+  const competitors = useMemo(() => state?.competitors ?? [], [state?.competitors]);
+  const gaps = useMemo(() => state?.gaps ?? [], [state?.gaps]);
   const hasBenchmark = competitors.length > 0;
 
   const allFilteredGaps = useMemo(() => {
@@ -416,12 +415,12 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   }, []);
 
   const resolveContentType = useCallback(
-    (keywordText: string, keywordId?: string, aiEvalData?: { recommended_content_type?: string } | null) => {
+    (keywordText: string, keywordId?: string, aiEvalData?: GapAiEvalData | null) => {
       const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
       if (entry) {
         return articleTypeToContentType(entry.article_type);
       }
-      const recommended = aiEvalData?.recommended_content_type;
+      const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
       const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin"];
       if (recommended && supportedTypes.includes(recommended)) {
         return rowContentTypes[keywordText.toLowerCase()] ?? recommended;
@@ -433,14 +432,14 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
 
   const renderContentTypeSelect = useCallback((
     keywordText: string,
-    aiEvalData: { recommended_content_type?: string } | null | undefined
+    aiEvalData: GapAiEvalData | null | undefined
   ) => {
     const entry = calendarMap.get(keywordText.toLowerCase());
     const isSch = !!entry;
     const isGenerated = !!entry?.blog;
     const currentType = resolveContentType(keywordText, undefined, aiEvalData);
 
-    const recommended = aiEvalData?.recommended_content_type;
+    const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
     const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
     const labels: Record<ContentType, string> = {
       blog: "Blog article",
@@ -464,7 +463,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         ))}
       </select>
     );
-  }, [calendarMap, resolveContentType, setRowContentType]);
+  }, [calendarMap, resolveContentType, setRowContentType, articleTypeToContentType]);
 
   const renderActionCell = useCallback((g: KeywordGap) => {
     const entry = calendarMap.get(g.keyword.toLowerCase());
@@ -924,8 +923,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                   </tbody>
                 </table>
               </div>
-            )}
-          </Suspense>
 
               {hasMore && (
                 <div className="shrink-0 border-t border-border-subtle bg-surface-secondary px-4 py-2.5 flex items-center justify-between gap-4">
@@ -986,6 +983,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               )}
             </div>
           )}
+          </Suspense>
         </div>
       )}
     </div>

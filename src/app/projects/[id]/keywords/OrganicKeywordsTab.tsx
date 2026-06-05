@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react";
 import { useRouter } from "next/navigation";
-import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, keywordsListQueryOptions, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { Keyword, KeywordStatus, TARGET_REGIONS, KeywordSourceType, ContentType } from "@/lib/types";
@@ -19,7 +18,7 @@ import {
   rememberKeywordDiscoverySourceTab,
   rememberKeywordFilter,
   rememberKeywordSort,
-  removeKeywordStatus,
+  type KeywordFilterTab,
 } from "@/lib/redux/keyword-workspace-slice";
 import { keywordsApi } from "@/frontend/api/keywords";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -31,8 +30,7 @@ import { KeywordTableSkeleton } from "@/components/Skeleton";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordActionCell } from "@/components/keywords/KeywordActionCell";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
-import { PageTitle } from "@/components/common";
-import { Tooltip, InfoIcon } from "@/components/Tooltip";
+import { Tooltip } from "@/components/Tooltip";
 import { toast } from "react-hot-toast";
 import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
@@ -49,17 +47,7 @@ function fmtIsoDateLocal(iso: string): string {
   });
 }
 
-/** Shown after approve when the server auto-schedules on the calendar. */
-function calendarApproveSuffix(cal: {
-  scheduledDate?: string;
-  calendarSkipped?: boolean;
-  calendarError?: string;
-}): string {
-  if (cal.calendarError) return ` — ${cal.calendarError}`;
-  if (cal.calendarSkipped && cal.scheduledDate) return ` — already on calendar (${fmtIsoDateLocal(cal.scheduledDate)})`;
-  if (cal.scheduledDate) return ` — scheduled ${fmtIsoDateLocal(cal.scheduledDate)}`;
-  return "";
-}
+
 
 function MonthlySearchesChart({ data }: { data: { month: string; volume: number }[] }) {
   if (!data || data.length === 0) return <span className="block p-3 text-text-tertiary">No monthly data</span>;
@@ -292,9 +280,6 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
 
   const [rowContentTypes, setRowContentTypes] = useState<Record<string, ContentType>>({});
 
-  const getRowContentType = useCallback((keyword: string) => {
-    return rowContentTypes[keyword.toLowerCase()] ?? "blog";
-  }, [rowContentTypes]);
 
   const setRowContentType = useCallback((keyword: string, type: ContentType) => {
     setRowContentTypes(prev => ({
@@ -309,7 +294,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     enabled: !!projectId,
     ...DEFAULT_QUERY_OPTIONS,
   });
-  const calendarEntries = calendarRes?.success ? calendarRes.data : [];
+  const calendarEntries = useMemo(() => calendarRes?.success ? calendarRes.data : [], [calendarRes]);
 
   const calendarMap = useMemo(() => {
     const map = new Map<string, typeof calendarEntries[number]>();
@@ -428,7 +413,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   /** Inner scroll area of the keyword DataTable — used after “Load more” (same pattern as competitors gap table). */
   const keywordTableScrollRef = useRef<HTMLDivElement>(null);
 
-  const [busyRowId, setBusyRowId] = useState<string | null>(null);
+  const [busyRowId] = useState<string | null>(null);
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkScheduling, setBulkScheduling] = useState(false);
@@ -462,10 +447,6 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   // Keyword drilldown modal. Stored as id (not a `Keyword` object) so the
   // modal always reflects the latest row state — including approve/reject
   // updates that happen via `handleStatusUpdate`.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   const [modalKeywordId, setModalKeywordId] = useState<string | null>(null);
 
@@ -473,8 +454,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     ...keywordsListQueryOptions(projectId),
     enabled: !!projectId,
   });
-  const serverKeywords: Keyword[] =
-    keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.data : [];
+  const serverKeywords: Keyword[] = useMemo(() =>
+    keywordsData && "success" in keywordsData && keywordsData.success ? keywordsData.data : [],
+    [keywordsData]
+  );
   const keywords: Keyword[] = useMemo(
     () =>
       serverKeywords.map(keyword =>
@@ -511,8 +494,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     enabled: !!projectId,
     staleTime: Infinity,
   });
-  const domainKeywords: CompetitorKeywordsForSiteRow[] =
-    domainRes && "success" in domainRes && domainRes.success ? domainRes.data : [];
+  const domainKeywords: CompetitorKeywordsForSiteRow[] = useMemo(() =>
+    domainRes && "success" in domainRes && domainRes.success ? domainRes.data : [],
+    [domainRes]
+  );
   const domainError =
     domainRes && !domainRes.success
       ? domainRes.error ?? "Failed to fetch domain keywords"
@@ -736,174 +721,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     }
   };
 
-  const handleStatusUpdate = async (kwId: string, status: KeywordStatus, phrase?: string): Promise<boolean> => {
-    const keyword = keywords.find(k => k.id === kwId);
-    const previousStatus = keyword?.status;
-    const label = phrase ?? keyword?.keyword ?? "Keyword";
-    setError("");
-    const previousData = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
 
-    if (keyword) {
-      patchKeywords(list => list.map(k => (k.id === kwId ? { ...k, status } : k)));
-      dispatch(
-        keywordStatusChanged({
-          projectId,
-          keywordId: kwId,
-          previousStatus,
-          nextStatus: status,
-        })
-      );
-    }
-
-    setBusyRowId(kwId);
-    const res = await keywordsApi.updateStatus(kwId, projectId, status);
-    setBusyRowId(null);
-
-    if (!res.success) {
-      if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
-      if (keyword) {
-        dispatch(
-          keywordStatusChanged({
-            projectId,
-            keywordId: kwId,
-            previousStatus: status,
-            nextStatus: previousStatus ?? keyword.status,
-          })
-        );
-      }
-      setError(res.error ?? "Could not update keyword status");
-      return false;
-    }
-
-    if (status === "pending") {
-      toast(`"${label}" moved back to pending`, { icon: 'ℹ️' });
-    } else if (status === "approved") {
-      toast.success(`"${label}" approved${calendarApproveSuffix(res)}`);
-      void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-      router.push(`/projects/${projectId}/content-calendar`);
-    } else if (status === "rejected") {
-      toast(`"${label}" rejected`, { icon: 'ℹ️' });
-    }
-
-    if (!keyword) {
-      dispatch(
-        keywordStatusChanged({
-          projectId,
-          keywordId: kwId,
-          previousStatus: undefined,
-          nextStatus: status,
-        })
-      );
-    }
-    return true;
-  };
-
-  const handleDomainStatusUpdate = async (row: CompetitorKeywordsForSiteRow, next: KeywordStatus) => {
-    const label = row.keyword;
-    const nk = normKeywordPhrase(label);
-    const previousStatus = effectiveDomainStatus(row);
-    const busyKey = row.matched_keyword_id ?? `dom:${row.keyword}`;
-
-    const revertPhraseOverlay = () => {
-      setDomainPhraseStatusOverlay(p => {
-        if (!(nk in p)) return p;
-        const q = { ...p };
-        delete q[nk];
-        return q;
-      });
-    };
-
-    setDomainPhraseStatusOverlay(p => ({ ...p, [nk]: next }));
-
-    if (row.matched_keyword_id) {
-      const ok = await handleStatusUpdate(row.matched_keyword_id, next, label);
-      if (!ok) revertPhraseOverlay();
-      return;
-    }
-    setError("");
-    setBusyRowId(busyKey);
-    const res = await keywordsApi.upsertDomainKeyword(
-      projectId,
-      {
-        keyword: row.keyword,
-        volume: row.volume,
-        kd: row.kd,
-        cpc: row.cpc,
-        intent: row.intent,
-        estimated_monthly_traffic: row.estimated_monthly_traffic,
-      },
-      next
-    );
-    setBusyRowId(null);
-    if (!res.success) {
-      revertPhraseOverlay();
-      setError(res.error ?? "Could not save keyword");
-      return;
-    }
-    if ("id" in res && res.id) {
-      // `mergeKeywordStatuses` spreads server map first then overlay, so an existing
-      // `pending` entry would overwrite the payload — use a direct assignment instead.
-      dispatch(
-        keywordStatusChanged({
-          projectId,
-          keywordId: res.id,
-          previousStatus,
-          nextStatus: next,
-        })
-      );
-      queryClient.setQueryData(qk.domainKeywords(projectId), (prev: unknown) => {
-        if (!prev || typeof prev !== "object" || !("success" in prev)) return prev;
-        const p = prev as { success: boolean; data?: CompetitorKeywordsForSiteRow[] };
-        if (!p.success || !p.data) return prev;
-        return {
-          ...p,
-          data: p.data.map(d =>
-            normKeywordPhrase(d.keyword) === nk
-              ? {
-                  ...d,
-                  matched_keyword_id: res.id,
-                  matched_status: next,
-                  keyword_analysis_score: d.keyword_analysis_score ?? null,
-                }
-              : d
-          ),
-        };
-      });
-    }
-    if (next === "approved") {
-      toast.success(`"${label}" approved${calendarApproveSuffix(res)}`);
-      void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-      router.push(`/projects/${projectId}/content-calendar`);
-    } else if (next === "pending") {
-      toast(`"${label}" moved back to pending`, { icon: 'ℹ️' });
-    } else if (next === "rejected") {
-      toast(`"${label}" rejected`, { icon: 'ℹ️' });
-    }
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
-      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
-    ]);
-  };
-
-  const handleKeywordRemove = async (kwId: string, phrase: string) => {
-    if (!confirm(`Remove “${phrase}” from this project? This cannot be undone.`)) return;
-    setBusyRowId(kwId);
-    setError("");
-    const snapshot = queryClient.getQueryData<KeywordsResponse>(KEYWORDS_KEY);
-    const previousStatus = keywords.find(k => k.id === kwId)?.status;
-    patchKeywords(list => list.filter(k => k.id !== kwId));
-    const res = await keywordsApi.deleteKeyword(projectId, kwId);
-    if (!res.success) {
-      if (snapshot) queryClient.setQueryData(KEYWORDS_KEY, snapshot);
-      setError(("error" in res && res.error) || "Could not delete keyword");
-    } else {
-      dispatch(removeKeywordStatus({ projectId, keywordId: kwId, previousStatus }));
-      queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-    }
-    setBusyRowId(null);
-  };
 
   const filtered = useMemo(() => {
     return keywords.filter(k => {
@@ -955,11 +773,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     scrollKeywordAnchorRowToTop(anchorRowKey);
   };
 
-  /** Re-discover: industry → keyword_ideas + DB; domain → keywords_for_site + cache. */
-  const handleRediscover = () => {
-    if (sourceTab === "domain") void handleDomainRediscover();
-    else void handleDiscover();
-  };
+
 
   const toggleSortColumn = (columnId: string) => {
     const col = columnId as TableSortColumn;
@@ -1207,7 +1021,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         );
       }
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [busyRowId, handleDomainStatusUpdate, effectiveDomainStatus, calendarMap, resolveContentType, setRowContentType, generatedMap]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<CompetitorKeywordsForSiteRow>[], [keywords, renderActionCell, renderContentTypeSelect]);
 
   const industryColumns = useMemo<ColumnDef<Keyword>[]>(() => [
     {
@@ -1363,7 +1177,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           (kw.source_type as KeywordSourceType) || "industry"
         )
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [busyRowId, handleStatusUpdate, projectData, calendarMap, resolveContentType, setRowContentType, generatedMap]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, projectData]);
 
   return (
     <div className="space-y-4 relative">
@@ -1375,7 +1189,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
             <PillTabFilterBar<FilterTab>
               items={FILTER_TAB_ITEMS}
               activeId={filter}
-              onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab as FilterTab }))}
+              onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab as unknown as KeywordFilterTab }))}
             />
           </div>
 
@@ -1571,7 +1385,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                     selectedIds={selectedIds}
                     onToggleSelect={toggleRowSelected}
                     selectionDisabled={bulkScheduling}
-                    isSelectable={kw => true}
+                    isSelectable={() => true}
                     rowClassName={(kw) => {
                       const isSch = calendarMap.has(kw.matched_keyword_id || "") || calendarMap.has(kw.keyword.toLowerCase());
                       const domainRowSelectId = domainSelectId(kw.keyword);
@@ -1688,7 +1502,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               selectedIds={selectedIds}
               onToggleSelect={toggleRowSelected}
               selectionDisabled={bulkScheduling}
-              isSelectable={kw => true}
+              isSelectable={() => true}
               onRowClick={kw => {
                 if (!massSelectMode && !busyRowId) setModalKeywordId(kw.id);
               }}

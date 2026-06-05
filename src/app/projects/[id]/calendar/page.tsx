@@ -29,6 +29,7 @@ import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordModal";
 import { PageTitle } from "@/components/common";
+import { Dialog } from "@/components/common/dialogs/Dialog";
 import { toast } from "react-hot-toast";
 
 type CalendarResponse = Awaited<ReturnType<typeof calendarApi.entries>>;
@@ -110,6 +111,9 @@ export default function CalendarPage() {
   /** null = closed, "" = open with no preselected date, "YYYY-MM-DD" = open pre-filled from grid click */
   const [addKeywordModalDate, setAddKeywordModalDate] = useState<string | null>(null);
   const [addKeywordBusy, setAddKeywordBusy] = useState(false);
+  const [removingEntryId, setRemovingEntryId] = useState<string | null>(null);
+  const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
+  const [entryToRemove, setEntryToRemove] = useState<{ id: string; keyword: string } | null>(null);
   const [calendarView, setCalendarView] = useState<"list" | "grid">(() => {
     if (typeof window === "undefined") return "list";
     const stored = localStorage.getItem("calendar-view");
@@ -324,6 +328,35 @@ export default function CalendarPage() {
     },
     [projectId, refetchCalendar, queryClient]
   );
+
+  const handleRemoveEntry = useCallback(
+    async (entryId: string, keyword: string) => {
+      setEntryToRemove({ id: entryId, keyword });
+      setRemoveConfirmOpen(true);
+    },
+    []
+  );
+
+  const confirmRemoveEntry = useCallback(async () => {
+    if (!entryToRemove) return;
+    setRemovingEntryId(entryToRemove.id);
+    setRemoveConfirmOpen(false);
+    try {
+      const res = await calendarApi.deleteEntry(projectId, entryToRemove.id);
+      if (res.success) {
+        toast.success(`"${entryToRemove.keyword}" removed from calendar`);
+        await refetchCalendar();
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      } else {
+        toast.error(res.error ?? "Could not remove entry");
+      }
+    } finally {
+      setRemovingEntryId(null);
+      setEntryToRemove(null);
+    }
+  }, [entryToRemove, projectId, refetchCalendar, queryClient]);
 
   // ── derived stats ─────────────────────────────────────────────────────────
 
@@ -625,6 +658,24 @@ export default function CalendarPage() {
                           Generating…
                         </span>
                       )}
+                      {!isGenerating && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveEntry(entry.id, entry.focus_keyword)}
+                          disabled={removingEntryId === entry.id}
+                          className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle/50 bg-transparent px-3 py-1 text-[11px] font-medium text-text-tertiary transition-colors hover:border-brand-coral/30 hover:bg-brand-coral/10 hover:text-brand-coral disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                          title="Remove from calendar"
+                        >
+                          {removingEntryId === entry.id ? (
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-coral/30 border-t-brand-coral" />
+                          ) : (
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          )}
+                          Remove
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -642,6 +693,7 @@ export default function CalendarPage() {
             onEmptyDayClick={(date) => setAddKeywordModalDate(date)}
             scheduleBusy={savingDate || addKeywordBusy}
             onMoveEntryToDate={handleMoveEntryToDate}
+            onRemoveEntry={handleRemoveEntry}
           />
         )}
       </section>
@@ -654,6 +706,36 @@ export default function CalendarPage() {
         onSubmit={handleAddCustomKeyword}
         busy={addKeywordBusy}
       />
+
+      {/* ── REMOVE CONFIRMATION DIALOG ──────────────────────────────────── */}
+      <Dialog
+        open={removeConfirmOpen}
+        onClose={() => setRemoveConfirmOpen(false)}
+        size="sm"
+        title="Remove from calendar"
+        description={`Are you sure you want to remove "${entryToRemove?.keyword}" from the calendar? The keyword and any generated blog will remain in Keyword Discovery and Content History.`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setRemoveConfirmOpen(false)}
+              className="inline-flex items-center justify-center rounded-full border border-border-subtle bg-surface-secondary px-5 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmRemoveEntry}
+              disabled={removingEntryId !== null}
+              className="inline-flex items-center justify-center rounded-full bg-brand-coral px-5 py-2 text-[13px] font-medium text-brand-on-coral transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {removingEntryId ? "Removing..." : "Remove"}
+            </button>
+          </>
+        }
+      >
+        <></>
+      </Dialog>
 
     </div>
   );

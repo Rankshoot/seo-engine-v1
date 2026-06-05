@@ -41,6 +41,7 @@ export function MiniCalendar({
   /** Called when the user clicks an empty future day in the grid. Opens the add-keyword modal. */
   onEmptyDayClick,
   onGenerateClick,
+  onRemoveEntry,
   generatingId = null,
 }: {
   entries: CalendarEntryWithBlog[];
@@ -53,6 +54,7 @@ export function MiniCalendar({
   onMoveEntryToDate?: (entryId: string, date: string) => boolean | Promise<boolean>;
   onEmptyDayClick?: (date: string) => void;
   onGenerateClick?: (entryId: string) => void;
+  onRemoveEntry?: (entryId: string, keyword: string) => void;
   generatingId?: string | null;
 }) {
   const today = new Date();
@@ -467,6 +469,21 @@ export function MiniCalendar({
                             className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-brand-action/10 text-brand-action hover:bg-brand-action/20 disabled:opacity-50"
                           >
                             Generate →
+                          </button>
+                        )}
+                        {!isGenerating && onRemoveEntry && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRemoveEntry(entry.id, entry.focus_keyword);
+                            }}
+                            className="absolute right-1 top-1 rounded border border-border-subtle/30 bg-surface-elevated/80 p-0.5 text-text-tertiary transition-colors hover:border-brand-coral/30 hover:bg-brand-coral/10 hover:text-brand-coral"
+                            title="Remove from calendar"
+                          >
+                            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
                           </button>
                         )}
                       </div>

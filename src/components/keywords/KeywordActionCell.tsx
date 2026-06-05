@@ -1,4 +1,3 @@
-import React, { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "react-hot-toast";
 import { Button, Spinner } from "@/components/common";
@@ -28,19 +27,12 @@ interface KeywordActionCellProps {
   onScheduleSuccess?: (res: {
     success: boolean;
     keywordStatus: string;
-    keyword: unknown;
-    calendarEntry: unknown;
+    keyword: any;
+    calendarEntry: any;
   }) => void;
 }
 
-function fmtDate(iso: string): string {
-  return new Date(iso + "T12:00:00").toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-export const KeywordActionCell = React.memo(function KeywordActionCell({
+export function KeywordActionCell({
   projectId,
   keyword,
   keywordId,
@@ -61,13 +53,13 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
 
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = () => {
     // Navigate to the respective generator page with autofill params
     // shouldSchedule=false indicates this is a generate-only action, not a schedule action
     const slug = contentType === "blog" ? "blogs" : contentType === "linkedin" ? "linkedin" : `${contentType}s`;
     const params = new URLSearchParams({ keyword, source: sourceType, shouldSchedule: "false" });
     router.push(`/projects/${projectId}/content-generator/${slug}?${params.toString()}`);
-  }, [contentType, keyword, sourceType, projectId, router]);
+  };
 
   const scheduleMutation = useMutation({
     mutationFn: async () => {
@@ -117,23 +109,21 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
         // Optimistically add the new calendar entry to the React Query cache
         if (res.calendarEntry) {
           const ENTRIES_KEY = qk.calendarWithBlogs(projectId);
-          queryClient.setQueryData(ENTRIES_KEY, (prev: unknown) => {
-            if (!prev || typeof prev !== "object" || !("success" in prev)) return prev;
-            const p = prev as { success: boolean; data: { id: string; blog?: unknown }[] };
-            if (!p.success) return prev;
-            const filtered = p.data.filter(e => e.id !== res.calendarEntry.id);
+          queryClient.setQueryData(ENTRIES_KEY, (prev: any) => {
+            if (!prev || !prev.success) return prev;
+            const filtered = prev.data.filter((e: any) => e.id !== res.calendarEntry.id);
             const blogStub = blogId
               ? { id: blogId, entry_id: res.calendarEntry.id, title: "", status: "generated", word_count: 0 }
               : null;
             return {
-              ...p,
+              ...prev,
               data: [...filtered, { ...res.calendarEntry, blog: blogStub }]
             };
           });
         }
 
         if (onScheduleSuccess) {
-          onScheduleSuccess(res as Parameters<Required<KeywordActionCellProps>["onScheduleSuccess"]>[0]);
+          onScheduleSuccess(res as any);
         }
 
         // Invalidate queries in background to sync fully
@@ -163,6 +153,17 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
     },
   });
 
+  const viewBlogLabel = () => {
+    return "View";
+  };
+
+  const fmtDate = (iso: string) => {
+    return new Date(iso + "T12:00:00").toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  };
+
   return (
     <div className="flex items-center justify-center gap-1.5">
       {blogId ? (
@@ -171,7 +172,6 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
           size="sm"
           className="px-2.5 text-[10px] h-7 rounded-full border border-border-subtle bg-surface-elevated text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-all whitespace-nowrap flex items-center justify-center"
           onClick={() => router.push(`/projects/${projectId}/blogs/${blogId}`)}
-          aria-label={`View blog post for "${keyword}"`}
         >
           View
         </Button>
@@ -181,7 +181,6 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
           size="sm"
           className="px-2.5 text-[10px] h-7 rounded-full shadow-sm transition-all whitespace-nowrap flex items-center justify-center"
           onClick={handleGenerate}
-          aria-label={`Generate content for "${keyword}"`}
         >
           Generate
         </Button>
@@ -191,7 +190,6 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
         <span
           className="px-2.5 h-7 text-[10px] font-semibold text-text-tertiary bg-surface-secondary border border-border-subtle rounded-full whitespace-nowrap flex items-center justify-center gap-1"
           title={`Scheduled date: ${scheduledDate}`}
-          aria-label={`Scheduled for ${fmtDate(scheduledDate)}`}
         >
           🗓 {fmtDate(scheduledDate)}
         </span>
@@ -202,7 +200,6 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
           className="px-2.5 text-[10px] h-7 rounded-full border border-border-subtle bg-surface-elevated text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-all whitespace-nowrap flex items-center justify-center"
           onClick={() => scheduleMutation.mutate()}
           disabled={scheduleMutation.isPending}
-          aria-label={`Schedule "${keyword}" to content calendar`}
         >
           {scheduleMutation.isPending ? (
             <Spinner size={10} />
@@ -213,4 +210,4 @@ export const KeywordActionCell = React.memo(function KeywordActionCell({
       )}
     </div>
   );
-});
+}

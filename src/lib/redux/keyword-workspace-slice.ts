@@ -6,7 +6,9 @@ export type CalendarScheduledKeyword = {
   status: string;
 };
 
-export type KeywordFilterTab = "all" | "ai" | KeywordStatus;
+export type KeywordFilterTab = "all" | "ai" | "generated" | KeywordStatus;
+/** The top-level organic vs competitor tab on the Keyword Discovery page. */
+export type KeywordDiscoveryMainTab = "organic" | "competitor";
 /** Keyword discovery page — which DataForSEO path Re-discover uses. */
 export type KeywordDiscoverySourceTab = "industry" | "domain";
 export type KeywordTableSortColumn =
@@ -30,8 +32,12 @@ export type ProjectStatsSnapshot = {
 
 type KeywordTablePrefs = {
   filter: KeywordFilterTab;
+  /** Filter state for the Competitor Keywords tab (separate from organic). */
+  competitorFilter: KeywordFilterTab;
   tableSort: { column: KeywordTableSortColumn; dir: KeywordSortDir };
   discoverySourceTab: KeywordDiscoverySourceTab;
+  /** Top-level tab: organic keywords vs competitor keywords. */
+  mainTab: KeywordDiscoveryMainTab;
 };
 
 export type ProjectKeywordWorkspace = {
@@ -106,8 +112,10 @@ export type KeywordWorkspaceState = {
 
 const defaultPrefs: KeywordTablePrefs = {
   filter: "all",
+  competitorFilter: "all",
   tableSort: { column: "analysis_score", dir: "desc" },
   discoverySourceTab: "industry",
+  mainTab: "organic",
 };
 
 const initialState: KeywordWorkspaceState = {
@@ -162,6 +170,8 @@ function ensureProject(state: KeywordWorkspaceState, projectId: string) {
   const pf = proj.aiAssistant.preferredFilter as string;
   if (pf === "low_competition" || pf === "long_tail") proj.aiAssistant.preferredFilter = "all";
   proj.prefs.discoverySourceTab ??= "industry";
+  proj.prefs.mainTab ??= "organic";
+  proj.prefs.competitorFilter ??= "all";
   return proj;
 }
 
@@ -186,6 +196,20 @@ export const keywordWorkspaceSlice = createSlice({
       action: PayloadAction<{ projectId: string; filter: KeywordFilterTab }>
     ) {
       ensureProject(state, action.payload.projectId).prefs.filter = action.payload.filter;
+    },
+
+    rememberCompetitorKeywordFilter(
+      state,
+      action: PayloadAction<{ projectId: string; filter: KeywordFilterTab }>
+    ) {
+      ensureProject(state, action.payload.projectId).prefs.competitorFilter = action.payload.filter;
+    },
+
+    rememberKeywordMainTab(
+      state,
+      action: PayloadAction<{ projectId: string; tab: KeywordDiscoveryMainTab }>
+    ) {
+      ensureProject(state, action.payload.projectId).prefs.mainTab = action.payload.tab;
     },
 
     rememberKeywordSort(
@@ -427,6 +451,8 @@ export const keywordWorkspaceSlice = createSlice({
 
 export const {
   rememberKeywordFilter,
+  rememberCompetitorKeywordFilter,
+  rememberKeywordMainTab,
   rememberKeywordSort,
   rememberKeywordDiscoverySourceTab,
   mergeKeywordStatuses,

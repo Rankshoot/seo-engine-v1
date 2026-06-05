@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
+import { aiGenerate } from '@/services/ai/providers';
 import {
   discoverKeywordsForProject,
   fetchGoogleAdsKeywordsForSite,
@@ -495,35 +496,26 @@ export async function discoverKeywords(projectId: string) {
     };
   }
 
-  // 1. In parallel: ensure a Business Brief exists (Jina scrape — cached in
-  //    `project_briefs`) and run the lightweight SEO crawler against the
-  //    user's domain. `crawlWebsite` NEVER throws — it always resolves to a
-  //    WebsiteCrawlResult, even when the domain is empty or the target is
-  //    down (the returned object then carries an `error` field). We use that
-  //    guarantee to always forward a real object into `discoverKeywordsForProject`
-  //    so the `(crawled_website_context)` trace can never read "skipped".
-  const [briefRes, crawlRaw] = await Promise.all([
-    generateBusinessBrief(projectId, { force: false }),
-    crawlWebsite(websiteDomain).catch(
-      (e): WebsiteCrawlResult => ({
-        url: websiteDomain,
-        finalUrl: websiteDomain,
-        status: 0,
-        title: '',
-        metaDescription: '',
-        headings: { h1: [], h2: [], h3: [] },
-        navText: [],
-        paragraphs: [],
-        urlSlugs: [],
-        linkTexts: [],
-        topPhrases: [],
-        wordCount: 0,
-        error: e instanceof Error ? e.message : String(e),
-      })
-    ),
-  ]);
-  const crawl: WebsiteCrawlResult = crawlRaw;
-  const brief = briefRes.brief;
+  // 1. Load the current brief if one exists, but do not generate/scrape a new one.
+  //    Also bypass the lightweight SEO crawler to avoid any hybrid scraping or Jina queries.
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.success && briefRes.brief ? briefRes.brief : undefined;
+
+  const crawl: WebsiteCrawlResult = {
+    url: websiteDomain,
+    finalUrl: websiteDomain,
+    status: 0,
+    title: '',
+    metaDescription: '',
+    headings: { h1: [], h2: [], h3: [] },
+    navText: [],
+    paragraphs: [],
+    urlSlugs: [],
+    linkTexts: [],
+    topPhrases: [],
+    wordCount: 0,
+    error: 'Crawling disabled on keyword discovery',
+  };
 
   // 2. Seeds. We DO NOT use the brief's AI-generated seed_phrases here —
   //    they're inferred from the website scrape and were drifting into
@@ -1552,60 +1544,69 @@ export async function upsertKeywordFromDomainSite(
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Smaller batches = shorter output = less risk of truncation / malformed JSON.
-const AI_EVAL_BATCH = 15;
+const AI_EVAL_BATCH = 10;
+// Max parallel batch calls — keeps wall-clock time low without hammering the API.
+const AI_EVAL_CONCURRENCY = 3;
 
-// Use JSON-mode capable models (responseMimeType forces valid JSON).
-const GEMINI_EVAL_URLS = [
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
-];
-
-/** Extracts the first JSON array from raw text (handles trailing commentary / partial fences). */
+/**
+ * Extracts the first valid JSON array from raw text.
+ * If the array is truncated (common when maxOutputTokens cuts mid-JSON) we try
+ * to recover partial entries by walking back from the last complete object.
+ */
 function extractJsonArray(raw: string): string {
   // Strip any markdown fences
   const s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-  // Find the first '[' and last ']'
   const start = s.indexOf('[');
+  if (start === -1) throw new Error('No JSON array found in response');
+
+  // Happy path — find a closing bracket
   const end = s.lastIndexOf(']');
-  if (start === -1 || end === -1 || end < start) throw new Error('No JSON array found in response');
-  return s.slice(start, end + 1);
-}
-
-async function callGeminiForEval(prompt: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY!;
-
-  for (const url of GEMINI_EVAL_URLS) {
+  if (end !== -1 && end > start) {
     try {
-      const body = {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 16384,
-          responseMimeType: 'application/json',
-        },
-      };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => res.status.toString());
-        console.error(`[callGeminiForEval] ${url} HTTP ${res.status}: ${errText.slice(0, 200)}`);
-        continue;
-      }
-      const json = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      if (text) return text;
-    } catch (e) {
-      console.error('[callGeminiForEval] fetch error', e);
+      // Validate it actually parses
+      JSON.parse(s.slice(start, end + 1));
+      return s.slice(start, end + 1);
+    } catch {
+      // fall through to repair
     }
   }
-  throw new Error('All Gemini endpoints failed for keyword evaluation');
+
+  // Repair path — the array was truncated. Find the last complete object by
+  // scanning back for `}` then trying to close the array.
+  const partial = s.slice(start);
+  const lastClose = partial.lastIndexOf('}');
+  if (lastClose === -1) throw new Error('No complete JSON object found in truncated response');
+  try {
+    const repaired = partial.slice(0, lastClose + 1) + ']';
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    throw new Error('Could not repair truncated JSON array');
+  }
+}
+
+async function callGeminiForEval(prompt: string, projectId: string): Promise<string> {
+  return aiGenerate("keyword-eval", prompt, {
+    projectId,
+    jsonMode: true,
+    temperature: 0.2,
+    retries: 2,
+    // Enough tokens for 10 keywords × ~200 tokens each of dense JSON output
+    maxOutputTokens: 8192,
+  });
 }
 
 function buildEvalPrompt(
-  project: { name: string; domain: string; niche: string; target_audience: string; target_region: string },
+  project: {
+    name: string;
+    domain: string;
+    niche: string;
+    target_audience: string;
+    target_region: string;
+    brand_voice?: string;
+    brand_values?: string;
+    brand_description?: string;
+  },
   brief: BusinessBrief | null,
   competitors: string[],
   keywords: Array<{ keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string }>
@@ -1618,6 +1619,10 @@ function buildEvalPrompt(
         brief.usps?.length ? `USPs: ${brief.usps.slice(0, 4).join('; ')}` : '',
       ].filter(Boolean).join('\n')
     : `Company: ${project.name}, Niche: ${project.niche}, Audience: ${project.target_audience}`;
+
+  const brandPersonaSnippet = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\n## BRAND PERSONA & IDENTITY\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Personality Description: ${project.brand_description}\n` : ""}`
+    : "";
 
   const kwList = keywords
     .map((k, i) =>
@@ -1637,9 +1642,10 @@ Competitors: ${competitors.slice(0, 6).join(', ') || 'unknown'}
 
 ## BUSINESS BRIEF
 ${briefSnippet}
+${brandPersonaSnippet}
 
 ## EVALUATION FRAMEWORK (weighted scoring)
-- Business Relevance (25%): Does keyword align with company services, audience, goals?
+- Business Relevance (25%): Does keyword align with company services, audience, goals, and brand voice/values?
 - Intent Match (15%): Is intent commercial/transactional > informational > navigational?
 - Traffic Potential (15%): Organic CTR opportunity, SERP type, ad density
 - Search Volume (10%): Volume appropriate for niche (B2B 500–5k can beat B2C 100k)
@@ -1667,6 +1673,7 @@ ${kwList}
 5. All string values must use plain ASCII quotes — do NOT use curly/smart quotes.
 6. Semantic Deduplication: Analyze the batch of keywords for semantic similarity/repetition (e.g. variations or minor variants of the same topic). If a keyword is a repetitive variant of another primary keyword in this list, set "duplicate_of" to the primary keyword's phrase, lower its score (to avoid cannibalization), and state this cannibalization risk in its weaknesses list.
 7. Content Type: For each keyword, recommend exactly one system-supported content type: "blog", "ebook", "whitepaper", or "linkedin" (do not suggest any other type). Suggest the best format for generating content on this query.
+8. Brand Persona Alignment: Evaluate whether the keyword and its search intent align with the brand persona, values, tone, and character. Penalize or lower scores for keywords that mismatch the brand's identity or messaging guidelines.
 
 Return a JSON array. Each element must have exactly these fields:
 - keyword (string — exact match from input)
@@ -1695,7 +1702,7 @@ export async function scoreKeywordsWithAI(
   // Ownership check
   const { data: project } = await supabaseAdmin
     .from('projects')
-    .select('id, name, domain, niche, target_audience, target_region')
+    .select('id, name, domain, niche, target_audience, target_region, brand_voice, brand_values, brand_description')
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();
@@ -1734,55 +1741,68 @@ export async function scoreKeywordsWithAI(
   if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
 
   let scored = 0;
+  const now = new Date().toISOString();
 
-  // Process in batches
+  // Split all rows into batches up front
+  const batches: typeof rows[] = [];
   for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
-    const batch = rows.slice(i, i + AI_EVAL_BATCH);
-    const prompt = buildEvalPrompt(project, brief, competitors, batch as Array<{keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string}>);
+    batches.push(rows.slice(i, i + AI_EVAL_BATCH));
+  }
 
-    let results: Array<{
-      keyword: string;
-      score: number;
-      category: string;
-      analysis: AiEvalData['analysis'];
-      reasoning: AiEvalData['reasoning'];
-      recommended_content_type?: string;
-      duplicate_of?: string | null;
-    }>;
-    try {
-      const raw = await callGeminiForEval(prompt);
-      results = JSON.parse(extractJsonArray(raw));
-    } catch (e) {
-      // Skip this batch but continue with others
-      console.error('[scoreKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);
-      continue;
-    }
+  // Process batches in parallel with a concurrency cap
+  for (let i = 0; i < batches.length; i += AI_EVAL_CONCURRENCY) {
+    const window = batches.slice(i, i + AI_EVAL_CONCURRENCY);
+    const results = await Promise.allSettled(
+      window.map(async (batch) => {
+        const prompt = buildEvalPrompt(
+          project, brief, competitors,
+          batch as Array<{keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string}>
+        );
+        const raw = await callGeminiForEval(prompt, projectId);
+        return { batch, parsed: JSON.parse(extractJsonArray(raw)) as Array<{
+          keyword: string;
+          score: number;
+          category: string;
+          analysis: AiEvalData['analysis'];
+          reasoning: AiEvalData['reasoning'];
+          recommended_content_type?: string;
+          duplicate_of?: string | null;
+        }>};
+      })
+    );
 
-    // Build a lookup by keyword phrase (case-insensitive)
-    const lookup = new Map(results.map(r => [r.keyword.toLowerCase().trim(), r]));
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.error('[scoreKeywordsWithAI] batch parse error', result.reason instanceof Error ? result.reason.message : result.reason);
+        continue;
+      }
 
-    const now = new Date().toISOString();
-    const updates = batch.flatMap(row => {
-      const hit = lookup.get(row.keyword.toLowerCase().trim());
-      if (!hit) return [];
-      const evalData: AiEvalData = {
-        category: hit.category,
-        analysis: hit.analysis,
-        reasoning: hit.reasoning,
-        recommended_content_type: hit.recommended_content_type,
-        duplicate_of: hit.duplicate_of
-      };
-      return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
-    });
+      const { batch, parsed } = result.value;
+      const lookup = new Map(parsed.map(r => [r.keyword.toLowerCase().trim(), r]));
 
-    if (updates.length) {
-      for (const upd of updates) {
+      const updates = batch.flatMap(row => {
+        const hit = lookup.get(row.keyword.toLowerCase().trim());
+        if (!hit) return [];
+        const evalData: AiEvalData = {
+          category: hit.category,
+          analysis: hit.analysis,
+          reasoning: hit.reasoning,
+          recommended_content_type: hit.recommended_content_type,
+          duplicate_of: hit.duplicate_of,
+        };
+        return [{ id: row.id as string, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+      });
+
+      if (updates.length) {
+        // Bulk upsert all updates in one DB round-trip
         await supabaseAdmin
           .from('keywords')
-          .update({ ai_eval_score: upd.ai_eval_score, ai_eval_data: upd.ai_eval_data, ai_eval_at: upd.ai_eval_at })
-          .eq('id', upd.id);
+          .upsert(
+            updates.map(u => ({ id: u.id, project_id: projectId, keyword: batch.find(b => b.id === u.id)?.keyword ?? '', ai_eval_score: u.ai_eval_score, ai_eval_data: u.ai_eval_data, ai_eval_at: u.ai_eval_at })),
+            { onConflict: 'id', ignoreDuplicates: false }
+          );
+        scored += updates.length;
       }
-      scored += updates.length;
     }
   }
 
@@ -1798,7 +1818,16 @@ export async function scoreKeywordsWithAI(
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildCompetitorEvalPrompt(
-  project: { name: string; domain: string; niche: string; target_audience: string; target_region: string },
+  project: {
+    name: string;
+    domain: string;
+    niche: string;
+    target_audience: string;
+    target_region: string;
+    brand_voice?: string;
+    brand_values?: string;
+    brand_description?: string;
+  },
   brief: BusinessBrief | null,
   competitors: string[],
   gaps: Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
@@ -1811,6 +1840,10 @@ function buildCompetitorEvalPrompt(
         brief.usps?.length ? `USPs: ${brief.usps.slice(0, 3).join('; ')}` : '',
       ].filter(Boolean).join('\n')
     : `Company: ${project.name}, Niche: ${project.niche}, Audience: ${project.target_audience}`;
+
+  const brandPersonaSnippet = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\n## BRAND PERSONA & IDENTITY\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Personality Description: ${project.brand_description}\n` : ""}`
+    : "";
 
   const kwList = gaps
     .map((g, i) =>
@@ -1830,6 +1863,7 @@ Main competitors: ${competitors.slice(0, 6).join(', ') || 'unknown'}
 
 ## BUSINESS BRIEF
 ${briefSnippet}
+${brandPersonaSnippet}
 
 ## GAP TYPE DEFINITIONS
 - missing: You have no content for this keyword — competitor ranks, you don't
@@ -1837,7 +1871,7 @@ ${briefSnippet}
 - untapped: High-value keyword neither you nor competitors dominate yet
 
 ## EVALUATION FRAMEWORK (weighted scoring for competitor gap keywords)
-- Business Relevance (20%): Does this keyword align with company services / audience goals?
+- Business Relevance (20%): Does this keyword align with company services / audience goals / brand persona?
 - Blog Writing Potential (20%): Can a high-quality 1500+ word article be written on this topic? Rich subtopics, FAQs, use cases?
 - Competitive Takeover Opportunity (20%): Gap type + competitor weakness score — how realistic is outranking the current result?
 - Search Intent Quality (15%): Informational / commercial intent that drives discovery and consideration. Avoid pure transactional or navigational.
@@ -1864,6 +1898,7 @@ ${kwList}
 6. All string values must use plain ASCII quotes.
 7. Semantic Deduplication: Analyze the batch of keywords for semantic similarity/repetition (e.g. variations or minor variants of the same topic). If a keyword is a repetitive variant of another primary keyword in this list, set "duplicate_of" to the primary keyword's phrase, lower its score (to avoid cannibalization), and state this cannibalization risk in its weaknesses list.
 8. Content Type: For each keyword, recommend exactly one system-supported content type: "blog", "ebook", "whitepaper", or "linkedin" (do not suggest any other type). Suggest the best format for generating content on this query.
+9. Brand Persona Alignment: Verify if the keyword fits the brand's core values, brand voice, and personality. Penalize keywords that mismatch the brand's identity or messaging guidelines.
 
 Return a JSON array. Each element must have exactly these fields:
 - keyword (string — exact match from input)
@@ -1891,7 +1926,7 @@ export async function scoreCompetitorKeywordsWithAI(
 
   const { data: project } = await supabaseAdmin
     .from('projects')
-    .select('id, name, domain, niche, target_audience, target_region')
+    .select('id, name, domain, niche, target_audience, target_region, brand_voice, brand_values, brand_description')
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();
@@ -1922,57 +1957,68 @@ export async function scoreCompetitorKeywordsWithAI(
   if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
 
   let scored = 0;
+  const now = new Date().toISOString();
 
+  // Split all rows into batches up front
+  const batches: typeof rows[] = [];
   for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
-    const batch = rows.slice(i, i + AI_EVAL_BATCH);
-    const prompt = buildCompetitorEvalPrompt(
-      project,
-      brief,
-      competitors,
-      batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+    batches.push(rows.slice(i, i + AI_EVAL_BATCH));
+  }
+
+  // Process batches in parallel with a concurrency cap
+  for (let i = 0; i < batches.length; i += AI_EVAL_CONCURRENCY) {
+    const window = batches.slice(i, i + AI_EVAL_CONCURRENCY);
+    const results = await Promise.allSettled(
+      window.map(async (batch) => {
+        const prompt = buildCompetitorEvalPrompt(
+          project, brief, competitors,
+          batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+        );
+        const raw = await callGeminiForEval(prompt, projectId);
+        return { batch, parsed: JSON.parse(extractJsonArray(raw)) as Array<{
+          keyword: string;
+          score: number;
+          category: string;
+          analysis: AiEvalData['analysis'];
+          reasoning: AiEvalData['reasoning'];
+          recommended_content_type?: string;
+          duplicate_of?: string | null;
+        }>};
+      })
     );
 
-    let results: Array<{
-      keyword: string;
-      score: number;
-      category: string;
-      analysis: AiEvalData['analysis'];
-      reasoning: AiEvalData['reasoning'];
-      recommended_content_type?: string;
-      duplicate_of?: string | null;
-    }>;
-    try {
-      const raw = await callGeminiForEval(prompt);
-      results = JSON.parse(extractJsonArray(raw));
-    } catch (e) {
-      console.error('[scoreCompetitorKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);
-      continue;
-    }
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.error('[scoreCompetitorKeywordsWithAI] batch parse error', result.reason instanceof Error ? result.reason.message : result.reason);
+        continue;
+      }
 
-    const lookup = new Map(results.map(r => [r.keyword.toLowerCase().trim(), r]));
-    const now = new Date().toISOString();
+      const { batch, parsed } = result.value;
+      const lookup = new Map(parsed.map(r => [r.keyword.toLowerCase().trim(), r]));
 
-    const updates = batch.flatMap(row => {
-      const hit = lookup.get(row.keyword.toLowerCase().trim());
-      if (!hit) return [];
-      const evalData: AiEvalData = {
-        category: hit.category,
-        analysis: hit.analysis,
-        reasoning: hit.reasoning,
-        recommended_content_type: hit.recommended_content_type,
-        duplicate_of: hit.duplicate_of
-      };
-      return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
-    });
+      const updates = batch.flatMap(row => {
+        const hit = lookup.get(row.keyword.toLowerCase().trim());
+        if (!hit) return [];
+        const evalData: AiEvalData = {
+          category: hit.category,
+          analysis: hit.analysis,
+          reasoning: hit.reasoning,
+          recommended_content_type: hit.recommended_content_type,
+          duplicate_of: hit.duplicate_of,
+        };
+        return [{ id: row.id as string, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+      });
 
-    if (updates.length) {
-      for (const upd of updates) {
+      if (updates.length) {
+        // Bulk upsert all updates in one DB round-trip
         await supabaseAdmin
           .from('keyword_gaps')
-          .update({ ai_eval_score: upd.ai_eval_score, ai_eval_data: upd.ai_eval_data, ai_eval_at: upd.ai_eval_at })
-          .eq('id', upd.id);
+          .upsert(
+            updates.map(u => ({ id: u.id, project_id: projectId, keyword: batch.find(b => b.id === u.id)?.keyword ?? '', ai_eval_score: u.ai_eval_score, ai_eval_data: u.ai_eval_data, ai_eval_at: u.ai_eval_at })),
+            { onConflict: 'id', ignoreDuplicates: false }
+          );
+        scored += updates.length;
       }
-      scored += updates.length;
     }
   }
 

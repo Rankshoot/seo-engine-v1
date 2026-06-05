@@ -23,7 +23,7 @@ import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-co
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { computeSEOScore } from "@/lib/seo-analyzer";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
-import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
+import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis-types";
 
 // Lazy load heavy modals to improve initial page load
 const BlogDeepAnalysisModal = lazy(() =>
@@ -2325,7 +2325,7 @@ function buildMarkdownComponents(internalSet: Set<string>, ownSiteHost: string |
   const Img: ComponentType<ImgHTMLAttributes<HTMLImageElement>> = ({ alt = "", src, ...r }) => {
     const safeSrc = typeof src === "string" ? markdownUrlTransform(src) : "";
     if (!safeSrc)
-      return <span className="my-8 block rounded-[8px] px-4 py-5 text-[12px] text-text-tertiary border border-dashed border-border-subtle bg-surface-secondary">Image could not be displayed.</span>;
+      return null;
     return (
       <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle">
         <img alt={alt} src={safeSrc} loading="lazy" className="aspect-video w-full object-cover" {...r} />

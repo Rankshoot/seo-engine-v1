@@ -28,7 +28,13 @@ const SORT_OPTIONS = [
   { value: "model", label: "Model" },
 ];
 
-const GEMINI_MODELS = [
+const AI_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-opus-4-8",
+  "claude-haiku-4-5",
+  "claude-haiku-4-5-20251001",
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
   "gemini-flash-latest",
   "gemini-2.0-flash",
   "text-embedding-004",
@@ -80,7 +86,7 @@ export function AdminAiLogsDashboard() {
         )}
       >
         <option value="">All models</option>
-        {GEMINI_MODELS.map((m) => (
+        {AI_MODELS.map((m) => (
           <option key={m} value={m}>
             {m}
           </option>
@@ -257,10 +263,22 @@ export function AdminAiLogsDashboard() {
                   label: "Tokens (in / out)",
                   value: `${formatAdminInt(detail.tokensInput ?? 0)} / ${formatAdminInt(detail.tokensOutput ?? 0)}`,
                 },
+                ...(detail.tokensCachedRead ? [{
+                  label: "Cache read tokens",
+                  value: formatAdminInt(detail.tokensCachedRead),
+                }] : []),
+                ...(detail.tokensCachedWrite ? [{
+                  label: "Cache write tokens",
+                  value: formatAdminInt(detail.tokensCachedWrite),
+                }] : []),
                 {
                   label: "Est. cost",
                   value: formatAdminUsd(detail.estimatedCostUsd ?? 0),
                 },
+                ...(detail.costSavingsUsd ? [{
+                  label: "Est. cost savings",
+                  value: formatAdminUsd(detail.costSavingsUsd),
+                }] : []),
                 { label: "User ID", value: detail.userId ?? "—" },
                 { label: "Project ID", value: detail.projectId ?? "—" },
                 {

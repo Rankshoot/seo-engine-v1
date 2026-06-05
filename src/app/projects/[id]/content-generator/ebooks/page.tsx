@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import {
@@ -25,6 +25,8 @@ import {
   SectionHeading,
   StepRow,
   StudioBreadcrumb,
+  RecentHistorySkeleton,
+  validateEbookForm,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -34,28 +36,11 @@ import {
   generateEbookAction,
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
-
-const TONES = [
-  { id: "premium-educational", label: "Premium · educational" },
-  { id: "founder-narrative", label: "Founder · narrative" },
-  { id: "analyst-formal", label: "Analyst · formal" },
-  { id: "friendly-expert", label: "Friendly · expert" },
-] as const;
-
-const DEPTH_OPTIONS = [
-  { id: "concise", label: "Concise", hint: "5–6 chapters · 5k words" },
-  { id: "standard", label: "Standard", hint: "7–8 chapters · 8k words" },
-  { id: "deep", label: "Deep dive", hint: "9–11 chapters · 14k+ words" },
-] as const;
-
-const LANG_OPTIONS = [
-  { code: "en", label: "English" },
-  { code: "es", label: "Spanish" },
-  { code: "de", label: "German" },
-  { code: "fr", label: "French" },
-  { code: "hi", label: "Hindi" },
-  { code: "pt", label: "Portuguese" },
-] as const;
+import {
+  EBOOK_TONES,
+  EBOOK_DEPTH_OPTIONS,
+  EBOOK_LANG_OPTIONS,
+} from "@/constants";
 
 type Phase = "form" | "review" | "generating";
 
@@ -89,26 +74,15 @@ export default function EbookGeneratorPage() {
   const [primaryKeyword, setPrimaryKeyword] = useState(searchParams?.get("keyword") || "");
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
-  const [tone, setTone] = useState<(typeof TONES)[number]["id"]>("premium-educational");
+  const [tone, setTone] = useState<(typeof EBOOK_TONES)[number]["id"]>("premium-educational");
   const [goal, setGoal] = useState("Educate the reader and capture qualified leads.");
   const [ctaObjective, setCtaObjective] = useState(
     "Book a demo or download a deeper resource on our site.",
   );
-  const [chapterDepth, setChapterDepth] = useState<(typeof DEPTH_OPTIONS)[number]["id"]>("standard");
+  const [chapterDepth, setChapterDepth] = useState<(typeof EBOOK_DEPTH_OPTIONS)[number]["id"]>("standard");
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
-
-  const { data: history } = useQuery({
-    queryKey: qk.contentStudioHistory(projectId),
-    queryFn: () => contentGeneratorApi.studioHistory(projectId),
-    enabled: !!projectId,
-    ...DEFAULT_QUERY_OPTIONS,
-  });
-  const recentEbooks = useMemo(() => {
-    const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
-    return rows.filter(r => r.content_type === "ebook").slice(0, 4);
-  }, [history]);
 
   useEffect(() => {
     if (project?.target_audience && !audience) {
@@ -158,9 +132,10 @@ export default function EbookGeneratorPage() {
   };
 
   const goReview = () => {
-    if (!topic.trim()) return toast.error("Add a topic or use Ask AI.");
-    if (!primaryKeyword.trim()) return toast.error("Add the primary SEO keyword.");
-    if (!audience.trim()) return toast.error("Describe your target audience.");
+    const val = validateEbookForm(topic, primaryKeyword, audience);
+    if (!val.isValid) {
+      return toast.error(val.error || "Validation failed");
+    }
     setPhase("review");
   };
 
@@ -171,7 +146,7 @@ export default function EbookGeneratorPage() {
       primaryKeyword,
       secondaryKeywords,
       audience,
-      tone: TONES.find(t => t.id === tone)?.label ?? tone,
+      tone: EBOOK_TONES.find(t => t.id === tone)?.label ?? tone,
       goal,
       ctaObjective,
       chapterDepth,
@@ -268,13 +243,13 @@ export default function EbookGeneratorPage() {
             topic={topic}
             primaryKeyword={primaryKeyword}
             audience={audience}
-            tone={TONES.find(t => t.id === tone)?.label ?? tone}
-            depthLabel={DEPTH_OPTIONS.find(d => d.id === chapterDepth)?.label ?? chapterDepth}
+            tone={EBOOK_TONES.find(t => t.id === tone)?.label ?? tone}
+            depthLabel={EBOOK_DEPTH_OPTIONS.find(d => d.id === chapterDepth)?.label ?? chapterDepth}
             goal={goal}
             ctaObjective={ctaObjective}
             secondaryKeywords={secondaryKeywords}
             regionLabel={TARGET_REGIONS.find(r => r.code === region)?.name ?? region}
-            languageLabel={LANG_OPTIONS.find(l => l.code === language)?.label ?? language}
+            languageLabel={EBOOK_LANG_OPTIONS.find(l => l.code === language)?.label ?? language}
           />
         ) : (
           <ContentForm>
@@ -333,11 +308,11 @@ export default function EbookGeneratorPage() {
               <SectionHeading index="02" label="Tone & depth" />
               <div className="space-y-5">
                 <Field label="Tone">
-                  <ChipChoice options={TONES.map(t => ({ id: t.id, label: t.label }))} value={tone} onChange={setTone} ariaLabel="Tone" />
+                  <ChipChoice options={EBOOK_TONES.map(t => ({ id: t.id, label: t.label }))} value={tone} onChange={setTone} ariaLabel="Tone" />
                 </Field>
                 <Field label="Chapter depth">
                   <ChipChoice
-                    options={DEPTH_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
+                    options={EBOOK_DEPTH_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
                     value={chapterDepth}
                     onChange={setChapterDepth}
                     ariaLabel="Chapter depth"
@@ -360,7 +335,7 @@ export default function EbookGeneratorPage() {
                       value={language}
                       onChange={e => setLanguage(e.target.value)}
                     >
-                      {LANG_OPTIONS.map(l => (
+                      {EBOOK_LANG_OPTIONS.map(l => (
                         <option key={l.code} value={l.code}>
                           {l.label}
                         </option>
@@ -399,34 +374,53 @@ export default function EbookGeneratorPage() {
               </div>
             </ContentFormSection>
 
-            {recentEbooks.length > 0 ? (
-              <ContentFormSection>
-                <SectionHeading index="04" label="Recent ebooks" hint="Continue from a draft or open the previewer." />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {recentEbooks.map(r => (
-                    <ProjectNavLink
-                      key={r.id}
-                      href={`${studioBase}/ebooks/${r.id}`}
-                      className="group flex flex-col gap-1 rounded-card border border-border-subtle bg-surface-elevated p-4 transition-colors hover:border-border-strong"
-                    >
-                      <span className="text-[11px] font-mono uppercase tracking-widest text-text-tertiary">
-                        {new Date(r.updated_at).toLocaleDateString()}
-                      </span>
-                      <span className="text-[14px] font-semibold text-text-primary line-clamp-2">{r.title}</span>
-                      <span className="mt-1 inline-flex flex-wrap gap-2 text-[11px] text-text-tertiary">
-                        <span>{r.word_count.toLocaleString()} words</span>
-                        <span>·</span>
-                        <span>{r.target_keyword || "no primary keyword"}</span>
-                      </span>
-                    </ProjectNavLink>
-                  ))}
-                </div>
-              </ContentFormSection>
-            ) : null}
+            <Suspense fallback={<RecentHistorySkeleton />}>
+              <RecentEbooksList projectId={projectId} studioBase={studioBase} />
+            </Suspense>
           </ContentForm>
         )}
       </div>
     </div>
+  );
+}
+
+function RecentEbooksList({ projectId, studioBase }: { projectId: string; studioBase: string }) {
+  const { data: history } = useSuspenseQuery({
+    queryKey: qk.contentStudioHistory(projectId),
+    queryFn: () => contentGeneratorApi.studioHistory(projectId),
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const recentEbooks = useMemo(() => {
+    const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
+    return rows.filter(r => r.content_type === "ebook").slice(0, 4);
+  }, [history]);
+
+  if (recentEbooks.length === 0) return null;
+
+  return (
+    <ContentFormSection>
+      <SectionHeading index="04" label="Recent ebooks" hint="Continue from a draft or open the previewer." />
+      <div className="grid gap-3 sm:grid-cols-2">
+        {recentEbooks.map(r => (
+          <ProjectNavLink
+            key={r.id}
+            href={`${studioBase}/ebooks/${r.id}`}
+            className="group flex flex-col gap-1 rounded-card border border-border-subtle bg-surface-elevated p-4 transition-colors hover:border-border-strong"
+          >
+            <span className="text-[11px] font-mono uppercase tracking-widest text-text-tertiary">
+              {new Date(r.updated_at).toLocaleDateString()}
+            </span>
+            <span className="text-[14px] font-semibold text-text-primary line-clamp-2">{r.title}</span>
+            <span className="mt-1 inline-flex flex-wrap gap-2 text-[11px] text-text-tertiary">
+              <span>{r.word_count.toLocaleString()} words</span>
+              <span>·</span>
+              <span>{r.target_keyword || "no primary keyword"}</span>
+            </span>
+          </ProjectNavLink>
+        ))}
+      </div>
+    </ContentFormSection>
   );
 }
 

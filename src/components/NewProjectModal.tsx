@@ -93,7 +93,10 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
   const [error, setError] = useState("");
   const [niche, setNiche] = useState(editProject?.niche ?? "");
   const [targetAudience, setTargetAudience] = useState(editProject?.target_audience ?? "");
-  const [aiLoading, setAiLoading] = useState<null | "niche" | "target_audience">(null);
+  const [brandVoice, setBrandVoice] = useState(editProject?.brand_voice ?? "");
+  const [brandValues, setBrandValues] = useState(editProject?.brand_values ?? "");
+  const [brandDescription, setBrandDescription] = useState(editProject?.brand_description ?? "");
+  const [aiLoading, setAiLoading] = useState<null | "niche" | "target_audience" | "brand_voice" | "brand_values" | "brand_description">(null);
   const [competitors, setCompetitors] = useState<string[]>(
     editProject?.project_competitors?.length
       ? editProject.project_competitors.map(c => c.domain)
@@ -107,7 +110,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
   const removeCompetitor = (i: number) =>
     setCompetitors(p => p.filter((_, idx) => idx !== i));
 
-  async function runTargetingAiFill(field: "niche" | "target_audience") {
+  async function runTargetingAiFill(field: "niche" | "target_audience" | "brand_voice" | "brand_values" | "brand_description") {
     setError("");
     const form = formRef.current;
     if (!form) return;
@@ -123,7 +126,10 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
       console.log("[suggestProjectTargetingField]", result.trace);
       if (result.success) {
         if (field === "niche") setNiche(result.value);
-        else setTargetAudience(result.value);
+        else if (field === "target_audience") setTargetAudience(result.value);
+        else if (field === "brand_voice") setBrandVoice(result.value);
+        else if (field === "brand_values") setBrandValues(result.value);
+        else if (field === "brand_description") setBrandDescription(result.value);
       } else {
         setError(result.error);
       }
@@ -148,6 +154,9 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
       description: fd.get("description") as string,
       competitors: competitors.filter(c => c.trim()),
       ahrefs_rank_tracker_project_id: null,
+      brand_voice: fd.get("brand_voice") as string,
+      brand_values: fd.get("brand_values") as string,
+      brand_description: fd.get("brand_description") as string,
     };
 
     if (editProject) {
@@ -253,16 +262,6 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                 required
                 defaultValue={editProject?.domain}
                 placeholder="e.g. yourwebsite.com"
-              />
-            </Field>
-            <Field label="Description" htmlFor="np-description">
-              <Textarea
-                id="np-description"
-                name="description"
-                rows={2}
-                defaultValue={editProject?.description ?? ""}
-                placeholder="Brief project notes…"
-                className="resize-none"
               />
             </Field>
           </div>
@@ -371,6 +370,88 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                 )}
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* ── Section 4: Brand Persona ──────────────────────────── */}
+        <div className="border-t border-border-subtle pt-2">
+          <SectionLabel n={4}>
+            Brand Persona{" "}
+            <span className="ml-1 font-normal normal-case tracking-normal text-text-tertiary">
+              (optional)
+            </span>
+          </SectionLabel>
+          <div className="space-y-3">
+            <div>
+              <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+                <Label htmlFor="np-brand-voice" className="min-w-0 flex-1">
+                  Brand Voice / Tone
+                </Label>
+                <AiFillLabelButton
+                  busy={aiLoading === "brand_voice"}
+                  disabled={loading}
+                  onClick={() => void runTargetingAiFill("brand_voice")}
+                />
+              </div>
+              <Input
+                id="np-brand-voice"
+                name="brand_voice"
+                value={brandVoice}
+                onChange={e => setBrandVoice(e.target.value)}
+                placeholder="e.g. professional, authoritative, warm, witty"
+              />
+              <p className="mt-1 text-[11px] text-text-tertiary">
+                Adjectives describing how your brand sounds to others.
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+                <Label htmlFor="np-brand-values" className="min-w-0 flex-1">
+                  Core Values / Messaging
+                </Label>
+                <AiFillLabelButton
+                  busy={aiLoading === "brand_values"}
+                  disabled={loading}
+                  onClick={() => void runTargetingAiFill("brand_values")}
+                />
+              </div>
+              <Input
+                id="np-brand-values"
+                name="brand_values"
+                value={brandValues}
+                onChange={e => setBrandValues(e.target.value)}
+                placeholder="e.g. customer-first, sustainability, transparency"
+              />
+              <p className="mt-1 text-[11px] text-text-tertiary">
+                Key principles or messaging themes driving your brand.
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+                <Label htmlFor="np-brand-desc" className="min-w-0 flex-1">
+                  Brand Personality / Description
+                </Label>
+                <AiFillLabelButton
+                  busy={aiLoading === "brand_description"}
+                  disabled={loading}
+                  onClick={() => void runTargetingAiFill("brand_description")}
+                />
+              </div>
+              <Textarea
+                id="np-brand-desc"
+                name="brand_description"
+                rows={2}
+                value={brandDescription}
+                onChange={e => setBrandDescription(e.target.value)}
+                placeholder="e.g. An expert advisor explaining complex concepts simply without jargon."
+                className="resize-none"
+              />
+              <p className="mt-1 text-[11px] text-text-tertiary">
+                Brief description of your brand's character or persona.
+              </p>
+            </div>
           </div>
         </div>
 

@@ -48,10 +48,30 @@ export interface AdminPlatformMaintenance {
   message: string;
 }
 
+export interface AdminPlatformRouting {
+  blog: string;
+  ebook: string;
+  whitepaper: string;
+  linkedin: string;
+  assistant: string;
+  fallback: string;
+}
+
+export interface AdminPlatformCostControls {
+  global_monthly_limit_usd: number;
+  global_daily_limit_usd: number;
+  project_monthly_limit_usd: number;
+  user_monthly_limit_usd: number;
+  soft_limit_percent: number;
+  warning_threshold_usd: number;
+}
+
 export interface AdminEnvKeyStatus {
   ahrefs: boolean;
   dataforseo: boolean;
   gemini: boolean;
+  anthropic: boolean;
+  openai: boolean;
   serper: boolean;
   clerk: boolean;
   supabase: boolean;
@@ -73,6 +93,8 @@ export interface AdminSettingsData {
   gemini: AdminPlatformGemini;
   debug: AdminPlatformDebug;
   maintenance: AdminPlatformMaintenance;
+  routing: AdminPlatformRouting;
+  cost_controls: AdminPlatformCostControls;
   envKeys: AdminEnvKeyStatus;
   admins: AdminPlatformAdminRow[];
 }
@@ -84,4 +106,6 @@ export interface AdminSettingsPatch {
   gemini?: Partial<AdminPlatformGemini>;
   debug?: Partial<AdminPlatformDebug>;
   maintenance?: Partial<AdminPlatformMaintenance>;
+  routing?: Partial<AdminPlatformRouting>;
+  cost_controls?: Partial<AdminPlatformCostControls>;
 }

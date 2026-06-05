@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, Suspense } from "react";
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { PageTitle } from "@/components/common";
 import { contentGeneratorApi } from "@/frontend/api/content-generator";
@@ -77,10 +77,47 @@ export default function ContentGeneratorHubPage() {
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
 
-  const { data } = useQuery({
+  return (
+    <div className="space-y-10 pb-16 pl-4 pr-4">
+      <div className="pt-4 pb-8 border-b border-border-subtle">
+        <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
+          <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
+            <span className="h-2 w-2 rounded-full bg-brand-action" />
+            AI content studio
+          </span>
+        </div>
+        <PageTitle>What are you writing today?</PageTitle>
+        <p className="mt-3 max-w-2xl text-[16px] leading-relaxed text-text-tertiary">
+          Pick a content type. Every studio uses your project brief, approved keywords, and live research —
+          so the draft sounds like your business, not a template.
+        </p>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <ProjectNavLink
+            href={`${studioBase}/history`}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary transition-colors hover:border-border-default hover:text-text-primary"
+          >
+            <span className="h-2 w-2 rounded-full bg-brand-action" />
+            View content history
+          </ProjectNavLink>
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-6xl">
+        <h2 className="mb-6 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">
+          Choose your content type
+        </h2>
+        <Suspense fallback={<ContentCardsSkeleton />}>
+          <ContentStudioCards projectId={projectId} studioBase={studioBase} />
+        </Suspense>
+      </div>
+    </div>
+  );
+}
+
+function ContentStudioCards({ projectId, studioBase }: { projectId: string; studioBase: string }) {
+  const { data } = useSuspenseQuery({
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
-    enabled: !!projectId,
     ...DEFAULT_QUERY_OPTIONS,
   });
 
@@ -157,40 +194,10 @@ export default function ContentGeneratorHubPage() {
   ];
 
   return (
-    <div className="space-y-10 pb-16 pl-4 pr-4">
-      <div className="pt-4 pb-8 border-b border-border-subtle">
-        <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
-          <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
-            <span className="h-2 w-2 rounded-full bg-brand-action" />
-            AI content studio
-          </span>
-        </div>
-        <PageTitle>What are you writing today?</PageTitle>
-        <p className="mt-3 max-w-2xl text-[16px] leading-relaxed text-text-tertiary">
-          Pick a content type. Every studio uses your project brief, approved keywords, and live research —
-          so the draft sounds like your business, not a template.
-        </p>
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <ProjectNavLink
-            href={`${studioBase}/history`}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary transition-colors hover:border-border-default hover:text-text-primary"
-          >
-            <span className="h-2 w-2 rounded-full bg-brand-action" />
-            View content history
-          </ProjectNavLink>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-6xl">
-        <h2 className="mb-6 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">
-          Choose your content type
-        </h2>
-        <div className="grid gap-6 md:grid-cols-2">
-          {cards.map(card => (
-            <ContentCard key={card.id} card={card} />
-          ))}
-        </div>
-      </div>
+    <div className="grid gap-6 md:grid-cols-2">
+      {cards.map(card => (
+        <ContentCard key={card.id} card={card} />
+      ))}
     </div>
   );
 }
@@ -234,5 +241,28 @@ function ContentCard({ card }: { card: ContentTypeCard }) {
         </ProjectNavLink>
       </div>
     </article>
+  );
+}
+
+function ContentCardsSkeleton() {
+  return (
+    <div className="grid gap-6 md:grid-cols-2 animate-pulse" aria-hidden="true">
+      {[1, 2, 3, 4].map(idx => (
+        <div key={idx} className="flex h-full flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
+          <div className="relative bg-surface-secondary px-6 pb-4 pt-8 h-[180px] flex items-center justify-center">
+            <div className="h-24 w-40 rounded bg-text-primary/10" />
+          </div>
+          <div className="flex flex-1 flex-col border-t border-border-subtle p-6 space-y-4">
+            <div className="h-6 w-32 rounded bg-text-primary/10" />
+            <div className="h-4 w-full rounded bg-text-primary/5" />
+            <div className="space-y-2 py-2">
+              <div className="h-3 w-4/5 rounded bg-text-primary/5" />
+              <div className="h-3 w-3/4 rounded bg-text-primary/5" />
+            </div>
+            <div className="h-10 w-full rounded-full bg-text-primary/10 mt-auto" />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

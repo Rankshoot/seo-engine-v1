@@ -40,8 +40,8 @@ export type AuditSeverity = 'low' | 'medium' | 'high';
 export type AuditImpact = 'low' | 'medium' | 'high';
 export type IssueCategory = 'technical' | 'seo' | 'content' | 'keyword_demand' | 'ux';
 
-const GEMINI_AUDIT_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+import { z } from 'zod';
+import { aiGenerateStructured } from '@/services/ai/providers';
 
 export interface BlogIssue {
   /** Plain-language label (<=6 words). No jargon. */
@@ -159,6 +159,7 @@ export interface AuditBlogInput {
   /** Project region, used for localized search-volume data. */
   region?: string;
   language?: string;
+  projectId?: string;
 }
 
 /** Paid / vendor steps inside `auditBlogUrl` — returned to the client for debugging. */
@@ -278,6 +279,7 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
     brief,
     sitePeerUrls,
     ahrefs_signals: isAhrefsConfigured() ? ahrefs_signals : null,
+    projectId: input.projectId,
   });
   trace.push({
     provider: 'gemini',
@@ -823,15 +825,34 @@ interface DiagnoseInput {
   brief: BusinessBrief | null;
   sitePeerUrls: string[];
   ahrefs_signals: BlogAuditAnalysis['ahrefs_signals'];
+  projectId?: string;
 }
 
-async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalysis> {
-  const { url, page, signals, brief, sitePeerUrls, ahrefs_signals } = input;
+const AuditAnalysisSchema = z.object({
+  summary: z.string(),
+  primary_keyword: z.string(),
+  secondary_keywords: z.array(z.string()),
+  issues: z.array(z.object({
+    label: z.string(),
+    category: z.enum(['technical', 'seo', 'content', 'keyword_demand', 'ux']),
+    severity: z.enum(['low', 'medium', 'high']),
+    detail: z.string(),
+    why_it_matters: z.string(),
+    fix: z.string(),
+    impact: z.enum(['low', 'medium', 'high']),
+  })),
+  content_gaps: z.array(z.string()),
+  internal_link_opportunities: z.array(z.object({
+    target_url: z.string(),
+    reason: z.string(),
+  })),
+  suggested_funnel_stage: z.enum(['TOFU', 'MOFU', 'BOFU', '']),
+  llm_quality_score: z.number(),
+  plain_language_verdict: z.string(),
+});
 
-  const geminiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!geminiKey) {
-    return emptyAnalysis('GEMINI_API_KEY missing; skipping LLM diagnosis.');
-  }
+async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalysis> {
+  const { url, page, signals, brief, sitePeerUrls, ahrefs_signals, projectId } = input;
 
   const head = page.markdown.slice(0, 18_000);
   const tail =
@@ -853,9 +874,6 @@ async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalys
         ? `AHREFS: URL rating ${ahrefs_signals.url_rating ?? 'n/a'}; no ranking keywords returned for this exact URL.`
         : '(Ahrefs not configured — no off-page signals.)';
 
-  // We keep business context MINIMAL — only the company name / niche — because
-  // the audit is meant to diagnose THIS blog on its own merits. We do not want
-  // "doesn't match your business brief" as an issue type.
   const briefContextLite = brief
     ? `SITE CONTEXT (for light grounding only — do NOT penalize this blog for "not matching" the brief): ${brief.summary}`
     : '';
@@ -895,7 +913,7 @@ BLOG POST BODY (first ~18k chars of markdown, plus tail excerpt for long pages):
 ---
 ${head}
 ---
-${tail ? `\n--- TAIL EXCERPT (last ~${Math.round(tail.length / 1000)}k chars) ---\n${tail}\n` : ''}
+${tail ? `\n--- TAIL EXCERPT (last ~\${Math.round(tail.length / 1000)}k chars) ---\n\${tail}\n` : ''}
 
 Produce ONLY this JSON (no prose, no markdown fences, no commentary):
 
@@ -942,33 +960,15 @@ RULES:
 Return ONLY the JSON object.`;
 
   try {
-    const res = await fetch(GEMINI_AUDIT_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-goog-api-key': geminiKey,
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 3072,
-          responseMimeType: 'application/json',
-        },
-      }),
+    const result = await aiGenerateStructured("content-audit", prompt, AuditAnalysisSchema, {
+      temperature: 0.2,
+      userId: null,
+      projectId,
     });
-    if (!res.ok) {
-      throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 180)}`);
-    }
-    const json = await res.json();
-    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('Gemini returned empty text');
-    const parsed = safeParseJson(text);
-    if (!parsed) throw new Error('Gemini returned unparseable JSON');
-    return coerceAnalysis(parsed, sitePeerUrls);
+    return coerceAnalysis(result, sitePeerUrls);
   } catch (e) {
     return emptyAnalysis(
-      `LLM diagnosis failed: ${e instanceof Error ? e.message : String(e)}`
+      `LLM diagnosis failed: \${e instanceof Error ? e.message : String(e)}`
     );
   }
 }

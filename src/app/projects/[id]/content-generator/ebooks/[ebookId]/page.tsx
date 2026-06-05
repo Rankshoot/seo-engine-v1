@@ -20,7 +20,6 @@ import {
 } from "@/components/content-generator/shared";
 import { EbookReader, type EbookTheme } from "@/components/content-generator/ebook/EbookReader";
 import { blogsApi } from "@/frontend/api/blogs";
-import { projectsApi } from "@/frontend/api/projects";
 import { exportEbook, EBOOK_EXPORT_OPTIONS } from "@/lib/content-exports";
 import { normalizeSiteHost } from "@/lib/blog-content";
 import type { StudioBrand } from "@/lib/studio-brand";

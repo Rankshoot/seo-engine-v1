@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
-import { Button, EmptyState, PageTitle } from "@/components/common";
+import { Button, EmptyState } from "@/components/common";
 import {
   ContentTypeBadge,
-  StudioBreadcrumb,
 } from "@/components/content-generator/shared";
 import { TableSkeleton } from "@/components/Skeleton";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
@@ -19,6 +18,7 @@ type SortKey = "updated" | "created" | "words" | "title";
 type StatusFilter = "all" | "generated" | "approved" | "published";
 
 const TYPE_FILTERS: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+const PAGE_SIZE = 20;
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -30,6 +30,89 @@ function statusTone(status: string): string {
   return "border-border-subtle bg-surface-secondary text-text-secondary";
 }
 
+interface HistoryRowProps {
+  row: ContentStudioHistoryRow;
+  index: number;
+  viewerHref: (row: ContentStudioHistoryRow) => string;
+}
+
+const HistoryRow = memo(function HistoryRow({ row, index, viewerHref }: HistoryRowProps) {
+  return (
+    <tr className="hover:bg-surface-hover/50 transition-colors">
+      <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
+        {index}
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <ContentTypeBadge type={CONTENT_TYPE_LABEL[row.content_type]} />
+      </td>
+      <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(28rem,40vw)]">
+        <ProjectNavLink
+          href={viewerHref(row)}
+          className="block truncate text-[13px] font-medium text-text-primary hover:text-brand-action transition-colors"
+          title={row.title}
+        >
+          {row.title}
+        </ProjectNavLink>
+        {row.meta_description ? (
+          <p className="mt-0.5 truncate text-[11px] text-text-tertiary" title={row.meta_description}>
+            {row.meta_description}
+          </p>
+        ) : null}
+      </td>
+      <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(20rem,30vw)]">
+        <p className="truncate text-[12px] text-text-secondary" title={row.target_keyword}>
+          {row.target_keyword || "—"}
+        </p>
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <span
+          className={cn(
+            "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize",
+            statusTone(row.status),
+          )}
+        >
+          {row.status}
+        </span>
+      </td>
+      <td className="px-4 py-2.5 align-middle text-[12px] tabular-nums text-text-secondary">
+        {row.word_count.toLocaleString()}
+      </td>
+      <td className="px-4 py-2.5 align-middle text-[12px] text-text-tertiary whitespace-nowrap">
+        {fmtDate(row.updated_at)}
+      </td>
+      <td className="px-4 py-2.5 align-middle text-right">
+        <ProjectNavLink
+          href={viewerHref(row)}
+          className="inline-flex shrink-0 items-center justify-center rounded-full bg-text-primary px-4 py-1.5 text-[12px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
+        >
+          View
+        </ProjectNavLink>
+      </td>
+    </tr>
+  );
+});
+
+interface HistoryTableBodyProps {
+  rows: ContentStudioHistoryRow[];
+  offset: number;
+  viewerHref: (row: ContentStudioHistoryRow) => string;
+}
+
+const HistoryTableBody = memo(function HistoryTableBody({ rows, offset, viewerHref }: HistoryTableBodyProps) {
+  return (
+    <tbody className="divide-y divide-border-subtle">
+      {rows.map((row, i) => (
+        <HistoryRow
+          key={row.id} // Stable database UUID
+          row={row}
+          index={offset + i + 1}
+          viewerHref={viewerHref}
+        />
+      ))}
+    </tbody>
+  );
+});
+
 export function HistoryTab() {
   const { id: projectId } = useParams<{ id: string }>();
   const studioBase = `/projects/${projectId}/content-generator`;
@@ -38,49 +121,48 @@ export function HistoryTab() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sort, setSort] = useState<SortKey>("updated");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+
+  // Debounce search keystrokes to run queries efficiently
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(handler);
+  }, [search]);
 
   const { data, isLoading } = useQuery({
-    queryKey: qk.contentStudioHistory(projectId),
-    queryFn: () => contentGeneratorApi.studioHistory(projectId),
+    queryKey: [
+      ...qk.contentStudioHistory(projectId),
+      {
+        types: Array.from(activeTypes),
+        status: statusFilter,
+        search: debouncedSearch,
+        sort,
+        page,
+      },
+    ],
+    queryFn: () =>
+      contentGeneratorApi.studioHistory(projectId, {
+        types: Array.from(activeTypes),
+        statuses: statusFilter === "all" ? undefined : [statusFilter],
+        search: debouncedSearch,
+        sort,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      }),
     enabled: !!projectId,
+    placeholderData: (prev) => prev,
     ...DEFAULT_QUERY_OPTIONS,
   });
 
   const allRows: ContentStudioHistoryRow[] = data?.success ? data.data : [];
-  const counts = useMemo(() => {
-    const map: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
-    for (const r of allRows) map[r.content_type] = (map[r.content_type] ?? 0) + 1;
-    return map;
-  }, [allRows]);
+  const totalCount = data?.success ? data.total : 0;
+  const counts = data?.success ? data.counts : { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
 
-  const visibleRows = useMemo(() => {
-    let rows = allRows.filter(r => activeTypes.has(r.content_type));
-    if (statusFilter !== "all") rows = rows.filter(r => r.status === statusFilter);
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      rows = rows.filter(
-        r =>
-          r.title.toLowerCase().includes(q) ||
-          r.target_keyword.toLowerCase().includes(q) ||
-          r.article_type.toLowerCase().includes(q),
-      );
-    }
-    return [...rows].sort((a, b) => {
-      switch (sort) {
-        case "created":
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        case "words":
-          return b.word_count - a.word_count;
-        case "title":
-          return a.title.localeCompare(b.title);
-        case "updated":
-        default:
-          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-      }
-    });
-  }, [allRows, activeTypes, statusFilter, search, sort]);
-
-  const toggleType = (t: ContentType) => {
+  const handleTypeToggle = (t: ContentType) => {
     setActiveTypes(prev => {
       const next = new Set(prev);
       if (next.has(t)) {
@@ -91,14 +173,34 @@ export function HistoryTab() {
       }
       return next;
     });
+    setPage(1);
   };
 
-  const viewerHref = (row: ContentStudioHistoryRow): string => {
-    if (row.content_type === "ebook") return `${studioBase}/ebooks/${row.id}`;
-    if (row.content_type === "whitepaper") return `${studioBase}/whitepapers/${row.id}`;
-    if (row.content_type === "linkedin") return `${studioBase}/linkedin/${row.id}`;
-    return `/projects/${projectId}/blogs/${row.id}?from=content-history`;
+  const handleStatusFilterChange = (s: StatusFilter) => {
+    setStatusFilter(s);
+    setPage(1);
   };
+
+  const handleSortChange = (s: SortKey) => {
+    setSort(s);
+    setPage(1);
+  };
+
+  const viewerHref = useMemo(() => {
+    return (row: ContentStudioHistoryRow): string => {
+      if (row.content_type === "ebook") return `${studioBase}/ebooks/${row.id}`;
+      if (row.content_type === "whitepaper") return `${studioBase}/whitepapers/${row.id}`;
+      if (row.content_type === "linkedin") return `${studioBase}/linkedin/${row.id}`;
+      return `/projects/${projectId}/blogs/${row.id}?from=content-history`;
+    };
+  }, [projectId, studioBase]);
+
+  const hasActiveFilters = activeTypes.size !== TYPE_FILTERS.length || statusFilter !== "all" || search.trim() !== "";
+  const isEmptyStateForNoContent = totalCount === 0 && !hasActiveFilters;
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const fromRecord = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const toRecord = Math.min(page * PAGE_SIZE, totalCount);
 
   return (
     <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
@@ -110,7 +212,7 @@ export function HistoryTab() {
             return (
               <button
                 key={t}
-                onClick={() => toggleType(t)}
+                onClick={() => handleTypeToggle(t)}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors",
                   active
@@ -138,7 +240,7 @@ export function HistoryTab() {
             return (
               <button
                 key={s}
-                onClick={() => setStatusFilter(s)}
+                onClick={() => handleStatusFilterChange(s)}
                 className={cn(
                   "rounded-full px-3 py-1 text-[12px] font-medium capitalize transition-colors",
                   active
@@ -165,7 +267,7 @@ export function HistoryTab() {
           <span>Sort</span>
           <select
             value={sort}
-            onChange={e => setSort(e.target.value as SortKey)}
+            onChange={e => handleSortChange(e.target.value as SortKey)}
             className="h-9 rounded-full border border-border-subtle bg-surface-secondary px-3 text-[13px] text-text-primary outline-none"
           >
             <option value="updated">Recently updated</option>
@@ -180,11 +282,11 @@ export function HistoryTab() {
         <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <TableSkeleton rows={8} columns={6} />
         </div>
-      ) : visibleRows.length === 0 ? (
+      ) : allRows.length === 0 ? (
         <EmptyState
-          title={allRows.length === 0 ? "No content generated yet" : "No assets match these filters"}
+          title={isEmptyStateForNoContent ? "No content generated yet" : "No assets match these filters"}
           body={
-            allRows.length === 0
+            isEmptyStateForNoContent
               ? "Open a studio above and generate your first piece — it'll show up here automatically."
               : "Try widening your filters or clearing the search to see more assets."
           }
@@ -212,62 +314,50 @@ export function HistoryTab() {
                   <th className="px-4 py-3 text-right whitespace-nowrap w-[1%]">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle">
-                {visibleRows.map((row, i) => (
-                  <tr key={row.id} className="hover:bg-surface-hover/50 transition-colors">
-                    <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
-                      {i + 1}
-                    </td>
-                    <td className="px-4 py-2.5 align-middle">
-                      <ContentTypeBadge type={CONTENT_TYPE_LABEL[row.content_type]} />
-                    </td>
-                    <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(28rem,40vw)]">
-                      <ProjectNavLink
-                        href={viewerHref(row)}
-                        className="block truncate text-[13px] font-medium text-text-primary hover:text-brand-action transition-colors"
-                        title={row.title}
-                      >
-                        {row.title}
-                      </ProjectNavLink>
-                      {row.meta_description ? (
-                        <p className="mt-0.5 truncate text-[11px] text-text-tertiary" title={row.meta_description}>
-                          {row.meta_description}
-                        </p>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(20rem,30vw)]">
-                      <p className="truncate text-[12px] text-text-secondary" title={row.target_keyword}>
-                        {row.target_keyword || "—"}
-                      </p>
-                    </td>
-                    <td className="px-4 py-2.5 align-middle">
-                      <span
-                        className={cn(
-                          "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize",
-                          statusTone(row.status),
-                        )}
-                      >
-                        {row.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 align-middle text-[12px] tabular-nums text-text-secondary">
-                      {row.word_count.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2.5 align-middle text-[12px] text-text-tertiary whitespace-nowrap">
-                      {fmtDate(row.updated_at)}
-                    </td>
-                    <td className="px-4 py-2.5 align-middle text-right">
-                      <ProjectNavLink
-                        href={viewerHref(row)}
-                        className="inline-flex shrink-0 items-center justify-center rounded-full bg-text-primary px-4 py-1.5 text-[12px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
-                      >
-                        View
-                      </ProjectNavLink>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+              <HistoryTableBody
+                rows={allRows}
+                offset={(page - 1) * PAGE_SIZE}
+                viewerHref={viewerHref}
+              />
             </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/20">
+            <p className="text-[12px] text-text-tertiary tabular-nums">
+              {totalCount === 0 ? "No results" : `Showing ${fromRecord}–${toRecord} of ${totalCount}`}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => setPage(page - 1)}
+                className={cn(
+                  "h-8 px-3 rounded-md text-[12px] font-medium border border-border-subtle transition-colors",
+                  page <= 1
+                    ? "opacity-40 cursor-not-allowed text-text-tertiary"
+                    : "text-text-secondary bg-surface-secondary hover:bg-surface-hover hover:text-text-primary"
+                )}
+              >
+                Previous
+              </button>
+              <span className="text-[12px] text-text-tertiary tabular-nums px-1">
+                Page {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() => setPage(page + 1)}
+                className={cn(
+                  "h-8 px-3 rounded-md text-[12px] font-medium border border-border-subtle transition-colors",
+                  page >= totalPages
+                    ? "opacity-40 cursor-not-allowed text-text-tertiary"
+                    : "text-text-secondary bg-surface-secondary hover:bg-surface-hover hover:text-text-primary"
+                )}
+              >
+                Next
+              </button>
+            </div>
           </div>
         </div>
       )}

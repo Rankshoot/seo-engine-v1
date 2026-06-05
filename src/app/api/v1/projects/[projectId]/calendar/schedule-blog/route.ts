@@ -1,6 +1,7 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { scheduleExistingBlog } from "@/server/calendar/schedule-existing-blog";
 import { apiJson } from "@/server/http/json";
+import { invalidateCalendarCache } from "@/utils/calendar-validation";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
       targetDate: body.targetDate.trim(),
       source: body.source,
     });
+    if (result.success) {
+      invalidateCalendarCache();
+    }
     return apiJson(result, { status: result.success ? 200 : 400 });
   } catch (e) {
     console.error("[calendar/schedule-blog]", e);

@@ -1,5 +1,5 @@
 import type { CalendarEntry, CalendarEntryWithBlog } from "@/lib/types";
-import { apiGet, apiPost } from "./http";
+import { apiDelete, apiGet, apiPost } from "./http";
 import { V1Routes } from "./routes";
 
 export const calendarApi = {
@@ -95,5 +95,12 @@ export const calendarApi = {
     }
   ): Promise<{ success: boolean; error?: string; scheduledDate?: string; alreadyExists?: boolean }> {
     return apiPost(V1Routes.calendarApproveAi(projectId), body);
+  },
+
+  deleteEntry(
+    projectId: string,
+    entryId: string
+  ): Promise<{ success: boolean; error?: string; removed?: number }> {
+    return apiDelete(V1Routes.calendarDeleteEntry(projectId, entryId));
   },
 };

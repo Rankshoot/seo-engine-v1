@@ -14,10 +14,16 @@ import {
 } from '@/lib/admin/logging/record-provider-call';
 import { computeSEOScore, openingPlainLower } from './seo-analyzer';
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
-const POLLINATIONS_CHAT_URL = 'https://gen.pollinations.ai/v1/chat/completions';
+import { aiGenerate, aiGenerateStructured } from '@/services/ai/providers';
+import { z } from 'zod';
+
+const ClassificationSchema = z.array(
+  z.object({
+    id: z.string(),
+    intent: z.enum(['informational', 'commercial', 'navigational', 'transactional']),
+    funnel_stage: z.enum(['TOFU', 'MOFU', 'BOFU']),
+  })
+);
 
 function normalizeHost(domain: string): string {
   return domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
@@ -67,211 +73,32 @@ function formatAhrefsContextForPrompt(ctx: {
   return lines.join('\n');
 }
 
-export async function geminiGenerate(prompt: string, retries = 3, useGoogleSearch = false, responseMimeType?: string): Promise<string> {
-  const { assertProviderEnabled } = await import('@/lib/admin/platform-settings-runtime');
-  await assertProviderEnabled('gemini');
-  for (let attempt = 0; attempt < retries; attempt++) {
-    const started = Date.now();
-    try {
-      const body: Record<string, unknown> = {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.75,
-          maxOutputTokens: 16384,
-          ...(responseMimeType ? { responseMimeType } : {})
-        },
-      };
-      if (useGoogleSearch) {
-        body.tools = [{ googleSearch: {} }];
-      }
-
-      const res = await fetch(GEMINI_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-goog-api-key': GEMINI_API_KEY,
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (res.status === 429) {
-        const fallback = await pollinationsGeminiFallback(prompt, 'Gemini API rate limit reached', 0.75);
-        if (fallback) {
-          recordGeminiCall({
-            model: process.env.POLLINATIONS_TEXT_MODEL || 'pollinations/gemini-fast',
-            prompt,
-            response: fallback,
-            ok: true,
-            latencyMs: Date.now() - started,
-            featureSuffix: 'blog_pollinations_fallback',
-          });
-          return fallback;
-        }
-        throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
-      }
-
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Gemini ${res.status}: ${err}`);
-      }
-
-      const json = await res.json();
-      const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error('Empty response from Gemini');
-      const usage = extractGeminiTokenUsage(json);
-      recordGeminiCall({
-        model: 'gemini-flash-latest',
-        prompt,
-        response: text,
-        tokensInput: usage.tokensInput,
-        tokensOutput: usage.tokensOutput,
-        ok: true,
-        latencyMs: Date.now() - started,
-        featureSuffix: 'blog_generate',
-      });
-      return text;
-    } catch (e: unknown) {
-      if (attempt === retries - 1) {
-        recordGeminiCall({
-          model: 'gemini-flash-latest',
-          prompt,
-          ok: false,
-          latencyMs: Date.now() - started,
-          errorMessage: e instanceof Error ? e.message : String(e),
-          featureSuffix: 'blog_generate',
-        });
-        throw e;
-      }
-      await new Promise(r => setTimeout(r, 5000));
-    }
-  }
-  throw new Error('Gemini failed after all retries');
-}
-
-async function pollinationsGeminiFallback(
+export async function geminiGenerate(
   prompt: string,
-  reason: string,
-  temperature = 0.75
-): Promise<string | null> {
-  const apiKey = process.env.POLLINATIONS_API_KEY;
-  if (!apiKey) return null;
-
-  try {
-    console.warn(`${reason}; using Pollinations Gemini fallback.`);
-    const res = await fetch(POLLINATIONS_CHAT_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: process.env.POLLINATIONS_TEXT_MODEL || 'gemini-fast',
-        messages: [{ role: 'user', content: prompt }],
-        temperature,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text().catch(() => '');
-      console.warn(`Pollinations fallback failed (${res.status}): ${err.slice(0, 200)}`);
-      return null;
-    }
-
-    const json = await res.json();
-    const text = json?.choices?.[0]?.message?.content;
-    return typeof text === 'string' && text.trim() ? text : null;
-  } catch (error) {
-    console.warn('Pollinations fallback failed:', error instanceof Error ? error.message : error);
-    return null;
-  }
+  retries = 3,
+  useGoogleSearch = false,
+  responseMimeType?: string,
+  userId?: string | null,
+  projectId?: string | null,
+  maxOutputTokens?: number
+): Promise<string> {
+  return aiGenerate("blog", prompt, {
+    useGoogleSearch,
+    jsonMode: responseMimeType === 'application/json',
+    retries,
+    userId,
+    projectId,
+    maxOutputTokens,
+  });
 }
-
-/** Schema for structured JSON array output (consumer Gemini API). */
-const KEYWORD_INTENT_RESPONSE_SCHEMA = {
-  type: 'ARRAY',
-  items: {
-    type: 'OBJECT',
-    properties: {
-      id: { type: 'STRING' },
-      intent: {
-        type: 'STRING',
-        enum: ['informational', 'commercial', 'navigational', 'transactional'],
-      },
-    },
-    required: ['id', 'intent'],
-  },
-} as const;
 
 /** Low-temperature JSON-style output for deterministic intent labels. */
 async function geminiGenerateClassificationJson(prompt: string, retries = 3): Promise<string> {
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const tryOnce = async (withResponseSchema: boolean): Promise<string> => {
-        const generationConfig: Record<string, unknown> = {
-          temperature: 0.2,
-          maxOutputTokens: 8192,
-          responseMimeType: 'application/json',
-        };
-        if (withResponseSchema) {
-          generationConfig.responseSchema = KEYWORD_INTENT_RESPONSE_SCHEMA;
-        }
-
-        const res = await fetch(GEMINI_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': GEMINI_API_KEY,
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig,
-          }),
-        });
-
-        if (res.status === 400 && withResponseSchema) {
-          const errText = await res.text();
-          console.warn(
-            '[intent-classify] responseSchema rejected; retrying without schema:',
-            errText.slice(0, 200)
-          );
-          return tryOnce(false);
-        }
-
-        if (res.status === 429) {
-          const fallback = await pollinationsGeminiFallback(
-            prompt,
-            'Gemini API rate limit reached',
-            0.2
-          );
-          if (fallback) return fallback;
-          throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
-        }
-
-        if (!res.ok) {
-          const err = await res.text();
-          throw new Error(`Gemini ${res.status}: ${err}`);
-        }
-
-        const json = await res.json();
-        const cand = json?.candidates?.[0];
-        const text = cand?.content?.parts?.[0]?.text;
-        if (!text) {
-          const reason = String(cand?.finishReason ?? '');
-          if (reason.includes('SAFETY')) {
-            throw new Error('Gemini blocked the response (safety filter).');
-          }
-          throw new Error('Empty response from Gemini');
-        }
-        return text;
-      };
-
-      return await tryOnce(true);
-    } catch (e: unknown) {
-      if (attempt === retries - 1) throw e;
-      await new Promise(r => setTimeout(r, 4000));
-    }
-  }
-  throw new Error('Gemini classification failed after all retries');
+  const result = await aiGenerateStructured("keyword-classification", prompt, ClassificationSchema, {
+    temperature: 0.2,
+    retries,
+  });
+  return JSON.stringify(result);
 }
 
 export interface KeywordIntentClassifyRow {
@@ -366,7 +193,7 @@ function tryParseIntentArrayPayload(raw: string): unknown[] | null {
 }
 
 /**
- * Last-resort: pull `{"id":"…","intent":"…"}` objects from noisy text (e.g. Pollinations).
+ * Last-resort: pull `{"id":"…","intent":"…"}` objects from noisy text.
  */
 function extractIntentObjectsLoose(s: string): unknown[] {
   const out: unknown[] = [];
@@ -424,9 +251,6 @@ export async function classifyKeywordIntentsForBusinessChunk(
   ctx: BusinessContextForIntent,
   rows: KeywordIntentClassifyRow[]
 ): Promise<{ id: string; intent: SerpIntentValue; funnel_stage: FunnelStage }[]> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured');
-  }
   if (!rows.length) return [];
 
   const expectedIds = new Set(rows.map(r => r.id));
@@ -685,7 +509,7 @@ interface GeminiBlogJson {
   externalLinksUsed?: string[];
 }
 
-function parseGeneratedBlogJson(
+export function parseGeneratedBlogJson(
   rawText: string,
   entry: { title: string; slug: string; focus_keyword: string },
   project: Project,
@@ -1015,6 +839,10 @@ export async function generateBlogPost(
       ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, writerCap)}\n`
       : "";
 
+  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
+    : "";
+
   const briefBlock = brief
     ? `\nCOMPANY CONTEXT (use as grounding — the article must sound like it was written by ${project.company}, for their audience; weave products/entities in naturally; do NOT pitch competitor names)
 - Summary: ${brief.summary || '(none)'}
@@ -1022,9 +850,9 @@ export async function generateBlogPost(
 - Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
 - Audience segments: ${brief.audiences.slice(0, 6).join(' | ') || project.target_audience}
 - USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
-- Tone: ${brief.tone || 'professional, expert, helpful'}
-`
-    : '';
+- Tone: ${project.brand_voice || brief.tone || 'professional, expert, helpful'}
+${brandPersonaBlock}`
+    : brandPersonaBlock ? `\nBRAND PERSONA:\n${brandPersonaBlock}\n` : "";
 
   // Research context block
   const researchBlock = research ? formatResearchForPrompt(research) : '';
@@ -1172,7 +1000,7 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
 
 Return JSON only.`;
 
-  const text = await geminiGenerate(prompt, 3, true, 'application/json');
+  const text = await geminiGenerate(prompt, 3, true, 'application/json', project.user_id, project.id);
   const result = parseGeneratedBlogJson(text, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
 
   // ── Pre-save SEO Quality Gate & Repair Loop ──
@@ -1228,7 +1056,7 @@ REPAIR INSTRUCTIONS:
 `;
 
     try {
-      const repairedRaw = await geminiGenerate(repairPrompt, 2, true, 'application/json');
+      const repairedRaw = await geminiGenerate(repairPrompt, 2, true, 'application/json', project.user_id, project.id);
       const repairedBlog = parseGeneratedBlogJson(repairedRaw, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
       const newScoreObj = computeSEOScore(repairedBlog, project.domain);
 
@@ -1328,15 +1156,20 @@ export async function generateInstantWebResearchArticle(input: {
     internalLinksBlock = 'INTERNAL LINKING: No internal URL pool is available for this project yet — do not invent internal links.';
   }
 
+  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
+    ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
+    : "";
+
   const briefBlock = brief
     ? `
 - Summary: ${brief.summary || '(none)'}
 - Products / offerings: ${brief.products.slice(0, 10).join(', ') || '(none)'}
 - Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
 - USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
-- Default tone from brief: ${brief.tone || 'professional, expert, helpful'}
-`
-    : '(No cached business brief — infer tone from the company name and niche.)';
+- Default tone from brief: ${project.brand_voice || brief.tone || 'professional, expert, helpful'}
+${brandPersonaBlock}`
+    : `(No cached business brief — infer tone from the company name and niche.)
+${brandPersonaBlock}`;
 
   const researchBlock = formatResearchForPrompt(research);
 
@@ -1681,7 +1514,7 @@ Write the repaired blog now. End the blog content, then on the next line output 
 ---META---
 {"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;
 
-  const text = await geminiGenerate(prompt, 3, true);
+  const text = await geminiGenerate(prompt, 3, true, undefined, project.user_id, project.id);
 
   const sepIdx = text.indexOf('---META---');
   let content = text.trim();
@@ -1910,75 +1743,23 @@ Process (follow in order):
 
 Return JSON only with keys "keyword" (string) and "topic" (string).`;
 
-  const run = async (withResponseSchema: boolean): Promise<string> => {
-    const generationConfig: Record<string, unknown> = {
+  const InstantKeywordTopicSchema = z.object({
+    keyword: z.string(),
+    topic: z.string(),
+  });
+
+  const result = await aiGenerateStructured(
+    "instant-keyword-topic",
+    prompt,
+    InstantKeywordTopicSchema,
+    {
       temperature: 0.92,
       topP: 0.94,
-      maxOutputTokens: 1024,
-      responseMimeType: 'application/json',
-    };
-    if (withResponseSchema) {
-      generationConfig.responseSchema = INSTANT_KEYWORD_TOPIC_SCHEMA;
     }
+  );
 
-    const res = await fetch(GEMINI_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-goog-api-key': GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig,
-      }),
-    });
-
-    if (res.status === 400 && withResponseSchema) {
-      const errText = await res.text();
-      console.warn('[instant-keyword-topic] responseSchema rejected; retrying without schema:', errText.slice(0, 200));
-      return run(false);
-    }
-
-    if (res.status === 429) {
-      const fallback = await pollinationsGeminiFallback(
-        prompt + '\n\nReturn valid JSON: {"keyword":"...","topic":"..."}',
-        'Gemini API rate limit reached',
-        0.92
-      );
-      if (fallback) return fallback;
-      throw new Error('Gemini API rate limit reached and Pollinations fallback is unavailable.');
-    }
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini ${res.status}: ${err}`);
-    }
-
-    const json = await res.json();
-    const cand = json?.candidates?.[0];
-    const text = cand?.content?.parts?.[0]?.text;
-    if (!text) {
-      const reason = String(cand?.finishReason ?? '');
-      if (reason.includes('SAFETY')) {
-        throw new Error('Gemini blocked the response (safety filter).');
-      }
-      throw new Error('Empty response from Gemini');
-    }
-    return text;
-  };
-
-  const raw = await run(true);
-  let parsed: { keyword?: string; topic?: string };
-  try {
-    parsed = JSON.parse(raw) as { keyword?: string; topic?: string };
-  } catch {
-    const brace = raw.match(/\{[\s\S]*\}/);
-    if (!brace) throw new Error('Could not parse keyword/topic suggestion JSON');
-    parsed = JSON.parse(brace[0]) as { keyword?: string; topic?: string };
-  }
-
-  const keyword = String(parsed.keyword ?? '').trim();
-  const topic = String(parsed.topic ?? '').trim();
+  const keyword = String(result.keyword ?? '').trim();
+  const topic = String(result.topic ?? '').trim();
 
   if (!keyword) {
     throw new Error('Model returned an empty keyword');
@@ -1989,3 +1770,4 @@ Return JSON only with keys "keyword" (string) and "topic" (string).`;
 
   return { topic, keyword };
 }
+

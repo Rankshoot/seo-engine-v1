@@ -18,9 +18,12 @@ export {
   StepRow,
   MetricPill,
   ContentTypeBadge,
+  RecentHistorySkeleton,
 } from "./section-helpers";
 export { GenerationProgress } from "./GenerationProgress";
 export type { GenerationStage } from "./GenerationProgress";
+export { ThinkingPanel } from "./ThinkingPanel";
+
 export { LongFormMarkdown, stripHeroH1 } from "./LongFormMarkdown";
 export type { LongFormMarkdownProps, LongFormReaderInk } from "./LongFormMarkdown";
 export { StudioBrandMasthead } from "./StudioBrandMasthead";
@@ -47,3 +50,4 @@ export { ScorecardView } from "./ScorecardView";
 export { ResourcesPanel } from "./ResourcesPanel";
 export { ExportMenu } from "./ExportMenu";
 export type { ExportMenuProps } from "./ExportMenu";
+export * from "./validation";

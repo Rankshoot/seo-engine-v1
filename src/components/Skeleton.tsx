@@ -77,6 +77,15 @@ export function TableSkeleton({
   );
 }
 
+/** Layout skeleton matching the keyword tables. */
+export function KeywordTableSkeleton() {
+  return (
+    <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
+      <TableSkeleton rows={8} columns={9} />
+    </div>
+  );
+}
+
 /** Matches the exact height of the collapsed business-brief card. */
 export function BusinessBriefSkeleton() {
   return (

@@ -1,4 +1,4 @@
-import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis";
+import type { BlogDeepAnalysisResult } from "@/lib/blog-deep-analysis-types";
 import type { Blog, BlogSeoIssueKey, BlogStatus } from "@/lib/types";
 import { apiGet, apiPatch, apiPost } from "./http";
 import { V1Routes } from "./routes";
@@ -32,6 +32,123 @@ export const blogsApi = {
     writerNotes?: string;
   }): Promise<{ success: true; data: Blog } | { success: false; error: string }> {
     return apiPost(V1Routes.blogsGenerate, body);
+  },
+
+  /**
+   * Streaming version of blog generation. Returns an async generator that
+   * yields typed SSE events as the generation progresses:
+   *   { event: "stage", stage: string, detail?: string }
+   *   { event: "done",  blogId: string }
+   *   { event: "error", message: string }
+   */
+  async *generateStream(body: {
+    entryId: string;
+    wordCount?: number;
+    writerNotes?: string;
+  }): AsyncGenerator<
+    | { event: "stage"; stage: "context" | "research" | "outline" | "draft" | "polish"; detail?: string }
+    | { event: "thinking"; chunk: string }
+    | { event: "thinking_done" }
+    | { event: "done"; blogId: string }
+    | { event: "error"; message: string }
+  > {
+    const response = await fetch("/api/v1/blogs/generate/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok || !response.body) {
+      yield { event: "error", message: `HTTP ${response.status}: Failed to start generation` };
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE lines end with \n\n; process all complete events
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const payload = JSON.parse(line.slice(6));
+          yield payload;
+        } catch {
+          // malformed event — skip
+        }
+      }
+    }
+  },
+
+  /**
+   * Direct blog generation without calendar entry. Used when generating from
+   * Keyword Discovery with shouldSchedule=false. Returns an async generator that
+   * yields typed SSE events as the generation progresses:
+   *   { event: "stage", stage: string, detail?: string }
+   *   { event: "done",  blogId: string }
+   *   { event: "error", message: string }
+   */
+  async *generateStreamDirect(body: {
+    projectId: string;
+    keyword: string;
+    topic: string;
+    audience: string;
+    tone: string;
+    goal: string;
+    ctaObjective: string;
+    secondaryKeywords: string[];
+    wordCount: number;
+  }): AsyncGenerator<
+    | { event: "stage"; stage: "context" | "research" | "outline" | "draft" | "polish"; detail?: string }
+    | { event: "thinking"; chunk: string }
+    | { event: "thinking_done" }
+    | { event: "done"; blogId: string }
+    | { event: "error"; message: string }
+  > {
+    const response = await fetch("/api/v1/blogs/generate/direct-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok || !response.body) {
+      yield { event: "error", message: `HTTP ${response.status}: Failed to start generation` };
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE lines end with \n\n; process all complete events
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const payload = JSON.parse(line.slice(6));
+          yield payload;
+        } catch {
+          // malformed event — skip
+        }
+      }
+    }
   },
 
   updateContent(

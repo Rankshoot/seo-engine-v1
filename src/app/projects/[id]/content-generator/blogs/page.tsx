@@ -21,6 +21,7 @@ import {
   ContentFormSection,
   ChipChoice,
   GenerationProgress,
+  ThinkingPanel,
   KeywordChips,
   SectionHeading,
   StepRow,
@@ -58,6 +59,23 @@ const LANG_OPTIONS = [
 ] as const;
 
 type Phase = "form" | "review" | "generating";
+type StreamStage = "context" | "research" | "outline" | "draft" | "polish";
+
+const STREAM_STAGES: import("@/components/content-generator/shared").GenerationStage[] = [
+  { id: "context",  label: "Loading project brief",     detail: "Reading your project brief and calendar entry…",           weight: 0.06 },
+  { id: "research", label: "Gathering live research",    detail: "Pulling live SERP data and keyword context…",              weight: 0.18 },
+  { id: "outline",  label: "Designing topical outline",  detail: "Structuring sections and SEO hierarchy…",                  weight: 0.12 },
+  { id: "draft",    label: "Drafting with Claude Sonnet", detail: "Writing the full blog post — this is the longest step…",  weight: 0.50 },
+  { id: "polish",   label: "SEO + image polish",          detail: "Generating hero image and final SEO pass…",               weight: 0.14 },
+];
+
+const STAGE_ORDER: StreamStage[] = ["context", "research", "outline", "draft", "polish"];
+
+// Cumulative progress thresholds per stage
+const STAGE_CUMULATIVE: number[] = (() => {
+  let acc = 0;
+  return STREAM_STAGES.map(s => { acc += s.weight; return acc; });
+})();
 
 export default function BlogGeneratorPage() {
   const { id: projectId } = useParams<{ id: string }>();
@@ -68,6 +86,7 @@ export default function BlogGeneratorPage() {
   const studioBase = `${base}/content-generator`;
 
   const entryId = searchParams?.get("entryId");
+  const shouldSchedule = searchParams?.get("shouldSchedule") !== "false"; // Default to true
 
   const { data: entriesData } = useQuery({
     queryKey: qk.calendarWithBlogs(projectId),
@@ -98,6 +117,10 @@ export default function BlogGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [streamStages, setStreamStages] = useState(STREAM_STAGES);
+  const [streamProgress, setStreamProgress] = useState<number | undefined>(undefined);
+  const [thinkingText, setThinkingText] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
 
   const { data: history } = useQuery({
     queryKey: qk.contentStudioHistory(projectId),
@@ -164,12 +187,18 @@ export default function BlogGeneratorPage() {
     setPhase("review");
   };
 
+
   const runGeneration = async () => {
     setPhase("generating");
+    setStreamProgress(0);
+    setThinkingText("");
+    setIsThinking(false);
+    setStreamStages(STREAM_STAGES.map(s => ({ ...s })));
+
     try {
       let finalEntryId = entryId;
-      if (!finalEntryId) {
-        // 1. Create a calendar entry
+      // Only create calendar entry if shouldSchedule is true and no entryId exists
+      if (!finalEntryId && shouldSchedule) {
         const calRes = await calendarApi.addCustomKeyword(projectId, {
           keyword: primaryKeyword,
           title: `[Draft] ${topic}`,
@@ -177,7 +206,6 @@ export default function BlogGeneratorPage() {
           writerNotes: `Audience: ${audience}\nTone: ${TONES.find(t => t.id === tone)?.label}\nGoal: ${goal}\nCTA: ${ctaObjective}\nSecondary Keywords: ${secondaryKeywords.join(", ")}`,
           targetDate: new Date().toISOString().split("T")[0],
         });
-        
         if (!calRes.success) {
           toast.error(calRes.error || "Failed to schedule blog");
           setPhase("form");
@@ -186,24 +214,101 @@ export default function BlogGeneratorPage() {
         finalEntryId = calRes.data.id;
       }
 
-      // 2. Generate the blog
-      const genRes = await blogsApi.generate({
-        entryId: finalEntryId,
-        wordCount,
-      });
-
-      if (genRes.success) {
-        toast.success("Blog generated");
-        void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
-        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-        router.push(`${base}/blogs/${genRes.data.id}`);
-      } else {
-        toast.error(genRes.error || "Failed to generate blog");
+      // If no entryId and shouldSchedule is false, generate without calendar entry
+      if (!finalEntryId) {
+        // Use the direct generation API that doesn't require entryId
+        for await (const event of blogsApi.generateStreamDirect({
+          projectId: projectId!,
+          keyword: primaryKeyword,
+          topic,
+          audience,
+          tone: TONES.find(t => t.id === tone)?.label || tone,
+          goal,
+          ctaObjective,
+          secondaryKeywords,
+          wordCount,
+        })) {
+          if (event.event === "stage") {
+            const stageIdx = STAGE_ORDER.indexOf(event.stage as StreamStage);
+            const progressAtStage = stageIdx === 0 ? 0.02 : STAGE_CUMULATIVE[stageIdx - 1];
+            setStreamProgress(progressAtStage);
+            if (event.stage === "polish") setIsThinking(false);
+            if (event.detail) {
+              setStreamStages(prev =>
+                prev.map(s => s.id === event.stage ? { ...s, detail: event.detail } : s)
+              );
+            }
+          } else if (event.event === "thinking") {
+            setIsThinking(true);
+            setThinkingText(prev => prev + event.chunk);
+          } else if (event.event === "thinking_done") {
+            setIsThinking(false);
+          } else if (event.event === "done") {
+            setStreamProgress(1);
+            setIsThinking(false);
+            toast.success("Blog generated!");
+            void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+            void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+            router.push(`${base}/blogs/${event.blogId}`);
+            return;
+          } else if (event.event === "error") {
+            toast.error(event.message || "Generation failed");
+            setPhase("form");
+            setIsThinking(false);
+            setStreamProgress(undefined);
+            return;
+          }
+        }
+        // Stream ended without a "done" event
+        toast.error("Generation ended unexpectedly. Please try again.");
         setPhase("form");
+        setStreamProgress(undefined);
+        return;
       }
-    } catch (e) {
+
+      // Existing flow: use entryId-based generation
+      for await (const event of blogsApi.generateStream({ entryId: finalEntryId!, wordCount })) {
+        if (event.event === "stage") {
+          const stageIdx = STAGE_ORDER.indexOf(event.stage as StreamStage);
+          const progressAtStage = stageIdx === 0 ? 0.02 : STAGE_CUMULATIVE[stageIdx - 1];
+          setStreamProgress(progressAtStage);
+          // When we move past draft, thinking is done
+          if (event.stage === "polish") setIsThinking(false);
+          if (event.detail) {
+            setStreamStages(prev =>
+              prev.map(s => s.id === event.stage ? { ...s, detail: event.detail } : s)
+            );
+          }
+        } else if (event.event === "thinking") {
+          setIsThinking(true);
+          setThinkingText(prev => prev + event.chunk);
+        } else if (event.event === "thinking_done") {
+          setIsThinking(false);
+        } else if (event.event === "done") {
+          setStreamProgress(1);
+          setIsThinking(false);
+          toast.success("Blog generated!");
+          void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+          router.push(`${base}/blogs/${event.blogId}`);
+          return;
+        } else if (event.event === "error") {
+          toast.error(event.message || "Generation failed");
+          setPhase("form");
+          setIsThinking(false);
+          setStreamProgress(undefined);
+          return;
+        }
+      }
+
+      // Stream ended without a "done" event — treat as error
+      toast.error("Generation ended unexpectedly. Please try again.");
+      setPhase("form");
+      setStreamProgress(undefined);
+    } catch {
       toast.error("An error occurred during generation");
       setPhase("form");
+      setStreamProgress(undefined);
     }
   };
 
@@ -215,7 +320,7 @@ export default function BlogGeneratorPage() {
 
   const heroLead = useMemo(() => {
     if (phase === "generating")
-      return "Gemini 2.5 Pro is synthesising live research, your brief, and approved keywords into a publication-ready blog post. Keep this tab open.";
+      return "Claude Sonnet is synthesising live research, your brief, and approved keywords into a publication-ready blog post. Keep this tab open.";
     if (phase === "review")
       return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a Pro-tier draft pass before saving.";
     return "Configure the blog angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
@@ -271,11 +376,19 @@ export default function BlogGeneratorPage() {
         ) : null}
 
         {phase === "generating" ? (
-          <GenerationProgress
-            badgeLabel="Blog"
-            title="Building your premium blog"
-            lead="Gemini 2.5 Pro is drafting a high-ranking blog post with real citations and your internal links woven in. This usually takes 1–3 minutes."
-          />
+          <div className="space-y-4">
+            <GenerationProgress
+              badgeLabel="Blog"
+              title="Building your premium blog"
+              lead="Claude Sonnet is drafting a high-ranking blog post with real citations and your internal links woven in. Watch the stages light up as each step completes."
+              stages={streamStages}
+              externalProgress={streamProgress}
+            />
+            <ThinkingPanel
+              thinking={thinkingText}
+              isStreaming={isThinking}
+            />
+          </div>
         ) : phase === "review" ? (
           <ReviewView
             topic={topic}

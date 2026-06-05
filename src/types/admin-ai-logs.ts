@@ -9,7 +9,10 @@ export interface AdminAiLogRow {
   hasFullResponse: boolean;
   tokensInput: number | null;
   tokensOutput: number | null;
+  tokensCachedRead?: number | null;
+  tokensCachedWrite?: number | null;
   estimatedCostUsd: number | null;
+  costSavingsUsd?: number | null;
   status: string;
   errorMessage: string;
   metadata: Record<string, unknown>;

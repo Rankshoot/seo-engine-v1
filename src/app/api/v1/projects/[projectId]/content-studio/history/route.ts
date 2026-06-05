@@ -33,6 +33,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ projectI
         .filter(s => ALLOWED_STATUSES.has(s))
     : undefined;
 
-  const result = await listContentStudioHistory(projectId, { types, statuses });
+  const limitParam = searchParams.get("limit");
+  const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100) : 20;
+
+  const offsetParam = searchParams.get("offset");
+  const offset = offsetParam ? Math.max(parseInt(offsetParam, 10), 0) : 0;
+
+  const search = searchParams.get("search")?.trim() || undefined;
+
+  const sortParam = searchParams.get("sort");
+  const sort = (sortParam || "updated") as "updated" | "created" | "words" | "title";
+
+  const result = await listContentStudioHistory(projectId, {
+    types,
+    statuses,
+    limit,
+    offset,
+    search,
+    sort,
+  });
   return apiJson(result, { status: result.success ? 200 : 500 });
 }

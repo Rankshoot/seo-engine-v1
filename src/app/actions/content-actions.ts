@@ -39,6 +39,9 @@ interface ProjectRow {
   target_audience: string;
   target_region: string;
   target_language: string;
+  brand_voice?: string;
+  brand_values?: string;
+  brand_description?: string;
 }
 
 const LANG_LABEL: Record<string, string> = {
@@ -260,6 +263,9 @@ export async function generateEbookAction(
         research,
         internalLinks,
         semanticKeywords: payload.semanticKeywords ?? [],
+        brandVoice: project.brand_voice,
+        brandValues: project.brand_values,
+        brandDescription: project.brand_description,
       },
       project.domain,
     );
@@ -403,6 +409,9 @@ export async function generateWhitepaperAction(
         research,
         internalLinks,
         semanticKeywords: payload.semanticKeywords ?? [],
+        brandVoice: project.brand_voice,
+        brandValues: project.brand_values,
+        brandDescription: project.brand_description,
       },
       project.domain,
     );
@@ -515,6 +524,9 @@ export async function generateLinkedInPostAction(
       companyDomain: project.domain,
       niche: project.niche,
       brief,
+      brandVoice: project.brand_voice,
+      brandValues: project.brand_values,
+      brandDescription: project.brand_description,
     });
     mark('gemini-pro', `${result.word_count} words drafted`, Date.now() - t1);
   } catch (e) {
@@ -584,13 +596,21 @@ export interface ContentStudioHistoryRow {
 
 export async function listContentStudioHistory(
   projectId: string,
-  filter: { types?: ContentType[]; statuses?: string[] } = {}
+  filter: {
+    types?: ContentType[];
+    statuses?: string[];
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sort?: 'updated' | 'created' | 'words' | 'title';
+  } = {}
 ): Promise<
-  | { success: true; data: ContentStudioHistoryRow[] }
-  | { success: false; error: string; data: ContentStudioHistoryRow[] }
+  | { success: true; data: ContentStudioHistoryRow[]; total: number; hasMore: boolean; counts: Record<ContentType, number> }
+  | { success: false; error: string; data: ContentStudioHistoryRow[]; total: number; hasMore: boolean; counts: Record<ContentType, number> }
 > {
   const user = await currentUser();
-  if (!user) return { success: false, error: 'Not authenticated', data: [] };
+  const emptyCounts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
+  if (!user) return { success: false, error: 'Not authenticated', data: [], total: 0, hasMore: false, counts: emptyCounts };
 
   const { data: project, error: pErr } = await supabaseAdmin
     .from('projects')
@@ -598,38 +618,70 @@ export async function listContentStudioHistory(
     .eq('id', projectId)
     .eq('user_id', user.id)
     .maybeSingle();
-  if (pErr || !project) return { success: false, error: 'Project not found', data: [] };
+  if (pErr || !project) return { success: false, error: 'Project not found', data: [], total: 0, hasMore: false, counts: emptyCounts };
 
   const types = filter.types?.length ? filter.types : (['blog', 'ebook', 'whitepaper', 'linkedin'] as ContentType[]);
   const statuses = filter.statuses?.length ? filter.statuses : ['generated', 'approved', 'published'];
+
+  const limit = Math.min(Math.max(filter.limit ?? 20, 1), 100);
+  const offset = Math.max(filter.offset ?? 0, 0);
+  const sort = filter.sort || 'updated';
+
+  const dbSortCol =
+    sort === 'created' ? 'created_at' :
+    sort === 'words' ? 'word_count' :
+    sort === 'title' ? 'title' :
+    'updated_at';
+  const ascending = sort === 'title';
 
   // Use content_type when it exists; fall back to article_type heuristics so older
   // databases without the migration still produce a sensible history list.
   const COLS =
     'id, title, meta_description, target_keyword, article_type, status, word_count, content_type, content_data, created_at, updated_at';
 
-  let { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('blogs')
-    .select(COLS)
+    .select(COLS, { count: 'exact' })
     .eq('project_id', projectId)
-    .in('status', statuses)
-    .order('updated_at', { ascending: false })
-    .limit(120);
+    .in('status', statuses);
 
-  if (error && /content_type|content_data|schema cache/i.test(error.message)) {
-    // Migration not run yet — degrade to a content-type-aware filter via article_type.
-    const fallback = await supabaseAdmin
-      .from('blogs')
-      .select('id, title, meta_description, target_keyword, article_type, status, word_count, created_at, updated_at')
-      .eq('project_id', projectId)
-      .in('status', statuses)
-      .order('updated_at', { ascending: false })
-      .limit(120);
-    data = (fallback.data as unknown) as typeof data;
-    error = fallback.error;
+  if (filter.types?.length) {
+    query = query.in('content_type', filter.types);
   }
 
-  if (error) return { success: false, error: error.message, data: [] };
+  if (filter.search) {
+    const q = `%${filter.search.replace(/[%_,]/g, '')}%`;
+    query = query.or(`title.ilike.${q},target_keyword.ilike.${q},article_type.ilike.${q}`);
+  }
+
+  query = query.order(dbSortCol, { ascending }).range(offset, offset + limit - 1);
+
+  let { data, error, count } = await query;
+  let hasRunFallback = false;
+
+  if (error && /content_type|content_data|schema cache/i.test(error.message)) {
+    hasRunFallback = true;
+    // Migration not run yet — degrade to a content-type-aware filter via article_type.
+    let fallbackQuery = supabaseAdmin
+      .from('blogs')
+      .select('id, title, meta_description, target_keyword, article_type, status, word_count, created_at, updated_at', { count: 'exact' })
+      .eq('project_id', projectId)
+      .in('status', statuses);
+
+    if (filter.search) {
+      const q = `%${filter.search.replace(/[%_,]/g, '')}%`;
+      fallbackQuery = fallbackQuery.or(`title.ilike.${q},target_keyword.ilike.${q},article_type.ilike.${q}`);
+    }
+
+    fallbackQuery = fallbackQuery.order(dbSortCol, { ascending }).range(offset, offset + limit - 1);
+
+    const fallback = await fallbackQuery;
+    data = (fallback.data as unknown) as typeof data;
+    error = fallback.error;
+    count = fallback.count;
+  }
+
+  if (error) return { success: false, error: error.message, data: [], total: 0, hasMore: false, counts: emptyCounts };
 
   const rows = (data ?? []) as Array<{
     id: string;
@@ -645,26 +697,62 @@ export async function listContentStudioHistory(
     updated_at: string;
   }>;
 
-  const mapped: ContentStudioHistoryRow[] = rows
-    .map(r => {
-      const inferredType = r.content_type ?? inferContentType(r.article_type ?? '');
-      return {
-        id: r.id,
-        title: r.title,
-        meta_description: r.meta_description ?? '',
-        target_keyword: r.target_keyword ?? '',
-        article_type: r.article_type ?? '',
-        status: r.status ?? 'generated',
-        word_count: r.word_count ?? 0,
-        content_type: inferredType,
-        content_data: (r.content_data ?? {}) as ContentStudioHistoryRow['content_data'],
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      };
-    })
-    .filter(r => types.includes(r.content_type));
+  let mapped: ContentStudioHistoryRow[] = rows.map(r => {
+    const inferredType = r.content_type ?? inferContentType(r.article_type ?? '');
+    return {
+      id: r.id,
+      title: r.title,
+      meta_description: r.meta_description ?? '',
+      target_keyword: r.target_keyword ?? '',
+      article_type: r.article_type ?? '',
+      status: r.status ?? 'generated',
+      word_count: r.word_count ?? 0,
+      content_type: inferredType,
+      content_data: (r.content_data ?? {}) as ContentStudioHistoryRow['content_data'],
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    };
+  });
 
-  return { success: true, data: mapped };
+  if (hasRunFallback) {
+    // In fallback mode, filter mapped list in-memory since the db couldn't query content_type.
+    mapped = mapped.filter(r => types.includes(r.content_type));
+  }
+
+  // Load counts for type badges on the server
+  const counts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
+  let countDataResult: Array<{ content_type?: string; article_type?: string }> = [];
+
+  const countRes = await supabaseAdmin
+    .from('blogs')
+    .select('content_type, article_type')
+    .eq('project_id', projectId)
+    .in('status', statuses);
+
+  if (countRes.error && /content_type|schema cache/i.test(countRes.error.message)) {
+    const fallbackRes = await supabaseAdmin
+      .from('blogs')
+      .select('article_type')
+      .eq('project_id', projectId)
+      .in('status', statuses);
+    if (fallbackRes.data) {
+      countDataResult = fallbackRes.data as Array<{ article_type?: string }>;
+    }
+  } else if (countRes.data) {
+    countDataResult = countRes.data;
+  }
+
+  for (const item of countDataResult) {
+    const t = (item.content_type ?? inferContentType(item.article_type ?? '')) as ContentType;
+    if (counts[t] !== undefined) {
+      counts[t]++;
+    }
+  }
+
+  const total = count ?? mapped.length;
+  const hasMore = offset + mapped.length < total;
+
+  return { success: true, data: mapped, total, hasMore, counts };
 }
 
 function inferContentType(articleType: string): ContentType {

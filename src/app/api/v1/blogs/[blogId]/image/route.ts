@@ -1,6 +1,6 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { generateContextualBlogImage } from "@/services/stabilityImages";
+import { generateContextualBlogImage } from "@/services/openAiImages";
 
 export const maxDuration = 120;
 

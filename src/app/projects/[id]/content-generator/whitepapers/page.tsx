@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import {
@@ -25,6 +25,8 @@ import {
   SectionHeading,
   StepRow,
   StudioBreadcrumb,
+  RecentHistorySkeleton,
+  validateWhitepaperForm,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -34,19 +36,10 @@ import {
   generateWhitepaperAction,
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
-
-const DEPTH_OPTIONS = [
-  { id: "executive", label: "Executive", hint: "C-suite / VP — plain English" },
-  { id: "analyst", label: "Analyst", hint: "Senior managers — methodology" },
-  { id: "engineering", label: "Engineering", hint: "Practitioners — technical depth" },
-] as const;
-
-const LANG_OPTIONS = [
-  { code: "en", label: "English" },
-  { code: "es", label: "Spanish" },
-  { code: "de", label: "German" },
-  { code: "fr", label: "French" },
-] as const;
+import {
+  WP_DEPTH_OPTIONS,
+  WP_LANG_OPTIONS,
+} from "@/constants";
 
 type Phase = "form" | "review" | "generating";
 
@@ -87,21 +80,10 @@ export default function WhitepaperGeneratorPage() {
   const [objective, setObjective] = useState(
     "Position the brand as the authoritative reference and convert qualified buyers.",
   );
-  const [depth, setDepth] = useState<(typeof DEPTH_OPTIONS)[number]["id"]>("analyst");
+  const [depth, setDepth] = useState<(typeof WP_DEPTH_OPTIONS)[number]["id"]>("analyst");
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
-
-  const { data: history } = useQuery({
-    queryKey: qk.contentStudioHistory(projectId),
-    queryFn: () => contentGeneratorApi.studioHistory(projectId),
-    enabled: !!projectId,
-    ...DEFAULT_QUERY_OPTIONS,
-  });
-  const recent = useMemo(() => {
-    const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
-    return rows.filter(r => r.content_type === "whitepaper").slice(0, 4);
-  }, [history]);
 
   useEffect(() => {
     if (project?.target_audience && !audience) setAudience(project.target_audience);
@@ -149,9 +131,10 @@ export default function WhitepaperGeneratorPage() {
   };
 
   const goReview = () => {
-    if (!topic.trim()) return toast.error("Topic is required.");
-    if (!primaryKeyword.trim()) return toast.error("Primary keyword is required.");
-    if (!problem.trim()) return toast.error("Describe the problem this whitepaper solves.");
+    const val = validateWhitepaperForm(topic, primaryKeyword, problem);
+    if (!val.isValid) {
+      return toast.error(val.error || "Validation failed");
+    }
     setPhase("review");
   };
 
@@ -265,10 +248,10 @@ export default function WhitepaperGeneratorPage() {
             problem={problem}
             angle={angle}
             objective={objective}
-            depthLabel={DEPTH_OPTIONS.find(d => d.id === depth)?.label ?? depth}
+            depthLabel={WP_DEPTH_OPTIONS.find(d => d.id === depth)?.label ?? depth}
             secondaryKeywords={secondaryKeywords}
             regionLabel={TARGET_REGIONS.find(r => r.code === region)?.name ?? region}
-            languageLabel={LANG_OPTIONS.find(l => l.code === language)?.label ?? language}
+            languageLabel={WP_LANG_OPTIONS.find(l => l.code === language)?.label ?? language}
           />
         ) : (
           <ContentForm>
@@ -364,7 +347,7 @@ export default function WhitepaperGeneratorPage() {
                 </Field>
                 <Field label="Technical depth">
                   <ChipChoice
-                    options={DEPTH_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
+                    options={WP_DEPTH_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
                     value={depth}
                     onChange={setDepth}
                     ariaLabel="Technical depth"
@@ -382,7 +365,7 @@ export default function WhitepaperGeneratorPage() {
                   </Field>
                   <Field label="Language" htmlFor="wp-language">
                     <Select id="wp-language" inputSize="lg" value={language} onChange={e => setLanguage(e.target.value)}>
-                      {LANG_OPTIONS.map(l => (
+                      {WP_LANG_OPTIONS.map(l => (
                         <option key={l.code} value={l.code}>
                           {l.label}
                         </option>
@@ -393,32 +376,51 @@ export default function WhitepaperGeneratorPage() {
               </div>
             </ContentFormSection>
 
-            {recent.length > 0 ? (
-              <ContentFormSection>
-                <SectionHeading index="03" label="Recent whitepapers" hint="Open the previewer to copy or export." />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {recent.map(r => (
-                    <ProjectNavLink
-                      key={r.id}
-                      href={`${studioBase}/whitepapers/${r.id}`}
-                      className="group flex flex-col gap-1 rounded-card border border-border-subtle bg-surface-elevated p-4 transition-colors hover:border-border-strong"
-                    >
-                      <span className="text-[11px] font-mono uppercase tracking-widest text-text-tertiary">
-                        {new Date(r.updated_at).toLocaleDateString()}
-                      </span>
-                      <span className="text-[14px] font-semibold text-text-primary line-clamp-2">{r.title}</span>
-                      <span className="mt-1 text-[11px] text-text-tertiary">
-                        {r.word_count.toLocaleString()} words · {r.target_keyword || "no primary keyword"}
-                      </span>
-                    </ProjectNavLink>
-                  ))}
-                </div>
-              </ContentFormSection>
-            ) : null}
+            <Suspense fallback={<RecentHistorySkeleton />}>
+              <RecentWhitepapersList projectId={projectId} studioBase={studioBase} />
+            </Suspense>
           </ContentForm>
         )}
       </div>
     </div>
+  );
+}
+
+function RecentWhitepapersList({ projectId, studioBase }: { projectId: string; studioBase: string }) {
+  const { data: history } = useSuspenseQuery({
+    queryKey: qk.contentStudioHistory(projectId),
+    queryFn: () => contentGeneratorApi.studioHistory(projectId),
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const recent = useMemo(() => {
+    const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
+    return rows.filter(r => r.content_type === "whitepaper").slice(0, 4);
+  }, [history]);
+
+  if (recent.length === 0) return null;
+
+  return (
+    <ContentFormSection>
+      <SectionHeading index="03" label="Recent whitepapers" hint="Open the previewer to copy or export." />
+      <div className="grid gap-3 sm:grid-cols-2">
+        {recent.map(r => (
+          <ProjectNavLink
+            key={r.id}
+            href={`${studioBase}/whitepapers/${r.id}`}
+            className="group flex flex-col gap-1 rounded-card border border-border-subtle bg-surface-elevated p-4 transition-colors hover:border-border-strong"
+          >
+            <span className="text-[11px] font-mono uppercase tracking-widest text-text-tertiary">
+              {new Date(r.updated_at).toLocaleDateString()}
+            </span>
+            <span className="text-[14px] font-semibold text-text-primary line-clamp-2">{r.title}</span>
+            <span className="mt-1 text-[11px] text-text-tertiary">
+              {r.word_count.toLocaleString()} words · {r.target_keyword || "no primary keyword"}
+            </span>
+          </ProjectNavLink>
+        ))}
+      </div>
+    </ContentFormSection>
   );
 }
 

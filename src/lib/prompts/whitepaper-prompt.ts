@@ -25,6 +25,9 @@ export interface WhitepaperPromptContext {
   brief: BusinessBrief | null;
   research: ResearchContext | null;
   internalLinks: string[];
+  brandVoice?: string;
+  brandValues?: string;
+  brandDescription?: string;
 }
 
 const DEPTH_GUIDE: Record<WhitepaperPromptContext['technicalDepth'], string> = {
@@ -37,14 +40,21 @@ const DEPTH_GUIDE: Record<WhitepaperPromptContext['technicalDepth'], string> = {
 };
 
 export function buildWhitepaperPrompt(ctx: WhitepaperPromptContext): string {
+  const brandPersonaBlock = (ctx.brandVoice || ctx.brandValues || ctx.brandDescription)
+    ? `\nBRAND PERSONA & IDENTITY:
+${ctx.brandVoice ? `- Brand Voice/Tone: ${ctx.brandVoice}\n` : ''}${ctx.brandValues ? `- Core Values/Messaging: ${ctx.brandValues}\n` : ''}${ctx.brandDescription ? `- Personality/Description: ${ctx.brandDescription}\n` : ''}`
+    : '';
+
   const briefBlock = ctx.brief
     ? `COMPANY GROUNDING (voice + credibility, NOT a sales brochure):
 - Summary: ${ctx.brief.summary || '(none)'}
 - Products / offerings: ${ctx.brief.products.slice(0, 8).join(', ') || '(none)'}
 - Audiences: ${ctx.brief.audiences.slice(0, 4).join(' | ') || ctx.audience}
 - USPs: ${ctx.brief.usps.slice(0, 4).join(' | ') || '(none)'}
-- Tone bias: ${ctx.brief.tone || 'analytical, evidence-led, credible'}`
-    : '(No cached brief — match the requested technical depth and the company name.)';
+- Tone bias: ${ctx.brief.tone || 'analytical, evidence-led, credible'}
+${brandPersonaBlock}`
+    : `(No cached brief — match the requested technical depth and the company name.)
+${brandPersonaBlock}`;
 
   const researchBlock = ctx.research ? formatResearchForPrompt(ctx.research) : '';
   const semanticBlock = ctx.semanticKeywords.length
@@ -149,5 +159,6 @@ After the whitepaper output EXACTLY this block (valid JSON, no trailing commas):
   "external_links": ["https://...", "https://..."],
   "internal_links": ["https://... or /path"],
   "semantic_keywords": ["primary phrase", "phrase 2"]
-}`;
+}
+- ${ctx.brandVoice ? `Strictly align the style and tone with the Brand Voice: ${ctx.brandVoice}.` : ctx.brief?.tone ? `Match the brand tone above.` : 'Use an analytical, evidence-led, credible tone.'}`;
 }

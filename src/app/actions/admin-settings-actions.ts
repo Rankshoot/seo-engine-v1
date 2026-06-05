@@ -17,6 +17,8 @@ import {
   DEFAULT_PLATFORM_LIMITS,
   DEFAULT_PLATFORM_MAINTENANCE,
   DEFAULT_PLATFORM_PROVIDERS,
+  DEFAULT_PLATFORM_ROUTING,
+  DEFAULT_PLATFORM_COST_CONTROLS,
   mergeSettingsSection,
 } from "@/lib/admin/platform-settings-defaults";
 import type { AdminSession } from "@/types/admin";
@@ -88,7 +90,7 @@ export async function getAdminSettings(): Promise<
   try {
     const db = getSupabaseAdmin();
 
-    const [providersRaw, limitsRaw, cacheRaw, geminiRaw, debugRaw, maintenanceRaw, adminsRes] =
+    const [providersRaw, limitsRaw, cacheRaw, geminiRaw, debugRaw, maintenanceRaw, routingRaw, costControlsRaw, adminsRes] =
       await Promise.all([
         readSettingsKey(db, "providers"),
         readSettingsKey(db, "limits"),
@@ -96,6 +98,8 @@ export async function getAdminSettings(): Promise<
         readSettingsKey(db, "gemini"),
         readSettingsKey(db, "debug"),
         readSettingsKey(db, "maintenance"),
+        readSettingsKey(db, "routing"),
+        readSettingsKey(db, "cost_controls"),
         db
           .from("platform_admins")
           .select("id, user_id, email, role, created_by, created_at")
@@ -114,6 +118,8 @@ export async function getAdminSettings(): Promise<
         gemini: mergeSettingsSection(DEFAULT_PLATFORM_GEMINI, geminiRaw),
         debug: mergeSettingsSection(DEFAULT_PLATFORM_DEBUG, debugRaw),
         maintenance: mergeSettingsSection(DEFAULT_PLATFORM_MAINTENANCE, maintenanceRaw),
+        routing: mergeSettingsSection(DEFAULT_PLATFORM_ROUTING, routingRaw),
+        cost_controls: mergeSettingsSection(DEFAULT_PLATFORM_COST_CONTROLS, costControlsRaw),
         envKeys: getAdminEnvKeyStatus(),
         admins: (adminsRes.data ?? []).map(mapAdminRow),
       },
@@ -200,6 +206,34 @@ export async function updateAdminSettings(
         admin.userId
       );
       changed.push("maintenance");
+    }
+
+    if (patch.routing) {
+      const current = mergeSettingsSection(
+        DEFAULT_PLATFORM_ROUTING,
+        await readSettingsKey(db, "routing")
+      );
+      await upsertSettingsKey(
+        db,
+        "routing",
+        { ...current, ...patch.routing },
+        admin.userId
+      );
+      changed.push("routing");
+    }
+
+    if (patch.cost_controls) {
+      const current = mergeSettingsSection(
+        DEFAULT_PLATFORM_COST_CONTROLS,
+        await readSettingsKey(db, "cost_controls")
+      );
+      await upsertSettingsKey(
+        db,
+        "cost_controls",
+        { ...current, ...patch.cost_controls },
+        admin.userId
+      );
+      changed.push("cost_controls");
     }
 
     if (changed.length) {

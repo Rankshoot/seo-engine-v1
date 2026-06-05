@@ -8,6 +8,8 @@ export function getAdminEnvKeyStatus(): AdminEnvKeyStatus {
       process.env.DATAFORSEO_LOGIN?.trim() && process.env.DATAFORSEO_PASSWORD?.trim()
     ),
     gemini: Boolean(process.env.GEMINI_API_KEY?.trim()),
+    anthropic: Boolean(process.env.ANTHROPIC_API_KEY?.trim()),
+    openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
     serper: Boolean(process.env.SERPER_API_KEY?.trim()),
     clerk: Boolean(
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() &&

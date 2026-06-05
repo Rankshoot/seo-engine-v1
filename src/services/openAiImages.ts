@@ -27,22 +27,22 @@ interface GenerateContextualBlogImageInput {
   contextAfter: string;
 }
 
-interface StabilityImageResponse {
-  image?: string;
-  seed?: number;
-  finish_reason?: string;
+interface OpenAiImageResponse {
+  data?: Array<{
+    url: string;
+    revised_prompt?: string;
+  }>;
+  error?: {
+    message: string;
+  };
 }
 
-// Switched from `/ultra` (6.5+ credits) to the SD 3.5 endpoint with the
-// `sd3.5-flash` model — flat 2.5 credits per successful generation, which is
-// the cheapest option that still produces editorial-quality blog imagery.
-// https://platform.stability.ai/docs/api-reference#tag/Generate
-const STABILITY_SD3_ENDPOINT = 'https://api.stability.ai/v2beta/stable-image/generate/sd3';
-const STABILITY_MODEL = 'sd3.5-flash';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
+const OPENAI_IMAGE_ENDPOINT = "https://api.openai.com/v1/images/generations";
+const OPENAI_MODEL = "dall-e-3";
 
 /**
- * Neutral inline SVG so markdown survives `sanitizeBlogContent` (empty `![]( )`
- * is stripped). Alt text still describes the intended image for editors and a11y.
+ * Neutral inline SVG placeholder so markdown rendering survives without broken images.
  */
 const BLOG_IMAGE_PLACEHOLDER_URL =
   'data:image/svg+xml;charset=utf-8,' +
@@ -59,18 +59,17 @@ function assetWithPlaceholder(request: Omit<BlogImageAsset, 'url'>): BlogImageAs
 
 export async function generateBlogImages(input: GenerateBlogImagesInput): Promise<BlogImageAsset[]> {
   const imageRequests = buildImageRequests(input);
-  const apiKey = process.env.STABILITY_API_KEY?.trim();
 
-  if (!apiKey) {
-    console.warn('[stability] STABILITY_API_KEY missing — saving blog with image placeholders.');
+  if (!OPENAI_API_KEY) {
+    console.warn('[openai-images] OPENAI_API_KEY missing — saving blog with image placeholders.');
     return imageRequests.map(assetWithPlaceholder);
   }
 
-  const hero = (await generateSingleImage(apiKey, imageRequests[0])) ?? assetWithPlaceholder(imageRequests[0]);
+  const hero = (await generateSingleImage(imageRequests[0])) ?? assetWithPlaceholder(imageRequests[0]);
   if (imageRequests.length === 1) return [hero];
 
   const settled = await Promise.allSettled(
-    imageRequests.slice(1).map(request => generateSingleImage(apiKey, request))
+    imageRequests.slice(1).map(request => generateSingleImage(request))
   );
 
   const rest = imageRequests.slice(1).map((request, i) => {
@@ -85,8 +84,7 @@ export async function generateBlogImages(input: GenerateBlogImagesInput): Promis
 export async function generateContextualBlogImage(
   input: GenerateContextualBlogImageInput
 ): Promise<BlogImageAsset | null> {
-  const apiKey = process.env.STABILITY_API_KEY;
-  if (!apiKey) return null;
+  if (!OPENAI_API_KEY) return null;
 
   const prompt = [
     `Editorial blog illustration for "${input.title}" about "${input.targetKeyword}" in ${input.niche}.`,
@@ -94,7 +92,7 @@ export async function generateContextualBlogImage(
     `Style: premium modern SaaS/editorial, clean 16:9 composition, sharp focus, high quality, no text, no words, no letters, no logos, no watermark, no distorted hands, no blurry artifacts.`,
   ].filter(Boolean).join(' ');
 
-  return generateSingleImage(apiKey, {
+  return generateSingleImage({
     placement: 'section',
     alt: input.imageAlt || `${input.targetKeyword} visual`,
     prompt,
@@ -134,10 +132,6 @@ export function insertBlogImages(content: string, images: BlogImageAsset[]): str
 }
 
 function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImageAsset, 'url'>> {
-  // Hard product cap: a blog ships with at most 2 images (hero + one
-  // supporting visual). Going higher historically produced broken-image
-  // sequences in the middle of the article — see blog-content.ts for the
-  // matching post-generation cap.
   const count = input.wordCount >= 1400 ? 2 : 1;
   const baseStyle =
     'premium editorial blog illustration, modern SaaS website style, clean composition, realistic lighting, sharp focus, high quality, no text, no words, no letters, no logos, no watermark, no distorted hands, no blurry artifacts';
@@ -163,51 +157,46 @@ function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImag
 }
 
 async function generateSingleImage(
-  apiKey: string,
   request: Omit<BlogImageAsset, 'url'>
 ): Promise<BlogImageAsset | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
-  const outputFormat = process.env.STABILITY_IMAGE_FORMAT || 'webp';
 
   try {
-    const form = new FormData();
-    form.append('prompt', request.prompt);
-    form.append('model', STABILITY_MODEL);
-    form.append('mode', 'text-to-image');
-    form.append('aspect_ratio', process.env.STABILITY_IMAGE_ASPECT_RATIO || '16:9');
-    form.append('output_format', outputFormat);
-    // `negative_prompt` is rejected by the distilled flash/turbo SD 3.5
-    // variants, so we bake the avoid-list straight into the prompt instead.
-
-    const response = await fetch(STABILITY_SD3_ENDPOINT, {
-      method: 'POST',
+    const response = await fetch(OPENAI_IMAGE_ENDPOINT, {
+      method: "POST",
       signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: 'application/json',
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
-      body: form,
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        prompt: request.prompt,
+        n: 1,
+        size: "1792x1024", // 16:9 widescreen aspect ratio
+      }),
     });
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      console.warn(`Stability SD3.5 Flash image generation failed (${response.status}): ${detail.slice(0, 500)}`);
+      console.warn(`OpenAI DALL-E image generation failed (${response.status}): ${detail.slice(0, 500)}`);
       return null;
     }
 
-    const data = (await response.json()) as StabilityImageResponse;
-    if (!data.image || (data.finish_reason && data.finish_reason !== 'SUCCESS')) {
-      console.warn(`Stability SD3.5 Flash returned no usable image. finish_reason=${data.finish_reason ?? 'unknown'}`);
+    const data = (await response.json()) as OpenAiImageResponse;
+    const imageUrl = data.data?.[0]?.url;
+    if (!imageUrl) {
+      console.warn("OpenAI DALL-E returned no image URL.");
       return null;
     }
 
     return {
       ...request,
-      url: `data:image/${outputFormat};base64,${data.image}`,
+      url: imageUrl,
     };
   } catch (error) {
-    console.warn('Stability SD3.5 Flash image generation skipped:', error);
+    console.warn("OpenAI DALL-E image generation skipped:", error);
     return null;
   } finally {
     clearTimeout(timeout);

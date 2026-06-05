@@ -26,7 +26,6 @@ import {
   type LinkedInDraft,
 } from "@/components/content-generator/linkedin/LinkedInStructuredEditor";
 import { blogsApi } from "@/frontend/api/blogs";
-import { projectsApi } from "@/frontend/api/projects";
 import {
   exportLinkedInPost,
   LINKEDIN_EXPORT_OPTIONS,

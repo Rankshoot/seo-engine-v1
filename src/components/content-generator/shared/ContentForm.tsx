@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 
 /**
  * Multi-section form scaffold used by Ebook / Whitepaper / LinkedIn forms.
@@ -9,11 +9,11 @@ import type { ReactNode } from "react";
  * `@/components/common`). Keeps every generator visually identical without
  * forcing each form to re-implement chrome.
  */
-export function ContentForm({ children }: { children: ReactNode }) {
+export const ContentForm = React.memo(function ContentForm({ children }: { children: ReactNode }) {
   return <div className="space-y-12">{children}</div>;
-}
+});
 
-export function ContentFormSection({
+export const ContentFormSection = React.memo(function ContentFormSection({
   children,
   className,
 }: {
@@ -21,9 +21,9 @@ export function ContentFormSection({
   className?: string;
 }) {
   return <section className={className}>{children}</section>;
-}
+});
 
-export function ContentFormGrid({
+export const ContentFormGrid = React.memo(function ContentFormGrid({
   children,
   cols = 2,
 }: {
@@ -32,10 +32,10 @@ export function ContentFormGrid({
 }) {
   const colClass = cols === 1 ? "" : cols === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3";
   return <div className={`grid gap-4 ${colClass}`}>{children}</div>;
-}
+});
 
 /** Pill toggle group used for tone / depth / style inputs. */
-export function ChipChoice<T extends string>({
+export const ChipChoice = React.memo(function ChipChoice<T extends string>({
   options,
   value,
   onChange,
@@ -76,6 +76,11 @@ export function ChipChoice<T extends string>({
       })}
     </div>
   );
-}
+}) as <T extends string>(props: {
+  options: { id: T; label: string; hint?: string }[];
+  value: T;
+  onChange: (next: T) => void;
+  ariaLabel?: string;
+}) => React.JSX.Element;
 
 export { KeywordChips } from "./KeywordChips";

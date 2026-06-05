@@ -5,11 +5,12 @@ import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Logo } from "@/components/brand/Logo";
-import { qk, keywordsListQueryOptions } from "@/lib/query";
+import { qk } from "@/lib/query";
+import { useMemo } from "react";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
 import { projectsApi } from "@/frontend/api/projects";
@@ -61,7 +62,6 @@ interface ProjectSidebarProps {
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
-  onOpenAI?: () => void;
 }
 
 export default function ProjectSidebar({ 
@@ -71,11 +71,9 @@ export default function ProjectSidebar({
   allProjects,
   isCollapsed,
   setIsCollapsed,
-  onOpenAI,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
   const { data: statsResponse } = useQuery({
     queryKey: qk.projectStats(projectId),
@@ -86,8 +84,8 @@ export default function ProjectSidebar({
     refetchOnWindowFocus: false,
     refetchOnMount: false,
   });
-  const serverStats =
-    statsResponse?.success && statsResponse.data
+  const serverStats = useMemo(() => {
+    return statsResponse?.success && statsResponse.data
       ? {
           approvedKeywords: statsResponse.data.approvedKeywords,
           calendarEntries: statsResponse.data.calendarEntries,
@@ -96,14 +94,25 @@ export default function ProjectSidebar({
           auditPending: statsResponse.data.auditPending,
         }
       : stats;
+  }, [statsResponse, stats]);
   const liveStats = useAppSelector(state => selectProjectStats(state, projectId, serverStats));
   const base = `/projects/${projectId}`;
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   /** Nav count badges use React Query + Redux; sidebar is client-only so counts can render immediately. */
-  const navCountsReady = true;
+  const navCountsReady = mounted;
 
+  useEffect(() => {
+    let active = true;
+    requestAnimationFrame(() => {
+      if (active) setMounted(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -121,11 +130,7 @@ export default function ProjectSidebar({
   }, [
     dispatch,
     projectId,
-    serverStats?.approvedKeywords,
-    serverStats?.calendarEntries,
-    serverStats?.blogsGenerated,
-    serverStats?.articlesInLibrary,
-    serverStats?.auditPending,
+    serverStats,
   ]);
 
   const auditBase = `${base}/audit`;
@@ -155,6 +160,12 @@ export default function ProjectSidebar({
       prefetchLabel: "Keywords",
     },
     {
+      icon: Icon.calendar,
+      label: "Content Calendar",
+      href: `${base}/content-calendar`,
+      prefetchLabel: "Content Calendar",
+    },
+    {
       icon: Icon.contentGen,
       label: "Content Generator",
       href: `${base}/content-generator`,
@@ -165,12 +176,6 @@ export default function ProjectSidebar({
         { label: "Whitepapers", href: `${base}/content-generator/whitepapers` },
         { label: "LinkedIn posts", href: `${base}/content-generator/linkedin` },
       ],
-    },
-    {
-      icon: Icon.calendar,
-      label: "Content Calendar",
-      href: `${base}/content-calendar`,
-      prefetchLabel: "Content Calendar",
     },
     {
       icon: Icon.articles,
@@ -396,28 +401,6 @@ export default function ProjectSidebar({
 
         <div className={`border-t border-border-subtle pt-6 transition-all duration-300 ease-in-out ${isCollapsed ? "flex justify-center" : ""}`}>
           <ul className="space-y-1.5 w-full">
-            {onOpenAI && (
-              <li>
-                <button
-                  onClick={onOpenAI}
-                  className={`w-full flex items-center rounded-[8px] text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all duration-300 ease-in-out border border-transparent group relative
-                    ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
-                  `}
-                >
-                  <span className="text-text-tertiary group-hover:text-brand-action transition-colors shrink-0">
-                    {Icon.ai}
-                  </span>
-                  <span className={`whitespace-nowrap transition-all duration-300 ease-in-out overflow-hidden ${isCollapsed ? "max-w-0 opacity-0 ml-0" : "max-w-[200px] opacity-100 ml-3"}`}>
-                    AI Assistant
-                  </span>
-                  {isCollapsed && (
-                    <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
-                      AI Assistant
-                    </div>
-                  )}
-                </button>
-              </li>
-            )}
             <li>
               <ProjectNavLink
                 href="/projects"

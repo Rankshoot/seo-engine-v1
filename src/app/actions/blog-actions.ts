@@ -6,7 +6,7 @@ import { generateBlogPost, geminiGenerate, repairBlogPost } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
 import { ArticleLibraryEntry, Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
-import { generateBlogImages, insertBlogImages } from '@/services/stabilityImages';
+import { generateBlogImages, insertBlogImages } from '@/services/openAiImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
 import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan } from '@/lib/content-health-calendar';
 import { hybridReadUrl } from '@/services/hybridScraper';
@@ -718,41 +718,36 @@ function normalizeRepairNotesFromModel(notes: string[], analysis: BlogAuditAnaly
 }
 
 function sanitizeBlogMarkdown(markdown: string): string {
-  let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(markdown))
+  // ── JSON Rescue ───────────────────────────────────────────────────────────
+  // If Claude returned a JSON object and the content field was stored as raw
+  // JSON (e.g. `{"title":"...","contentMarkdown":"# H1\n\n...","..."}`)
+  // extract contentMarkdown before any other processing.
+  const rescued = rescueJsonBlogContent(markdown);
+  let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(rescued))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
-    // Strip the LLM's leftover `![alt](IMAGE_PLACEHOLDER)` artifacts so the
-    // preview never flashes a broken-image icon. The async sanitizer in
-    // `blog-content.ts` does this on fresh generations; this branch keeps
-    // legacy rows clean too.
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
     .replace(/Regenerat(?:e|ing) with AI[^\n]*(?:illustration|visual)?/gi, '')
     .replace(/^\s*(?:Regenerate image|Generate image|Image\.\.\.)\s*$/gim, '');
 
   // ── Leaked JSON / META artifact cleanup ──────────────────────────────
-  // Remove orphaned ---META--- and everything after it.
   const metaIdx = cleaned.indexOf('---META---');
   if (metaIdx !== -1) {
     cleaned = cleaned.substring(0, metaIdx);
   }
 
   cleaned = cleaned
-    // JSON key-value pairs leaked into body (external_links, internal_links, etc.)
     .replace(
       /^\s*"(?:external_links|internal_links|meta_description|slug|seoNotes|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm,
       ''
     )
-    // Bare JSON URL arrays on their own line: ["https://...", ...]
     .replace(
-      /^\s*\[\s*"https?:\/\/[^"]+?"(?:\s*,\s*"https?:\/\/[^"]+?")*\s*\]\s*$/gm,
+      /^\s*\[\s*"https?:\/\/[^"]+"(?:\s*,\s*"https?:\/\/[^"]+")*\s*\]\s*$/gm,
       ''
     )
-    // Lines that are just bare URLs (not inside markdown links)
     .replace(/^\s*"?https?:\/\/\S+"?\s*,?\s*$/gm, '')
-    // Orphaned JSON braces/brackets on their own line
     .replace(/^\s*[{}]\s*$/gm, '')
-    // Leaked JSON key-value continuations (e.g. `},"internal_links":{`)
     .replace(
       /^\s*[,}]\s*"(?:external_links|internal_links|meta_description|slug)".*$/gm,
       ''
@@ -773,6 +768,48 @@ function stripSchemaJsonBlocks(markdown: string): string {
       '\n'
     );
 }
+
+/**
+ * Detects when stored blog content is a raw JSON blob (e.g. Claude returned
+ * `{"title":"...","contentMarkdown":"# H1\n\n..."}` and it was saved verbatim).
+ * Extracts `contentMarkdown` so the viewer renders clean markdown.
+ * Returns the original string unchanged when it's not JSON.
+ */
+function rescueJsonBlogContent(raw: string): string {
+  const trimmed = raw.trim();
+  // Fast path — regular markdown starts with #, text, or image
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('```')) return raw;
+
+  // Strip surrounding markdown code fences (```json … ```)
+  const stripped = trimmed
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/, '');
+
+  // Attempt full JSON parse
+  try {
+    const parsed = JSON.parse(stripped) as Record<string, unknown>;
+    if (typeof parsed?.contentMarkdown === 'string' && parsed.contentMarkdown.length > 100) {
+      console.log('[blog-rescue] Extracted contentMarkdown from raw JSON content blob');
+      return parsed.contentMarkdown as string;
+    }
+  } catch {
+    // Not valid JSON — try regex extraction for truncated/malformed responses
+    const match = stripped.match(
+      /"contentMarkdown"\s*:\s*"([\s\S]+?)(?:"\s*,\s*"(?:faqQuestions|internalLinksUsed|externalLinksUsed|slug)|\s*"\s*\})/
+    );
+    if (match?.[1] && match[1].length > 100) {
+      try {
+        const unescaped = JSON.parse(`"${match[1]}"`);
+        console.log('[blog-rescue] Regex-extracted contentMarkdown from malformed JSON');
+        return unescaped as string;
+      } catch { /* give up */ }
+    }
+  }
+
+  return raw;
+}
+
+
 
 function extractMarkdownLinks(markdown: string, ownDomain = '') {
   const external = new Set<string>();

@@ -4,9 +4,11 @@ import { currentUser } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import {
   runBlogDeepAnalysisPipeline,
+} from '@/lib/blog-deep-analysis';
+import {
   type BlogDeepAnalysisResult,
   type DeepAnalysisTraceEntry,
-} from '@/lib/blog-deep-analysis';
+} from '@/lib/blog-deep-analysis-types';
 import type { DataForSEOTraceEntry } from '@/lib/dataforseo';
 
 /** PostgREST / Postgres when `blog_deep_analyses` was never migrated or cache is stale. */

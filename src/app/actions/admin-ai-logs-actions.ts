@@ -20,7 +20,10 @@ type AiLogDbRow = {
   response_full: string | null;
   tokens_input: number | null;
   tokens_output: number | null;
+  tokens_cached_read: number | null;
+  tokens_cached_write: number | null;
   estimated_cost_usd: number | null;
+  cost_savings_usd: number | null;
   status: string;
   error_message: string | null;
   metadata: Record<string, unknown> | null;
@@ -39,8 +42,12 @@ function mapListRow(row: AiLogDbRow): AdminAiLogRow {
     hasFullResponse: !!row.response_full,
     tokensInput: row.tokens_input,
     tokensOutput: row.tokens_output,
+    tokensCachedRead: row.tokens_cached_read,
+    tokensCachedWrite: row.tokens_cached_write,
     estimatedCostUsd:
       row.estimated_cost_usd != null ? Number(row.estimated_cost_usd) : null,
+    costSavingsUsd:
+      row.cost_savings_usd != null ? Number(row.cost_savings_usd) : null,
     status: row.status,
     errorMessage: row.error_message ?? "",
     metadata: row.metadata ?? {},
@@ -71,7 +78,8 @@ export async function listAdminAiLogs(
       .select(
         `id, user_id, project_id, feature, model, prompt_summary,
          prompt_full, response_full, tokens_input, tokens_output,
-         estimated_cost_usd, status, error_message, metadata, created_at`,
+         tokens_cached_read, tokens_cached_write, estimated_cost_usd,
+         cost_savings_usd, status, error_message, metadata, created_at`,
         { count: "exact" }
       );
 
@@ -137,7 +145,8 @@ export async function getAdminAiLogDetail(
       .select(
         `id, user_id, project_id, feature, model, prompt_summary,
          prompt_full, response_full, tokens_input, tokens_output,
-         estimated_cost_usd, status, error_message, metadata, created_at`
+         tokens_cached_read, tokens_cached_write, estimated_cost_usd,
+         cost_savings_usd, status, error_message, metadata, created_at`
       )
       .eq("id", logId)
       .maybeSingle();

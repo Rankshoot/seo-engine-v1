@@ -221,3 +221,47 @@ export function recordApiCacheHit(
     metadata,
   });
 }
+
+export interface RecordAiCallInput {
+  provider: "gemini" | "claude";
+  model: string;
+  prompt: string;
+  response?: string | null;
+  tokensInput?: number | null;
+  tokensOutput?: number | null;
+  tokensCachedRead?: number | null;
+  tokensCachedWrite?: number | null;
+  costSavingsUsd?: number | null;
+  estimatedCostUsd?: number | null;
+  ok: boolean;
+  latencyMs: number;
+  errorMessage?: string | null;
+  featureSuffix?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export function recordAiCall(input: RecordAiCallInput): void {
+  if (!isServer) return;
+  const ctx = mergeUsageLogContext({});
+  queueAiUsage({
+    userId: ctx.userId,
+    projectId: ctx.projectId,
+    feature: ctxFeature(input.provider, input.featureSuffix),
+    model: input.model,
+    prompt: input.prompt,
+    response: input.response,
+    tokensInput: input.tokensInput,
+    tokensOutput: input.tokensOutput,
+    tokensCachedRead: input.tokensCachedRead,
+    tokensCachedWrite: input.tokensCachedWrite,
+    costSavingsUsd: input.costSavingsUsd,
+    estimatedCostUsd: input.estimatedCostUsd,
+    status: input.ok ? "success" : "error",
+    errorMessage: input.errorMessage,
+    metadata: {
+      ...input.metadata,
+      latencyMs: input.latencyMs,
+    },
+  });
+}
+

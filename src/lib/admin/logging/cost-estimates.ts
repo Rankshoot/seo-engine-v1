@@ -8,7 +8,6 @@ const API_CALL_USD_ESTIMATES: Partial<Record<ApiUsageProvider, number>> = {
   serper: 0.001,
   jina: 0.0002,
   scraper: 0.0005,
-  pollinations: 0,
   ahrefs: 0.02,
 };
 

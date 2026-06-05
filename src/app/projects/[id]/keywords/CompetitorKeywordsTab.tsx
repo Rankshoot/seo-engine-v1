@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
@@ -10,14 +10,15 @@ import { calendarApi } from "@/frontend/api/calendar";
 import type { KeywordGap, ContentType } from "@/lib/types";
 import { KeywordActionCell } from "@/components/keywords/KeywordActionCell";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
-import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
+import { useAppSelector, selectAiSuggestedGapKeywords, useAppDispatch, selectKeywordPrefs } from "@/lib/redux/hooks";
+import { rememberCompetitorKeywordFilter, type KeywordFilterTab } from "@/lib/redux/keyword-workspace-slice";
 import { EmptyState } from "@/components/common";
 import { scoreCompetitorKeywordsWithAI } from "@/app/actions/keyword-actions";
 import { Tooltip } from "@/components/Tooltip";
-import { TableSkeleton } from "@/components/Skeleton";
+import { KeywordTableSkeleton } from "@/components/Skeleton";
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
-type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled";
+type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled" | "generated";
 type GapSortColumn = "keyword" | "gap_type" | "volume" | "competitor_weakness" | "ai_eval_score" | "action";
 type SortDir = "asc" | "desc";
 type GapAiEvalData = NonNullable<KeywordGap["ai_eval_data"]>;
@@ -169,7 +170,12 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
 export default function CompetitorKeywordsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const router = useRouter();
+  const dispatch = useAppDispatch();
+  const prefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const COMPETITORS_KEY = qk.competitors(projectId);
+
+  // The workspace filter tab — persisted in Redux
+  const workspaceTab = (prefs.competitorFilter as OpportunityWorkspaceTab) ?? "all";
 
   // States
   const [running, setRunning] = useState(false);
@@ -179,7 +185,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const [aiScoring, setAiScoring] = useState(false);
   const [aiScoringDone, setAiScoringDone] = useState(false);
 
-  const [workspaceTab, setWorkspaceTab] = useState<OpportunityWorkspaceTab>("all");
+  // workspaceTab is now from Redux, not local state
   const [sortCol, setSortCol] = useState<GapSortColumn>("volume");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [rowContentTypes, setRowContentTypes] = useState<Record<string, ContentType>>({});
@@ -212,7 +218,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   );
 
   // Memoized Variables
-  const calendarEntries = calendarRes?.success ? calendarRes.data : [];
+  const calendarEntries = useMemo(() => calendarRes?.success ? calendarRes.data : [], [calendarRes]);
 
   const calendarMap = useMemo(() => {
     const map = new Map<string, typeof calendarEntries[number]>();
@@ -232,17 +238,18 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     return new Set((aiSuggestedGapKeywords ?? []).map(k => k.toLowerCase()));
   }, [aiSuggestedGapKeywords]);
 
-  const competitors = state?.competitors ?? [];
-  const gaps = state?.gaps ?? [];
-  const averages = state?.averages;
+  const competitors = useMemo(() => state?.competitors ?? [], [state?.competitors]);
+  const gaps = useMemo(() => state?.gaps ?? [], [state?.gaps]);
   const hasBenchmark = competitors.length > 0;
 
   const allFilteredGaps = useMemo(() => {
     const filtered = gaps.filter(g => {
       if (workspaceTab === "all") return true;
       const isSch = calendarMap.has(g.keyword.toLowerCase());
+      const isGen = !!(calendarMap.get(g.keyword.toLowerCase())?.blog);
       if (workspaceTab === "scheduled") return isSch;
       if (workspaceTab === "unscheduled") return !isSch;
+      if (workspaceTab === "generated") return isGen;
       return true;
     });
     return [...filtered].sort((a, b) => compareGaps(a, b, sortCol, sortDir));
@@ -260,13 +267,17 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     let all = 0;
     let unscheduled = 0;
     let scheduled = 0;
+    let generated = 0;
     for (const g of gaps) {
       all += 1;
-      const isSch = calendarMap.has(g.keyword.toLowerCase());
+      const entry = calendarMap.get(g.keyword.toLowerCase());
+      const isSch = !!entry;
+      const isGen = !!(entry?.blog);
       if (isSch) scheduled += 1;
       else unscheduled += 1;
+      if (isGen) generated += 1;
     }
-    return { all, unscheduled, scheduled };
+    return { all, unscheduled, scheduled, generated };
   }, [gaps, calendarMap]);
 
   // Effects
@@ -416,12 +427,12 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   }, []);
 
   const resolveContentType = useCallback(
-    (keywordText: string, keywordId?: string, aiEvalData?: any) => {
+    (keywordText: string, keywordId?: string, aiEvalData?: GapAiEvalData | null) => {
       const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
       if (entry) {
         return articleTypeToContentType(entry.article_type);
       }
-      const recommended = aiEvalData?.recommended_content_type;
+      const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
       const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin"];
       if (recommended && supportedTypes.includes(recommended)) {
         return rowContentTypes[keywordText.toLowerCase()] ?? recommended;
@@ -430,6 +441,72 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     },
     [calendarMap, rowContentTypes, articleTypeToContentType]
   );
+
+  const renderContentTypeSelect = useCallback((
+    keywordText: string,
+    aiEvalData: GapAiEvalData | null | undefined
+  ) => {
+    const entry = calendarMap.get(keywordText.toLowerCase());
+    const isSch = !!entry;
+    const isGenerated = !!entry?.blog;
+    const currentType = resolveContentType(keywordText, undefined, aiEvalData);
+
+    const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
+    const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+    const labels: Record<ContentType, string> = {
+      blog: "Blog article",
+      ebook: "Ebook",
+      whitepaper: "Whitepaper",
+      linkedin: "LinkedIn post",
+    };
+
+    return (
+      <select
+        value={currentType}
+        onChange={e => setRowContentType(keywordText, e.target.value as ContentType)}
+        disabled={isSch || isGenerated}
+        className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+      >
+        {options.map(type => (
+          <option key={type} value={type}>
+            {labels[type]}
+            {type === recommended ? " ✨" : ""}
+          </option>
+        ))}
+      </select>
+    );
+  }, [calendarMap, resolveContentType, setRowContentType, articleTypeToContentType]);
+
+  const renderActionCell = useCallback((g: KeywordGap) => {
+    const entry = calendarMap.get(g.keyword.toLowerCase());
+    const selectedType = resolveContentType(g.keyword, undefined, g.ai_eval_data);
+    const intent = g.is_transactional
+      ? "transactional"
+      : g.is_commercial
+        ? "commercial"
+        : g.is_informational
+          ? "informational"
+          : g.is_navigational
+            ? "navigational"
+            : "informational";
+
+    return (
+      <KeywordActionCell
+        projectId={projectId}
+        keyword={g.keyword}
+        sourceType="competitor_gap"
+        contentType={selectedType}
+        scheduledDate={entry?.scheduled_date}
+        blogId={entry?.blog?.id}
+        volume={g.volume}
+        kd={g.kd}
+        intent={intent}
+        competitorDomain={g.top_competitor_domain}
+        rankingUrl={g.top_competitor_url}
+        rank={g.position ?? undefined}
+      />
+    );
+  }, [calendarMap, resolveContentType, projectId]);
 
   const sortMark = useCallback(
     (col: GapSortColumn) =>
@@ -450,12 +527,17 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       { id: "all" as OpportunityWorkspaceTab, label: "All", count: workspaceCounts.all },
       { id: "unscheduled" as OpportunityWorkspaceTab, label: "Unscheduled", count: workspaceCounts.unscheduled },
       { id: "scheduled" as OpportunityWorkspaceTab, label: "Scheduled", count: workspaceCounts.scheduled },
+      { id: "generated" as OpportunityWorkspaceTab, label: "Generated", count: workspaceCounts.generated },
     ],
     [workspaceCounts]
   );
 
+  const handleWorkspaceTabChange = (tab: OpportunityWorkspaceTab) => {
+    dispatch(rememberCompetitorKeywordFilter({ projectId, filter: tab as unknown as KeywordFilterTab }));
+  };
+
   return (
-    <div className="space-y-4 pb-16 max-w-full mx-auto relative">
+    <div className="space-y-4 pb-16 max-w-full mx-auto relative animate-slide-in-right">
       {error && (
         <div className="rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">
           {error}
@@ -510,13 +592,14 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             </div>
           )}
 
-          <section className="space-y-4">
+          <section className="space-y-3">
+
             <div className="flex flex-wrap items-center justify-between gap-3">
               <PillTabFilterBar<OpportunityWorkspaceTab>
                 className="min-w-0 flex-1"
                 items={OPPORTUNITY_TAB_ITEMS}
                 activeId={workspaceTab}
-                onChange={setWorkspaceTab}
+                onChange={handleWorkspaceTabChange}
               />
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                 {(gaps.length > 0 || loading) && !massSelectMode && (
@@ -618,22 +701,73 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                 )}
               </div>
             </div>
-          </section>
 
-          {loading ? (
-            <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <TableSkeleton rows={8} columns={9} />
+            {/* ── Search bar and rediscover button commented out ──────────────── */}
+            {/*
+            <div className="flex items-center gap-3">
+              <div className="relative flex-none">
+                <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+                  <svg className="h-3.5 w-3.5 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                  </svg>
+                </div>
+                <input
+                  id="competitor-keyword-search"
+                  type="search"
+                  placeholder="Search opportunities…"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="h-9 w-64 rounded-full border border-border-subtle bg-surface-elevated pl-8 pr-8 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none transition-all duration-200 focus:border-brand-action/50 focus:ring-2 focus:ring-brand-action/15 hover:border-border-strong"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="absolute inset-y-0 right-2.5 flex items-center text-text-tertiary hover:text-text-primary transition-colors"
+                    aria-label="Clear search"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              {searchQuery && (
+                <span className="text-[12px] text-text-tertiary">
+                  {allFilteredGaps.length} result{allFilteredGaps.length !== 1 ? "s" : ""}
+                </span>
+              )}
+              {hasBenchmark && (
+                <button
+                  type="button"
+                  onClick={handleRun}
+                  disabled={running || loading}
+                  title="Re-run competitor benchmark"
+                  className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3.5 text-[12px] font-semibold text-text-secondary shadow-sm transition-all duration-200 hover:border-border-strong hover:text-text-primary hover:-translate-y-px disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  {running ? (
+                    <><div className="h-3 w-3 rounded-full border-2 border-text-tertiary/30 border-t-text-secondary animate-spin" /><span>Running…</span></>
+                  ) : (
+                    <><svg className="h-3.5 w-3.5 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg><span>Re‑benchmark</span></>
+                  )}
+                </button>
+              )}
             </div>
-          ) : displayedGaps.length === 0 ? (
-            <EmptyState
-              variant="card"
-              title={workspaceTab !== "all" ? "No opportunities match this tab" : "No opportunities match this view"}
-            />
-          ) : (
-            <div
-              className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden flex flex-col"
-              style={{ height: "560px" }}
-            >
+            */}
+
+          <Suspense fallback={<KeywordTableSkeleton />}>
+            {loading ? (
+              <KeywordTableSkeleton />
+            ) : displayedGaps.length === 0 ? (
+              <EmptyState
+                variant="card"
+                title={workspaceTab !== "all" ? "No opportunities match this tab" : "No opportunities match this view"}
+              />
+            ) : (
+              <div
+                className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden flex flex-col"
+                style={{ height: "560px" }}
+              >
               <div ref={tableScrollRef} className="overflow-x-auto overflow-y-auto flex-1 min-h-0">
                 <table className="w-full min-w-[1060px] text-left">
                   <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
@@ -844,74 +978,14 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                             onClick={e => e.stopPropagation()}
                             onPointerDown={e => e.stopPropagation()}
                           >
-                            {(() => {
-                              const keywordText = g.keyword;
-                              const entry = calendarMap.get(keywordText.toLowerCase());
-                              const isSch = !!entry;
-                              const isGenerated = !!entry?.blog;
-                              const currentType = resolveContentType(keywordText, undefined, g.ai_eval_data);
-
-                              const recommended = (g.ai_eval_data as any)?.recommended_content_type;
-                              const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
-                              const labels: Record<ContentType, string> = {
-                                blog: "Blog article",
-                                ebook: "Ebook",
-                                whitepaper: "Whitepaper",
-                                linkedin: "LinkedIn post",
-                              };
-
-                              return (
-                                <select
-                                  value={currentType}
-                                  onChange={e => setRowContentType(keywordText, e.target.value as ContentType)}
-                                  disabled={isSch || isGenerated}
-                                  className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                                >
-                                  {options.map(type => (
-                                    <option key={type} value={type}>
-                                      {labels[type]}
-                                      {type === recommended ? " ✨" : ""}
-                                    </option>
-                                  ))}
-                                </select>
-                              );
-                            })()}
+                            {renderContentTypeSelect(g.keyword, g.ai_eval_data)}
                           </td>
                           <td
                             className="px-4 py-3 text-center"
                             onClick={e => e.stopPropagation()}
                             onPointerDown={e => e.stopPropagation()}
                           >
-                            {(() => {
-                              const entry = calendarMap.get(g.keyword.toLowerCase());
-                              const selectedType = resolveContentType(g.keyword, undefined, g.ai_eval_data);
-                              return (
-                                <KeywordActionCell
-                                  projectId={projectId}
-                                  keyword={g.keyword}
-                                  sourceType="competitor_gap"
-                                  contentType={selectedType}
-                                  scheduledDate={entry?.scheduled_date}
-                                  blogId={entry?.blog?.id}
-                                  volume={g.volume}
-                                  kd={g.kd}
-                                  intent={
-                                    g.is_transactional
-                                      ? "transactional"
-                                      : g.is_commercial
-                                        ? "commercial"
-                                        : g.is_informational
-                                          ? "informational"
-                                          : g.is_navigational
-                                            ? "navigational"
-                                            : "informational"
-                                  }
-                                  competitorDomain={g.top_competitor_domain}
-                                  rankingUrl={g.top_competitor_url}
-                                  rank={g.position ?? undefined}
-                                />
-                              );
-                            })()}
+                            {renderActionCell(g)}
                           </td>
                         </tr>
                       );
@@ -979,6 +1053,8 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               )}
             </div>
           )}
+          </Suspense>
+          </section>
         </div>
       )}
     </div>

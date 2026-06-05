@@ -361,7 +361,7 @@ export async function auditExistingBlogs(
     const batch = queue.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
       batch.map(url =>
-        auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language }).catch(e => ({
+        auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language, projectId }).catch(e => ({
           record: {
             url,
             title: url,
@@ -609,7 +609,7 @@ export async function auditSelectedUrls(
   // Run sequentially to limit external API pressure.
   for (const url of urls) {
     try {
-      const { record: r } = await auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language });
+      const { record: r } = await auditBlogUrl({ url, brief, sitePeerUrls: blogUrls, region, language, projectId });
       const analysisMerged: BlogAuditAnalysis = {
         ...r.analysis,
         analyze_page_meta: {
@@ -712,6 +712,7 @@ export async function auditExternalBlogUrl(
     sitePeerUrls,
     region,
     language,
+    projectId,
   });
 
   const { data: prevRow } = await supabaseAdmin

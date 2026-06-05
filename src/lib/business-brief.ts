@@ -13,10 +13,28 @@ import {
   normalizeDomain,
 } from './jina';
 import { hybridReadBatch, type ScrapedPageMarkdown as JinaPage } from '../services/hybridScraper';
+import { z } from 'zod';
+import { aiGenerateStructured } from '@/services/ai/providers';
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+const internalLinkCandidateSchema = z.object({
+  url: z.string(),
+  title: z.string(),
+  topic: z.string(),
+});
+
+const llmExtractedBriefSchema = z.object({
+  summary: z.string(),
+  products: z.array(z.string()),
+  entities: z.array(z.string()),
+  audiences: z.array(z.string()),
+  usps: z.array(z.string()),
+  tone: z.string(),
+  internal_link_candidates: z.array(internalLinkCandidateSchema),
+  seed_phrases: z.array(z.string()),
+  tofu_hints: z.array(z.string()),
+  mofu_hints: z.array(z.string()),
+  bofu_hints: z.array(z.string()),
+});
 
 export interface InternalLinkCandidate {
   url: string;
@@ -74,6 +92,8 @@ export interface BuildBriefInput {
   target_audience: string;
   description?: string;
   competitors?: string[];
+  projectId?: string;
+  userId?: string;
 }
 
 /** Entrypoint: scrape → extract → return structured brief. */
@@ -134,15 +154,24 @@ export async function buildBusinessBrief(input: BuildBriefInput): Promise<BuildB
 
   const prompt = buildPrompt(input, userContext + blogListContext, compContext);
 
-  // 4. Gemini → JSON.
+  // 4. Claude/Gemini structured generation.
   let parsed: Partial<BusinessBrief> | null = null;
   try {
-    const jsonText = await geminiJson(prompt);
-    parsed = safeParse(jsonText);
-    trace.push({ label: 'gemini_extract', ok: !!parsed, length: jsonText.length });
+    const structuredResult = await aiGenerateStructured(
+      'business-brief',
+      prompt,
+      llmExtractedBriefSchema,
+      {
+        temperature: 0.4,
+        userId: input.userId,
+        projectId: input.projectId,
+      }
+    );
+    parsed = structuredResult;
+    trace.push({ label: 'ai_extract', ok: !!parsed, length: JSON.stringify(structuredResult).length });
   } catch (e) {
     trace.push({
-      label: 'gemini_extract',
+      label: 'ai_extract',
       ok: false,
       error: e instanceof Error ? e.message : String(e),
     });
@@ -214,46 +243,7 @@ Rules for seed_phrases (critical — these become real Google queries):
 Return ONLY the JSON object.`;
 }
 
-async function geminiJson(prompt: string): Promise<string> {
-  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY missing in server env');
-  const res = await fetch(GEMINI_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-goog-api-key': GEMINI_API_KEY,
-    },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.4,
-        maxOutputTokens: 4096,
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const json = await res.json();
-  const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Gemini returned empty text');
-  return text;
-}
-
-function safeParse(text: string): Partial<BusinessBrief> | null {
-  try {
-    return JSON.parse(text);
-  } catch {
-    // Very occasionally Gemini will wrap JSON in ```json fences despite the
-    // mimeType hint. Strip them and retry.
-    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try {
-      return JSON.parse(match[0]);
-    } catch {
-      return null;
-    }
-  }
-}
+// (Helper functions geminiJson and safeParse removed as aiGenerateStructured is now used)
 
 function coerceBrief(
   parsed: Partial<BusinessBrief> | null,

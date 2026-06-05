@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import {
@@ -24,6 +24,8 @@ import {
   SectionHeading,
   StepRow,
   StudioBreadcrumb,
+  RecentHistorySkeleton,
+  validateLinkedInForm,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -34,28 +36,11 @@ import {
   generateLinkedInPostAction,
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
-
-const STYLE_OPTIONS: { id: LinkedInPostStyle; label: string; hint: string }[] = [
-  { id: "educational", label: "Educational", hint: "Counter-intuitive insight + a frame the reader keeps" },
-  { id: "founder", label: "Founder", hint: "Real, specific moment + the lesson" },
-  { id: "industry_insight", label: "Industry insight", hint: "Fresh data + what most miss" },
-  { id: "storytelling", label: "Storytelling", hint: "Three short scenes — implicit lesson" },
-  { id: "list", label: "List", hint: "5–8 short items + meta lesson" },
-  { id: "carousel", label: "Carousel-ready", hint: "6–9 chunks, slide-sized" },
-];
-
-const VOICE_OPTIONS = [
-  { id: "first_person" as const, label: "First person", hint: "Sounds like a founder writing" },
-  { id: "company" as const, label: "Brand voice", hint: "Sounds like the company" },
-];
-
-const TONE_OPTIONS = [
-  "Confident · plain-spoken",
-  "Curious · analytical",
-  "Provocative · sharp",
-  "Warm · human",
-  "Numbers-first · precise",
-];
+import {
+  LINKEDIN_STYLE_OPTIONS,
+  LINKEDIN_VOICE_OPTIONS,
+  LINKEDIN_TONE_OPTIONS,
+} from "@/constants";
 
 type Phase = "form" | "review" | "generating";
 
@@ -87,7 +72,7 @@ export default function LinkedInGeneratorPage() {
   const [topic, setTopic] = useState("");
   const [primaryKeyword, setPrimaryKeyword] = useState(searchParams?.get("keyword") || "");
   const [audience, setAudience] = useState("");
-  const [tone, setTone] = useState(TONE_OPTIONS[0]);
+  const [tone, setTone] = useState(LINKEDIN_TONE_OPTIONS[0]);
   const [postStyle, setPostStyle] = useState<LinkedInPostStyle>("educational");
   const [voice, setVoice] = useState<"first_person" | "company">("first_person");
   const [authorRole, setAuthorRole] = useState("Founder");
@@ -97,17 +82,6 @@ export default function LinkedInGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
-
-  const { data: history } = useQuery({
-    queryKey: qk.contentStudioHistory(projectId),
-    queryFn: () => contentGeneratorApi.studioHistory(projectId),
-    enabled: !!projectId,
-    ...DEFAULT_QUERY_OPTIONS,
-  });
-  const recent = useMemo(() => {
-    const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
-    return rows.filter(r => r.content_type === "linkedin").slice(0, 6);
-  }, [history]);
 
   useEffect(() => {
     if (project?.target_audience && !audience) setAudience(project.target_audience);
@@ -150,8 +124,10 @@ export default function LinkedInGeneratorPage() {
   };
 
   const goReview = () => {
-    if (!topic.trim()) return toast.error("Add a topic or use Ask AI.");
-    if (!primaryKeyword.trim()) return toast.error("Add the primary keyword.");
+    const val = validateLinkedInForm(topic, primaryKeyword);
+    if (!val.isValid) {
+      return toast.error(val.error || "Validation failed");
+    }
     setPhase("review");
   };
 
@@ -262,7 +238,7 @@ export default function LinkedInGeneratorPage() {
                 { label: "Primary keyword", value: primaryKeyword },
                 { label: "Audience", value: audience },
                 { label: "Tone", value: tone },
-                { label: "Post style", value: STYLE_OPTIONS.find(s => s.id === postStyle)?.label ?? postStyle },
+                { label: "Post style", value: LINKEDIN_STYLE_OPTIONS.find(s => s.id === postStyle)?.label ?? postStyle },
                 {
                   label: "Voice",
                   value:
@@ -323,10 +299,10 @@ export default function LinkedInGeneratorPage() {
               <SectionHeading index="02" label="Style & voice" />
               <div className="space-y-5">
                 <Field label="Post style">
-                  <ChipChoice<LinkedInPostStyle> options={STYLE_OPTIONS} value={postStyle} onChange={setPostStyle} ariaLabel="Post style" />
+                  <ChipChoice<LinkedInPostStyle> options={LINKEDIN_STYLE_OPTIONS} value={postStyle} onChange={setPostStyle} ariaLabel="Post style" />
                 </Field>
                 <Field label="Voice">
-                  <ChipChoice options={VOICE_OPTIONS} value={voice} onChange={setVoice} ariaLabel="Voice" />
+                  <ChipChoice options={LINKEDIN_VOICE_OPTIONS} value={voice} onChange={setVoice} ariaLabel="Voice" />
                 </Field>
                 {voice === "first_person" ? (
                   <Field label="Author role" htmlFor="li-author-role">
@@ -341,7 +317,7 @@ export default function LinkedInGeneratorPage() {
                 ) : null}
                 <Field label="Tone" htmlFor="li-tone">
                   <Select id="li-tone" inputSize="lg" value={tone} onChange={e => setTone(e.target.value)}>
-                    {TONE_OPTIONS.map(t => (
+                    {LINKEDIN_TONE_OPTIONS.map(t => (
                       <option key={t} value={t}>
                         {t}
                       </option>
@@ -386,31 +362,50 @@ export default function LinkedInGeneratorPage() {
               </div>
             </ContentFormSection>
 
-            {recent.length > 0 ? (
-              <ContentFormSection>
-                <SectionHeading index="04" label="Recent posts" />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {recent.map(r => (
-                    <ProjectNavLink
-                      key={r.id}
-                      href={`${studioBase}/linkedin/${r.id}`}
-                      className="group flex flex-col gap-1 rounded-card border border-border-subtle bg-surface-elevated p-4 transition-colors hover:border-border-strong"
-                    >
-                      <span className="text-[11px] font-mono uppercase tracking-widest text-text-tertiary">
-                        {new Date(r.updated_at).toLocaleDateString()}
-                      </span>
-                      <span className="text-[14px] font-semibold text-text-primary line-clamp-3">{r.title}</span>
-                      <span className="mt-1 text-[11px] text-text-tertiary">
-                        {r.word_count.toLocaleString()} words
-                      </span>
-                    </ProjectNavLink>
-                  ))}
-                </div>
-              </ContentFormSection>
-            ) : null}
+            <Suspense fallback={<RecentHistorySkeleton />}>
+              <RecentLinkedInPostsList projectId={projectId} studioBase={studioBase} />
+            </Suspense>
           </ContentForm>
         )}
       </div>
     </div>
+  );
+}
+
+function RecentLinkedInPostsList({ projectId, studioBase }: { projectId: string; studioBase: string }) {
+  const { data: history } = useSuspenseQuery({
+    queryKey: qk.contentStudioHistory(projectId),
+    queryFn: () => contentGeneratorApi.studioHistory(projectId),
+    ...DEFAULT_QUERY_OPTIONS,
+  });
+
+  const recent = useMemo(() => {
+    const rows: ContentStudioHistoryRow[] = history?.success ? history.data : [];
+    return rows.filter(r => r.content_type === "linkedin").slice(0, 6);
+  }, [history]);
+
+  if (recent.length === 0) return null;
+
+  return (
+    <ContentFormSection>
+      <SectionHeading index="04" label="Recent posts" />
+      <div className="grid gap-3 sm:grid-cols-2">
+        {recent.map(r => (
+          <ProjectNavLink
+            key={r.id}
+            href={`${studioBase}/linkedin/${r.id}`}
+            className="group flex flex-col gap-1 rounded-card border border-border-subtle bg-surface-elevated p-4 transition-colors hover:border-border-strong"
+          >
+            <span className="text-[11px] font-mono uppercase tracking-widest text-text-tertiary">
+              {new Date(r.updated_at).toLocaleDateString()}
+            </span>
+            <span className="text-[14px] font-semibold text-text-primary line-clamp-3">{r.title}</span>
+            <span className="mt-1 text-[11px] text-text-tertiary">
+              {r.word_count.toLocaleString()} words
+            </span>
+          </ProjectNavLink>
+        ))}
+      </div>
+    </ContentFormSection>
   );
 }

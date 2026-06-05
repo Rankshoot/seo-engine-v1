@@ -27,6 +27,28 @@ export interface LinkedInPromptContext {
   brandDescription?: string;
 }
 
+/**
+ * Type-guard to validate LinkedInPromptContext objects at runtime.
+ */
+export function isLinkedInPromptContext(obj: unknown): obj is LinkedInPromptContext {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const c = obj as Record<string, unknown>;
+  return (
+    typeof c.topic === 'string' &&
+    typeof c.postStyle === 'string' &&
+    typeof c.audience === 'string' &&
+    typeof c.tone === 'string' &&
+    typeof c.primaryKeyword === 'string' &&
+    typeof c.ctaObjective === 'string' &&
+    (c.voicePerspective === 'first_person' || c.voicePerspective === 'company') &&
+    typeof c.regionLabel === 'string' &&
+    typeof c.languageLabel === 'string' &&
+    typeof c.companyName === 'string' &&
+    typeof c.companyDomain === 'string' &&
+    typeof c.niche === 'string'
+  );
+}
+
 const STYLE_GUIDE: Record<LinkedInPostStyle, string> = {
   educational:
     'Educational explainer. Lead with a counter-intuitive insight, deliver one frame the reader can use today, and close with a sharp question.',
@@ -42,10 +64,36 @@ const STYLE_GUIDE: Record<LinkedInPostStyle, string> = {
     'Carousel-style text post. Plan 6–9 slide-sized chunks separated by blank lines. Each chunk = one heading + 1–2 lines, suitable for repurposing into a carousel.',
 };
 
+// Frozen immutable object representing prompt sections (SonarQube compliance)
+const LINKEDIN_PROMPT_TEMPLATE = Object.freeze({
+  intro: `You are a senior LinkedIn ghostwriter who has shipped 1,000+ posts that pulled real engagement (>2% engagement rate) WITHOUT clickbait. Write ONE post.`,
+  platformRules: `PLATFORM RULES — non-negotiable:
+- Total length: 950–1,300 characters (LinkedIn collapses at 1,300; the hook + first line must be magnetic).
+- First line is the HOOK — must work standalone above the fold. ≤ 12 words. No "In today's world", no "I'm excited to share".
+- Use 1–2 sentences per paragraph. Generous whitespace. No walls of text.
+- No emojis (unless the topic genuinely demands one — never decorative).
+- Do NOT spam hashtags. End with 3–5 targeted hashtags only, on the last line.
+- No "👇" / "DM me" / "P.S." cliché endings. End with a real question, an observation, or a CTA tied to the objective.
+- No links inside the body (LinkedIn deprioritizes them). The CTA can mention "link in profile" if appropriate.
+- Avoid generic AI phrasing ("delve", "leverage", "unlock", "navigating", "in today's fast-paced", "game-changer", "synergy", "robust").
+- Active voice, plain words. Specific > vague every time.`,
+  outputContract: `OUTPUT CONTRACT — produce exactly this Markdown shape, then the ---META--- block:`
+});
+
 export function buildLinkedInPostPrompt(ctx: LinkedInPromptContext): string {
+  if (!isLinkedInPromptContext(ctx)) {
+    console.error("Invalid LinkedInPromptContext passed to buildLinkedInPostPrompt:", ctx);
+    throw new TypeError("Invalid prompt context configuration. See diagnostic logs for details.");
+  }
+
   const brandPersonaBlock = (ctx.brandVoice || ctx.brandValues || ctx.brandDescription)
-    ? `\nBRAND PERSONA & IDENTITY:
-${ctx.brandVoice ? `- Brand Voice/Tone: ${ctx.brandVoice}\n` : ''}${ctx.brandValues ? `- Core Values/Messaging: ${ctx.brandValues}\n` : ''}${ctx.brandDescription ? `- Personality/Description: ${ctx.brandDescription}\n` : ''}`
+    ? `\nBRAND PERSONA & IDENTITY:\n${
+        ctx.brandVoice ? `- Brand Voice/Tone: ${ctx.brandVoice}\n` : ''
+      }${
+        ctx.brandValues ? `- Core Values/Messaging: ${ctx.brandValues}\n` : ''
+      }${
+        ctx.brandDescription ? `- Personality/Description: ${ctx.brandDescription}\n` : ''
+      }`
     : '';
 
   const briefBlock = ctx.brief
@@ -63,34 +111,15 @@ ${brandPersonaBlock}`
       ? `Write in first person as the ${ctx.authorRole || 'founder'} of ${ctx.companyName}. Use "I" / "we". Sound like a real human posting from their phone. ${ctx.brandVoice ? `Align the personality with the brand voice: ${ctx.brandVoice}` : ''}`
       : `Write as the ${ctx.companyName} brand voice. Use "we" sparingly. Stay human, not corporate. ${ctx.brandVoice ? `Align the personality and tone with: ${ctx.brandVoice}` : ''}`;
 
-  return `You are a senior LinkedIn ghostwriter who has shipped 1,000+ posts that pulled real engagement (>2% engagement rate) WITHOUT clickbait. Write ONE post.
-
-PLATFORM RULES — non-negotiable:
-- Total length: 950–1,300 characters (LinkedIn collapses at 1,300; the hook + first line must be magnetic).
-- First line is the HOOK — must work standalone above the fold. ≤ 12 words. No "In today's world", no "I'm excited to share".
-- Use 1–2 sentences per paragraph. Generous whitespace. No walls of text.
-- No emojis (unless the topic genuinely demands one — never decorative).
-- Do NOT spam hashtags. End with 3–5 targeted hashtags only, on the last line.
-- No "👇" / "DM me" / "P.S." cliché endings. End with a real question, an observation, or a CTA tied to the objective.
-- No links inside the body (LinkedIn deprioritizes them). The CTA can mention "link in profile" if appropriate.
-- Avoid generic AI phrasing ("delve", "leverage", "unlock", "navigating", "in today's fast-paced", "game-changer", "synergy", "robust").
-- Active voice, plain words. Specific > vague every time.
-
-POST STYLE: ${ctx.postStyle.toUpperCase()} — ${STYLE_GUIDE[ctx.postStyle]}
-TOPIC: ${ctx.topic}
-PRIMARY KEYWORD (must appear naturally somewhere — not stuffed): "${ctx.primaryKeyword}"
-AUDIENCE: ${ctx.audience}
-TONE: ${ctx.tone}
-CTA OBJECTIVE: ${ctx.ctaObjective}
-REGION: ${ctx.regionLabel} · LANGUAGE: ${ctx.languageLabel}
-
-${voiceBlock}
-
-${briefBlock}
-
-OUTPUT CONTRACT — produce exactly this Markdown shape, then the ---META--- block:
-
-# [LinkedIn — ${ctx.postStyle}] ${ctx.companyName}
+  return [
+    LINKEDIN_PROMPT_TEMPLATE.intro,
+    LINKEDIN_PROMPT_TEMPLATE.platformRules,
+    `POST STYLE: ${ctx.postStyle.toUpperCase()} — ${STYLE_GUIDE[ctx.postStyle]}`,
+    `TOPIC: ${ctx.topic}\nPRIMARY KEYWORD (must appear naturally somewhere — not stuffed): "${ctx.primaryKeyword}"\nAUDIENCE: ${ctx.audience}\nTONE: ${ctx.tone}\nCTA OBJECTIVE: ${ctx.ctaObjective}\nREGION: ${ctx.regionLabel} · LANGUAGE: ${ctx.languageLabel}`,
+    voiceBlock,
+    briefBlock,
+    LINKEDIN_PROMPT_TEMPLATE.outputContract,
+    `# [LinkedIn — ${ctx.postStyle}] ${ctx.companyName}
 
 ## Hook
 [The hook line. ≤ 12 words. Must make a scroller stop.]
@@ -117,5 +146,6 @@ After the post, output EXACTLY this block (valid JSON, no trailing commas):
   "primary_keyword": "${ctx.primaryKeyword}",
   "meta_description": "≤ 160 char description used inside Rankit history list",
   "slug": "short-url-slug-from-the-hook"
-}`;
+}`
+  ].join('\n\n');
 }

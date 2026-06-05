@@ -305,7 +305,7 @@ export default function BlogGeneratorPage() {
       toast.error("Generation ended unexpectedly. Please try again.");
       setPhase("form");
       setStreamProgress(undefined);
-    } catch (e) {
+    } catch {
       toast.error("An error occurred during generation");
       setPhase("form");
       setStreamProgress(undefined);

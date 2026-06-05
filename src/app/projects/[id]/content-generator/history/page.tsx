@@ -46,7 +46,9 @@ export default function ContentHistoryPage() {
     ...DEFAULT_QUERY_OPTIONS,
   });
 
-  const allRows: ContentStudioHistoryRow[] = data?.success ? data.data : [];
+  const allRows: ContentStudioHistoryRow[] = useMemo(() => {
+    return data?.success ? data.data : [];
+  }, [data]);
   const counts = useMemo(() => {
     const map: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
     for (const r of allRows) map[r.content_type] = (map[r.content_type] ?? 0) + 1;

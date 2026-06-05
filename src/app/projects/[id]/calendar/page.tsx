@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { memo, useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -83,6 +83,216 @@ function entryBlogTitle(entry: CalendarEntry | null): string {
   return et || entry.focus_keyword || "—";
 }
 
+// ── Module-level helpers ─────────────────────────────────────────────────────────────
+function getDefaultCalendarView(): "list" | "grid" {
+  if (typeof window === "undefined") return "grid";
+  const stored = localStorage.getItem("calendar-view");
+  if (stored === "list") return "list";
+  localStorage.setItem("calendar-view", "grid");
+  return "grid";
+}
+
+// ── Internal types ─────────────────────────────────────────────────────────────
+type CalendarKwState = { status?: string; date?: string };
+
+interface CalendarListRowProps {
+  entry: CalendarEntry;
+  isFirst: boolean;
+  projectId: string;
+  scheduledKeywordsMap: Record<string, CalendarKwState | undefined>;
+  pickingDateForEntryId: string | null;
+  savingDate: boolean;
+  scheduledDatesSet: Set<string>;
+  removingEntryId: string | null;
+  onPickingDateChange: (id: string | null) => void;
+  onScheduleKeyword: (keywordId: string, date: string) => Promise<boolean>;
+  onRemoveEntry: (entryId: string, keyword: string) => void;
+}
+
+/** Memoised row — re-renders only when its own entry or direct state changes. */
+const CalendarListRow = memo(function CalendarListRow({
+  entry,
+  isFirst,
+  projectId,
+  scheduledKeywordsMap,
+  pickingDateForEntryId,
+  savingDate,
+  scheduledDatesSet,
+  removingEntryId,
+  onPickingDateChange,
+  onScheduleKeyword,
+  onRemoveEntry,
+}: CalendarListRowProps) {
+  const kw = entry.keywords;
+  const isRepairRow = entry.article_type === "Repair";
+
+  const origin = resolveCalendarKeywordOrigin({
+    contentHealthAudit: entry.content_health_audit,
+    keywordSourceType: kw?.source_type,
+    articleType: entry.article_type,
+    aiSourceFromEntry: entry.ai_source,
+    aiSourceFromKeyword: kw?.ai_source ?? null,
+  });
+
+  const reduxState = entry.keyword_id ? scheduledKeywordsMap[entry.keyword_id] : undefined;
+  const effectiveStatus = entry.status ?? reduxState?.status;
+  const effectiveDate   = entry.scheduled_date ?? reduxState?.date ?? "";
+
+  const lifecycleDisplay = resolveCalendarLifecycleStatus({
+    hasCalendarEntry: true,
+    calendarStatus: effectiveStatus,
+  });
+
+  const isLocked =
+    effectiveStatus === "generated" ||
+    effectiveStatus === "downloaded" ||
+    effectiveStatus === "approved" ||
+    effectiveStatus === "published";
+  const isGenerating  = effectiveStatus === "generating";
+  const isPickingThis = pickingDateForEntryId === entry.id;
+  const canReschedule = Boolean(entry.keyword_id) && !isGenerating;
+
+  const dateObj    = new Date(effectiveDate + "T12:00:00");
+  const monthShort = dateObj.toLocaleDateString("en-US", { month: "short" });
+  const dayNum     = dateObj.getDate();
+  const weekday    = dateObj.toLocaleDateString("en-US", { weekday: "short" });
+  const todayISO   = new Date().toISOString().slice(0, 10);
+  const isPastDate = effectiveDate < todayISO;
+  const blogTitle  = entryBlogTitle(entry);
+
+  return (
+    <div
+      className={`group flex gap-4 px-4 py-3 transition-colors hover:bg-surface-hover/40 ${
+        !isFirst ? "border-t border-border-subtle" : ""
+      }`}
+    >
+      {/* Date card */}
+      <div className="flex shrink-0 flex-col items-center pt-0.5">
+        <div className="flex w-14 flex-col items-center">
+          <span
+            className={`text-[9px] font-bold uppercase tracking-widest ${
+              isPastDate ? "text-text-tertiary" : "text-brand-action/70"
+            }`}
+          >
+            {monthShort}
+          </span>
+          <span
+            className={`-mt-0.5 text-[24px] font-bold leading-none tabular-nums ${
+              isPastDate ? "text-text-secondary" : "text-brand-action"
+            }`}
+          >
+            {dayNum}
+          </span>
+          <span className="text-[8px] font-medium text-text-tertiary">{weekday}</span>
+        </div>
+        {canReschedule && (
+          <div className="mt-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+            <CalendarDatePicker
+              open={isPickingThis}
+              onOpenChange={(o) => onPickingDateChange(o ? entry.id : null)}
+              currentDate={entry.scheduled_date}
+              onConfirm={(d) => {
+                if (entry.keyword_id) void onScheduleKeyword(entry.keyword_id, d);
+              }}
+              saving={savingDate}
+              scheduledDates={scheduledDatesSet}
+              iconOnly
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Entry details */}
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="min-w-0">
+          <h4 className="truncate text-[15px] font-semibold leading-tight text-text-primary">
+            {entry.focus_keyword}
+          </h4>
+          {isRepairRow ? (
+            <p className="mt-0.5 text-[11px] italic text-text-tertiary">Repair draft</p>
+          ) : entry.secondary_keywords?.length ? (
+            <p className="mt-0.5 truncate text-[11px] text-text-tertiary">
+              {entry.secondary_keywords.slice(0, 4).join(" · ")}
+            </p>
+          ) : null}
+        </div>
+
+        {blogTitle !== "—" && (
+          <p className="truncate text-[12px] text-text-tertiary" title={blogTitle}>
+            {blogTitle}
+          </p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-0.5 text-[11px]">
+          <div className="flex items-center gap-1.5">
+            <CalendarOriginPills resolved={origin} />
+          </div>
+          {kw?.volume ? (
+            <div className="flex items-center gap-1">
+              <span className="text-text-tertiary">Vol</span>
+              <span className="font-mono font-medium tabular-nums text-text-secondary">
+                {kw.volume.toLocaleString()}
+              </span>
+            </div>
+          ) : null}
+          {kw?.kd != null && kw.kd > 0 ? (
+            <div className="flex items-center gap-1">
+              <span className="text-text-tertiary">KD</span>
+              <KdCell kd={kw.kd} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Right rail */}
+      <div className="flex shrink-0 flex-col items-end justify-center gap-2 self-stretch pl-2">
+        <LifecycleStatusBadge display={lifecycleDisplay} />
+        {isLocked && (
+          <ProjectNavLink
+            href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+            className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
+          >
+            View Blog
+          </ProjectNavLink>
+        )}
+        {isRepairRow && !isLocked && !isGenerating && (
+          <ProjectNavLink
+            href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+            className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary whitespace-nowrap"
+          >
+            Generate
+          </ProjectNavLink>
+        )}
+        {isGenerating && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#f59e0b]/20 px-4 py-1.5 text-[12px] font-semibold text-[#f59e0b]/70 select-none whitespace-nowrap">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f59e0b]" />
+            Generating…
+          </span>
+        )}
+        {!isGenerating && (
+          <button
+            type="button"
+            onClick={() => onRemoveEntry(entry.id, entry.focus_keyword)}
+            disabled={removingEntryId === entry.id}
+            aria-label={`Remove ${entry.focus_keyword} from calendar`}
+            className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle/50 bg-transparent px-3 py-1 text-[11px] font-medium text-text-tertiary transition-colors hover:border-brand-coral/30 hover:bg-brand-coral/10 hover:text-brand-coral disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            title="Remove from calendar"
+          >
+            {removingEntryId === entry.id ? (
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-coral/30 border-t-brand-coral" />
+            ) : (
+              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            )}
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function CalendarPage() {
@@ -114,13 +324,7 @@ export default function CalendarPage() {
   const [removingEntryId, setRemovingEntryId] = useState<string | null>(null);
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
   const [entryToRemove, setEntryToRemove] = useState<{ id: string; keyword: string } | null>(null);
-  const [calendarView, setCalendarView] = useState<"list" | "grid">(() => {
-    if (typeof window === "undefined") return "grid";
-    const stored = localStorage.getItem("calendar-view");
-    if (stored === "list") return "list";
-    localStorage.setItem("calendar-view", "grid");
-    return "grid";
-  });
+  const [calendarView, setCalendarView] = useState<"list" | "grid">(getDefaultCalendarView);
   const handleCalendarViewChange = useCallback((view: "list" | "grid") => {
     setCalendarView(view);
     localStorage.setItem("calendar-view", view);
@@ -147,31 +351,12 @@ export default function CalendarPage() {
     ...keywordsListQueryOptions(projectId),
     enabled: !!projectId,
   });
-  const allKeywords =
-    keywordsData && "success" in keywordsData && keywordsData.success
+  const allKeywords = useMemo(() => {
+    return keywordsData && "success" in keywordsData && keywordsData.success
       ? keywordsData.data
       : [];
-  const approvedKeywords = allKeywords.filter((k) => k.status === "approved");
+  }, [keywordsData]);
 
-  // ── entry lookup maps ─────────────────────────────────────────────────────
-
-  const entriesByKeywordId = useMemo(
-    () =>
-      new Map(entries.filter((e) => e.keyword_id).map((e) => [e.keyword_id!, e])),
-    [entries]
-  );
-  const entriesByFocusKeyword = useMemo(
-    () => new Map(entries.map((e) => [e.focus_keyword.toLowerCase().trim(), e])),
-    [entries]
-  );
-
-  const findEntryForKeyword = useCallback(
-    (kw: { id: string; keyword: string }) =>
-      entriesByKeywordId.get(kw.id) ??
-      entriesByFocusKeyword.get(kw.keyword.toLowerCase().trim()) ??
-      null,
-    [entriesByKeywordId, entriesByFocusKeyword]
-  );
 
   // Pre-built Set of all already-scheduled dates for the calendar picker
   const scheduledDatesSet = useMemo(
@@ -179,8 +364,8 @@ export default function CalendarPage() {
     [entries]
   );
 
-  // Memoize approved keywords to avoid filtering on every render
-  const approvedKeywordsMemo = useMemo(
+  // Memoized approved keywords
+  const approvedKeywords = useMemo(
     () => allKeywords.filter((k) => k.status === "approved"),
     [allKeywords]
   );
@@ -224,7 +409,7 @@ export default function CalendarPage() {
   const handleScheduleKeyword = useCallback(
     async (keywordId: string, date: string): Promise<boolean> => {
       setSavingDate(true);
-      const kw = approvedKeywordsMemo.find((k) => k.id === keywordId);
+      const kw = approvedKeywords.find((k) => k.id === keywordId);
       try {
         const res = await calendarApi.addKeywordOnDate(projectId, { keywordId, date });
         if (res.success) {
@@ -248,7 +433,7 @@ export default function CalendarPage() {
         setSavingDate(false);
       }
     },
-    [approvedKeywordsMemo, projectId, dispatch, refetchCalendar, queryClient]
+    [approvedKeywords, projectId, dispatch, refetchCalendar, queryClient]
   );
 
   const handleMoveEntryToDate = useCallback(
@@ -362,16 +547,22 @@ export default function CalendarPage() {
 
   // ── derived stats ─────────────────────────────────────────────────────────
 
-  const totalScheduled = entries.length;
-  const blogReady = entries.filter(
-    (e) => e.status === "generated" || e.status === "downloaded"
-  ).length;
-  const awaitingGeneration = entries.filter((e) => e.status === "scheduled").length;
-
-  const sortedEntries = useMemo(
-    () => [...entries].sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)),
-    [entries]
-  );
+  const { totalScheduled, blogReady, awaitingGeneration, sortedEntries } = useMemo(() => {
+    let readyCount = 0;
+    let awaitingCount = 0;
+    for (const e of entries) {
+      if (e.status === "generated" || e.status === "downloaded") readyCount++;
+      else if (e.status === "scheduled") awaitingCount++;
+    }
+    return {
+      totalScheduled: entries.length,
+      blogReady: readyCount,
+      awaitingGeneration: awaitingCount,
+      sortedEntries: [...entries].sort((a, b) =>
+        a.scheduled_date.localeCompare(b.scheduled_date)
+      ),
+    };
+  }, [entries]);
 
   // ── render ────────────────────────────────────────────────────────────────
 
@@ -518,170 +709,22 @@ export default function CalendarPage() {
             </div>
           ) : (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
-              {sortedEntries.map((entry, idx) => {
-                const kw = entry.keywords;
-                const isRepairRow = entry.article_type === "Repair";
-                const origin = resolveCalendarKeywordOrigin({
-                  contentHealthAudit: entry.content_health_audit,
-                  keywordSourceType: kw?.source_type,
-                  articleType: entry.article_type,
-                  aiSourceFromEntry: entry.ai_source,
-                  aiSourceFromKeyword: kw?.ai_source ?? null,
-                });
-                const reduxState = entry.keyword_id ? scheduledKeywordsMap[entry.keyword_id] : undefined;
-                const effectiveStatus = entry.status ?? reduxState?.status;
-                const effectiveDate = entry.scheduled_date ?? reduxState?.date;
-                const lifecycleDisplay = resolveCalendarLifecycleStatus({
-                  hasCalendarEntry: true,
-                  calendarStatus: effectiveStatus,
-                });
-                const isLocked =
-                  effectiveStatus === "generated" ||
-                  effectiveStatus === "downloaded" ||
-                  effectiveStatus === "approved" ||
-                  effectiveStatus === "published";
-                const isGenerating = effectiveStatus === "generating";
-                const isPickingThis = pickingDateForEntryId === entry.id;
-                const canReschedule = Boolean(entry.keyword_id) && !isGenerating;
-
-                const dateObj = new Date(effectiveDate + "T12:00:00");
-                const monthShort = dateObj.toLocaleDateString("en-US", { month: "short" });
-                const dayNum = dateObj.getDate();
-                const weekday = dateObj.toLocaleDateString("en-US", { weekday: "short" });
-                const isPastDate = effectiveDate < new Date().toISOString().slice(0, 10);
-
-                return (
-                  <div
-                    key={entry.id}
-                    className={`group flex gap-4 px-4 py-3 transition-colors hover:bg-surface-hover/40 ${
-                      idx !== 0 ? "border-t border-border-subtle" : ""
-                    }`}
-                  >
-                    {/* Calendar date card on left */}
-                    <div className="flex shrink-0 flex-col items-center pt-0.5">
-                      <div className="flex w-14 flex-col items-center">
-                        <span
-                          className={`text-[9px] font-bold uppercase tracking-widest ${
-                            isPastDate ? "text-text-tertiary" : "text-brand-action/70"
-                          }`}
-                        >
-                          {monthShort}
-                        </span>
-                        <span
-                          className={`-mt-0.5 text-[24px] font-bold leading-none tabular-nums ${
-                            isPastDate ? "text-text-secondary" : "text-brand-action"
-                          }`}
-                        >
-                          {dayNum}
-                        </span>
-                        <span className="text-[8px] font-medium text-text-tertiary">{weekday}</span>
-                      </div>
-                      {canReschedule && (
-                        <div className="mt-1.5 opacity-0 transition-opacity group-hover:opacity-100">
-                          <CalendarDatePicker
-                            open={isPickingThis}
-                            onOpenChange={(o) => setPickingDateForEntryId(o ? entry.id : null)}
-                            currentDate={entry.scheduled_date}
-                            onConfirm={(d) => {
-                              if (entry.keyword_id) void handleScheduleKeyword(entry.keyword_id, d);
-                            }}
-                            saving={savingDate}
-                            scheduledDates={scheduledDatesSet}
-                            iconOnly
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Entry details */}
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="min-w-0">
-                        <h4 className="truncate text-[15px] font-semibold leading-tight text-text-primary">
-                          {entry.focus_keyword}
-                        </h4>
-                        {isRepairRow ? (
-                          <p className="mt-0.5 text-[11px] italic text-text-tertiary">Repair draft</p>
-                        ) : entry.secondary_keywords?.length ? (
-                          <p className="mt-0.5 truncate text-[11px] text-text-tertiary">
-                            {entry.secondary_keywords.slice(0, 4).join(" · ")}
-                          </p>
-                        ) : null}
-                      </div>
-
-                      {entryBlogTitle(entry) !== "—" && (
-                        <p className="truncate text-[12px] text-text-tertiary" title={entryBlogTitle(entry)}>
-                          {entryBlogTitle(entry)}
-                        </p>
-                      )}
-
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-0.5 text-[11px]">
-                        <div className="flex items-center gap-1.5">
-                          <CalendarOriginPills resolved={origin} />
-                        </div>
-                        {kw?.volume ? (
-                          <div className="flex items-center gap-1">
-                            <span className="text-text-tertiary">Vol</span>
-                            <span className="font-mono font-medium tabular-nums text-text-secondary">
-                              {kw.volume.toLocaleString()}
-                            </span>
-                          </div>
-                        ) : null}
-                        {kw?.kd != null && kw.kd > 0 ? (
-                          <div className="flex items-center gap-1">
-                            <span className="text-text-tertiary">KD</span>
-                            <KdCell kd={kw.kd} />
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    {/* Status + primary action — right rail */}
-                    <div className="flex shrink-0 flex-col items-end justify-center gap-2 self-stretch pl-2">
-                      <LifecycleStatusBadge display={lifecycleDisplay} />
-                      {isLocked && (
-                        <ProjectNavLink
-                          href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                          className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
-                        >
-                          View Blog
-                        </ProjectNavLink>
-                      )}
-                      {isRepairRow && !isLocked && !isGenerating && (
-                        <ProjectNavLink
-                          href={`/projects/${projectId}/blogs?entry=${entry.id}`}
-                          className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary whitespace-nowrap"
-                        >
-                          Generate
-                        </ProjectNavLink>
-                      )}
-                      {isGenerating && (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-[#f59e0b]/20 px-4 py-1.5 text-[12px] font-semibold text-[#f59e0b]/70 select-none whitespace-nowrap">
-                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f59e0b]" />
-                          Generating…
-                        </span>
-                      )}
-                      {!isGenerating && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveEntry(entry.id, entry.focus_keyword)}
-                          disabled={removingEntryId === entry.id}
-                          className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle/50 bg-transparent px-3 py-1 text-[11px] font-medium text-text-tertiary transition-colors hover:border-brand-coral/30 hover:bg-brand-coral/10 hover:text-brand-coral disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                          title="Remove from calendar"
-                        >
-                          {removingEntryId === entry.id ? (
-                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-coral/30 border-t-brand-coral" />
-                          ) : (
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          )}
-                          Remove
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {sortedEntries.map((entry, idx) => (
+              <CalendarListRow
+                key={entry.id}
+                entry={entry}
+                isFirst={idx === 0}
+                projectId={projectId}
+                scheduledKeywordsMap={scheduledKeywordsMap}
+                pickingDateForEntryId={pickingDateForEntryId}
+                savingDate={savingDate}
+                scheduledDatesSet={scheduledDatesSet}
+                removingEntryId={removingEntryId}
+                onPickingDateChange={setPickingDateForEntryId}
+                onScheduleKeyword={handleScheduleKeyword}
+                onRemoveEntry={handleRemoveEntry}
+              />
+            ))}
             </div>
           )
         ) : (

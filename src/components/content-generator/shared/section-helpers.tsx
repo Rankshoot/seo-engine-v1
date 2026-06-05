@@ -186,3 +186,25 @@ export function ContentTypeBadge({ type }: { type: string }) {
     </span>
   );
 }
+
+/** Pulse loader fallback for the Recent History panel at the bottom of generator pages. */
+export function RecentHistorySkeleton() {
+  return (
+    <div className="space-y-4 animate-pulse" aria-hidden="true">
+      <div className="flex items-center gap-3">
+        <div className="h-4 w-6 rounded bg-text-primary/10" />
+        <div className="h-4 w-32 rounded bg-text-primary/10" />
+        <div className="h-px flex-1 bg-border-subtle" />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {[1, 2, 3, 4].map(idx => (
+          <div key={idx} className="flex flex-col gap-2 rounded-card border border-border-subtle bg-surface-elevated p-4 h-[100px]">
+            <div className="h-3 w-20 rounded bg-text-primary/10" />
+            <div className="h-4 w-3/4 rounded bg-text-primary/10" />
+            <div className="h-3 w-1/2 rounded bg-text-primary/5 mt-auto" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

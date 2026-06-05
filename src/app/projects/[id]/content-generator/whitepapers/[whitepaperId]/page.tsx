@@ -20,7 +20,6 @@ import {
 } from "@/components/content-generator/shared";
 import { WhitepaperReader } from "@/components/content-generator/whitepaper/WhitepaperReader";
 import { blogsApi } from "@/frontend/api/blogs";
-import { projectsApi } from "@/frontend/api/projects";
 import { exportWhitepaper, WHITEPAPER_EXPORT_OPTIONS } from "@/lib/content-exports";
 import { normalizeSiteHost } from "@/lib/blog-content";
 import type { StudioBrand } from "@/lib/studio-brand";

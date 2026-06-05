@@ -2,13 +2,7 @@ import { currentUser } from "@clerk/nextjs/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { deterministicFunnelStage } from "@/lib/keyword-funnel";
 import type { CalendarEntry } from "@/lib/types";
-
-function localDayISOFromOffset(daysFromToday: number): string {
-  const d = new Date();
-  d.setHours(12, 0, 0, 0);
-  d.setDate(d.getDate() + daysFromToday);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+import { getLocalDayISOFromOffset, isPastDate } from "@/utils/calendar-validation";
 
 async function nextVacantDate(projectId: string, preferredDate?: string): Promise<string | null> {
   const { data: rows } = await supabaseAdmin
@@ -23,7 +17,7 @@ async function nextVacantDate(projectId: string, preferredDate?: string): Promis
   }
 
   for (let i = 0; i < 500; i++) {
-    const key = localDayISOFromOffset(i);
+    const key = getLocalDayISOFromOffset(i);
     if (!taken.has(key)) return key;
   }
   return null;
@@ -56,81 +50,84 @@ export async function addCustomKeywordToCalendar(
   | { success: true; data: CalendarEntry; scheduled_date: string }
   | { success: false; error: string }
 > {
-  const user = await currentUser();
-  if (!user) return { success: false, error: "Not authenticated" };
+  const startTime = Date.now();
+  let userId = "anonymous";
+  let status = "failure";
+  let errorMsg = "";
 
-  const kw = input.keyword.trim();
-  if (!kw) return { success: false, error: "Keyword is required" };
+  try {
+    const user = await currentUser();
+    if (!user) {
+      errorMsg = "Not authenticated";
+      return { success: false, error: errorMsg };
+    }
+    userId = user.id;
 
-  const { data: project, error: pErr } = await supabaseAdmin
-    .from("projects")
-    .select("id")
-    .eq("id", input.projectId)
-    .eq("user_id", user.id)
-    .single();
+    const kw = input.keyword.trim();
+    if (!kw) {
+      errorMsg = "Keyword is required";
+      return { success: false, error: errorMsg };
+    }
 
-  if (pErr || !project) return { success: false, error: "Project not found" };
-
-  const normKw = (s: string) => s.toLowerCase().trim();
-
-  const { data: existing } = await supabaseAdmin
-    .from("calendar_entries")
-    .select("id, scheduled_date, focus_keyword")
-    .eq("project_id", input.projectId)
-    .ilike("focus_keyword", kw.replace(/[%_]/g, "\\$&"));
-
-  const dup = (existing ?? []).find(
-    (e) => normKw(e.focus_keyword as string) === normKw(kw)
-  );
-  if (dup) {
-    return {
-      success: false,
-      error: `"${kw}" is already on the calendar for ${String(dup.scheduled_date).slice(0, 10)}.`,
-    };
-  }
-
-  const scheduledDate = await nextVacantDate(input.projectId, input.targetDate);
-  if (!scheduledDate) return { success: false, error: "No free calendar date found" };
-
-  const titleToUse = (input.title ?? kw).trim().slice(0, 200) || kw;
-  const articleType = input.articleType ?? "Blog Post";
-  const writerNotes = input.writerNotes?.trim() ?? "";
-
-  const today = localDayISOFromOffset(0);
-  if (scheduledDate < today) {
-    return { success: false, error: "Target date is in the past" };
-  }
-
-  /* Upsert into `keywords` so the calendar row can link to it */
-  let keywordId: string | null = null;
-  const { data: existingKw } = await supabaseAdmin
-    .from("keywords")
-    .select("id")
-    .eq("project_id", input.projectId)
-    .ilike("keyword", kw.replace(/[%_]/g, "\\$&"))
-    .maybeSingle();
-
-  if (existingKw) {
-    keywordId = existingKw.id as string;
-  } else {
-    const res = await supabaseAdmin
-      .from("keywords")
-      .insert({
-        project_id: input.projectId,
-        keyword: kw,
-        status: "approved",
-        secondary_keywords: [],
-        source_type: "manual",
-        funnel_stage: deterministicFunnelStage("", kw),
-      })
+    const { data: project, error: pErr } = await supabaseAdmin
+      .from("projects")
       .select("id")
+      .eq("id", input.projectId)
+      .eq("user_id", user.id)
       .single();
 
-    let newKw = res.data;
-    const insErr = res.error;
+    if (pErr || !project) {
+      errorMsg = "Project not found";
+      return { success: false, error: errorMsg };
+    }
 
-    if (insErr && insErr.message.includes("funnel_stage") && insErr.message.includes("schema cache")) {
-      const retryRes = await supabaseAdmin
+    const normKw = (s: string) => s.toLowerCase().trim();
+
+    const { data: existing } = await supabaseAdmin
+      .from("calendar_entries")
+      .select("id, scheduled_date, focus_keyword")
+      .eq("project_id", input.projectId)
+      .ilike("focus_keyword", kw.replace(/[%_]/g, "\\$&"));
+
+    const dup = (existing ?? []).find(
+      (e) => normKw(e.focus_keyword as string) === normKw(kw)
+    );
+    if (dup) {
+      errorMsg = `"${kw}" is already on the calendar for ${String(dup.scheduled_date).slice(0, 10)}.`;
+      return {
+        success: false,
+        error: errorMsg,
+      };
+    }
+
+    const scheduledDate = await nextVacantDate(input.projectId, input.targetDate);
+    if (!scheduledDate) {
+      errorMsg = "No free calendar date found";
+      return { success: false, error: errorMsg };
+    }
+
+    const titleToUse = (input.title ?? kw).trim().slice(0, 200) || kw;
+    const articleType = input.articleType ?? "Blog Post";
+    const writerNotes = input.writerNotes?.trim() ?? "";
+
+    if (isPastDate(scheduledDate)) {
+      errorMsg = "Target date is in the past";
+      return { success: false, error: errorMsg };
+    }
+
+    /* Upsert into `keywords` so the calendar row can link to it */
+    let keywordId: string | null = null;
+    const { data: existingKw } = await supabaseAdmin
+      .from("keywords")
+      .select("id")
+      .eq("project_id", input.projectId)
+      .ilike("keyword", kw.replace(/[%_]/g, "\\$&"))
+      .maybeSingle();
+
+    if (existingKw) {
+      keywordId = existingKw.id as string;
+    } else {
+      const res = await supabaseAdmin
         .from("keywords")
         .insert({
           project_id: input.projectId,
@@ -138,32 +135,63 @@ export async function addCustomKeywordToCalendar(
           status: "approved",
           secondary_keywords: [],
           source_type: "manual",
+          funnel_stage: deterministicFunnelStage("", kw),
         })
         .select("id")
         .single();
-      newKw = retryRes.data;
+
+      let newKw = res.data;
+      const insErr = res.error;
+
+      if (insErr && insErr.message.includes("funnel_stage") && insErr.message.includes("schema cache")) {
+        const retryRes = await supabaseAdmin
+          .from("keywords")
+          .insert({
+            project_id: input.projectId,
+            keyword: kw,
+            status: "approved",
+            secondary_keywords: [],
+            source_type: "manual",
+          })
+          .select("id")
+          .single();
+        newKw = retryRes.data;
+      }
+
+      if (newKw) keywordId = newKw.id as string;
     }
 
-    if (newKw) keywordId = newKw.id as string;
+    const { data, error } = await supabaseAdmin
+      .from("calendar_entries")
+      .insert({
+        project_id: input.projectId,
+        keyword_id: keywordId,
+        scheduled_date: scheduledDate,
+        title: titleToUse,
+        article_type: articleType,
+        slug: slugify(kw),
+        focus_keyword: kw,
+        secondary_keywords: [],
+        status: "scheduled",
+        ...(writerNotes ? { content_health_audit: { writer_notes: writerNotes } } : {}),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      errorMsg = error.message;
+      return { success: false, error: errorMsg };
+    }
+    
+    status = "success";
+    return { success: true, data: data as CalendarEntry, scheduled_date: scheduledDate };
+  } catch (err: unknown) {
+    errorMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMsg };
+  } finally {
+    const duration = Date.now() - startTime;
+    console.log(
+      `[Telemetry] addCustomKeywordToCalendar: userId=${userId} projectId=${input.projectId} keyword=${input.keyword} duration=${duration}ms status=${status} error=${errorMsg || "none"}`
+    );
   }
-
-  const { data, error } = await supabaseAdmin
-    .from("calendar_entries")
-    .insert({
-      project_id: input.projectId,
-      keyword_id: keywordId,
-      scheduled_date: scheduledDate,
-      title: titleToUse,
-      article_type: articleType,
-      slug: slugify(kw),
-      focus_keyword: kw,
-      secondary_keywords: [],
-      status: "scheduled",
-      ...(writerNotes ? { content_health_audit: { writer_notes: writerNotes } } : {}),
-    })
-    .select()
-    .single();
-
-  if (error) return { success: false, error: error.message };
-  return { success: true, data: data as CalendarEntry, scheduled_date: scheduledDate };
 }

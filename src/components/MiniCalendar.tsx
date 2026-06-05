@@ -57,11 +57,13 @@ export function MiniCalendar({
   onRemoveEntry?: (entryId: string, keyword: string) => void;
   generatingId?: string | null;
 }) {
-  const today = new Date();
-  const [calendarViewYM, setCalendarViewYM] = useState(() => ({
-    y: today.getFullYear(),
-    m: today.getMonth(),
-  }));
+  const [calendarViewYM, setCalendarViewYM] = useState(() => {
+    const today = new Date();
+    return {
+      y: today.getFullYear(),
+      m: today.getMonth(),
+    };
+  });
   const viewYear = calendarViewYM.y;
   const viewMonth = calendarViewYM.m;
   const [draggingEntryId, setDraggingEntryId] = useState<string | null>(null);
@@ -119,20 +121,32 @@ export function MiniCalendar({
     return e ? normalizeCalDay(e.scheduled_date) : null;
   }, [entries, schedulingKeywordId, normPhrase]);
 
-  const firstDay = new Date(viewYear, viewMonth, 1);
-  const lastDay = new Date(viewYear, viewMonth + 1, 0);
-  const startOffset = firstDay.getDay();
-  const totalCells = Math.ceil((startOffset + lastDay.getDate()) / 7) * 7;
-  const monthLabel = firstDay.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  // ── Grid math ─────────────────────────────────────────────────────────────
+  // Recalculated only when the displayed month/year changes, not on drag/hover.
+  const { startOffset, totalCells, lastDayDate, monthLabel, todayISO, toISO } = useMemo(() => {
+    const fd = new Date(viewYear, viewMonth, 1);
+    const ld = new Date(viewYear, viewMonth + 1, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const iso = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
+    const t = new Date();
+    return {
+      startOffset: fd.getDay(),
+      totalCells: Math.ceil((fd.getDay() + ld.getDate()) / 7) * 7,
+      lastDayDate: ld.getDate(),
+      monthLabel: fd.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+      todayISO: iso(t.getFullYear(), t.getMonth(), t.getDate()),
+      toISO: iso,
+    };
+  }, [viewYear, viewMonth]);
 
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const toISO = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
-  const todayISO = toISO(today.getFullYear(), today.getMonth(), today.getDate());
-
-  const prevMonth = () =>
-    setCalendarViewYM(v => (v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 }));
-  const nextMonth = () =>
-    setCalendarViewYM(v => (v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 }));
+  const prevMonth = useCallback(
+    () => setCalendarViewYM(v => (v.m === 0 ? { y: v.y - 1, m: 11 } : { ...v, m: v.m - 1 })),
+    []
+  );
+  const nextMonth = useCallback(
+    () => setCalendarViewYM(v => (v.m === 11 ? { y: v.y + 1, m: 0 } : { ...v, m: v.m + 1 })),
+    []
+  );
 
   const dndActive = Boolean(onMoveEntryToDate) && !schedulingKeywordId;
 
@@ -267,7 +281,7 @@ export function MiniCalendar({
         {Array.from({ length: totalCells }).map((_, idx) => {
           const dayNum = idx - startOffset + 1;
 
-          if (dayNum < 1 || dayNum > lastDay.getDate()) {
+          if (dayNum < 1 || dayNum > lastDayDate) {
             return <div key={idx} className="min-h-[90px]" />;
           }
 

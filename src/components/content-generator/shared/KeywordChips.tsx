@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type KeyboardEvent } from "react";
+import React, { useState, type KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
 
 /**
@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
  * Keywords workspace so authors recognise it instantly. Accepts
  * comma-, semicolon-, or Enter-delimited input.
  */
-export function KeywordChips({
+export const KeywordChips = React.memo(function KeywordChips({
   value,
   onChange,
   placeholder = "Type and press Enter to add…",
@@ -83,4 +83,4 @@ export function KeywordChips({
       />
     </div>
   );
-}
+});

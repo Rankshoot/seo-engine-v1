@@ -313,21 +313,7 @@ function buildComponents({ internalSet, ownSiteHost, readerInk }: MarkdownCompon
   const Img: ComponentType<ImgHTMLAttributes<HTMLImageElement>> = ({ alt = "", src, ...r }) => {
     const safeSrc = typeof src === "string" ? safeUrl(src) : "";
     if (!safeSrc) {
-      return (
-        <span
-          className={cn(
-            "my-8 block rounded-[8px] px-4 py-5 text-[12px] border border-dashed",
-            !ink && "text-text-tertiary border-border-subtle bg-surface-secondary",
-          )}
-          style={
-            ink
-              ? { color: ink.tertiary, borderColor: ink.border, backgroundColor: ink.surfaceMuted }
-              : undefined
-          }
-        >
-          Image could not be displayed.
-        </span>
-      );
+      return null;
     }
     return (
       <span

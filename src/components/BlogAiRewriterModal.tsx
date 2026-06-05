@@ -446,7 +446,7 @@ export function BlogAiRewriterModal({
     <Dialog
       open={open}
       onClose={onClose}
-      size="sm"
+      size="md"
       title="AI rewriter"
       closeOnBackdrop={!loading && !resolveLoading}
       closeOnEscape={!loading && !resolveLoading}
@@ -459,7 +459,7 @@ export function BlogAiRewriterModal({
             </svg>
             Rewriting
           </p>
-          <div className="text-[13px] leading-relaxed text-text-secondary [&_p]:my-0 [&_p+_p]:mt-2">
+          <div className="max-h-[200px] overflow-y-auto text-[12px] leading-relaxed text-text-secondary [&_p]:my-0 [&_p+_p]:mt-2">
             {renderMarkdownSnippet(truncatedOriginal)}
           </div>
         </div>

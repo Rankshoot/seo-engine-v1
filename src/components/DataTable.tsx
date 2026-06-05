@@ -1,6 +1,6 @@
 "use client";
 
-import React, { ReactNode, RefObject, useMemo } from "react";
+import React, { ReactNode, RefObject, useMemo, useCallback } from "react";
 import {
   flexRender,
   getCoreRowModel,
@@ -75,6 +75,90 @@ function SortMark({ colId, sortColumn, sortDirection }: { colId: string; sortCol
   );
 }
 
+interface DataTableRowProps<T> {
+  row: import("@tanstack/react-table").Row<T>;
+  rowId: string;
+  selectable: boolean;
+  isSelected: boolean;
+  massSelectMode: boolean;
+  selectionDisabled: boolean;
+  onToggleSelect?: (id: string) => void;
+  onRowClick?: (row: T) => void;
+  rowClassName?: string;
+  original: T;
+  scrollContainerRef?: RefObject<HTMLDivElement | null>;
+  handleRowClick: (row: T, rowId: string, selectable: boolean, e: React.MouseEvent<HTMLTableRowElement>) => void;
+}
+
+const DataTableRow = React.memo(function DataTableRow<T>({
+  row,
+  rowId,
+  selectable,
+  isSelected,
+  massSelectMode,
+  selectionDisabled,
+  onToggleSelect,
+  onRowClick,
+  rowClassName,
+  original,
+  scrollContainerRef,
+  handleRowClick,
+}: DataTableRowProps<T>) {
+  return (
+    <TableRow
+      data-table-row-key={rowId}
+      data-state={isSelected ? "selected" : undefined}
+      onClick={e => handleRowClick(original, rowId, selectable, e)}
+      className={cn(
+        "transition-colors duration-150 hover:bg-surface-hover/90",
+        scrollContainerRef ? "scroll-mt-12" : "",
+        rowClassName,
+        massSelectMode && selectable && !selectionDisabled
+          ? "cursor-pointer"
+          : onRowClick
+            ? "cursor-pointer"
+            : "",
+      )}
+    >
+      <TableCell
+        data-row-no-mass
+        className={cn(
+          "border-border-subtle transition-[width,padding] duration-300 ease-out",
+          massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0",
+          "overflow-hidden",
+        )}
+      >
+        <span
+          className={cn(
+            "flex justify-center transition-all duration-300 ease-out",
+            massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0",
+          )}
+        >
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => {
+              if (selectable && onToggleSelect && !selectionDisabled) onToggleSelect(rowId);
+            }}
+            onClick={e => e.stopPropagation()}
+            disabled={!massSelectMode || !selectable || selectionDisabled}
+            aria-label={`Select row ${rowId}`}
+            className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
+          />
+        </span>
+      </TableCell>
+      {row.getVisibleCells().map(cell => {
+        const align = (cell.column.columnDef.meta as { align?: "left" | "center" | "right" })?.align;
+        return (
+          <TableCell key={cell.id} className={alignClass(align)}>
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </TableCell>
+        );
+      })}
+    </TableRow>
+  );
+}) as <T>(props: DataTableRowProps<T>) => React.ReactElement;
+
 export function DataTable<T>({
   data,
   columns,
@@ -103,7 +187,12 @@ export function DataTable<T>({
       header: () => (
         <div className={cn("flex items-center gap-1.5", flexAlign(col.align))}>
           {col.sortable && onSortToggle ? (
-            <button type="button" className={thBtnClass} onClick={() => onSortToggle(col.id)}>
+            <button
+              type="button"
+              className={thBtnClass}
+              onClick={() => onSortToggle(col.id)}
+              aria-label={`Sort by ${typeof col.header === "string" ? col.header : col.id}`}
+            >
               {col.header}
               <SortMark colId={col.id} sortColumn={sortColumn} sortDirection={sortDirection} />
             </button>
@@ -132,19 +221,7 @@ export function DataTable<T>({
     getRowId: row => keyExtractor(row),
   });
 
-  if (isLoading) {
-    return (
-      <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-        <TableSkeleton rows={loadingRows} columns={loadingColumns} />
-      </div>
-    );
-  }
-
-  if (data.length === 0 && emptyState) {
-    return <>{emptyState}</>;
-  }
-
-  const handleRowClick = (row: T, rowId: string, selectable: boolean, e: React.MouseEvent<HTMLTableRowElement>) => {
+  const handleRowClick = useCallback((row: T, rowId: string, selectable: boolean, e: React.MouseEvent<HTMLTableRowElement>) => {
     const t = e.target as HTMLElement;
     if (
       t.closest(
@@ -159,7 +236,19 @@ export function DataTable<T>({
       return;
     }
     if (onRowClick) onRowClick(row);
-  };
+  }, [massSelectMode, onToggleSelect, selectionDisabled, onRowClick]);
+
+  if (isLoading) {
+    return (
+      <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
+        <TableSkeleton rows={loadingRows} columns={loadingColumns} />
+      </div>
+    );
+  }
+
+  if (data.length === 0 && emptyState) {
+    return <>{emptyState}</>;
+  }
 
   return (
     <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
@@ -183,8 +272,23 @@ export function DataTable<T>({
                 </TableHead>
                 {headerGroup.headers.map(header => {
                   const align = (header.column.columnDef.meta as { align?: "left" | "center" | "right" })?.align;
+                  const isSorted = sortColumn === header.id;
+                  const isSortable = columns.find(c => c.id === header.id)?.sortable;
+                  const ariaSortVal = isSortable
+                    ? isSorted
+                      ? sortDirection === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                    : undefined;
+
                   return (
-                    <TableHead key={header.id} scope="col" className={cn("py-3", alignClass(align))}>
+                    <TableHead
+                      key={header.id}
+                      scope="col"
+                      className={cn("py-3", alignClass(align))}
+                      aria-sort={ariaSortVal}
+                    >
                       {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                     </TableHead>
                   );
@@ -200,58 +304,21 @@ export function DataTable<T>({
               const isSelected = selectedIds.has(rowId);
 
               return (
-                <TableRow
+                <DataTableRow
                   key={row.id}
-                  data-table-row-key={rowId}
-                  data-state={isSelected ? "selected" : undefined}
-                  onClick={e => handleRowClick(original, rowId, selectable, e)}
-                  className={cn(
-                    "transition-colors duration-150 hover:bg-surface-hover/90",
-                    scrollContainerRef ? "scroll-mt-12" : "",
-                    rowClassName?.(original),
-                    massSelectMode && selectable && !selectionDisabled
-                      ? "cursor-pointer"
-                      : onRowClick
-                        ? "cursor-pointer"
-                        : "",
-                  )}
-                >
-                  <TableCell
-                    data-row-no-mass
-                    className={cn(
-                      "border-border-subtle transition-[width,padding] duration-300 ease-out",
-                      massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0",
-                      "overflow-hidden",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "flex justify-center transition-all duration-300 ease-out",
-                        massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0",
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => {
-                          if (selectable && onToggleSelect && !selectionDisabled) onToggleSelect(rowId);
-                        }}
-                        onClick={e => e.stopPropagation()}
-                        disabled={!massSelectMode || !selectable || selectionDisabled}
-                        aria-label="Select row"
-                        className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
-                      />
-                    </span>
-                  </TableCell>
-                  {row.getVisibleCells().map(cell => {
-                    const align = (cell.column.columnDef.meta as { align?: "left" | "center" | "right" })?.align;
-                    return (
-                      <TableCell key={cell.id} className={alignClass(align)}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    );
-                  })}
-                </TableRow>
+                  row={row}
+                  rowId={rowId}
+                  selectable={selectable}
+                  isSelected={isSelected}
+                  massSelectMode={massSelectMode}
+                  selectionDisabled={selectionDisabled}
+                  onToggleSelect={onToggleSelect}
+                  onRowClick={onRowClick}
+                  rowClassName={rowClassName?.(original)}
+                  original={original}
+                  scrollContainerRef={scrollContainerRef}
+                  handleRowClick={handleRowClick}
+                />
               );
             })}
           </TableBody>

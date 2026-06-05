@@ -1,5 +1,6 @@
 "use client";
 
+import React, { useMemo } from "react";
 import type { KeywordStatus } from "@/lib/types";
 import { StatusActionDropdown } from "@/components/common/StatusActionDropdown";
 
@@ -24,8 +25,18 @@ type Props = {
   onChange: (next: KeywordStatus) => void;
 };
 
-export function KeywordActionDropdown({ status, busy, onChange }: Props) {
-  const statuses: KeywordStatus[] = ["pending", "approved", "rejected"];
+export const KeywordActionDropdown = React.memo(function KeywordActionDropdown({ status, busy, onChange }: Props) {
+  const items = useMemo(() => {
+    const statuses: KeywordStatus[] = ["pending", "approved", "rejected"];
+    return statuses.map(s => ({
+      key: s,
+      label: STATUS_LABEL[s],
+      selected: s === status,
+      onSelect: () => {
+        if (s !== status) onChange(s);
+      },
+    }));
+  }, [status, onChange]);
 
   return (
     <StatusActionDropdown
@@ -34,14 +45,7 @@ export function KeywordActionDropdown({ status, busy, onChange }: Props) {
       triggerClassName={`${TRIGGER_BASE} ${STATUS_TRIGGER[status]}`}
       busy={busy}
       ariaLabel={`Keyword status: ${STATUS_LABEL[status]}`}
-      items={statuses.map(s => ({
-        key: s,
-        label: STATUS_LABEL[s],
-        selected: s === status,
-        onSelect: () => {
-          if (s !== status) onChange(s);
-        },
-      }))}
+      items={items}
     />
   );
-}
+});

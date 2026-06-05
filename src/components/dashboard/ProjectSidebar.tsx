@@ -5,11 +5,12 @@ import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Logo } from "@/components/brand/Logo";
-import { qk, keywordsListQueryOptions } from "@/lib/query";
+import { qk } from "@/lib/query";
+import { useMemo } from "react";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
 import { projectsApi } from "@/frontend/api/projects";
@@ -73,7 +74,6 @@ export default function ProjectSidebar({
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
   const { data: statsResponse } = useQuery({
     queryKey: qk.projectStats(projectId),
@@ -84,8 +84,8 @@ export default function ProjectSidebar({
     refetchOnWindowFocus: false,
     refetchOnMount: false,
   });
-  const serverStats =
-    statsResponse?.success && statsResponse.data
+  const serverStats = useMemo(() => {
+    return statsResponse?.success && statsResponse.data
       ? {
           approvedKeywords: statsResponse.data.approvedKeywords,
           calendarEntries: statsResponse.data.calendarEntries,
@@ -94,14 +94,25 @@ export default function ProjectSidebar({
           auditPending: statsResponse.data.auditPending,
         }
       : stats;
+  }, [statsResponse, stats]);
   const liveStats = useAppSelector(state => selectProjectStats(state, projectId, serverStats));
   const base = `/projects/${projectId}`;
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   /** Nav count badges use React Query + Redux; sidebar is client-only so counts can render immediately. */
-  const navCountsReady = true;
+  const navCountsReady = mounted;
 
+  useEffect(() => {
+    let active = true;
+    requestAnimationFrame(() => {
+      if (active) setMounted(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -119,11 +130,7 @@ export default function ProjectSidebar({
   }, [
     dispatch,
     projectId,
-    serverStats?.approvedKeywords,
-    serverStats?.calendarEntries,
-    serverStats?.blogsGenerated,
-    serverStats?.articlesInLibrary,
-    serverStats?.auditPending,
+    serverStats,
   ]);
 
   const auditBase = `${base}/audit`;

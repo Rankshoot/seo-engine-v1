@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
@@ -11,10 +11,9 @@ import type { KeywordGap, ContentType } from "@/lib/types";
 import { KeywordActionCell } from "@/components/keywords/KeywordActionCell";
 import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
-import { EmptyState } from "@/components/common";
+import { EmptyState, KeywordTableSkeleton } from "@/components/common";
 import { scoreCompetitorKeywordsWithAI } from "@/app/actions/keyword-actions";
 import { Tooltip } from "@/components/Tooltip";
-import { TableSkeleton } from "@/components/Skeleton";
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled";
@@ -165,6 +164,192 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
   );
 }
 
+interface CompetitorGapRowProps {
+  gap: KeywordGap;
+  isScheduled: boolean;
+  isSelected: boolean;
+  massSelectMode: boolean;
+  bulkSchedulingGaps: boolean;
+  onToggleSelect: (gapId: string) => void;
+  renderContentTypeSelect: (keywordText: string, aiEvalData: GapAiEvalData | null | undefined) => React.ReactNode;
+  renderActionCell: (g: KeywordGap) => React.ReactNode;
+  aiGapKeywordSet: Set<string>;
+}
+
+const CompetitorGapRow = React.memo(function CompetitorGapRow({
+  gap,
+  isScheduled,
+  isSelected,
+  massSelectMode,
+  bulkSchedulingGaps,
+  onToggleSelect,
+  renderContentTypeSelect,
+  renderActionCell,
+  aiGapKeywordSet,
+}: CompetitorGapRowProps) {
+  const kd = gap.kd;
+  const position = gap.position;
+
+  const handleRowClick = (e: React.MouseEvent<HTMLTableRowElement>) => {
+    const t = e.target as HTMLElement;
+    if (
+      t.closest(
+        "button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a"
+      )
+    ) {
+      return;
+    }
+    if (massSelectMode && !bulkSchedulingGaps) {
+      onToggleSelect(gap.id);
+    }
+  };
+
+  const activeIntents = [
+    gap.is_transactional && { label: "Transactional", color: "text-[#10b981]" },
+    gap.is_commercial && { label: "Commercial", color: "text-[#f59e0b]" },
+    gap.is_informational && { label: "Informational", color: "text-[#60a5fa]" },
+    gap.is_navigational && { label: "Navigational", color: "text-[#a78bfa]" },
+  ].filter((t): t is { label: string; color: string } => !!t);
+
+  const aiScoreCat = gap.ai_eval_score != null ? getAiGapScoreCategory(gap.ai_eval_score) : null;
+
+  return (
+    <tr
+      onClick={handleRowClick}
+      className={`transition-colors hover:bg-surface-hover ${
+        isScheduled ? "bg-brand-action/[0.07]" : ""
+      } ${massSelectMode && !bulkSchedulingGaps ? "cursor-pointer" : ""} ${
+        isSelected ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
+      }`}
+    >
+      <td
+        className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${
+          massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"
+        } overflow-hidden`}
+      >
+        <span
+          className={`flex justify-center transition-all duration-300 ease-out ${
+            massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0"
+          }`}
+        >
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelect(gap.id)}
+            onClick={e => e.stopPropagation()}
+            disabled={bulkSchedulingGaps || !massSelectMode}
+            aria-label={`Select opportunity ${gap.keyword}`}
+            className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
+          />
+        </span>
+      </td>
+      <td className="px-4 py-3 max-w-[240px] w-[240px] min-w-0">
+        <div className="flex items-center gap-2 w-full min-w-0">
+          <Tooltip placement="above" content={gap.keyword} className="w-full min-w-0 !justify-start">
+            <p className="truncate text-[14px] font-medium text-text-primary cursor-help w-full min-w-0">
+              {gap.keyword}
+            </p>
+          </Tooltip>
+          {aiGapKeywordSet.has(gap.keyword.toLowerCase()) && (
+            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+              AI pick
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 text-[11px] text-text-tertiary">{gap.top_competitor_domain}</p>
+      </td>
+      <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
+        {gap.volume > 0 ? gap.volume.toLocaleString() : "—"}
+      </td>
+      <td className="px-4 py-3 text-center">
+        {typeof kd === "number" && kd > 0 ? (
+          <span
+            className={`text-[13px] font-semibold tabular-nums ${
+              kd >= 70 ? "text-brand-coral" : kd >= 40 ? "text-[#f59e0b]" : "text-[#10b981]"
+            }`}
+          >
+            {kd}
+          </span>
+        ) : (
+          <span className="text-[12px] text-text-tertiary">—</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-center">
+        {typeof position === "number" && position > 0 ? (
+          <span
+            className={`text-[13px] font-semibold tabular-nums ${
+              position <= 3 ? "text-[#10b981]" : position <= 10 ? "text-[#f59e0b]" : "text-text-secondary"
+            }`}
+          >
+            #{position}
+          </span>
+        ) : (
+          <span className="text-[12px] text-text-tertiary">—</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-center">
+        {activeIntents.length > 0 ? (
+          <div className="flex items-center justify-center gap-1 text-[12px] font-semibold">
+            {activeIntents.map((t, idx) => (
+              <span key={t.label} className="flex items-center gap-1">
+                {idx > 0 && <span className="text-text-tertiary/40">/</span>}
+                <span className={t.color}>{t.label}</span>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span className="text-[12px] text-text-tertiary">—</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-center">
+        {gap.ai_eval_score && gap.ai_eval_data && aiScoreCat ? (
+          <Tooltip
+            placement="above"
+            content={<GapAiScoreTooltip data={gap.ai_eval_data} score={gap.ai_eval_score} />}
+          >
+            <span
+              className={`inline-flex cursor-default items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-bold tabular-nums ${aiScoreCat.colorClass}`}
+            >
+              {aiScoreCat.icon} {gap.ai_eval_score}
+            </span>
+          </Tooltip>
+        ) : (
+          <span className="text-[12px] text-text-tertiary">—</span>
+        )}
+      </td>
+      <td className="px-4 py-3 max-w-[220px]">
+        {gap.top_competitor_url ? (
+          <a
+            href={gap.top_competitor_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={gap.top_competitor_url}
+            className="block truncate text-[12px] text-brand-action/80 hover:text-brand-action hover:underline"
+          >
+            {compactUrl(gap.top_competitor_url)} ↗
+          </a>
+        ) : (
+          <span className="text-[12px] text-text-tertiary">—</span>
+        )}
+      </td>
+      <td
+        className="px-4 py-3 text-center"
+        onClick={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
+      >
+        {renderContentTypeSelect(gap.keyword, gap.ai_eval_data)}
+      </td>
+      <td
+        className="px-4 py-3 text-center"
+        onClick={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
+      >
+        {renderActionCell(gap)}
+      </td>
+    </tr>
+  );
+});
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function CompetitorKeywordsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -212,7 +397,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   );
 
   // Memoized Variables
-  const calendarEntries = calendarRes?.success ? calendarRes.data : [];
+  const calendarEntries = useMemo(() => calendarRes?.success ? calendarRes.data : [], [calendarRes]);
 
   const calendarMap = useMemo(() => {
     const map = new Map<string, typeof calendarEntries[number]>();
@@ -233,8 +418,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   }, [aiSuggestedGapKeywords]);
 
   const competitors = state?.competitors ?? [];
-  const gaps = state?.gaps ?? [];
-  const averages = state?.averages;
+  const gaps = useMemo(() => state?.gaps ?? [], [state?.gaps]);
   const hasBenchmark = competitors.length > 0;
 
   const allFilteredGaps = useMemo(() => {
@@ -416,12 +600,12 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   }, []);
 
   const resolveContentType = useCallback(
-    (keywordText: string, keywordId?: string, aiEvalData?: any) => {
+    (keywordText: string, keywordId?: string, aiEvalData?: GapAiEvalData | null) => {
       const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
       if (entry) {
         return articleTypeToContentType(entry.article_type);
       }
-      const recommended = aiEvalData?.recommended_content_type;
+      const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
       const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin"];
       if (recommended && supportedTypes.includes(recommended)) {
         return rowContentTypes[keywordText.toLowerCase()] ?? recommended;
@@ -430,6 +614,72 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     },
     [calendarMap, rowContentTypes, articleTypeToContentType]
   );
+
+  const renderContentTypeSelect = useCallback((
+    keywordText: string,
+    aiEvalData: GapAiEvalData | null | undefined
+  ) => {
+    const entry = calendarMap.get(keywordText.toLowerCase());
+    const isSch = !!entry;
+    const isGenerated = !!entry?.blog;
+    const currentType = resolveContentType(keywordText, undefined, aiEvalData);
+
+    const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
+    const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+    const labels: Record<ContentType, string> = {
+      blog: "Blog article",
+      ebook: "Ebook",
+      whitepaper: "Whitepaper",
+      linkedin: "LinkedIn post",
+    };
+
+    return (
+      <select
+        value={currentType}
+        onChange={e => setRowContentType(keywordText, e.target.value as ContentType)}
+        disabled={isSch || isGenerated}
+        className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+      >
+        {options.map(type => (
+          <option key={type} value={type}>
+            {labels[type]}
+            {type === recommended ? " ✨" : ""}
+          </option>
+        ))}
+      </select>
+    );
+  }, [calendarMap, resolveContentType, setRowContentType, articleTypeToContentType]);
+
+  const renderActionCell = useCallback((g: KeywordGap) => {
+    const entry = calendarMap.get(g.keyword.toLowerCase());
+    const selectedType = resolveContentType(g.keyword, undefined, g.ai_eval_data);
+    const intent = g.is_transactional
+      ? "transactional"
+      : g.is_commercial
+        ? "commercial"
+        : g.is_informational
+          ? "informational"
+          : g.is_navigational
+            ? "navigational"
+            : "informational";
+
+    return (
+      <KeywordActionCell
+        projectId={projectId}
+        keyword={g.keyword}
+        sourceType="competitor_gap"
+        contentType={selectedType}
+        scheduledDate={entry?.scheduled_date}
+        blogId={entry?.blog?.id}
+        volume={g.volume}
+        kd={g.kd}
+        intent={intent}
+        competitorDomain={g.top_competitor_domain}
+        rankingUrl={g.top_competitor_url}
+        rank={g.position ?? undefined}
+      />
+    );
+  }, [calendarMap, resolveContentType, projectId]);
 
   const sortMark = useCallback(
     (col: GapSortColumn) =>
@@ -620,20 +870,19 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             </div>
           </section>
 
-          {loading ? (
-            <div className="overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-              <TableSkeleton rows={8} columns={9} />
-            </div>
-          ) : displayedGaps.length === 0 ? (
-            <EmptyState
-              variant="card"
-              title={workspaceTab !== "all" ? "No opportunities match this tab" : "No opportunities match this view"}
-            />
-          ) : (
-            <div
-              className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden flex flex-col"
-              style={{ height: "560px" }}
-            >
+          <Suspense fallback={<KeywordTableSkeleton />}>
+            {loading ? (
+              <KeywordTableSkeleton />
+            ) : displayedGaps.length === 0 ? (
+              <EmptyState
+                variant="card"
+                title={workspaceTab !== "all" ? "No opportunities match this tab" : "No opportunities match this view"}
+              />
+            ) : (
+              <div
+                className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden flex flex-col"
+                style={{ height: "560px" }}
+              >
               <div ref={tableScrollRef} className="overflow-x-auto overflow-y-auto flex-1 min-h-0">
                 <table className="w-full min-w-[1060px] text-left">
                   <thead className="sticky top-0 z-10 bg-surface-secondary text-[12px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
@@ -695,225 +944,22 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                   </thead>
                   <tbody className="divide-y divide-border-subtle/60">
                     {displayedGaps.map(g => {
-                      const kd = g.kd;
-                      const position = g.position;
                       const isScheduled = calendarMap.has(g.keyword.toLowerCase());
                       const isSelected = selectedGapIds.has(g.id);
 
                       return (
-                        <tr
+                        <CompetitorGapRow
                           key={g.id}
-                          onClick={e => {
-                            const t = e.target as HTMLElement;
-                            if (
-                              t.closest(
-                                "button, input, select, textarea, label, [data-keyword-action], [role='menu'], [role='menuitem'], [role='listbox'], [role='option'], a"
-                              )
-                            )
-                              return;
-                            if (massSelectMode && !bulkSchedulingGaps) toggleGapRowSelected(g.id);
-                          }}
-                          className={`transition-colors hover:bg-surface-hover ${
-                            isScheduled ? "bg-brand-action/[0.07]" : ""
-                          } ${massSelectMode && !bulkSchedulingGaps ? "cursor-pointer" : ""} ${
-                            isSelected ? "bg-surface-secondary/95 ring-1 ring-inset ring-brand-action/25" : ""
-                          }`}
-                        >
-                          <td
-                            className={`border-border-subtle align-middle transition-[width,padding] duration-300 ease-out ${massSelectMode ? "w-12 px-4 py-3 opacity-100" : "w-0 max-w-0 border-0 p-0 opacity-0"} overflow-hidden`}
-                          >
-                            <span
-                              className={`flex justify-center transition-all duration-300 ease-out ${massSelectMode ? "opacity-100 scale-100 translate-x-0" : "pointer-events-none -translate-x-2 scale-90 opacity-0"}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleGapRowSelected(g.id)}
-                                onClick={e => e.stopPropagation()}
-                                disabled={bulkSchedulingGaps || !massSelectMode}
-                                aria-label={`Select opportunity ${g.keyword}`}
-                                className="rounded border-border-subtle text-brand-action focus:ring-brand-action"
-                              />
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 max-w-[240px] w-[240px] min-w-0">
-                            <div className="flex items-center gap-2 w-full min-w-0">
-                              <Tooltip placement="above" content={g.keyword} className="w-full min-w-0 !justify-start">
-                                <p className="truncate text-[14px] font-medium text-text-primary cursor-help w-full min-w-0">
-                                  {g.keyword}
-                                </p>
-                              </Tooltip>
-                              {aiGapKeywordSet.has(g.keyword.toLowerCase()) && (
-                                <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
-                                  AI pick
-                                </span>
-                              )}
-                            </div>
-                            <p className="mt-0.5 text-[11px] text-text-tertiary">{g.top_competitor_domain}</p>
-                          </td>
-                          <td className="px-4 py-3 text-right text-[14px] font-mono text-text-secondary tabular-nums">
-                            {g.volume > 0 ? g.volume.toLocaleString() : "—"}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {typeof kd === "number" && kd > 0 ? (
-                              <span
-                                className={`text-[13px] font-semibold tabular-nums ${
-                                  kd >= 70 ? "text-brand-coral" : kd >= 40 ? "text-[#f59e0b]" : "text-[#10b981]"
-                                }`}
-                              >
-                                {kd}
-                              </span>
-                            ) : (
-                              <span className="text-[12px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {typeof position === "number" && position > 0 ? (
-                              <span
-                                className={`text-[13px] font-semibold tabular-nums ${
-                                  position <= 3 ? "text-[#10b981]" : position <= 10 ? "text-[#f59e0b]" : "text-text-secondary"
-                                }`}
-                              >
-                                #{position}
-                              </span>
-                            ) : (
-                              <span className="text-[12px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {(() => {
-                              const activeIntents = [
-                                g.is_transactional && { label: "Transactional", color: "text-[#10b981]" },
-                                g.is_commercial && { label: "Commercial", color: "text-[#f59e0b]" },
-                                g.is_informational && { label: "Informational", color: "text-[#60a5fa]" },
-                                g.is_navigational && { label: "Navigational", color: "text-[#a78bfa]" },
-                              ].filter((t): t is { label: string; color: string } => !!t);
-
-                              return activeIntents.length > 0 ? (
-                                <div className="flex items-center justify-center gap-1 text-[12px] font-semibold">
-                                  {activeIntents.map((t, idx) => (
-                                    <span key={t.label} className="flex items-center gap-1">
-                                      {idx > 0 && <span className="text-text-tertiary/40">/</span>}
-                                      <span className={t.color}>{t.label}</span>
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="text-[12px] text-text-tertiary">—</span>
-                              );
-                            })()}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {g.ai_eval_score && g.ai_eval_data ? (
-                              <Tooltip
-                                placement="above"
-                                content={<GapAiScoreTooltip data={g.ai_eval_data} score={g.ai_eval_score} />}
-                              >
-                                {(() => {
-                                  const cat = getAiGapScoreCategory(g.ai_eval_score!);
-                                  return (
-                                    <span
-                                      className={`inline-flex cursor-default items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-bold tabular-nums ${cat.colorClass}`}
-                                    >
-                                      {cat.icon} {g.ai_eval_score}
-                                    </span>
-                                  );
-                                })()}
-                              </Tooltip>
-                            ) : (
-                              <span className="text-[12px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 max-w-[220px]">
-                            {g.top_competitor_url ? (
-                              <a
-                                href={g.top_competitor_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title={g.top_competitor_url}
-                                className="block truncate text-[12px] text-brand-action/80 hover:text-brand-action hover:underline"
-                              >
-                                {compactUrl(g.top_competitor_url)} ↗
-                              </a>
-                            ) : (
-                              <span className="text-[12px] text-text-tertiary">—</span>
-                            )}
-                          </td>
-                          <td
-                            className="px-4 py-3 text-center"
-                            onClick={e => e.stopPropagation()}
-                            onPointerDown={e => e.stopPropagation()}
-                          >
-                            {(() => {
-                              const keywordText = g.keyword;
-                              const entry = calendarMap.get(keywordText.toLowerCase());
-                              const isSch = !!entry;
-                              const isGenerated = !!entry?.blog;
-                              const currentType = resolveContentType(keywordText, undefined, g.ai_eval_data);
-
-                              const recommended = (g.ai_eval_data as any)?.recommended_content_type;
-                              const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
-                              const labels: Record<ContentType, string> = {
-                                blog: "Blog article",
-                                ebook: "Ebook",
-                                whitepaper: "Whitepaper",
-                                linkedin: "LinkedIn post",
-                              };
-
-                              return (
-                                <select
-                                  value={currentType}
-                                  onChange={e => setRowContentType(keywordText, e.target.value as ContentType)}
-                                  disabled={isSch || isGenerated}
-                                  className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                                >
-                                  {options.map(type => (
-                                    <option key={type} value={type}>
-                                      {labels[type]}
-                                      {type === recommended ? " ✨" : ""}
-                                    </option>
-                                  ))}
-                                </select>
-                              );
-                            })()}
-                          </td>
-                          <td
-                            className="px-4 py-3 text-center"
-                            onClick={e => e.stopPropagation()}
-                            onPointerDown={e => e.stopPropagation()}
-                          >
-                            {(() => {
-                              const entry = calendarMap.get(g.keyword.toLowerCase());
-                              const selectedType = resolveContentType(g.keyword, undefined, g.ai_eval_data);
-                              return (
-                                <KeywordActionCell
-                                  projectId={projectId}
-                                  keyword={g.keyword}
-                                  sourceType="competitor_gap"
-                                  contentType={selectedType}
-                                  scheduledDate={entry?.scheduled_date}
-                                  blogId={entry?.blog?.id}
-                                  volume={g.volume}
-                                  kd={g.kd}
-                                  intent={
-                                    g.is_transactional
-                                      ? "transactional"
-                                      : g.is_commercial
-                                        ? "commercial"
-                                        : g.is_informational
-                                          ? "informational"
-                                          : g.is_navigational
-                                            ? "navigational"
-                                            : "informational"
-                                  }
-                                  competitorDomain={g.top_competitor_domain}
-                                  rankingUrl={g.top_competitor_url}
-                                  rank={g.position ?? undefined}
-                                />
-                              );
-                            })()}
-                          </td>
-                        </tr>
+                          gap={g}
+                          isScheduled={isScheduled}
+                          isSelected={isSelected}
+                          massSelectMode={massSelectMode}
+                          bulkSchedulingGaps={bulkSchedulingGaps}
+                          onToggleSelect={toggleGapRowSelected}
+                          renderContentTypeSelect={renderContentTypeSelect}
+                          renderActionCell={renderActionCell}
+                          aiGapKeywordSet={aiGapKeywordSet}
+                        />
                       );
                     })}
                   </tbody>
@@ -979,6 +1025,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               )}
             </div>
           )}
+        </Suspense>
         </div>
       )}
     </div>

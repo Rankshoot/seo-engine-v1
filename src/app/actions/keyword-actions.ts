@@ -1544,17 +1544,45 @@ export async function upsertKeywordFromDomainSite(
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Smaller batches = shorter output = less risk of truncation / malformed JSON.
-const AI_EVAL_BATCH = 15;
+const AI_EVAL_BATCH = 10;
+// Max parallel batch calls — keeps wall-clock time low without hammering the API.
+const AI_EVAL_CONCURRENCY = 3;
 
-/** Extracts the first JSON array from raw text (handles trailing commentary / partial fences). */
+/**
+ * Extracts the first valid JSON array from raw text.
+ * If the array is truncated (common when maxOutputTokens cuts mid-JSON) we try
+ * to recover partial entries by walking back from the last complete object.
+ */
 function extractJsonArray(raw: string): string {
   // Strip any markdown fences
   const s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-  // Find the first '[' and last ']'
   const start = s.indexOf('[');
+  if (start === -1) throw new Error('No JSON array found in response');
+
+  // Happy path — find a closing bracket
   const end = s.lastIndexOf(']');
-  if (start === -1 || end === -1 || end < start) throw new Error('No JSON array found in response');
-  return s.slice(start, end + 1);
+  if (end !== -1 && end > start) {
+    try {
+      // Validate it actually parses
+      JSON.parse(s.slice(start, end + 1));
+      return s.slice(start, end + 1);
+    } catch {
+      // fall through to repair
+    }
+  }
+
+  // Repair path — the array was truncated. Find the last complete object by
+  // scanning back for `}` then trying to close the array.
+  const partial = s.slice(start);
+  const lastClose = partial.lastIndexOf('}');
+  if (lastClose === -1) throw new Error('No complete JSON object found in truncated response');
+  try {
+    const repaired = partial.slice(0, lastClose + 1) + ']';
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    throw new Error('Could not repair truncated JSON array');
+  }
 }
 
 async function callGeminiForEval(prompt: string, projectId: string): Promise<string> {
@@ -1563,6 +1591,8 @@ async function callGeminiForEval(prompt: string, projectId: string): Promise<str
     jsonMode: true,
     temperature: 0.2,
     retries: 2,
+    // Enough tokens for 10 keywords × ~200 tokens each of dense JSON output
+    maxOutputTokens: 8192,
   });
 }
 
@@ -1711,55 +1741,68 @@ export async function scoreKeywordsWithAI(
   if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
 
   let scored = 0;
+  const now = new Date().toISOString();
 
-  // Process in batches
+  // Split all rows into batches up front
+  const batches: typeof rows[] = [];
   for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
-    const batch = rows.slice(i, i + AI_EVAL_BATCH);
-    const prompt = buildEvalPrompt(project, brief, competitors, batch as Array<{keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string}>);
+    batches.push(rows.slice(i, i + AI_EVAL_BATCH));
+  }
 
-    let results: Array<{
-      keyword: string;
-      score: number;
-      category: string;
-      analysis: AiEvalData['analysis'];
-      reasoning: AiEvalData['reasoning'];
-      recommended_content_type?: string;
-      duplicate_of?: string | null;
-    }>;
-    try {
-      const raw = await callGeminiForEval(prompt, projectId);
-      results = JSON.parse(extractJsonArray(raw));
-    } catch (e) {
-      // Skip this batch but continue with others
-      console.error('[scoreKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);
-      continue;
-    }
+  // Process batches in parallel with a concurrency cap
+  for (let i = 0; i < batches.length; i += AI_EVAL_CONCURRENCY) {
+    const window = batches.slice(i, i + AI_EVAL_CONCURRENCY);
+    const results = await Promise.allSettled(
+      window.map(async (batch) => {
+        const prompt = buildEvalPrompt(
+          project, brief, competitors,
+          batch as Array<{keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string}>
+        );
+        const raw = await callGeminiForEval(prompt, projectId);
+        return { batch, parsed: JSON.parse(extractJsonArray(raw)) as Array<{
+          keyword: string;
+          score: number;
+          category: string;
+          analysis: AiEvalData['analysis'];
+          reasoning: AiEvalData['reasoning'];
+          recommended_content_type?: string;
+          duplicate_of?: string | null;
+        }>};
+      })
+    );
 
-    // Build a lookup by keyword phrase (case-insensitive)
-    const lookup = new Map(results.map(r => [r.keyword.toLowerCase().trim(), r]));
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.error('[scoreKeywordsWithAI] batch parse error', result.reason instanceof Error ? result.reason.message : result.reason);
+        continue;
+      }
 
-    const now = new Date().toISOString();
-    const updates = batch.flatMap(row => {
-      const hit = lookup.get(row.keyword.toLowerCase().trim());
-      if (!hit) return [];
-      const evalData: AiEvalData = {
-        category: hit.category,
-        analysis: hit.analysis,
-        reasoning: hit.reasoning,
-        recommended_content_type: hit.recommended_content_type,
-        duplicate_of: hit.duplicate_of
-      };
-      return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
-    });
+      const { batch, parsed } = result.value;
+      const lookup = new Map(parsed.map(r => [r.keyword.toLowerCase().trim(), r]));
 
-    if (updates.length) {
-      for (const upd of updates) {
+      const updates = batch.flatMap(row => {
+        const hit = lookup.get(row.keyword.toLowerCase().trim());
+        if (!hit) return [];
+        const evalData: AiEvalData = {
+          category: hit.category,
+          analysis: hit.analysis,
+          reasoning: hit.reasoning,
+          recommended_content_type: hit.recommended_content_type,
+          duplicate_of: hit.duplicate_of,
+        };
+        return [{ id: row.id as string, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+      });
+
+      if (updates.length) {
+        // Bulk upsert all updates in one DB round-trip
         await supabaseAdmin
           .from('keywords')
-          .update({ ai_eval_score: upd.ai_eval_score, ai_eval_data: upd.ai_eval_data, ai_eval_at: upd.ai_eval_at })
-          .eq('id', upd.id);
+          .upsert(
+            updates.map(u => ({ id: u.id, project_id: projectId, keyword: batch.find(b => b.id === u.id)?.keyword ?? '', ai_eval_score: u.ai_eval_score, ai_eval_data: u.ai_eval_data, ai_eval_at: u.ai_eval_at })),
+            { onConflict: 'id', ignoreDuplicates: false }
+          );
+        scored += updates.length;
       }
-      scored += updates.length;
     }
   }
 
@@ -1914,57 +1957,68 @@ export async function scoreCompetitorKeywordsWithAI(
   if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
 
   let scored = 0;
+  const now = new Date().toISOString();
 
+  // Split all rows into batches up front
+  const batches: typeof rows[] = [];
   for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
-    const batch = rows.slice(i, i + AI_EVAL_BATCH);
-    const prompt = buildCompetitorEvalPrompt(
-      project,
-      brief,
-      competitors,
-      batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+    batches.push(rows.slice(i, i + AI_EVAL_BATCH));
+  }
+
+  // Process batches in parallel with a concurrency cap
+  for (let i = 0; i < batches.length; i += AI_EVAL_CONCURRENCY) {
+    const window = batches.slice(i, i + AI_EVAL_CONCURRENCY);
+    const results = await Promise.allSettled(
+      window.map(async (batch) => {
+        const prompt = buildCompetitorEvalPrompt(
+          project, brief, competitors,
+          batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
+        );
+        const raw = await callGeminiForEval(prompt, projectId);
+        return { batch, parsed: JSON.parse(extractJsonArray(raw)) as Array<{
+          keyword: string;
+          score: number;
+          category: string;
+          analysis: AiEvalData['analysis'];
+          reasoning: AiEvalData['reasoning'];
+          recommended_content_type?: string;
+          duplicate_of?: string | null;
+        }>};
+      })
     );
 
-    let results: Array<{
-      keyword: string;
-      score: number;
-      category: string;
-      analysis: AiEvalData['analysis'];
-      reasoning: AiEvalData['reasoning'];
-      recommended_content_type?: string;
-      duplicate_of?: string | null;
-    }>;
-    try {
-      const raw = await callGeminiForEval(prompt, projectId);
-      results = JSON.parse(extractJsonArray(raw));
-    } catch (e) {
-      console.error('[scoreCompetitorKeywordsWithAI] batch parse error', e instanceof Error ? e.message : e);
-      continue;
-    }
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.error('[scoreCompetitorKeywordsWithAI] batch parse error', result.reason instanceof Error ? result.reason.message : result.reason);
+        continue;
+      }
 
-    const lookup = new Map(results.map(r => [r.keyword.toLowerCase().trim(), r]));
-    const now = new Date().toISOString();
+      const { batch, parsed } = result.value;
+      const lookup = new Map(parsed.map(r => [r.keyword.toLowerCase().trim(), r]));
 
-    const updates = batch.flatMap(row => {
-      const hit = lookup.get(row.keyword.toLowerCase().trim());
-      if (!hit) return [];
-      const evalData: AiEvalData = {
-        category: hit.category,
-        analysis: hit.analysis,
-        reasoning: hit.reasoning,
-        recommended_content_type: hit.recommended_content_type,
-        duplicate_of: hit.duplicate_of
-      };
-      return [{ id: row.id, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
-    });
+      const updates = batch.flatMap(row => {
+        const hit = lookup.get(row.keyword.toLowerCase().trim());
+        if (!hit) return [];
+        const evalData: AiEvalData = {
+          category: hit.category,
+          analysis: hit.analysis,
+          reasoning: hit.reasoning,
+          recommended_content_type: hit.recommended_content_type,
+          duplicate_of: hit.duplicate_of,
+        };
+        return [{ id: row.id as string, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+      });
 
-    if (updates.length) {
-      for (const upd of updates) {
+      if (updates.length) {
+        // Bulk upsert all updates in one DB round-trip
         await supabaseAdmin
           .from('keyword_gaps')
-          .update({ ai_eval_score: upd.ai_eval_score, ai_eval_data: upd.ai_eval_data, ai_eval_at: upd.ai_eval_at })
-          .eq('id', upd.id);
+          .upsert(
+            updates.map(u => ({ id: u.id, project_id: projectId, keyword: batch.find(b => b.id === u.id)?.keyword ?? '', ai_eval_score: u.ai_eval_score, ai_eval_data: u.ai_eval_data, ai_eval_at: u.ai_eval_at })),
+            { onConflict: 'id', ignoreDuplicates: false }
+          );
+        scored += updates.length;
       }
-      scored += updates.length;
     }
   }
 

@@ -1,13 +1,13 @@
 const API_KEY_PATTERNS: RegExp[] = [
-  /\b(sk|pk)_[a-zA-Z0-9_-]{8,}\b/gi,
-  /\bAIza[a-zA-Z0-9_-]{20,}\b/g,
-  /\bBearer\s+[a-zA-Z0-9._-]+\b/gi,
-  /\b(api[_-]?key|apikey|secret|token)\s*[:=]\s*["']?[\w.-]+["']?/gi,
-  /\bGEMINI_API_KEY\s*=\s*\S+/gi,
-  /\bAHREFS_API_KEY\s*=\s*\S+/gi,
+  /\b(sk|pk)_[a-zA-Z0-9_-]{8,100}\b/gi,
+  /\bAIza[a-zA-Z0-9_-]{20,100}\b/g,
+  /\bBearer\s+[a-zA-Z0-9._-]{8,150}\b/gi,
+  /\b(api[_-]?key|apikey|secret|token)\s*[:=]\s*["']?[\w.-]{1,100}["']?/gi,
+  /\bGEMINI_API_KEY\s*=\s*\S{8,100}/gi,
+  /\bAHREFS_API_KEY\s*=\s*\S{8,100}/gi,
 ];
 
-const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
+const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]{1,63}\.[A-Z]{2,10}\b/gi;
 
 export interface RedactTextOptions {
   /** When false, mask email addresses in output. Default true in summaries. */

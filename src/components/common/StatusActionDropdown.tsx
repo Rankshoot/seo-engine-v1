@@ -145,10 +145,14 @@ export function StatusActionDropdown({
             type="button"
             disabled={item.disabled || busy}
             className={`${itemCls} ${item.selected ? "bg-surface-hover/80 text-text-primary" : ""}`}
-            onClick={e => {
+            onClick={async (e) => {
               e.stopPropagation();
               setOpen(false);
-              item.onSelect();
+              try {
+                await item.onSelect();
+              } catch (err) {
+                console.error("Error executing status action:", err);
+              }
             }}
           >
             {item.label}
@@ -169,7 +173,7 @@ export function StatusActionDropdown({
         disabled={busy}
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-label={ariaLabel}
+        aria-label={ariaLabel || triggerLabel || "Dropdown menu"}
         onClick={e => {
           e.stopPropagation();
           setOpen(o => !o);

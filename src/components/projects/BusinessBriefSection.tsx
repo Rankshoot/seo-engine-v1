@@ -26,6 +26,7 @@ export function BusinessBriefSection({ projectId }: { projectId: string }) {
     setRefreshingBrief(true);
     setBriefError("");
     const res = await briefApi.generate(projectId, { force: true });
+    /* debug trace logging commented out for production
     if (res.trace?.length) {
       console.groupCollapsed(
         `[Brief] Refresh — scraped ${res.trace.filter(t => t.label === "jina_read" && t.ok).length} pages`
@@ -35,6 +36,7 @@ export function BusinessBriefSection({ projectId }: { projectId: string }) {
       }
       console.groupEnd();
     }
+    */
     if (res.success && res.brief) {
       const updatedAt = new Date().toISOString();
       queryClient.setQueryData<BriefResponse>(BRIEF_KEY, {

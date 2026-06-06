@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import Link from "next/link";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { usePathname, useRouter } from "next/navigation";
@@ -145,7 +145,17 @@ export default function ProjectSidebar({
     children?: { label: string; href: string; exact?: boolean }[];
   };
 
-  const navItems: NavLeaf[] = [
+  const isActive = useCallback((href: string, exact?: boolean) =>
+    exact ? pathname === href : href === base ? pathname === base : pathname.startsWith(href),
+    [pathname, base]
+  );
+
+  const groupActive = useCallback((item: NavLeaf) =>
+    item.children?.some(c => c.exact ? pathname === c.href : isActive(c.href)) || isActive(item.href, item.exact),
+    [pathname, isActive]
+  );
+
+  const navItems = useMemo((): NavLeaf[] => [
     {
       icon: Icon.grid,
       label: "Overview",
@@ -196,13 +206,7 @@ export default function ProjectSidebar({
         { label: "Content Analyzer", href: `${auditBase}/import` },
       ],
     },
-  ];
-
-  const isActive = (href: string, exact?: boolean) =>
-    exact ? pathname === href : href === base ? pathname === base : pathname.startsWith(href);
-
-  const groupActive = (item: NavLeaf) =>
-    item.children?.some(c => c.exact ? pathname === c.href : isActive(c.href)) || isActive(item.href, item.exact);
+  ], [base, auditBase, navCountsReady, liveStats]);
 
   return (
     <aside 
@@ -225,6 +229,9 @@ export default function ProjectSidebar({
               onClick={() => setIsCollapsed(false)}
               className="absolute inset-0 m-auto w-8 h-8 flex items-center justify-center rounded-[8px] bg-surface-elevated border border-border-subtle text-text-primary shadow-sm opacity-0 group-hover:opacity-100 transition-all duration-200 scale-90 group-hover:scale-100 z-10"
               title="Expand sidebar"
+              aria-label="Expand sidebar"
+              aria-expanded={false}
+              tabIndex={0}
             >
               {Icon.chevronRight}
             </button>
@@ -233,6 +240,9 @@ export default function ProjectSidebar({
               onClick={() => setIsCollapsed(true)}
               className="p-1.5 rounded-[8px] text-text-tertiary hover:bg-surface-hover hover:text-text-primary transition-colors shrink-0"
               title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              aria-expanded={true}
+              tabIndex={0}
             >
               {Icon.chevronLeft}
             </button>
@@ -243,6 +253,10 @@ export default function ProjectSidebar({
         <div className="relative w-full" ref={dropdownRef}>
           <button 
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            aria-expanded={isDropdownOpen}
+            aria-haspopup="menu"
+            aria-label={project ? `Project options for ${project.name}` : "Project selection"}
+            tabIndex={0}
             className={`w-full relative flex items-center text-left rounded-[12px] bg-surface-elevated border border-border-subtle shadow-sm hover:border-brand-action/30 transition-all duration-300 ease-in-out overflow-hidden ${
               isCollapsed ? "h-[56px]" : "h-[88px]"
             }`}
@@ -283,10 +297,16 @@ export default function ProjectSidebar({
                 {allProjects.map((p) => (
                   <button
                     key={p.id}
-                    onClick={() => {
+                    onClick={async () => {
                       setIsDropdownOpen(false);
-                      router.push(`/projects/${p.id}`);
+                      try {
+                        await router.push(`/projects/${p.id}`);
+                      } catch (err) {
+                        console.error("Navigation error:", err);
+                      }
                     }}
+                    aria-label={`Switch to project ${p.name}`}
+                    tabIndex={0}
                     className="w-full flex items-center justify-between px-3 py-2 hover:bg-surface-hover transition-colors text-left"
                   >
                     <div className="flex-1 min-w-0 pr-3">

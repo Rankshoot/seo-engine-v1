@@ -77,6 +77,7 @@ export class GeminiProvider implements AIProvider {
           "X-goog-api-key": GEMINI_API_KEY,
         },
         body: JSON.stringify(body),
+        signal: opts.signal,
       });
 
       if (res.status === 400 && withSchema && opts.responseSchema) {
@@ -202,6 +203,7 @@ export class GeminiProvider implements AIProvider {
         "X-goog-api-key": GEMINI_API_KEY,
       },
       body: JSON.stringify(body),
+      signal: opts.signal,
     });
 
     if (!res.ok) {

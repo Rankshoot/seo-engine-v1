@@ -31,6 +31,8 @@ export interface CallOptions {
   systemPrompt?: string;
   /** Custom flag for cache controls on Claude. */
   cachePrompt?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface AIProvider {

@@ -225,6 +225,38 @@ async function getFallbackProviderAndModel(feature: string): Promise<{
 /**
  * Centrally routed string completion helper with automatic fallback.
  */
+/**
+ * Helper to wrap a promise function with an AbortController timeout.
+ * Throws a TimeoutError if the request hangs beyond the timeout threshold.
+ */
+async function withTimeout<T>(
+  promiseFn: (signal?: AbortSignal) => Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  if (timeoutMs <= 0) {
+    return promiseFn();
+  }
+
+  const controller = new AbortController();
+  const id = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await promiseFn(controller.signal);
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (error.name === "AbortError" || error.message?.includes("aborted") || controller.signal.aborted) {
+      const timeoutErr = new Error("Gateway Timeout");
+      timeoutErr.name = "TimeoutError";
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 export async function aiGenerate(
   feature: string,
   prompt: string,
@@ -240,38 +272,55 @@ export async function aiGenerate(
     cachePrompt?: boolean;
     retries?: number;
     topP?: number;
+    timeoutMs?: number;
   } = {}
 ): Promise<string> {
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
+  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
+
   try {
-    const res = await provider.generate(model, prompt, {
-      temperature: opts.temperature,
-      maxOutputTokens: opts.maxOutputTokens,
-      jsonMode: opts.jsonMode,
-      responseSchema: opts.responseSchema,
-      useGoogleSearch: opts.useGoogleSearch,
-      systemPrompt: opts.systemPrompt,
-      cachePrompt: opts.cachePrompt,
-      retries: opts.retries,
-      topP: opts.topP,
-    });
+    const res = await withTimeout(
+      (signal) =>
+        provider.generate(model, prompt, {
+          temperature: opts.temperature,
+          maxOutputTokens: opts.maxOutputTokens,
+          jsonMode: opts.jsonMode,
+          responseSchema: opts.responseSchema,
+          useGoogleSearch: opts.useGoogleSearch,
+          systemPrompt: opts.systemPrompt,
+          cachePrompt: opts.cachePrompt,
+          retries: opts.retries,
+          topP: opts.topP,
+          signal,
+        }),
+      timeoutMs
+    );
     return res.text;
   } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw err;
+    }
+
     const { provider: fbProvider, model: fbModel } = await getFallbackProviderAndModel(feature);
     if (fbModel !== model) {
       console.warn(`[routing] Primary generation failed with model ${model}. Retrying with fallback: ${fbModel}. Error:`, err instanceof Error ? err.message : err);
-      const res = await fbProvider.generate(fbModel, prompt, {
-        temperature: opts.temperature,
-        maxOutputTokens: opts.maxOutputTokens,
-        jsonMode: opts.jsonMode,
-        responseSchema: opts.responseSchema,
-        useGoogleSearch: opts.useGoogleSearch,
-        systemPrompt: opts.systemPrompt,
-        cachePrompt: opts.cachePrompt,
-        retries: opts.retries,
-        topP: opts.topP,
-      });
+      const res = await withTimeout(
+        (signal) =>
+          fbProvider.generate(fbModel, prompt, {
+            temperature: opts.temperature,
+            maxOutputTokens: opts.maxOutputTokens,
+            jsonMode: opts.jsonMode,
+            responseSchema: opts.responseSchema,
+            useGoogleSearch: opts.useGoogleSearch,
+            systemPrompt: opts.systemPrompt,
+            cachePrompt: opts.cachePrompt,
+            retries: opts.retries,
+            topP: opts.topP,
+            signal,
+          }),
+        timeoutMs
+      );
       return res.text;
     }
     throw err;
@@ -295,10 +344,16 @@ export async function* aiStream(
     cachePrompt?: boolean;
     retries?: number;
     topP?: number;
+    timeoutMs?: number;
   } = {}
 ) {
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
+  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
+
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
   try {
     const streamGen = provider.stream(model, prompt, {
       temperature: opts.temperature,
@@ -309,30 +364,58 @@ export async function* aiStream(
       cachePrompt: opts.cachePrompt,
       retries: opts.retries,
       topP: opts.topP,
+      signal: controller?.signal,
     });
     for await (const chunk of streamGen) {
       yield chunk;
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (controller?.signal.aborted || error.name === "AbortError" || error.message?.includes("aborted")) {
+      const timeoutErr = new Error("Gateway Timeout");
+      timeoutErr.name = "TimeoutError";
+      throw timeoutErr;
+    }
+
     const { provider: fbProvider, model: fbModel } = await getFallbackProviderAndModel(feature);
     if (fbModel !== model) {
       console.warn(`[routing] Primary stream failed with model ${model}. Retrying with fallback: ${fbModel}. Error:`, err instanceof Error ? err.message : err);
-      const fallbackStream = fbProvider.stream(fbModel, prompt, {
-        temperature: opts.temperature,
-        maxOutputTokens: opts.maxOutputTokens,
-        jsonMode: opts.jsonMode,
-        useGoogleSearch: opts.useGoogleSearch,
-        systemPrompt: opts.systemPrompt,
-        cachePrompt: opts.cachePrompt,
-        retries: opts.retries,
-        topP: opts.topP,
-      });
-      for await (const chunk of fallbackStream) {
-        yield chunk;
+      if (timeoutId) clearTimeout(timeoutId);
+      
+      const fbController = timeoutMs > 0 ? new AbortController() : null;
+      const fbTimeoutId = fbController ? setTimeout(() => fbController.abort(), timeoutMs) : null;
+
+      try {
+        const fallbackStream = fbProvider.stream(fbModel, prompt, {
+          temperature: opts.temperature,
+          maxOutputTokens: opts.maxOutputTokens,
+          jsonMode: opts.jsonMode,
+          useGoogleSearch: opts.useGoogleSearch,
+          systemPrompt: opts.systemPrompt,
+          cachePrompt: opts.cachePrompt,
+          retries: opts.retries,
+          topP: opts.topP,
+          signal: fbController?.signal,
+        });
+        for await (const chunk of fallbackStream) {
+          yield chunk;
+        }
+      } catch (fbErr: unknown) {
+        const fbError = fbErr instanceof Error ? fbErr : new Error(String(fbErr));
+        if (fbController?.signal.aborted || fbError.name === "AbortError" || fbError.message?.includes("aborted")) {
+          const timeoutErr = new Error("Gateway Timeout");
+          timeoutErr.name = "TimeoutError";
+          throw timeoutErr;
+        }
+        throw fbErr;
+      } finally {
+        if (fbTimeoutId) clearTimeout(fbTimeoutId);
       }
     } else {
       throw err;
     }
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
@@ -352,32 +435,49 @@ export async function aiGenerateStructured<T>(
     cachePrompt?: boolean;
     retries?: number;
     topP?: number;
+    timeoutMs?: number;
   } = {}
 ): Promise<T> {
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
+  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
+
   try {
-    const res = await provider.generateStructured(model, prompt, schema, {
-      temperature: opts.temperature,
-      maxOutputTokens: opts.maxOutputTokens,
-      systemPrompt: opts.systemPrompt,
-      cachePrompt: opts.cachePrompt,
-      retries: opts.retries,
-      topP: opts.topP,
-    });
+    const res = await withTimeout(
+      (signal) =>
+        provider.generateStructured(model, prompt, schema, {
+          temperature: opts.temperature,
+          maxOutputTokens: opts.maxOutputTokens,
+          systemPrompt: opts.systemPrompt,
+          cachePrompt: opts.cachePrompt,
+          retries: opts.retries,
+          topP: opts.topP,
+          signal,
+        }),
+      timeoutMs
+    );
     return res.data;
   } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw err;
+    }
+
     const { provider: fbProvider, model: fbModel } = await getFallbackProviderAndModel(feature);
     if (fbModel !== model) {
       console.warn(`[routing] Primary structured generation failed with model ${model}. Retrying with fallback: ${fbModel}. Error:`, err instanceof Error ? err.message : err);
-      const res = await fbProvider.generateStructured(fbModel, prompt, schema, {
-        temperature: opts.temperature,
-        maxOutputTokens: opts.maxOutputTokens,
-        systemPrompt: opts.systemPrompt,
-        cachePrompt: opts.cachePrompt,
-        retries: opts.retries,
-        topP: opts.topP,
-      });
+      const res = await withTimeout(
+        (signal) =>
+          fbProvider.generateStructured(fbModel, prompt, schema, {
+            temperature: opts.temperature,
+            maxOutputTokens: opts.maxOutputTokens,
+            systemPrompt: opts.systemPrompt,
+            cachePrompt: opts.cachePrompt,
+            retries: opts.retries,
+            topP: opts.topP,
+            signal,
+          }),
+        timeoutMs
+      );
       return res.data;
     }
     throw err;

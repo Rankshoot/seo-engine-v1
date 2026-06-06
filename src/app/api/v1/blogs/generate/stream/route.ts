@@ -53,6 +53,9 @@ export async function POST(req: Request) {
         }
       };
 
+      let wasStalled = false;
+      let stallTimeoutId: NodeJS.Timeout | undefined;
+
       try {
         // ── Stage 1: Load context ─────────────────────────────────────────
         emit({ event: "stage", stage: "context", detail: "Loading project brief and calendar entry…" });
@@ -140,8 +143,8 @@ export async function POST(req: Request) {
           });
         }
 
-        let wasStalled = false;
-        let stallTimeoutId: NodeJS.Timeout | undefined;
+        wasStalled = false;
+        stallTimeoutId = undefined;
         const resetStallTimeout = () => {
           if (stallTimeoutId) clearTimeout(stallTimeoutId);
           stallTimeoutId = setTimeout(() => {

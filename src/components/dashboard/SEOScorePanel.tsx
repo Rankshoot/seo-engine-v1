@@ -41,8 +41,8 @@ export default function SEOScorePanel({
 }) {
   const score    = useMemo(() => computeSEOScore(blog, projectDomain ?? undefined), [blog, projectDomain]);
   const cfg      = GRADE_CONFIG[score.grade];
-  const pct      = Math.round((score.total / score.maxTotal) * 100);
-  const failures = score.checks.filter(c => !c.pass);
+  const pct      = useMemo(() => Math.round((score.total / score.maxTotal) * 100), [score.total, score.maxTotal]);
+  const failures = useMemo(() => score.checks.filter(c => !c.pass), [score.checks]);
 
   return (
     <div className={`space-y-4 ${className}`}>
@@ -80,7 +80,7 @@ export default function SEOScorePanel({
       {/* Checklist */}
       <div className="space-y-2">
         {score.checks.map(check => (
-          <div key={check.label} className="flex items-start gap-2.5">
+          <div key={check.key} className="flex items-start gap-2.5">
             <div
               className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 mt-0.5"
               style={{ background: check.pass ? "#16a34a18" : "#b91c1c12" }}
@@ -105,8 +105,18 @@ export default function SEOScorePanel({
                 {!check.pass && onFixIssue && (
                   <button
                     type="button"
-                    onClick={() => onFixIssue(check)}
+                    onClick={async () => {
+                      if (onFixIssue) {
+                        try {
+                          await onFixIssue(check);
+                        } catch (err) {
+                          console.error("Error applying AI SEO fix:", err);
+                        }
+                      }
+                    }}
                     disabled={Boolean(fixingIssue)}
+                    aria-label={`AI fix for ${check.label}`}
+                    tabIndex={0}
                     className="shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50"
                     style={{ border: `1px solid ${V.action}33`, background: `color-mix(in srgb, ${V.action} 10%, transparent)`, color: V.action }}
                   >

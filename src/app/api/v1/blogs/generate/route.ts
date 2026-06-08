@@ -12,8 +12,17 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { entryId: string; wordCount?: number; writerNotes?: string };
     if (!body.entryId) return apiJson({ success: false, error: "Expected { entryId, wordCount?, writerNotes? }" }, { status: 400 });
     const result = await generateBlog(body.entryId, body.wordCount ?? 2500, body.writerNotes);
-    return apiJson(result, { status: result.success ? 200 : 400 });
-  } catch {
+    if (!result.success) {
+      if (result.error === "Gateway Timeout") {
+        return apiJson(result, { status: 504 });
+      }
+      return apiJson(result, { status: 400 });
+    }
+    return apiJson(result, { status: 200 });
+  } catch (err: any) {
+    if (err && (err.name === "TimeoutError" || err.message === "Gateway Timeout")) {
+      return apiJson({ success: false, error: "Gateway Timeout" }, { status: 504 });
+    }
     return apiJson({ success: false, error: "Invalid JSON body" }, { status: 400 });
   }
 }

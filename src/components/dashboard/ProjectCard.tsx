@@ -233,6 +233,7 @@ export default function ProjectCard({ project }: ProjectCardProps) {
               setMenuOpen(v => !v);
             }}
             aria-label="Project menu"
+            aria-expanded={menuOpen}
             className="flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
           >
             <MoreHorizontal className="h-4 w-4" />
@@ -325,10 +326,16 @@ function DeleteProjectModal({
   const handleDelete = async () => {
     setDeleting(true);
     setError("");
-    const res = await projectsApi.delete(project.id);
-    if (res.success) onDeleted();
-    else {
-      setError(res.error ?? "Failed to delete project.");
+    try {
+      const res = await projectsApi.delete(project.id);
+      if (res.success) {
+        onDeleted();
+      } else {
+        setError(res.error ?? "Failed to delete project.");
+        setDeleting(false);
+      }
+    } catch (err) {
+      setError("An unexpected error occurred.");
       setDeleting(false);
     }
   };
@@ -342,10 +349,11 @@ function DeleteProjectModal({
           calendar entry, blog draft, audit, and competitor benchmark tied to it. This can&apos;t be undone.
         </p>
         <div>
-          <label className="mb-2 block text-[13px] font-medium text-text-primary">
+          <label htmlFor={`delete-confirm-${project.id}`} className="mb-2 block text-[13px] font-medium text-text-primary">
             Type <span className="font-bold text-status-danger">{project.name}</span> to confirm
           </label>
           <input
+            id={`delete-confirm-${project.id}`}
             value={confirmText}
             onChange={e => setConfirmText(e.target.value)}
             className="input-field w-full"
@@ -360,7 +368,13 @@ function DeleteProjectModal({
         <div className="flex items-center justify-end gap-2 border-t border-border-subtle pt-4">
           <button
             type="button"
-            onClick={onClose}
+            onClick={async () => {
+              try {
+                await onClose();
+              } catch (err) {
+                console.error("Error closing modal:", err);
+              }
+            }}
             className="rounded-full px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
           >
             Cancel
@@ -397,7 +411,13 @@ function ModalShell({
       <button
         type="button"
         aria-label="Close modal"
-        onClick={onClose}
+        onClick={async () => {
+          try {
+            await onClose();
+          } catch (err) {
+            console.error("Error closing modal via overlay:", err);
+          }
+        }}
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
       />
       <div
@@ -409,7 +429,13 @@ function ModalShell({
           <h2 className="text-[18px] font-semibold tracking-tight text-text-primary">{title}</h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={async () => {
+              try {
+                await onClose();
+              } catch (err) {
+                console.error("Error closing modal via close button:", err);
+              }
+            }}
             aria-label="Close"
             className="flex h-9 w-9 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
           >

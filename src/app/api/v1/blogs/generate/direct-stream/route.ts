@@ -65,6 +65,9 @@ export async function POST(req: Request) {
         }
       };
 
+      let wasStalled = false;
+      let stallTimeoutId: NodeJS.Timeout | undefined;
+
       try {
         // ── Stage 1: Load context ─────────────────────────────────────────
         emit({ event: "stage", stage: "context", detail: "Loading project brief…" });
@@ -144,6 +147,25 @@ export async function POST(req: Request) {
         let fullContent = "";
         let thinkingEmitted = false;
 
+        const abortController = new AbortController();
+        if (req.signal) {
+          req.signal.addEventListener("abort", () => {
+            abortController.abort();
+          });
+        }
+
+        wasStalled = false;
+        stallTimeoutId = undefined;
+        const resetStallTimeout = () => {
+          if (stallTimeoutId) clearTimeout(stallTimeoutId);
+          stallTimeoutId = setTimeout(() => {
+            wasStalled = true;
+            abortController.abort();
+          }, 45000);
+        };
+
+        resetStallTimeout();
+
         const anthropic = getAnthropicClient();
         const claudeStream = await anthropic.messages.stream({
           model: claudeModel,
@@ -151,9 +173,12 @@ export async function POST(req: Request) {
           thinking: { type: "enabled", budget_tokens: 8000 },
           messages: [{ role: "user", content: blogPrompt }],
           system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
+        }, {
+          signal: abortController.signal,
         });
 
         for await (const event of claudeStream) {
+          resetStallTimeout();
           if (event.type === "content_block_start") {
             if (event.content_block.type === "thinking") {
               thinkingEmitted = true;
@@ -169,6 +194,8 @@ export async function POST(req: Request) {
             }
           }
         }
+
+        if (stallTimeoutId) clearTimeout(stallTimeoutId);
 
         // Signal thinking complete
         if (thinkingEmitted) {
@@ -226,11 +253,15 @@ export async function POST(req: Request) {
         if (error) throw error;
 
         emit({ event: "done", blogId: data.id });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Generation failed";
+      } catch (err: any) {
+        let message = err instanceof Error ? err.message : "Generation failed";
+        if (wasStalled || (err && (err.name === "AbortError" || err.name === "APIConnectionTimeoutError" || err.message?.includes("aborted")))) {
+          message = "Gateway Timeout";
+        }
         console.error("[blog direct stream] Error:", message);
         emit({ event: "error", message });
       } finally {
+        if (stallTimeoutId) clearTimeout(stallTimeoutId);
         controller.close();
       }
     },

@@ -123,7 +123,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
         domain: String(fd.get("domain") ?? ""),
         description: String(fd.get("description") ?? ""),
       });
-      console.log("[suggestProjectTargetingField]", result.trace);
+      // console.log("[suggestProjectTargetingField]", result.trace);
       if (result.success) {
         if (field === "niche") setNiche(result.value);
         else if (field === "target_audience") setTargetAudience(result.value);

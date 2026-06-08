@@ -14,14 +14,17 @@ const isServer = typeof window === "undefined";
 
 function getAls(): AlsStore | null {
   if (!isServer) return null;
-  const req = typeof require !== "undefined" ? eval("require") : null;
-  if (!req) return null;
-  const { AsyncLocalStorage } = req("async_hooks") as typeof import("async_hooks");
-  const g = globalThis as typeof globalThis & { __serpcraftUsageAls?: AlsStore };
-  if (!g.__serpcraftUsageAls) {
-    g.__serpcraftUsageAls = new AsyncLocalStorage<UsageLogContext>();
+  try {
+    const { AsyncLocalStorage } = require("async_hooks") as typeof import("async_hooks");
+    const g = globalThis as typeof globalThis & { __serpcraftUsageAls?: AlsStore };
+    if (!g.__serpcraftUsageAls) {
+      g.__serpcraftUsageAls = new AsyncLocalStorage<UsageLogContext>() as unknown as AlsStore;
+    }
+    return g.__serpcraftUsageAls;
+  } catch (err) {
+    console.warn("[log-context] Failed to load AsyncLocalStorage:", err);
+    return null;
   }
-  return g.__serpcraftUsageAls;
 }
 
 function runInContext<T>(context: UsageLogContext, fn: () => T): T {

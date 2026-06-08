@@ -26,6 +26,7 @@ export interface DropdownMenuProps {
     onClick?: (e: React.MouseEvent) => void;
     "aria-expanded"?: boolean;
     "aria-haspopup"?: string;
+    "aria-controls"?: string;
   }>;
   children: ReactNode;
   align?: "start" | "end";
@@ -88,6 +89,7 @@ export function DropdownMenu({
     },
     "aria-expanded": open,
     "aria-haspopup": "menu",
+    "aria-controls": open ? menuId : undefined,
   });
 
   const positionClass =
@@ -126,7 +128,7 @@ export function DropdownMenu({
   );
 }
 
-export interface DropdownItemProps {
+export interface DropdownItemProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   onSelect?: () => void;
   disabled?: boolean;
   destructive?: boolean;
@@ -144,13 +146,23 @@ export function DropdownItem({
   trailing,
   children,
   className,
+  ...rest
 }: DropdownItemProps) {
   return (
     <button
       type="button"
       role="menuitem"
       disabled={disabled}
-      onClick={onSelect}
+      tabIndex={0}
+      onClick={async (e) => {
+        if (onSelect) {
+          try {
+            await onSelect();
+          } catch (err) {
+            console.error("Error executing dropdown item action:", err);
+          }
+        }
+      }}
       className={cn(
         "flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-[13px] transition-colors",
         "disabled:opacity-40 disabled:cursor-not-allowed",
@@ -159,6 +171,7 @@ export function DropdownItem({
           : "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
         className,
       )}
+      {...rest}
     >
       {icon ? (
         <span className="shrink-0 text-text-tertiary [&>svg]:h-3.5 [&>svg]:w-3.5">{icon}</span>

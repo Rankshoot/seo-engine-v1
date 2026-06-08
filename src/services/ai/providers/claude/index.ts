@@ -123,7 +123,7 @@ export class ClaudeProvider implements AIProvider {
         messageParams.top_p = opts.topP;
       }
 
-      const response = await client.messages.create(messageParams);
+      const response = await client.messages.create(messageParams, { signal: opts.signal });
       const text = response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
         .map((block) => block.text)
@@ -215,7 +215,7 @@ export class ClaudeProvider implements AIProvider {
       system: systemBlock.length ? systemBlock : undefined,
       messages: [{ role: "user", content: prompt }],
       stream: true,
-    });
+    }, { signal: opts.signal });
 
     let fullText = "";
     let tokenUsage: TokenUsage = { input: 0, output: 0 };
@@ -301,7 +301,7 @@ export class ClaudeProvider implements AIProvider {
         },
       ],
       tool_choice: { type: "tool", name: "structured_output_schema" },
-    });
+    }, { signal: opts.signal });
 
     // Find the tool use content block
     const toolUseBlock = response.content.find(

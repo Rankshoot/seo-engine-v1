@@ -91,8 +91,14 @@ export function Dialog({
       <button
         type="button"
         aria-label="Close dialog"
-        onClick={() => {
-          if (closeOnBackdrop) onClose();
+        onClick={async () => {
+          if (closeOnBackdrop) {
+            try {
+              await onClose();
+            } catch (err) {
+              console.error("Error closing dialog via backdrop:", err);
+            }
+          }
         }}
         className="absolute inset-0 bg-black/60 backdrop-blur-[2px] transition-opacity duration-(--duration-base) animate-[fade-in_0.18s_ease-out]"
         tabIndex={-1}
@@ -134,7 +140,13 @@ export function Dialog({
                   aria-label="Close"
                   size="sm"
                   variant="ghost"
-                  onClick={onClose}
+                  onClick={async () => {
+                    try {
+                      await onClose();
+                    } catch (err) {
+                      console.error("Error closing dialog via close button:", err);
+                    }
+                  }}
                   className="-mr-2"
                 >
                   <svg

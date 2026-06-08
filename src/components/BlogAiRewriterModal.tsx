@@ -272,7 +272,7 @@ export function BlogAiRewriterModal({
             enrichedLinks.length === 1 ? pendingByLinkId[enrichedLinks[0].id!]?.newHref : undefined,
           prefValidatedReplacements: prefReplacements.length ? prefReplacements : undefined,
         });
-        if (res.trace) console.log("[blog AI rewrite]", res.trace);
+        // if (res.trace) console.log("[blog AI rewrite]", res.trace);
         if (res.success && res.rewritten) {
           const ok = applyRewriteResponse(res.rewritten, res.linkResolutions);
           if (!ok) return;
@@ -308,7 +308,7 @@ export function BlogAiRewriterModal({
         links: selectionForApi.links,
         instruction: resolveInstruction,
       });
-      if (res.trace) console.log("[blog AI rewrite resolve]", res.trace);
+      // if (res.trace) console.log("[blog AI rewrite resolve]", res.trace);
       if (res.linkType) setResolvedLinkType(res.linkType);
 
       if (res.candidatesByLinkId && Object.keys(res.candidatesByLinkId).length > 0) {

@@ -1,10 +1,10 @@
 import { Suspense } from "react";
 import dynamicComponent from "next/dynamic";
 import { KeywordTableSkeleton } from "@/components/Skeleton";
-import { KeywordTabSwitcher } from "./KeywordTabSwitcher";
+import { KeywordTabSwitcher } from "./_components/KeywordTabSwitcher";
 
-const OrganicKeywordsTab = dynamicComponent(() => import("./OrganicKeywordsTab"));
-const CompetitorKeywordsTab = dynamicComponent(() => import("./CompetitorKeywordsTab"));
+const OrganicKeywordsTab = dynamicComponent(() => import("./_tabs/OrganicKeywordsTab"));
+const CompetitorKeywordsTab = dynamicComponent(() => import("./_tabs/CompetitorKeywordsTab"));
 
 export const dynamic = "force-dynamic";
 
@@ -19,9 +19,9 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
   const activeTab = tab === "competitor" ? "competitor" : "organic";
 
   return (
-    <div className="space-y-0 pb-16 relative">
+    <div className="flex flex-col h-[calc(100vh-4rem)] relative bg-background">
       {/* ── Sticky Header ─────────────────────────────────────────────── */}
-      <header className="sticky -top-6 lg:-top-8 z-40 bg-surface-primary/95 backdrop-blur-md -mx-6 lg:-mx-8 -mt-6 lg:-mt-8 px-6 lg:px-8 pt-6 lg:pt-8 pb-0">
+      <header className="shrink-0 z-40 bg-surface-primary/95 backdrop-blur-md px-6 pt-6 pb-0">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           {/* Title area */}
           <div className="min-w-0 flex-1">
@@ -63,8 +63,8 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
       </header>
 
       {/* ── Content ───────────────────────────────────────────────────── */}
-      <section className="space-y-4 pt-5 px-0">
-        <div className="w-full">
+      <section className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-5">
+        <div className="w-full flex-1 flex flex-col min-h-0">
           <Suspense key={activeTab} fallback={<KeywordTableSkeleton />}>
             {activeTab === "organic" ? (
               <OrganicKeywordsTab projectId={id} />

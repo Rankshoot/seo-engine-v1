@@ -1,6 +1,16 @@
 /** Base path for versioned JSON APIs (readable in Network → Response). */
 export const API_V1 = "/api/v1";
 
+function resolveUrl(path: string): string {
+  const relPath = `${API_V1}${path}`;
+  if (typeof window !== "undefined") {
+    return relPath;
+  }
+  // Server-side: resolve to absolute URL using NEXT_PUBLIC_APP_URL or fallback localhost
+  const host = process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${process.env.PORT || 3000}`;
+  return `${host.replace(/\/$/, "")}${relPath}`;
+}
+
 export async function readApiJson<T>(res: Response): Promise<T> {
   const text = await res.text();
   try {
@@ -11,12 +21,14 @@ export async function readApiJson<T>(res: Response): Promise<T> {
 }
 
 export async function apiGet<T = unknown>(path: string): Promise<T> {
-  const res = await fetch(`${API_V1}${path}`, { credentials: "same-origin" });
+  const url = resolveUrl(path);
+  const res = await fetch(url, { credentials: "same-origin" });
   return readApiJson<T>(res);
 }
 
 export async function apiPost<T = unknown>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_V1}${path}`, {
+  const url = resolveUrl(path);
+  const res = await fetch(url, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
@@ -26,7 +38,8 @@ export async function apiPost<T = unknown>(path: string, body?: unknown): Promis
 }
 
 export async function apiPatch<T = unknown>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_V1}${path}`, {
+  const url = resolveUrl(path);
+  const res = await fetch(url, {
     method: "PATCH",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
@@ -36,6 +49,7 @@ export async function apiPatch<T = unknown>(path: string, body: unknown): Promis
 }
 
 export async function apiDelete<T = unknown>(path: string): Promise<T> {
-  const res = await fetch(`${API_V1}${path}`, { method: "DELETE", credentials: "same-origin" });
+  const url = resolveUrl(path);
+  const res = await fetch(url, { method: "DELETE", credentials: "same-origin" });
   return readApiJson<T>(res);
 }

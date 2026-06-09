@@ -512,3 +512,157 @@ Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
     'AI returned an unparseable response. Please try again — the model usually recovers on the next call.',
   );
 }
+
+/** Gemini schema dialect (`v1beta`) for LinkedIn inputs. */
+const LINKEDIN_INPUTS_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    topic: { type: 'STRING' },
+    primary_keyword: { type: 'STRING' },
+    audience: { type: 'STRING' },
+    post_style: { 
+      type: 'STRING',
+      description: 'The style of the LinkedIn post. Must be one of: "educational", "founder", "industry_insight", "storytelling", "list", "carousel"'
+    },
+    voice: { 
+      type: 'STRING',
+      description: 'The narrative perspective of the LinkedIn post. Must be either "first_person" or "company"'
+    },
+    author_role: { 
+      type: 'STRING',
+      description: 'If voice is first_person, suggest a role like "Founder", "CMO", "VP of Growth". Otherwise suggest empty string.'
+    },
+    cta_objective: { 
+      type: 'STRING',
+      description: 'Engaging, feed-native call to action (e.g. Spark a debate, ask a specific question, prompt them to DM for the cheat sheet).'
+    },
+    tone: {
+      type: 'STRING',
+      description: 'Tone of the post. Must be one of: "Confident · plain-spoken", "Curious · analytical", "Provocative · sharp", "Warm · human", "Numbers-first · precise"'
+    }
+  },
+  required: ['topic', 'primary_keyword', 'audience', 'post_style', 'voice', 'author_role', 'cta_objective', 'tone'],
+} as const;
+
+export interface LinkedInInputsSuggestion {
+  topic: string;
+  primary_keyword: string;
+  audience: string;
+  post_style: string;
+  voice: string;
+  author_role: string;
+  cta_objective: string;
+  tone: string;
+}
+
+export async function suggestLinkedInInputsWithFlash(input: {
+  niche: string;
+  audience: string;
+  domain: string;
+  briefSummary: string | null;
+  brandVoice?: string;
+  brandValues?: string;
+  brandDescription?: string;
+  seedKeyword?: string;
+}): Promise<LinkedInInputsSuggestion> {
+  const briefBlock = input.briefSummary?.trim()
+    ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
+    : '(no cached brief)';
+
+  const seedRule = input.seedKeyword?.trim()
+    ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one.`
+    : `Suggest a highly relevant primary keyword (2-6 words) related to the project niche and audience.`;
+
+  const prompt = `You are a social media SEO content strategist proposing a LinkedIn post plan.
+Suggest the form input values that will produce the best feed-native LinkedIn post next.
+
+CONTEXT:
+- Domain: ${input.domain}
+- Niche: ${input.niche}
+- Default audience: ${input.audience}
+${input.brandVoice ? `- Brand Voice: ${input.brandVoice}` : ''}
+${input.brandValues ? `- Brand Values: ${input.brandValues}` : ''}
+${input.brandDescription ? `- Brand Description: ${input.brandDescription}` : ''}
+${briefBlock}
+
+${seedRule}
+
+Rules for values:
+- post_style: Must be exactly one of: "educational", "founder", "industry_insight", "storytelling", "list", "carousel". Pick the style that best fits this topic and niche.
+- voice: Must be exactly one of: "first_person" or "company".
+- author_role: E.g., "Founder", "CEO", "Head of Growth", "CMO", "VP of Marketing". If voice is "company", set this to an empty string.
+- tone: Must be exactly one of: "Confident · plain-spoken", "Curious · analytical", "Provocative · sharp", "Warm · human", "Numbers-first · precise".
+- cta_objective: Feed-native CTA (e.g. asking a smart question to drive comments, or suggesting they DM for a checklist). Avoid generic clichés.
+
+Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
+{"topic": "...", "primary_keyword": "...", "audience": "...", "post_style": "...", "voice": "...", "author_role": "...", "cta_objective": "...", "tone": "..."}`;
+
+  let raw = '';
+  try {
+    raw = await aiGenerate('assistant', prompt, {
+      temperature: 0.6,
+      maxOutputTokens: 2048,
+      jsonMode: true,
+      responseSchema: LINKEDIN_INPUTS_SCHEMA as unknown as Record<string, unknown>,
+    });
+  } catch (e) {
+    console.warn(
+      '[content-studio] LinkedIn inputs suggestion Flash call failed; retrying with Pro.',
+      e instanceof Error ? e.message : e,
+    );
+  }
+
+  const parseOrExtract = (text: string): LinkedInInputsSuggestion | null => {
+    const parsed = parseLooseJson<LinkedInInputsSuggestion>(text);
+    if (parsed && parsed.topic && parsed.primary_keyword) {
+      return parsed;
+    }
+    // Fallback regex grab
+    const grab = (key: string): string => {
+      const re = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, 'i');
+      const m = re.exec(text);
+      return m ? m[1].replace(/\\"/g, '"').trim() : '';
+    };
+    const topic = grab('topic');
+    const primary = grab('primary_keyword');
+    if (!topic && !primary) return null;
+    return {
+      topic,
+      primary_keyword: primary,
+      audience: grab('audience') || input.audience,
+      post_style: grab('post_style') || 'educational',
+      voice: grab('voice') || 'first_person',
+      author_role: grab('author_role') || 'Founder',
+      cta_objective: grab('cta_objective') || 'Spark a comment thread.',
+      tone: grab('tone') || 'Confident · plain-spoken',
+    };
+  };
+
+  const fromFlash = raw ? parseOrExtract(raw) : null;
+  if (fromFlash) {
+    return fromFlash;
+  }
+
+  // Fallback to Pro
+  let proRaw = '';
+  try {
+    proRaw = await aiGenerate('assistant', prompt, {
+      temperature: 0.75,
+      maxOutputTokens: 1024,
+      jsonMode: true,
+      responseSchema: LINKEDIN_INPUTS_SCHEMA as unknown as Record<string, unknown>,
+    });
+  } catch (e) {
+    throw new Error(
+      `LinkedIn suggestion failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  const fromPro = parseOrExtract(proRaw);
+  if (fromPro) {
+    return fromPro;
+  }
+
+  throw new Error('AI returned an unparseable response for LinkedIn suggestions. Please try again.');
+}
+

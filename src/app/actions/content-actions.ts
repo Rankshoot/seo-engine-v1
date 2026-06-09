@@ -7,6 +7,7 @@ import {
   generateWhitepaper,
   generateLinkedInPost,
   suggestContentTopicWithFlash,
+  suggestLinkedInInputsWithFlash,
 } from '@/lib/content-studio';
 import { researchKeyword } from '@/lib/research';
 import { sanitizeBlogContent } from '@/lib/blog-content';
@@ -140,7 +141,19 @@ export async function suggestContentTopicAction(
     seedKeyword?: string;
   }
 ): Promise<
-  | { success: true; topic: string; primary_keyword: string; semantic_keywords: string[]; rationale: string }
+  | { 
+      success: true; 
+      topic: string; 
+      primary_keyword: string; 
+      semantic_keywords: string[]; 
+      rationale: string;
+      audience?: string;
+      post_style?: string;
+      voice?: string;
+      author_role?: string;
+      cta_objective?: string;
+      tone?: string;
+    }
   | { success: false; error: string }
 > {
   const user = await currentUser();
@@ -149,6 +162,36 @@ export async function suggestContentTopicAction(
   const projRes = await loadProjectAndBrief(projectId, user.id);
   if (!projRes.ok) return { success: false, error: projRes.error };
   const { project, brief } = projRes;
+
+  if (payload.contentType === 'linkedin') {
+    try {
+      const suggestion = await suggestLinkedInInputsWithFlash({
+        niche: project.niche || 'general',
+        audience: project.target_audience || 'general audience',
+        domain: project.domain,
+        briefSummary: brief?.summary ?? null,
+        brandVoice: project.brand_voice,
+        brandValues: project.brand_values,
+        brandDescription: project.brand_description,
+        seedKeyword: payload.seedKeyword,
+      });
+      return {
+        success: true,
+        topic: suggestion.topic,
+        primary_keyword: suggestion.primary_keyword,
+        semantic_keywords: [],
+        rationale: 'LinkedIn feed optimization suggestion',
+        audience: suggestion.audience,
+        post_style: suggestion.post_style,
+        voice: suggestion.voice,
+        author_role: suggestion.author_role,
+        cta_objective: suggestion.cta_objective,
+        tone: suggestion.tone,
+      };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : 'Could not generate suggestion' };
+    }
+  }
 
   const approved = await loadApprovedKeywords(projectId);
   const labelMap: Record<ContentType, string> = {

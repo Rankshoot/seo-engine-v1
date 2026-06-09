@@ -114,7 +114,13 @@ export default function LinkedInGeneratorPage() {
       if (res.success) {
         setTopic(res.topic);
         setPrimaryKeyword(res.primary_keyword);
-        toast.success("Hook angle filled");
+        if (res.audience) setAudience(res.audience);
+        if (res.post_style) setPostStyle(res.post_style as LinkedInPostStyle);
+        if (res.voice) setVoice(res.voice as "first_person" | "company");
+        if (res.author_role) setAuthorRole(res.author_role);
+        if (res.cta_objective) setCtaObjective(res.cta_objective);
+        if (res.tone) setTone(res.tone);
+        toast.success("Filled all fields for LinkedIn post template");
       } else {
         toast.error(res.error);
       }

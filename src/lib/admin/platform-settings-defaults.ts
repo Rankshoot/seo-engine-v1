@@ -64,7 +64,7 @@ export const DEFAULT_PLATFORM_ROUTING: AdminPlatformRouting = {
   ebook: "claude-sonnet-4-6",
   whitepaper: "claude-sonnet-4-6",
   linkedin: "claude-sonnet-4-6",
-  assistant: "claude-sonnet-4-6",
+  assistant: "gemini-3-pro-preview",
   fallback: "gemini-2.5-pro",
 };
 

@@ -15,18 +15,17 @@ export default function ProjectLayoutClient({
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const { data: projectRes, isFetched } = useProject(projectId);
+  // Commented out to prevent duplicate API call in keyword discovery page
+  // const { data: projectRes, isFetched } = useProject(projectId);
   const { data: projectsListRes } = useProjects();
 
-  const project: Project | null =
-    projectRes && projectRes.success && projectRes.data ? projectRes.data : null;
+  const allProjects = projectsListRes?.success && projectsListRes.data ? projectsListRes.data : [];
+  const project: Project | null = allProjects.find(p => p.id === projectId) || null;
 
   // Only trigger notFound if the query finished and explicitly failed to find a project
-  if (isFetched && !project) {
-    notFound();
-  }
-
-  const allProjects = projectsListRes?.success && projectsListRes.data ? projectsListRes.data : [];
+  // if (isFetched && !project) {
+  //   notFound();
+  // }
 
   return (
     <div className="h-screen overflow-hidden bg-surface-primary flex transition-all duration-300 ease-in-out">

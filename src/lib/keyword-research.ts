@@ -51,6 +51,7 @@ import {
   type AhrefsIntentObject,
   type AhrefsKeywordIdea,
 } from './ahrefs';
+import { fetchGoogleAdsKeywordsForSite } from './dataforseo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -84,6 +85,8 @@ export interface KeywordResearchInput {
   queryMatching?: boolean;
   /** Whether to query related terms */
   queryRelated?: boolean;
+  /** When provided (DataForSEO path only), domain keywords are fetched live and merged with industry keywords. */
+  targetDomain?: string;
 }
 
 /**
@@ -789,6 +792,53 @@ export async function fetchKeywordsFromDataForSEO(
       `DataForSEO failed: ${ideasResult.errorMessage ?? 'unknown error'}`,
       trace
     );
+  }
+
+  // Domain keywords: fetch live via keywords_for_site and merge in (half-and-half).
+  if (input.targetDomain) {
+    try {
+      const domainResult = await fetchGoogleAdsKeywordsForSite(
+        input.targetDomain,
+        region,
+        language,
+        limit
+      );
+      pushTrace(trace, {
+        provider: 'dataforseo',
+        endpoint: 'keywords_data/google_ads/keywords_for_site/live (domain merge)',
+        ok: domainResult.rows.length > 0,
+        ms: 0,
+        rows: domainResult.rows.length,
+      });
+      for (const row of domainResult.rows) {
+        normalized.push({
+          keyword: row.keyword,
+          volume: row.volume,
+          difficulty: row.kd > 0 ? row.kd : null,
+          cpc: row.cpc > 0 ? row.cpc : null,
+          intent: (row.intent as NormalizedKeyword['intent']) || '',
+          intents: null,
+          trafficPotential: row.estimated_monthly_traffic ?? null,
+          parentTopic: null,
+          trend: '',
+          monthlySearches: [],
+          competitionLevel: '',
+          source: 'dataforseo',
+          endpoint: 'keywords_for_site',
+        });
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[keyword-research] domain keywords merge failed (non-fatal):', msg);
+      pushTrace(trace, {
+        provider: 'dataforseo',
+        endpoint: 'keywords_data/google_ads/keywords_for_site/live (domain merge)',
+        ok: false,
+        ms: 0,
+        rows: 0,
+        errorMessage: msg,
+      });
+    }
   }
 
   const keywords = mergeKeywords(normalized);

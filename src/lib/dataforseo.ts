@@ -1993,6 +1993,7 @@ export async function discoverKeywordsForProject(
       relatedLastVolume: extras.relatedLastVolume,
       queryMatching: extras.queryMatching,
       queryRelated: extras.queryRelated,
+      targetDomain: ownDomain || undefined,
     });
     researchKeywords = research.keywords;
     researchTrace = research.trace;

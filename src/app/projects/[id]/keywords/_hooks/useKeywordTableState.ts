@@ -18,7 +18,6 @@ export interface UseKeywordTableStateProps<T> {
   initialSortColumn?: string;
   initialSortDirection?: "asc" | "desc";
   compareFn: (a: T, b: T, columnId: string, direction: "asc" | "desc") => number;
-  alwaysShowAll?: boolean;
 }
 
 const PAGE_SIZE = 20;
@@ -36,7 +35,6 @@ export function useKeywordTableState<T>({
   initialSortColumn = "",
   initialSortDirection = "desc",
   compareFn,
-  alwaysShowAll = false,
 }: UseKeywordTableStateProps<T>) {
   // 1. Search Query
   const [searchQuery, setSearchQuery] = useState("");
@@ -55,8 +53,8 @@ export function useKeywordTableState<T>({
   const activeSortColumn = externalSortColumn !== undefined ? externalSortColumn : localSortColumn;
   const activeSortDirection = externalSortDirection !== undefined ? externalSortDirection : localSortDirection;
 
-  // 5. Pagination / Visible Range
-  const [visibleCount, setVisibleCount] = useState(alwaysShowAll ? 20 : PAGE_SIZE);
+  // 5. Pagination
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   // Toggle selection for a single row
   const toggleRowSelected = useCallback((id: string) => {
@@ -171,18 +169,10 @@ export function useKeywordTableState<T>({
     }
   }, [processedData.length]);
 
-  // Reset/update page size when filter, sort, or data length changes
+  // Reset page size when filter or sort switches
   useEffect(() => {
-    if (alwaysShowAll) {
-      setVisibleCount(Math.min(20, processedData.length));
-      const handle = requestAnimationFrame(() => {
-        setVisibleCount(processedData.length);
-      });
-      return () => cancelAnimationFrame(handle);
-    } else {
-      setVisibleCount(PAGE_SIZE);
-    }
-  }, [filter, activeSortColumn, activeSortDirection, processedData.length, alwaysShowAll]);
+    setVisibleCount(PAGE_SIZE);
+  }, [filter, activeSortColumn, activeSortDirection]);
 
   // Reset selection on project or data change
   useEffect(() => {

@@ -154,11 +154,12 @@ export function useKeywordTableState<T>({
   }, []);
 
 
-  // Reset selection on project or data change
+  // Reset selection when data is emptied (e.g. switching projects)
   useEffect(() => {
-    exitMassSelect();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+    if (data.length === 0) {
+      exitMassSelect();
+    }
+  }, [data.length, exitMassSelect]);
 
   return {
     searchQuery,

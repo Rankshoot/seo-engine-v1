@@ -42,7 +42,8 @@ export interface SharedKeywordTableProps<T> {
   scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
 
   controls?: ReactNode;
-  footer?: ReactNode;
+  footerLeft?: ReactNode;
+  footerRight?: ReactNode;
 }
 
 const thBtnClass =
@@ -90,7 +91,8 @@ export function SharedKeywordTable<T>({
   minWidth = "860px",
   scrollContainerRef,
   controls,
-  footer,
+  footerLeft,
+  footerRight,
 }: SharedKeywordTableProps<T>) {
   const handleRowClick = (row: T, rowId: string, selectable: boolean, e: React.MouseEvent<HTMLTableRowElement>) => {
     const t = e.target as HTMLElement;
@@ -233,13 +235,16 @@ export function SharedKeywordTable<T>({
                   </TableRow>
                 );
               })}
-              {footer && (
-                <TableRow className="hover:bg-transparent bg-surface-secondary/30">
+              {(footerLeft || footerRight) && (
+                <TableRow className="hover:bg-transparent bg-surface-secondary/30 border-t border-border-subtle">
                   <TableCell
-                    colSpan={columns.length + (massSelectMode ? 1 : 0)}
-                    className="p-0 border-t border-border-subtle"
+                    colSpan={columns.length + (massSelectMode ? 1 : 0) - 1}
+                    className="px-6 py-3.5 align-middle"
                   >
-                    {footer}
+                    {footerLeft}
+                  </TableCell>
+                  <TableCell className="px-4 py-3.5 align-middle text-center">
+                    {footerRight}
                   </TableCell>
                 </TableRow>
               )}
@@ -250,3 +255,4 @@ export function SharedKeywordTable<T>({
     </div>
   );
 }
+

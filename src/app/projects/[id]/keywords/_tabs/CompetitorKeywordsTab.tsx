@@ -27,8 +27,6 @@ type SortDir = "asc" | "desc";
 type GapAiEvalData = NonNullable<KeywordGap["ai_eval_data"]>;
 
 // ─── CONSTANTS & HELPERS ────────────────────────────────────────────────────
-const KEYWORDS_TABLE_PAGE_SIZE = 20;
-
 function compactUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -39,11 +37,14 @@ function compactUrl(url: string): string {
   }
 }
 
+const KD_COLOR = (kd: number) =>
+  kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
+
 function getAiGapScoreCategory(score: number): { icon: string; colorClass: string; label: string } {
-  if (score >= 75) return { icon: "★", colorClass: "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10", label: "High opportunity" };
-  if (score >= 55) return { icon: "◆", colorClass: "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10", label: "Good fit" };
-  if (score >= 35) return { icon: "▸", colorClass: "text-brand-action border-brand-action/25 bg-brand-action/10", label: "Moderate" };
-  return { icon: "▾", colorClass: "text-text-tertiary border-border-subtle bg-surface-elevated", label: "Low priority" };
+  if (score >= 75) return { icon: "★", colorClass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400", label: "High opportunity" };
+  if (score >= 55) return { icon: "◆", colorClass: "border-brand-action/30 bg-brand-action/10 text-brand-action", label: "Good fit" };
+  if (score >= 35) return { icon: "●", colorClass: "border-amber-500/30 bg-amber-500/10 text-amber-400", label: "Moderate" };
+  return { icon: "▼", colorClass: "border-border-subtle bg-surface-tertiary text-text-tertiary", label: "Low priority" };
 }
 
 function compareGaps(a: KeywordGap, b: KeywordGap, col: GapSortColumn, dir: SortDir): number {
@@ -243,7 +244,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     setError("");
     const res = await competitorsApi.loadMoreFromAhrefs(projectId);
     if (!res.success) {
-      setError(res.error ?? "Failed to load more from Ahrefs");
+      setError(res.error ?? "Failed to load more keywords");
     } else if (res.added > 0) {
       await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
     }
@@ -366,19 +367,21 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     };
 
     return (
-      <select
-        value={currentType}
-        onChange={e => tableState.setRowContentType(keywordText, e.target.value as ContentType)}
-        disabled={isSch || isGenerated}
-        className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-      >
-        {options.map(type => (
-          <option key={type} value={type}>
-            {labels[type]}
-            {type === recommended ? " ✨" : ""}
-          </option>
-        ))}
-      </select>
+      <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+        <select
+          value={currentType}
+          onChange={e => tableState.setRowContentType(keywordText, e.target.value as ContentType)}
+          disabled={isSch || isGenerated}
+          className="w-36 h-8 text-[12px] bg-surface-secondary border border-border-subtle hover:border-border-strong rounded-md transition-colors px-2 outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        >
+          {options.map(type => (
+            <option key={type} value={type}>
+              {labels[type]}
+              {type === recommended ? " ✨" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
     );
   }, [calendarMap, resolveContentType, tableState, articleTypeToContentType]);
 
@@ -396,20 +399,22 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             : "informational";
 
     return (
-      <KeywordActionCell
-        projectId={projectId}
-        keyword={g.keyword}
-        sourceType="competitor_gap"
-        contentType={selectedType}
-        scheduledDate={entry?.scheduled_date}
-        blogId={entry?.blog?.id}
-        volume={g.volume}
-        kd={g.kd}
-        intent={intent}
-        competitorDomain={g.top_competitor_domain}
-        rankingUrl={g.top_competitor_url}
-        rank={g.position ?? undefined}
-      />
+      <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+        <KeywordActionCell
+          projectId={projectId}
+          keyword={g.keyword}
+          sourceType="competitor_gap"
+          contentType={selectedType}
+          scheduledDate={entry?.scheduled_date}
+          blogId={entry?.blog?.id}
+          volume={g.volume}
+          kd={g.kd}
+          intent={intent}
+          competitorDomain={g.top_competitor_domain}
+          rankingUrl={g.top_competitor_url}
+          rank={g.position ?? undefined}
+        />
+      </div>
     );
   }, [calendarMap, resolveContentType, projectId]);
 
@@ -453,11 +458,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       sortable: false,
       tooltip: "Keyword Difficulty (0–100). Higher = harder to rank.",
       cell: (g: KeywordGap) => typeof g.kd === "number" && g.kd > 0 ? (
-        <span
-          className={`text-[13px] font-semibold tabular-nums ${
-            g.kd >= 70 ? "text-brand-coral" : g.kd >= 40 ? "text-[#f59e0b]" : "text-[#10b981]"
-          }`}
-        >
+        <span className={`text-[13px] font-semibold tabular-nums ${KD_COLOR(g.kd)}`}>
           {g.kd}
         </span>
       ) : (
@@ -527,7 +528,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               <span
                 className={`inline-flex cursor-default items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-bold tabular-nums ${cat.colorClass}`}
               >
-                {cat.icon} {g.ai_eval_score}
+                <span>{cat.icon}</span> {g.ai_eval_score}
               </span>
             );
           })()}
@@ -780,70 +781,35 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                   }`;
                 }}
                 minWidth="1060px"
-                footer={(() => {
-                  const shown = tableState.displayedData.length;
-                  const total = tableState.processedData.length;
-                  const nextChunk = Math.min(KEYWORDS_TABLE_PAGE_SIZE, Math.max(0, total - shown));
-                  return shown < total && nextChunk > 0 ? (
-                    <div className="px-6 py-4 flex items-center justify-between gap-4">
-                      <span className="text-[12px] text-text-tertiary">
-                        Showing <span className="font-semibold text-text-secondary">{shown}</span> of{" "}
-                        <span className="font-semibold text-text-secondary">{total}</span> keywords
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const anchor = shown > 0 ? tableState.processedData[shown - 1]!.id : null;
-                          tableState.loadMore(anchor, tableScrollRef);
-                        }}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 py-1.5 text-[12px] font-medium text-text-secondary shadow-sm transition-colors hover:border-border-strong hover:text-text-primary"
-                      >
-                        Load {nextChunk} more
-                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-                    </div>
-                  ) : tableState.processedData.length > 0 ? (
-                    <div className="px-6 py-4 flex items-center justify-between gap-4">
-                      <span className="text-[12px] text-text-tertiary">
-                        {total > KEYWORDS_TABLE_PAGE_SIZE
-                          ? `All ${total} keywords shown`
-                          : `${total} keyword${total === 1 ? "" : "s"}`}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void handleLoadMoreAhrefs()}
-                        disabled={loadingMoreAhrefs}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-1.5 text-[12px] font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none ${
-                          loadingMoreAhrefs
-                            ? "border-brand-action/40 bg-brand-action/10 text-brand-action animate-pulse"
-                            : "border-brand-action/30 bg-brand-action/5 text-brand-action hover:bg-brand-action/10 hover:border-brand-action/50"
-                        }`}
-                      >
-                        {loadingMoreAhrefs ? (
-                          <>
-                            <div className="h-3 w-3 rounded-full border-2 border-brand-action/30 border-t-brand-action animate-spin" />
-                            Loading from Ahrefs…
-                          </>
-                        ) : (
-                          <>
-                            <svg
-                              className="h-3.5 w-3.5"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                            </svg>
-                            Load more from Ahrefs
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  ) : null;
-                })()}
+                footerLeft={
+                  <span className="text-[12px] text-text-tertiary">
+                    Showing <span className="font-semibold text-text-secondary">{tableState.processedData.length}</span> of{" "}
+                    <span className="font-semibold text-text-secondary">{tableState.processedData.length}</span> keywords
+                  </span>
+                }
+                footerRight={
+                  <button
+                    type="button"
+                    onClick={() => void handleLoadMoreAhrefs()}
+                    disabled={loadingMoreAhrefs}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-1.5 text-[12px] font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none ${
+                      loadingMoreAhrefs
+                        ? "border-brand-action/40 bg-brand-action/10 text-brand-action animate-pulse"
+                        : "border-brand-action/30 bg-brand-action/5 text-brand-action hover:bg-brand-action/10 hover:border-brand-action/50"
+                    }`}
+                  >
+                    {loadingMoreAhrefs ? (
+                      <>
+                        <div className="h-3 w-3 rounded-full border-2 border-brand-action/30 border-t-brand-action animate-spin" />
+                        Loading…
+                      </>
+                    ) : (
+                      <>
+                        Load more
+                      </>
+                    )}
+                  </button>
+                }
               />
             </Suspense>
           </section>

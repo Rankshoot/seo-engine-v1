@@ -143,36 +143,16 @@ export function useKeywordTableState<T>({
     return sorted;
   }, [filteredData, activeSortColumn, activeSortDirection, compareFn]);
 
-  // Paginated chunk
-  const displayedData = useMemo(() => {
-    return processedData.slice(0, visibleCount);
-  }, [processedData, visibleCount]);
+  // Paginated chunk - modified to return full sorted/filtered dataset immediately
+  const displayedData = processedData;
 
-  const hasMore = visibleCount < processedData.length;
-  const remaining = processedData.length - visibleCount;
+  const hasMore = false;
+  const remaining = 0;
 
   const loadMore = useCallback((anchorKey?: string | null, scrollContainerRef?: React.RefObject<HTMLDivElement | null>) => {
-    setVisibleCount(prev => Math.min(prev + PAGE_SIZE, processedData.length));
-    
-    if (anchorKey && scrollContainerRef?.current) {
-      const root = scrollContainerRef.current;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          for (const el of root.querySelectorAll<HTMLElement>("tbody tr[data-table-row-key]")) {
-            if (el.getAttribute("data-table-row-key") === anchorKey) {
-              el.scrollIntoView({ behavior: "smooth", block: "start" });
-              break;
-            }
-          }
-        });
-      });
-    }
-  }, [processedData.length]);
+    // No-op since local pagination is disabled
+  }, []);
 
-  // Reset page size when filter or sort switches
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [filter, activeSortColumn, activeSortDirection]);
 
   // Reset selection on project or data change
   useEffect(() => {

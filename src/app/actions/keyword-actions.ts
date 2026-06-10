@@ -1593,6 +1593,7 @@ async function callGeminiForEval(prompt: string, projectId: string): Promise<str
     retries: 2,
     // Enough tokens for 10 keywords × ~200 tokens each of dense JSON output
     maxOutputTokens: 8192,
+    timeoutMs: 120000,
   });
 }
 
@@ -1724,7 +1725,6 @@ export async function scoreKeywordsWithAI(
     .from('keywords')
     .select('id, keyword, volume, kd, cpc, intent, trend, ai_eval_score, ai_eval_at')
     .eq('project_id', projectId)
-    .eq('source_type', 'industry')
     .or('source.eq.organic,source.is.null')
     .order('volume', { ascending: false })
     .limit(200);

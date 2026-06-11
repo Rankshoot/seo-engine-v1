@@ -3,6 +3,27 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { adminPanelPathFromProjectsAdmin } from "@/lib/projects/reserved-project-slugs";
 
+// Edge-native in-memory rate limit cache
+const rateLimitCache = new Map<string, number[]>();
+
+function isRateLimited(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const timestamps = rateLimitCache.get(key) || [];
+  
+  // Clean up expired timestamps
+  const validTimestamps = timestamps.filter(t => now - t < windowMs);
+  
+  if (validTimestamps.length >= limit) {
+    rateLimitCache.set(key, validTimestamps);
+    return true;
+  }
+  
+  validTimestamps.push(now);
+  rateLimitCache.set(key, validTimestamps);
+  return false;
+}
+
+
 async function fetchApprovalStatus(userId: string): Promise<"approved" | "pending"> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -97,6 +118,38 @@ export default function middleware(...args: Parameters<typeof clerk>) {
   const req = args[0];
   const pathname = req.nextUrl.pathname;
   const lowerPathname = pathname.toLowerCase();
+
+  // Edge-native Rate Limiting to prevent API abuse
+  if (pathname.startsWith("/api/")) {
+    const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || 
+               req.headers.get("x-real-ip") || 
+               "127.0.0.1";
+
+    const isGenerationApi = pathname.includes("/generate") || 
+                             pathname.includes("/enhance") || 
+                             pathname.includes("/deep-analysis");
+    
+    // AI generation APIs are limited to 10 req/min; others to 100 req/min
+    const limit = isGenerationApi ? 10 : 100;
+    const windowMs = 60 * 1000;
+
+    if (isRateLimited(`${ip}:${isGenerationApi ? "gen" : "api"}`, limit, windowMs)) {
+      return new NextResponse(
+        JSON.stringify({
+          success: false,
+          error: "Too Many Requests",
+          message: "You have exceeded your request rate limit. Please try again in a minute.",
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "60",
+          },
+        }
+      );
+    }
+  }
 
   // Backward-compatible project URL aliases:
   //   /project/:id/...  -> /projects/:id/...

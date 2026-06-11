@@ -1,10 +1,22 @@
 import type { Metadata } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/components/query-provider";
 import { ReduxProvider } from "@/components/redux-provider";
 import { AppToastContainer } from "@/components/app-toast-container";
 import { TooltipProvider } from "@/components/ui/Tooltip";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-sans",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+});
 
 // Conditionally import Clerk only if keys are configured
 const isClerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
@@ -29,19 +41,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const content = (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${jetbrainsMono.variable}`}>
+      <head />
       <body className="min-h-screen antialiased bg-surface-primary text-text-primary">
         <ThemeProvider
           attribute="class"
@@ -54,6 +55,7 @@ export default async function RootLayout({
               <TooltipProvider delayDuration={250} skipDelayDuration={150}>
                 <AppToastContainer />
                 {children}
+                <SpeedInsights />
               </TooltipProvider>
             </QueryProvider>
           </ReduxProvider>

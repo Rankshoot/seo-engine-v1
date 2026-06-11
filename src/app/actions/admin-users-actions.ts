@@ -2,8 +2,10 @@
 
 import { clerkClient } from "@clerk/nextjs/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { requireAdmin } from "@/lib/admin/require-admin";
+import { QuotaService } from "@/services/quota";
 import type { AdminListParams } from "@/lib/admin/parse-list-params";
-import type { AdminUserRow, AdminUsersListResult } from "@/types/admin-users";
+import type { AdminUserRow, AdminUsersListResult, ApprovalStatus } from "@/types/admin-users";
 
 function daysAgoIso(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -46,16 +48,35 @@ export async function listAdminUsers(
     const db = getSupabaseAdmin();
     const since30d = daysAgoIso(30);
 
-    const { data: projects, error: projErr } = await db
-      .from("projects")
-      .select("id, user_id, created_at, updated_at")
-      .returns<
-        { id: string; user_id: string; created_at: string; updated_at: string }[]
-      >();
+    const [{ data: projects, error: projErr }, { data: approvalUsers }] = await Promise.all([
+      db
+        .from("projects")
+        .select("id, user_id, created_at, updated_at")
+        .returns<{ id: string; user_id: string; created_at: string; updated_at: string }[]>(),
+      db
+        .from("user_approvals")
+        .select("clerk_user_id, requested_at")
+        .returns<{ clerk_user_id: string; requested_at: string }[]>(),
+    ]);
 
     if (projErr) throw new Error(projErr.message);
 
     const byUser = new Map<string, UserAgg>();
+
+    // Seed map from user_approvals so users with no projects still appear
+    for (const a of approvalUsers ?? []) {
+      if (!a.clerk_user_id) continue;
+      if (!byUser.has(a.clerk_user_id)) {
+        byUser.set(a.clerk_user_id, {
+          userId: a.clerk_user_id,
+          projectCount: 0,
+          projectIds: [],
+          lastActiveAt: null,
+          firstSeenAt: a.requested_at ?? null,
+        });
+      }
+    }
+
     for (const p of projects ?? []) {
       if (!p.user_id) continue;
       const cur = byUser.get(p.user_id) ?? {
@@ -127,8 +148,9 @@ export async function listAdminUsers(
     const pageRows = rows.slice(start, start + params.pageSize);
 
     const allPageProjectIds = pageRows.flatMap((r) => r.projectIds);
+    const pageUserIds = pageRows.map((r) => r.userId);
 
-    const [keywordsRes, blogsRes, aiLogsRes, apiLogsRes] = await Promise.all([
+    const [keywordsRes, blogsRes, aiLogsRes, apiLogsRes, approvalsRes] = await Promise.all([
       allPageProjectIds.length
         ? db.from("keywords").select("project_id").in("project_id", allPageProjectIds)
         : Promise.resolve({ data: [] as { project_id: string }[] }),
@@ -155,6 +177,12 @@ export async function listAdminUsers(
               pageRows.map((r) => r.userId)
             )
         : Promise.resolve({ data: [] as { user_id: string; estimated_cost_usd: number | null }[] }),
+      pageUserIds.length
+        ? db
+            .from("user_approvals")
+            .select("clerk_user_id, status")
+            .in("clerk_user_id", pageUserIds)
+        : Promise.resolve({ data: [] as { clerk_user_id: string; status: string }[] }),
     ]);
 
     const kwByProject = new Map<string, number>();
@@ -183,6 +211,12 @@ export async function listAdminUsers(
       );
     }
 
+    const approvalByUser = new Map<string, ApprovalStatus>();
+    for (const row of approvalsRes.data ?? []) {
+      if (!row.clerk_user_id) continue;
+      approvalByUser.set(row.clerk_user_id, row.status as ApprovalStatus);
+    }
+
     const items: AdminUserRow[] = await Promise.all(
       pageRows.map(async (row) => {
         const profile = await enrichClerkProfile(row.userId);
@@ -205,6 +239,7 @@ export async function listAdminUsers(
           aiCostUsd30d: ai?.cost ?? 0,
           lastActiveAt: row.lastActiveAt,
           firstSeenAt: row.firstSeenAt,
+          approvalStatus: approvalByUser.get(row.userId) ?? "approved",
         };
       })
     );
@@ -223,4 +258,207 @@ export async function listAdminUsers(
     console.error("[admin-users]", message);
     return { success: false, error: message };
   }
+}
+
+/**
+ * Admin action to fetch full quota limits, overrides and usage status for a user.
+ */
+export async function getAdminUserQuotaStatus(userId: string) {
+  const adminCheck = await requireAdmin({ minRole: "support" });
+  if (!adminCheck.ok) {
+    throw new Error("Unauthorized: Admin role required.");
+  }
+
+  // Ensure record exists
+  await QuotaService.ensureUserRecords(userId);
+
+  return QuotaService.getUserQuotaStatus(userId);
+}
+
+/**
+ * Admin action to update user-specific quotas, base plan, and overrides.
+ */
+export async function updateAdminUserQuota(
+  userId: string,
+  updates: {
+    planId: string;
+    subscriptionStatus: string;
+    override_projects: number | null;
+    override_keywords_fetched: number | null;
+    override_keywords_explored: number | null;
+    override_standard_content: number | null;
+    override_premium_content: number | null;
+    override_ai_credits: number | null;
+  }
+) {
+  const adminCheck = await requireAdmin({ minRole: "admin" });
+  if (!adminCheck.ok) {
+    throw new Error("Unauthorized: Admin role required.");
+  }
+
+  const db = getSupabaseAdmin();
+
+  // Update user profile record plan and status
+  const { error: userErr } = await db
+    .from("users")
+    .update({
+      plan_id: updates.planId,
+      subscription_status: updates.subscriptionStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", userId);
+
+  if (userErr) {
+    throw new Error(`Failed to update user profile plan: ${userErr.message}`);
+  }
+
+  // Ensure quota record is present first
+  await QuotaService.ensureUserRecords(userId);
+
+  // Fetch target plan limits to sync base counters
+  const { data: plan, error: planErr } = await db
+    .from("subscription_plans")
+    .select("*")
+    .eq("id", updates.planId)
+    .single();
+
+  if (planErr || !plan) {
+    throw new Error(`Failed to fetch limits for plan ${updates.planId}`);
+  }
+
+  // Sync quotas with overrides
+  const { error: quotaErr } = await db
+    .from("user_quotas")
+    .update({
+      limit_projects: plan.limit_projects,
+      limit_keywords_fetched: plan.limit_keywords_fetched,
+      limit_keywords_explored: plan.limit_keywords_explored,
+      limit_standard_content: plan.limit_standard_content,
+      limit_premium_content: plan.limit_premium_content,
+      limit_ai_credits: plan.limit_ai_credits,
+
+      override_projects: updates.override_projects,
+      override_keywords_fetched: updates.override_keywords_fetched,
+      override_keywords_explored: updates.override_keywords_explored,
+      override_standard_content: updates.override_standard_content,
+      override_premium_content: updates.override_premium_content,
+      override_ai_credits: updates.override_ai_credits,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+
+  if (quotaErr) {
+    throw new Error(`Failed to update overrides in database: ${quotaErr.message}`);
+  }
+
+  return { success: true };
+}
+
+/**
+ * Admin action to fetch and aggregate precise costing and usage data per user.
+ */
+export async function getAdminUserCostAndUsage(
+  userId: string,
+  startDateStr: string,
+  endDateStr: string
+) {
+  const adminCheck = await requireAdmin({ minRole: "support" });
+  if (!adminCheck.ok) {
+    throw new Error("Unauthorized: Admin role required.");
+  }
+
+  const db = getSupabaseAdmin();
+
+  // Parse start and end dates
+  const start = new Date(startDateStr);
+  const end = new Date(endDateStr);
+  end.setHours(23, 59, 59, 999); // Cover the full last day
+
+  const [aiLogsRes, apiLogsRes] = await Promise.all([
+    db
+      .from("ai_usage_logs")
+      .select("estimated_cost_usd, created_at, status")
+      .eq("user_id", userId)
+      .gte("created_at", start.toISOString())
+      .lte("created_at", end.toISOString())
+      .order("created_at", { ascending: true }),
+    db
+      .from("api_usage_logs")
+      .select("estimated_cost_usd, created_at, status")
+      .eq("user_id", userId)
+      .gte("created_at", start.toISOString())
+      .lte("created_at", end.toISOString())
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (aiLogsRes.error) throw new Error(`AI logs error: ${aiLogsRes.error.message}`);
+  if (apiLogsRes.error) throw new Error(`API logs error: ${apiLogsRes.error.message}`);
+
+  const aiLogs = aiLogsRes.data || [];
+  const apiLogs = apiLogsRes.data || [];
+
+  let totalAiCost = 0;
+  for (const log of aiLogs) {
+    totalAiCost += Number(log.estimated_cost_usd) || 0;
+  }
+
+  let totalApiCost = 0;
+  for (const log of apiLogs) {
+    totalApiCost += Number(log.estimated_cost_usd) || 0;
+  }
+
+  // Aggregate daily mapping for charts
+  const dailyMap = new Map<
+    string,
+    { date: string; aiCost: number; apiCost: number; aiCalls: number; apiCalls: number }
+  >();
+
+  // Pre-populate every single date in the range to avoid empty gaps in rendering
+  const tempDate = new Date(start);
+  while (tempDate <= end) {
+    const dateStr = tempDate.toISOString().slice(0, 10);
+    dailyMap.set(dateStr, {
+      date: dateStr,
+      aiCost: 0,
+      apiCost: 0,
+      aiCalls: 0,
+      apiCalls: 0,
+    });
+    tempDate.setDate(tempDate.getDate() + 1);
+  }
+
+  // Populate AI logs stats
+  for (const log of aiLogs) {
+    const dateStr = log.created_at.slice(0, 10);
+    let cur = dailyMap.get(dateStr);
+    if (!cur) {
+      cur = { date: dateStr, aiCost: 0, apiCost: 0, aiCalls: 0, apiCalls: 0 };
+      dailyMap.set(dateStr, cur);
+    }
+    cur.aiCost += Number(log.estimated_cost_usd) || 0;
+    cur.aiCalls += 1;
+  }
+
+  // Populate API logs stats
+  for (const log of apiLogs) {
+    const dateStr = log.created_at.slice(0, 10);
+    let cur = dailyMap.get(dateStr);
+    if (!cur) {
+      cur = { date: dateStr, aiCost: 0, apiCost: 0, aiCalls: 0, apiCalls: 0 };
+      dailyMap.set(dateStr, cur);
+    }
+    cur.apiCost += Number(log.estimated_cost_usd) || 0;
+    cur.apiCalls += 1;
+  }
+
+  const chartData = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+  return {
+    totalAiCost,
+    totalApiCost,
+    totalCost: totalAiCost + totalApiCost,
+    aiCount: aiLogs.length,
+    apiCount: apiLogs.length,
+    chartData,
+  };
 }

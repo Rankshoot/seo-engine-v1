@@ -1,6 +1,43 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { adminPanelPathFromProjectsAdmin } from "@/lib/projects/reserved-project-slugs";
+
+async function fetchApprovalStatus(userId: string): Promise<"approved" | "pending"> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return "approved";
+
+  const db = createClient(url, key);
+  const { data } = await db
+    .from("user_approvals")
+    .select("status")
+    .eq("clerk_user_id", userId)
+    .single();
+
+  const status = (data as { status: string } | null)?.status ?? null;
+
+  if (status === "approved") return "approved";
+
+  if (status === "pending" || status === "denied" || status === "revoked") {
+    return "pending";
+  }
+
+  // No record at all — insert pending and block.
+  // Existing grandfathered users already have 'approved' from the migration script.
+  // Any user without a record is therefore new and must wait for approval.
+  await db.from("user_approvals").upsert(
+    {
+      clerk_user_id: userId,
+      email: "",
+      status: "pending",
+      requested_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "clerk_user_id" }
+  );
+  return "pending";
+}
 
 const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
@@ -8,7 +45,17 @@ const isPublicRoute = createRouteMatcher([
   "/",
   "/sign-in(.*)",
   "/sign-up(.*)",
+  "/pending-approval(.*)",
   "/api/webhooks(.*)",
+]);
+
+const isApprovalBypassRoute = createRouteMatcher([
+  "/pending-approval(.*)",
+  "/sign-in(.*)",
+  "/sign-up(.*)",
+  "/api/webhooks(.*)",
+  "/api/v1/admin(.*)",
+  "/api/v1/me/approval-status(.*)",
 ]);
 
 const clerk = clerkMiddleware(async (auth, req) => {
@@ -18,7 +65,7 @@ const clerk = clerkMiddleware(async (auth, req) => {
   const isApiV1 = pathname.startsWith("/api/v1/");
   const isPublicWebhook = pathname.startsWith("/api/webhooks") || pathname.startsWith("/api/v1/webhooks");
 
-  if (userId && isPublicRoute(req) && !pathname.startsWith("/api")) {
+  if (userId && isPublicRoute(req) && !pathname.startsWith("/api") && pathname !== "/pending-approval") {
     return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
@@ -35,6 +82,14 @@ const clerk = clerkMiddleware(async (auth, req) => {
   const isApi = pathname.startsWith("/api/");
   if (!isPublicRoute(req) && !isApi) {
     await auth.protect();
+  }
+
+  // Approval gate — real-time DB check (sessionClaims are stale until token rotation)
+  if (userId && !isApi && !isApprovalBypassRoute(req)) {
+    const status = await fetchApprovalStatus(userId);
+    if (status === "pending") {
+      return NextResponse.redirect(new URL("/pending-approval", req.url));
+    }
   }
 });
 

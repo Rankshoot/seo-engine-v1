@@ -6,19 +6,17 @@ import { PageShell, EmptyState } from "@/components/common";
 import { DataTable, type ColumnDef } from "@/components/DataTable";
 import { AdminFilters, type AdminFiltersState } from "@/components/admin/AdminFilters";
 import { AdminPagination } from "@/components/admin/AdminPagination";
-import {
-  AdminDetailDrawer,
-  AdminDetailRows,
-} from "@/components/admin/AdminDetailDrawer";
+import { AdminUserModal } from "@/components/admin/AdminUserModal";
 import { useAdminListUrlState } from "@/hooks/useAdminListUrlState";
-import { useAdminUsers } from "@/lib/query/admin-queries";
+import { useAdminUsers, useUpdateUserApproval } from "@/lib/query/admin-queries";
 import {
   formatAdminDate,
   formatAdminInt,
   formatAdminUsd,
 } from "@/lib/admin/format";
-import type { AdminUserRow } from "@/types/admin-users";
+import type { AdminUserRow, ApprovalStatus } from "@/types/admin-users";
 import { cn } from "@/lib/cn";
+import type { ApprovalAction } from "@/frontend/api/admin";
 
 const USER_SORT_OPTIONS = [
   { value: "lastActive", label: "Last active" },
@@ -27,10 +25,95 @@ const USER_SORT_OPTIONS = [
   { value: "userId", label: "User ID" },
 ];
 
+const STATUS_CONFIG: Record<ApprovalStatus, { label: string; className: string }> = {
+  approved: { label: "Approved", className: "bg-emerald-500/10 text-emerald-400" },
+  pending:  { label: "Pending",  className: "bg-amber-500/10 text-amber-400" },
+  denied:   { label: "Denied",   className: "bg-red-500/10 text-red-400" },
+  revoked:  { label: "Revoked",  className: "bg-zinc-500/10 text-zinc-400" },
+};
+
+function ApprovalBadge({ status }: { status: ApprovalStatus }) {
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+        cfg.className
+      )}
+    >
+      {cfg.label}
+    </span>
+  );
+}
+
+interface NotesModalProps {
+  open: boolean;
+  action: "deny" | "revoke";
+  onConfirm: (notes: string) => void;
+  onClose: () => void;
+  isPending: boolean;
+}
+
+function NotesModal({ open, action, onConfirm, onClose, isPending }: NotesModalProps) {
+  const [notes, setNotes] = useState("");
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-sm rounded-2xl border border-border-default bg-surface-secondary p-6 shadow-2xl">
+        <h3 className="mb-1 text-[15px] font-semibold text-text-primary capitalize">
+          {action} user
+        </h3>
+        <p className="mb-4 text-[13px] text-text-tertiary">
+          Optionally add a note for your records.
+        </p>
+        <textarea
+          className="w-full rounded-lg border border-border-default bg-surface-primary px-3 py-2 text-[13px] text-text-primary placeholder-text-tertiary outline-none focus:border-brand-action resize-none"
+          rows={3}
+          placeholder="Notes (optional)…"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 px-3 rounded-md text-[13px] text-text-secondary hover:text-text-primary transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => { onConfirm(notes); setNotes(""); }}
+            className={cn(
+              "h-8 px-4 rounded-md text-[13px] font-medium text-white transition-opacity",
+              action === "deny" ? "bg-red-500 hover:opacity-90" : "bg-zinc-600 hover:opacity-90",
+              isPending && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            {isPending ? "Saving…" : `Confirm ${action}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AdminUsersDashboard() {
   const { params, setParams } = useAdminListUrlState("lastActive", "desc");
   const { data, isLoading, isError, error, refetch } = useAdminUsers(params);
   const [selected, setSelected] = useState<AdminUserRow | null>(null);
+  const [notesModal, setNotesModal] = useState<{
+    userId: string;
+    action: "deny" | "revoke";
+  } | null>(null);
+
+  const updateApproval = useUpdateUserApproval();
+
+  const handleApprovalAction = (userId: string, action: ApprovalAction, notes?: string) => {
+    updateApproval.mutate({ userId, action, notes });
+    setNotesModal(null);
+  };
 
   const filterState: AdminFiltersState = useMemo(
     () => ({
@@ -56,6 +139,11 @@ export function AdminUsersDashboard() {
             </p>
           </div>
         ),
+      },
+      {
+        id: "status",
+        header: "Status",
+        cell: (row) => <ApprovalBadge status={row.approvalStatus} />,
       },
       {
         id: "projects",
@@ -111,8 +199,53 @@ export function AdminUsersDashboard() {
           </span>
         ),
       },
+      {
+        id: "actions",
+        header: "",
+        align: "right",
+        cell: (row) => (
+          <div
+            className="flex items-center justify-end gap-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(row.approvalStatus === "pending" ||
+              row.approvalStatus === "denied" ||
+              row.approvalStatus === "revoked") && (
+              <button
+                type="button"
+                onClick={() => handleApprovalAction(row.userId, "approve")}
+                disabled={updateApproval.isPending}
+                className="h-7 px-2.5 rounded-md text-[12px] font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+              >
+                Approve
+              </button>
+            )}
+            {row.approvalStatus === "pending" && (
+              <button
+                type="button"
+                onClick={() => setNotesModal({ userId: row.userId, action: "deny" })}
+                disabled={updateApproval.isPending}
+                className="h-7 px-2.5 rounded-md text-[12px] font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+              >
+                Deny
+              </button>
+            )}
+            {row.approvalStatus === "approved" && (
+              <button
+                type="button"
+                onClick={() => setNotesModal({ userId: row.userId, action: "revoke" })}
+                disabled={updateApproval.isPending}
+                className="h-7 px-2.5 rounded-md text-[12px] font-medium bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20 transition-colors disabled:opacity-50"
+              >
+                Revoke
+              </button>
+            )}
+          </div>
+        ),
+      },
     ],
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [updateApproval.isPending]
   );
 
   return (
@@ -153,8 +286,8 @@ export function AdminUsersDashboard() {
           columns={columns}
           keyExtractor={(row) => row.userId}
           isLoading={isLoading}
-          loadingColumns={7}
-          minWidth="960px"
+          loadingColumns={9}
+          minWidth="1080px"
           onRowClick={setSelected}
           rowClassName={() => "cursor-pointer"}
           emptyState={
@@ -180,56 +313,27 @@ export function AdminUsersDashboard() {
         />
       )}
 
-      <AdminDetailDrawer
+      <AdminUserModal
         open={!!selected}
-        title={selected?.displayName ?? selected?.email ?? "User"}
-        subtitle={selected?.email ?? selected?.userId}
+        userId={selected?.userId ?? null}
         onClose={() => setSelected(null)}
-      >
-        {selected ? (
-          <>
-            <AdminDetailRows
-              rows={[
-                { label: "Clerk user ID", value: selected.userId },
-                { label: "Email", value: selected.email ?? "—" },
-                { label: "Display name", value: selected.displayName ?? "—" },
-                { label: "Projects", value: formatAdminInt(selected.projectCount) },
-                { label: "Keywords", value: formatAdminInt(selected.keywordCount) },
-                { label: "Blogs", value: formatAdminInt(selected.contentCount) },
-                {
-                  label: "AI requests (30d)",
-                  value: formatAdminInt(selected.aiRequests30d),
-                },
-                {
-                  label: "AI cost (30d)",
-                  value: formatAdminUsd(selected.aiCostUsd30d),
-                },
-                {
-                  label: "API cost (30d)",
-                  value: formatAdminUsd(selected.apiCostUsd30d),
-                },
-                {
-                  label: "Last active",
-                  value: formatAdminDate(selected.lastActiveAt),
-                },
-                {
-                  label: "First seen",
-                  value: formatAdminDate(selected.firstSeenAt),
-                },
-              ]}
-            />
-            <Link
-              href={`/admin/projects?userId=${encodeURIComponent(selected.userId)}`}
-              className={cn(
-                "mt-6 inline-flex h-9 items-center px-4 rounded-md text-[13px] font-medium",
-                "bg-brand-action text-white hover:opacity-90"
-              )}
-            >
-              View projects
-            </Link>
-          </>
-        ) : null}
-      </AdminDetailDrawer>
+        onSaveSuccess={() => {
+          void refetch();
+        }}
+        userEmail={selected?.email}
+        userDisplayName={selected?.displayName}
+      />
+
+      <NotesModal
+        open={!!notesModal}
+        action={notesModal?.action ?? "deny"}
+        isPending={updateApproval.isPending}
+        onClose={() => setNotesModal(null)}
+        onConfirm={(notes) => {
+          if (!notesModal) return;
+          handleApprovalAction(notesModal.userId, notesModal.action as ApprovalAction, notes);
+        }}
+      />
     </PageShell>
   );
 }

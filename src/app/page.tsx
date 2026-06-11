@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { getPublicPricingData } from "@/app/actions/stripe-actions";
+import { PricingCards } from "./pricing/PricingCards";
 import {
   AuthSignedIn as SignedIn,
   AuthSignedOut as SignedOut,
@@ -117,6 +119,7 @@ export default function LandingPage() {
       <DashboardPreview />
       <AssistantShowcase />
       <IntegrationsRow />
+      <PricingSection />
       <FinalCTA />
       <Footer />
     </main>
@@ -172,6 +175,7 @@ function Nav({
             { label: "Product", href: "#features" },
             { label: "Workflow", href: "#workflow" },
             { label: "Assistant", href: "#assistant" },
+            { label: "Pricing", href: "#pricing" },
             { label: "Preview", href: "#preview" },
           ].map(item => (
             <a
@@ -228,6 +232,7 @@ function Nav({
               { label: "Product", href: "#features" },
               { label: "Workflow", href: "#workflow" },
               { label: "Assistant", href: "#assistant" },
+              { label: "Pricing", href: "#pricing" },
               { label: "Preview", href: "#preview" },
             ].map(item => (
               <a
@@ -794,6 +799,7 @@ function Footer() {
               { label: "Features", href: "#features" },
               { label: "Workflow", href: "#workflow" },
               { label: "AI Assistant", href: "#assistant" },
+              { label: "Pricing", href: "#pricing" },
               { label: "Live preview", href: "#preview" },
             ],
           },
@@ -866,3 +872,73 @@ function SectionSub({ children, className }: { children: React.ReactNode; classN
     </p>
   );
 }
+
+function PricingSection() {
+  const [pricingData, setPricingData] = useState<{
+    plans: any[];
+    userActivePlanId: string;
+    isUserSubscribed: boolean;
+    isLoggedIn: boolean;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    getPublicPricingData()
+      .then((data) => {
+        if (active) {
+          setPricingData(data);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load pricing on home page:", err);
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <section id="pricing" className="px-6 py-28 relative">
+      <div className="max-w-[1240px] mx-auto space-y-16 relative z-10">
+        <div className="text-center space-y-4 max-w-2xl mx-auto">
+          <SectionEyebrow icon={<Zap className="h-3.5 w-3.5" />} label="Pricing" />
+          <SectionTitle>
+            Simple, transparent <span className="gradient-text">pricing.</span>
+          </SectionTitle>
+          <SectionSub className="mx-auto text-center">
+            Select the plan that fits your growth. Manage competitor benchmarks, keywords exploration, and AI copywriting with predictable credits.
+          </SectionSub>
+        </div>
+
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="animate-pulse rounded-[24px] p-8 bg-surface-secondary border border-border-subtle h-[550px]"
+              />
+            ))}
+          </div>
+        ) : pricingData ? (
+          <PricingCards
+            plans={pricingData.plans}
+            userActivePlanId={pricingData.userActivePlanId}
+            isUserSubscribed={pricingData.isUserSubscribed}
+            isLoggedIn={pricingData.isLoggedIn}
+          />
+        ) : (
+          <div className="text-center text-text-secondary py-12">
+            Failed to load pricing plans. Please refresh or try again.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+

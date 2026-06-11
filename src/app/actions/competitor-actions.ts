@@ -679,6 +679,16 @@ export async function generateBlogFromOpportunity(projectId: string, keyword: st
     keywordId = existingKw.id as string;
     canonicalKeyword = String(existingKw.keyword);
   } else {
+    try {
+      const { QuotaService } = await import("@/services/quota");
+      await QuotaService.checkQuota(user.id, "keywords_fetched");
+    } catch (qErr: any) {
+      return {
+        success: false as const,
+        error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
+      };
+    }
+
     const displayKeyword = (gap?.keyword as string | undefined)?.trim() || keyword.trim();
     const insertPayload = {
       project_id: projectId,

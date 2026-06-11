@@ -63,7 +63,13 @@ const navItems: {
     match: (p) => p.startsWith("/admin/audit-logs"),
   },
   {
-    label: "Settings",
+    label: "Plans",
+    href: "/admin/plans",
+    minRole: "admin",
+    match: (p) => p.startsWith("/admin/plans"),
+  },
+  {
+    label: "Admins",
     href: "/admin/settings",
     minRole: "admin",
     match: (p) => p.startsWith("/admin/settings"),

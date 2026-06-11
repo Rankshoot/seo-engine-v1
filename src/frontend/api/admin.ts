@@ -115,6 +115,8 @@ export type AdminMutationResponse = {
   error?: string;
 };
 
+export type ApprovalAction = "approve" | "deny" | "revoke";
+
 export const adminApi = {
   getMe: () => apiGet<AdminMeResponse>(V1Routes.adminMe),
   getOverview: () => apiGet<AdminOverviewResponse>(V1Routes.adminOverview),
@@ -160,6 +162,11 @@ export const adminApi = {
   revokeAdmin: (platformAdminId: string) =>
     apiDelete<AdminMutationResponse>(
       `${V1Routes.adminSettingsAdmins}?id=${encodeURIComponent(platformAdminId)}`
+    ),
+  updateUserApproval: (userId: string, action: ApprovalAction, notes?: string) =>
+    apiPost<AdminMutationResponse>(
+      `${V1Routes.adminUsers}/${encodeURIComponent(userId)}/approval`,
+      { action, notes }
     ),
 };
 

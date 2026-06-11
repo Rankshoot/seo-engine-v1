@@ -10,6 +10,7 @@ import {
   mapAdminErrorsListResponse,
   mapAdminProjectsListResponse,
   mapAdminUsersListResponse,
+  type ApprovalAction,
 } from "@/frontend/api/admin";
 import type { AdminSettingsPatch } from "@/types/admin-settings";
 import type { PlatformAdminRole } from "@/constants/enums/platform-admin-role";
@@ -229,6 +230,28 @@ export function useRevokePlatformAdmin() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: qk.admin.settings });
       void queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
+    },
+  });
+}
+
+export function useUpdateUserApproval() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      userId,
+      action,
+      notes,
+    }: {
+      userId: string;
+      action: ApprovalAction;
+      notes?: string;
+    }) =>
+      executeSafeQuery(async () => {
+        const res = await adminApi.updateUserApproval(userId, action, notes);
+        if (!res.success) throw new Error(res.error ?? "Failed to update approval");
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
     },
   });
 }

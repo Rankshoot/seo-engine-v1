@@ -37,7 +37,13 @@ export const keywordsApi = {
     return apiPost(V1Routes.keywordsLoadMore(projectId), { offset, limit });
   },
 
-  loadMoreFromAhrefs(projectId: string): Promise<{ success: boolean; error?: string; count?: number }> {
+  loadMoreFromAhrefs(projectId: string): Promise<{
+    success: boolean;
+    error?: string;
+    count?: number;
+    discoveryTrace?: any;
+    ahrefsDiscoveryState?: any;
+  }> {
     return apiPost(V1Routes.keywordsLoadMoreAhrefs(projectId));
   },
 

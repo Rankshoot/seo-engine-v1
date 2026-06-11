@@ -1,17 +1,10 @@
 import * as cheerio from 'cheerio';
-import { JSDOM, VirtualConsole } from 'jsdom';
+import { parseHTML } from 'linkedom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { chromium, type Browser } from 'playwright';
 import { readUrlViaJinaReader } from '@/lib/jina';
 import { analyzeWebsiteWithAI, type AIAnalysisResult } from './aiWebsiteAnalyzer';
-
-const quietJsdomConsole = new VirtualConsole();
-quietJsdomConsole.on('jsdomError', error => {
-  const jsdomError = error as Error & { type?: string };
-  if (jsdomError.type === 'css parsing' || /could not parse css stylesheet/i.test(jsdomError.message)) return;
-  console.warn('[hybridScraper] jsdom warning:', error.message);
-});
 
 export interface ScrapedBlogPost {
   url: string;
@@ -184,8 +177,14 @@ function parseWebsiteHtml(html: string, baseUrl: string) {
   });
 
   // Readability extraction
-  const dom = new JSDOM(html, { url: baseUrl, virtualConsole: quietJsdomConsole });
-  const reader = new Readability(dom.window.document);
+  const { document } = parseHTML(html);
+  
+  // Set baseURI for relative link resolution in Readability
+  const base = document.createElement('base');
+  base.href = baseUrl;
+  document.head?.appendChild(base);
+
+  const reader = new Readability(document as any);
   const article = reader.parse();
 
   const rawTextContent = article?.textContent || $('body').text();
@@ -312,8 +311,14 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
       throw new Error(`Failed to fetch HTML for ${url}`);
     }
 
-    const dom = new JSDOM(html, { url, virtualConsole: quietJsdomConsole });
-    const reader = new Readability(dom.window.document);
+    const { document } = parseHTML(html);
+    
+    // Set baseURI for relative link resolution in Readability
+    const base = document.createElement('base');
+    base.href = url;
+    document.head?.appendChild(base);
+
+    const reader = new Readability(document as any);
     const article = reader.parse();
 
     let markdown = '';

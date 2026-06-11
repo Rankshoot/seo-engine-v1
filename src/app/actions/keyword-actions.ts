@@ -736,9 +736,9 @@ export async function getKeywords(
     };
 
   // Approved/rejected rows are always returned so the existing UI selection
-  // state survives. The `limit/offset` only paginates pending rows.
+  // state survives. The `limit/offset` only paginates pending rows if limit is defined.
   const includeApproved = opts.includeApproved !== false;
-  const limit = Math.max(1, Math.min(opts.limit ?? 20, 200));
+  const limit = opts.limit !== undefined ? Math.max(1, Math.min(opts.limit, 10000)) : undefined;
   const offset = Math.max(0, opts.offset ?? 0);
 
   // Total pending count — drives the "Load more" affordance in the UI.
@@ -748,15 +748,19 @@ export async function getKeywords(
     .eq('project_id', projectId)
     .or('source.eq.organic,source.is.null');
 
-  const pendingPromise = supabaseAdmin
+  const pendingQuery = supabaseAdmin
     .from('keywords')
     .select('*')
     .eq('project_id', projectId)
     .eq('status', 'pending')
     .or('source.eq.organic,source.is.null')
     .order('keyword_analysis_score', { ascending: false, nullsFirst: false })
-    .order('volume', { ascending: false })
-    .range(offset, offset + limit - 1);
+    .order('volume', { ascending: false });
+
+  const pendingPromise = limit !== undefined
+    ? pendingQuery.range(offset, offset + limit - 1)
+    : pendingQuery;
+
 
   const lockedPromise = includeApproved
     ? supabaseAdmin
@@ -824,8 +828,26 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
   const relatedLastVolume = state.related_last_volume ?? undefined;
   const relatedHasMore = state.related_has_more !== false;
 
+  console.log('[loadMoreFromAhrefsAction] Request inputs:', {
+    projectId,
+    domain: project.domain,
+    niche: project.niche,
+    region: project.target_region,
+    state,
+    matchingLastVolume,
+    matchingHasMore,
+    relatedLastVolume,
+    relatedHasMore,
+  });
+
   if (!matchingHasMore && !relatedHasMore) {
-    return { success: true, count: 0, message: 'All keywords already loaded from Ahrefs' };
+    console.log('[loadMoreFromAhrefsAction] Bypassing Ahrefs call: matching_has_more and related_has_more are both false.');
+    return { 
+      success: true, 
+      count: 0, 
+      message: 'All keywords already loaded from Ahrefs',
+      ahrefsDiscoveryState: state,
+    };
   }
 
   // 2. Build seed keywords using same logic
@@ -833,6 +855,7 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
 
   // 3. Fetch from Ahrefs using last volume
   // Fetch via discoverKeywordsForProject to reuse the full scoring and normalization pipeline!
+  console.log('[loadMoreFromAhrefsAction] Triggering discoverKeywordsForProject with seeds:', seedKeywords);
   const research = await discoverKeywordsForProject(
     seedKeywords,
     project.target_region ?? 'us',
@@ -849,20 +872,33 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
   );
 
   const rawKeywords = research.keywords;
+  console.log(`[loadMoreFromAhrefsAction] Received ${rawKeywords.length} raw keywords.`);
+  console.log('[loadMoreFromAhrefsAction] Trace entries:', JSON.stringify(research.trace, null, 2));
 
   if (!rawKeywords.length) {
-    // If no keywords are returned, update has_more to false so we don't loop endlessly
-    const updatedState = {
-      matching_last_volume: matchingLastVolume ?? null,
-      matching_has_more: false,
-      related_last_volume: relatedLastVolume ?? null,
-      related_has_more: false,
-    };
-    await supabaseAdmin
-      .from('projects')
-      .update({ ahrefs_discovery_state: updatedState })
-      .eq('id', projectId);
-    return { success: true, count: 0 };
+    if (research.ahrefsDiscoveryState) {
+      console.log('[loadMoreFromAhrefsAction] Ahrefs responded successfully with 0 keywords. Setting matching_has_more to false.');
+      await supabaseAdmin
+        .from('projects')
+        .update({ ahrefs_discovery_state: research.ahrefsDiscoveryState })
+        .eq('id', projectId);
+      return { 
+        success: true, 
+        count: 0,
+        discoveryTrace: research.trace,
+        ahrefsDiscoveryState: research.ahrefsDiscoveryState,
+      };
+    } else {
+      console.warn('[loadMoreFromAhrefsAction] Ahrefs request failed (transient error / fallback triggered). Retaining current database state.');
+      const errEntry = research.trace?.find(t => !t.ok && t.label.includes('ahrefs'));
+      const errorMsg = errEntry?.fetchError || 'Ahrefs request failed';
+      return {
+        success: false,
+        error: `Ahrefs call failed: ${errorMsg}`,
+        discoveryTrace: research.trace,
+        ahrefsDiscoveryState: state,
+      };
+    }
   }
 
   // 4. Map keywords to DB schema (relevance and fit are already calculated by discoverKeywordsForProject!)
@@ -902,11 +938,15 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
   }
 
   if (insErr) {
-    return { success: false, error: insErr.message };
+    console.error('[loadMoreFromAhrefsAction] DB Insertion error:', insErr.message);
+    return { success: false, error: insErr.message, discoveryTrace: research.trace };
   }
 
   // 6. Update project's `ahrefs_discovery_state`
+  let finalState = state;
   if (research.ahrefsDiscoveryState) {
+    finalState = research.ahrefsDiscoveryState;
+    console.log('[loadMoreFromAhrefsAction] Updating database discovery state to:', finalState);
     await supabaseAdmin
       .from('projects')
       .update({ ahrefs_discovery_state: research.ahrefsDiscoveryState })
@@ -916,6 +956,8 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
   return {
     success: true,
     count: inserted?.length ?? 0,
+    discoveryTrace: research.trace,
+    ahrefsDiscoveryState: finalState,
   };
 }
 

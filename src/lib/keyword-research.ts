@@ -133,6 +133,8 @@ export interface KeywordResearchTraceEntry {
   errorMessage?: string;
   /** Set on the synthetic "falling back" entry. */
   fallbackReason?: string;
+  query?: any;
+  response?: any;
 }
 
 export interface KeywordResearchResult {
@@ -465,6 +467,8 @@ export async function fetchKeywordsFromAhrefs(
       status: res.status,
       errorReason: res.errorReason,
       errorMessage: res.errorMessage,
+      query: call.query,
+      response: res.data,
     });
     if (!res.ok) {
       if (!firstHardFailure && res.errorReason) firstHardFailure = res.errorReason;

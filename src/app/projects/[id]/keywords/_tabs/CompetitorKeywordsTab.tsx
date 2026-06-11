@@ -173,6 +173,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
 
   const [running, setRunning] = useState(false);
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
+  const [hasMoreAhrefs, setHasMoreAhrefs] = useState(true);
   const [error, setError] = useState("");
   const [lastRunSummary, setLastRunSummary] = useState("");
   const [aiScoring, setAiScoring] = useState(false);
@@ -245,8 +246,11 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     const res = await competitorsApi.loadMoreFromAhrefs(projectId);
     if (!res.success) {
       setError(res.error ?? "Failed to load more keywords");
-    } else if (res.added > 0) {
-      await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
+    } else {
+      if (res.added > 0) {
+        await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
+      }
+      setHasMoreAhrefs(res.hasMore);
     }
     setLoadingMoreAhrefs(false);
   }, [projectId, queryClient, COMPETITORS_KEY]);
@@ -788,27 +792,29 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                   </span>
                 }
                 footerRight={
-                  <button
-                    type="button"
-                    onClick={() => void handleLoadMoreAhrefs()}
-                    disabled={loadingMoreAhrefs}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-1.5 text-[12px] font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none ${
-                      loadingMoreAhrefs
-                        ? "border-brand-action/40 bg-brand-action/10 text-brand-action animate-pulse"
-                        : "border-brand-action/30 bg-brand-action/5 text-brand-action hover:bg-brand-action/10 hover:border-brand-action/50"
-                    }`}
-                  >
-                    {loadingMoreAhrefs ? (
-                      <>
-                        <div className="h-3 w-3 rounded-full border-2 border-brand-action/30 border-t-brand-action animate-spin" />
-                        Loading…
-                      </>
-                    ) : (
-                      <>
-                        Load more
-                      </>
-                    )}
-                  </button>
+                  hasMoreAhrefs ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleLoadMoreAhrefs()}
+                      disabled={loadingMoreAhrefs}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-1.5 text-[12px] font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none ${
+                        loadingMoreAhrefs
+                          ? "border-brand-action/40 bg-brand-action/10 text-brand-action animate-pulse"
+                          : "border-brand-action/30 bg-brand-action/5 text-brand-action hover:bg-brand-action/10 hover:border-brand-action/50"
+                      }`}
+                    >
+                      {loadingMoreAhrefs ? (
+                        <>
+                          <div className="h-3 w-3 rounded-full border-2 border-brand-action/30 border-t-brand-action animate-spin" />
+                          Loading…
+                        </>
+                      ) : (
+                        <>
+                          Load more
+                        </>
+                      )}
+                    </button>
+                  ) : null
                 }
               />
             </Suspense>

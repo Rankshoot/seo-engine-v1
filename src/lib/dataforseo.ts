@@ -2022,7 +2022,7 @@ export async function discoverKeywordsForProject(
     trace.push({
       label: `[${entry.provider}] ${entry.endpoint}${entry.fallbackReason ? ` → fallback (${entry.fallbackReason})` : ''}`,
       url: '',
-      requestBody: null,
+      requestBody: entry.query || null,
       httpStatus: entry.status ?? 0,
       ok: entry.ok,
       rawText: '',
@@ -2031,6 +2031,8 @@ export async function discoverKeywordsForProject(
         rows: entry.rows,
         errorReason: entry.errorReason,
         fallbackReason: entry.fallbackReason,
+        query: entry.query,
+        response: entry.response,
       },
       fetchError: entry.errorMessage,
     });

@@ -278,6 +278,19 @@ export async function runKeywordDiscoveryPipeline(
     };
   }
 
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(user.id, "keywords_fetched");
+  } catch (qErr: any) {
+    return {
+      success: false,
+      error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
+      inserted: 0,
+      duplicates_skipped: 0,
+      candidates_returned: 0,
+    };
+  }
+
   const { data: project, error: pErr } = await supabaseAdmin
     .from('projects')
     .select('id, domain, company, niche, target_audience, target_region, target_language')
@@ -487,12 +500,17 @@ export async function discoverKeywords(projectId: string) {
     { userId: user.id, projectId, feature: 'keyword_discovery' },
     async () => {
   try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(user.id, "keywords_fetched");
     const { assertProjectKeywordCapacity } = await import('@/lib/admin/platform-settings-runtime');
     await assertProjectKeywordCapacity(projectId);
-  } catch (e) {
+  } catch (e: any) {
+    const isQuotaError = e?.name === 'QuotaExhaustedError' || e?.message?.includes('Quota exceeded');
     return {
       success: false,
-      error: e instanceof Error ? e.message : 'Keyword limit reached',
+      error: isQuotaError
+        ? "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords."
+        : (e instanceof Error ? e.message : 'Keyword limit reached'),
     };
   }
 
@@ -803,6 +821,16 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
   const user = await currentUser();
   if (!user) {
     return { success: false, error: 'Not authenticated' };
+  }
+
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(user.id, "keywords_fetched");
+  } catch (qErr: any) {
+    return {
+      success: false,
+      error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
+    };
   }
 
   // 1. Get the project details and its current ahrefs_discovery_state
@@ -1472,6 +1500,15 @@ export async function upsertKeywordFromDomainSite(
   let id: string | undefined = existing?.id as string | undefined;
 
   if (!id) {
+    try {
+      const { QuotaService } = await import("@/services/quota");
+      await QuotaService.checkQuota(user.id, "keywords_fetched");
+    } catch (qErr: any) {
+      return {
+        success: false,
+        error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
+      };
+    }
     // Same column set as `discoverKeywords` — never reference columns missing from this Supabase project.
     // `ignoreDuplicates: true` matches discovery: do not overwrite an existing approved/rejected row on conflict.
     let { error: insErr } = await supabaseAdmin.from('keywords').upsert(
@@ -2170,6 +2207,16 @@ export async function scheduleKeyword(
       keywordText = existing.keyword;
       secondaryKeywords = existing.secondary_keywords ?? [];
     } else {
+      try {
+        const { QuotaService } = await import("@/services/quota");
+        await QuotaService.checkQuota(user.id, "keywords_fetched");
+      } catch (qErr: any) {
+        return {
+          success: false,
+          error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
+        };
+      }
+
       const { data: project, error: pErr } = await supabaseAdmin
         .from('projects')
         .select('id')

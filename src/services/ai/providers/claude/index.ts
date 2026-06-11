@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { AIProvider, CallOptions, ProviderResponse, StructuredResponse, TokenUsage } from "../base";
+import { AIProvider, CallOptions, ProviderResponse, StructuredResponse, TokenUsage, PlatformAIError } from "../base";
 import { recordAiCall } from "@/lib/admin/logging/record-provider-call";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
@@ -180,12 +180,12 @@ export class ClaudeProvider implements AIProvider {
             latencyMs,
             errorMessage: e instanceof Error ? e.message : String(e),
           });
-          throw e;
+          throw new PlatformAIError("Content engine is busy, please try again.");
         }
         await new Promise((r) => setTimeout(r, 4000 * Math.pow(2, attempt)));
       }
     }
-    throw new Error(`Claude ${model} failed after ${retries} retries`);
+    throw new PlatformAIError("Content engine is busy, please try again.");
   }
 
   async *stream(
@@ -199,69 +199,82 @@ export class ClaudeProvider implements AIProvider {
     const client = this.getClient();
     const started = Date.now();
 
-    const systemBlock: any[] = [];
-    if (opts.systemPrompt) {
-      systemBlock.push({
-        type: "text",
-        text: opts.systemPrompt,
-        ...(opts.cachePrompt ? { cache_control: { type: "ephemeral" } } : {})
-      });
-    }
-
-    const stream = await client.messages.create({
-      model,
-      max_tokens: opts.maxOutputTokens ?? 4096,
-      temperature: opts.temperature,
-      system: systemBlock.length ? systemBlock : undefined,
-      messages: [{ role: "user", content: prompt }],
-      stream: true,
-    }, { signal: opts.signal });
-
-    let fullText = "";
-    let tokenUsage: TokenUsage = { input: 0, output: 0 };
-
-    for await (const chunk of stream) {
-      if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
-        fullText += chunk.delta.text;
-        yield chunk.delta.text;
-      } else if (chunk.type === "message_start") {
-        const usage = chunk.message.usage;
-        tokenUsage.input = usage.input_tokens;
-        tokenUsage.output = usage.output_tokens;
-        tokenUsage.cachedRead = (usage as any).cache_read_input_tokens ?? 0;
-        tokenUsage.cachedWrite = (usage as any).cache_creation_input_tokens ?? 0;
-      } else if (chunk.type === "message_delta") {
-        const usage = chunk.usage;
-        tokenUsage.output = usage.output_tokens;
+    try {
+      const systemBlock: any[] = [];
+      if (opts.systemPrompt) {
+        systemBlock.push({
+          type: "text",
+          text: opts.systemPrompt,
+          ...(opts.cachePrompt ? { cache_control: { type: "ephemeral" } } : {})
+        });
       }
+
+      const stream = await client.messages.create({
+        model,
+        max_tokens: opts.maxOutputTokens ?? 4096,
+        temperature: opts.temperature,
+        system: systemBlock.length ? systemBlock : undefined,
+        messages: [{ role: "user", content: prompt }],
+        stream: true,
+      }, { signal: opts.signal });
+
+      let fullText = "";
+      let tokenUsage: TokenUsage = { input: 0, output: 0 };
+
+      for await (const chunk of stream) {
+        if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+          fullText += chunk.delta.text;
+          yield chunk.delta.text;
+        } else if (chunk.type === "message_start") {
+          const usage = chunk.message.usage;
+          tokenUsage.input = usage.input_tokens;
+          tokenUsage.output = usage.output_tokens;
+          tokenUsage.cachedRead = (usage as any).cache_read_input_tokens ?? 0;
+          tokenUsage.cachedWrite = (usage as any).cache_creation_input_tokens ?? 0;
+        } else if (chunk.type === "message_delta") {
+          const usage = chunk.usage;
+          tokenUsage.output = usage.output_tokens;
+        }
+      }
+
+      const latencyMs = Date.now() - started;
+      const cost = this.estimateCost(model, tokenUsage);
+      const savings = this.estimateSavings(model, tokenUsage);
+
+      recordAiCall({
+        provider: "claude",
+        model,
+        prompt,
+        response: fullText,
+        tokensInput: tokenUsage.input,
+        tokensOutput: tokenUsage.output,
+        tokensCachedRead: tokenUsage.cachedRead,
+        tokensCachedWrite: tokenUsage.cachedWrite,
+        costSavingsUsd: savings,
+        estimatedCostUsd: cost,
+        ok: true,
+        latencyMs,
+      });
+
+      return {
+        text: fullText,
+        usage: tokenUsage,
+        latencyMs,
+        model,
+        provider: "claude",
+      };
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      recordAiCall({
+        provider: "claude",
+        model,
+        prompt,
+        ok: false,
+        latencyMs,
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
+      throw new PlatformAIError("Content engine is busy, please try again.");
     }
-
-    const latencyMs = Date.now() - started;
-    const cost = this.estimateCost(model, tokenUsage);
-    const savings = this.estimateSavings(model, tokenUsage);
-
-    recordAiCall({
-      provider: "claude",
-      model,
-      prompt,
-      response: fullText,
-      tokensInput: tokenUsage.input,
-      tokensOutput: tokenUsage.output,
-      tokensCachedRead: tokenUsage.cachedRead,
-      tokensCachedWrite: tokenUsage.cachedWrite,
-      costSavingsUsd: savings,
-      estimatedCostUsd: cost,
-      ok: true,
-      latencyMs,
-    });
-
-    return {
-      text: fullText,
-      usage: tokenUsage,
-      latencyMs,
-      model,
-      provider: "claude",
-    };
   }
 
   async generateStructured<T>(
@@ -276,91 +289,104 @@ export class ClaudeProvider implements AIProvider {
     const client = this.getClient();
     const started = Date.now();
 
-    const systemBlock: any[] = [];
-    if (opts.systemPrompt) {
-      systemBlock.push({
-        type: "text",
-        text: opts.systemPrompt,
-        ...(opts.cachePrompt ? { cache_control: { type: "ephemeral" } } : {})
-      });
-    }
+    try {
+      const systemBlock: any[] = [];
+      if (opts.systemPrompt) {
+        systemBlock.push({
+          type: "text",
+          text: opts.systemPrompt,
+          ...(opts.cachePrompt ? { cache_control: { type: "ephemeral" } } : {})
+        });
+      }
 
-    // Force structured output by defining a tool and setting tool_choice to force call it
-    const jsonSchema = zodToJsonSchema(schema);
-    const response = await client.messages.create({
-      model,
-      max_tokens: opts.maxOutputTokens ?? 4096,
-      temperature: opts.temperature,
-      system: systemBlock.length ? systemBlock : undefined,
-      messages: [{ role: "user", content: prompt }],
-      tools: [
-        {
-          name: "structured_output_schema",
-          description: "Structured JSON schema output form.",
-          input_schema: jsonSchema,
-        },
-      ],
-      tool_choice: { type: "tool", name: "structured_output_schema" },
-    }, { signal: opts.signal });
+      // Force structured output by defining a tool and setting tool_choice to force call it
+      const jsonSchema = zodToJsonSchema(schema);
+      const response = await client.messages.create({
+        model,
+        max_tokens: opts.maxOutputTokens ?? 4096,
+        temperature: opts.temperature,
+        system: systemBlock.length ? systemBlock : undefined,
+        messages: [{ role: "user", content: prompt }],
+        tools: [
+          {
+            name: "structured_output_schema",
+            description: "Structured JSON schema output form.",
+            input_schema: jsonSchema,
+          },
+        ],
+        tool_choice: { type: "tool", name: "structured_output_schema" },
+      }, { signal: opts.signal });
 
-    // Find the tool use content block
-    const toolUseBlock = response.content.find(
-      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-    );
-
-    if (!toolUseBlock) {
-      throw new Error("Claude did not use the structured output tool as requested.");
-    }
-
-    const data = toolUseBlock.input as T;
-
-    // Run schema validation
-    const validation = schema.safeParse(data);
-    if (!validation.success) {
-      throw new Error(
-        `Zod validation failed: ${validation.error.message}\nRaw JSON: ${JSON.stringify(
-          data,
-          null,
-          2
-        )}`
+      // Find the tool use content block
+      const toolUseBlock = response.content.find(
+        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
       );
+
+      if (!toolUseBlock) {
+        throw new Error("Claude did not use the structured output tool as requested.");
+      }
+
+      const data = toolUseBlock.input as T;
+
+      // Run schema validation
+      const validation = schema.safeParse(data);
+      if (!validation.success) {
+        throw new Error(
+          `Zod validation failed: ${validation.error.message}\nRaw JSON: ${JSON.stringify(
+            data,
+            null,
+            2
+          )}`
+        );
+      }
+
+      const usage = response.usage;
+      const tokenUsage: TokenUsage = {
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cachedRead: (usage as any).cache_read_input_tokens ?? 0,
+        cachedWrite: (usage as any).cache_creation_input_tokens ?? 0,
+      };
+
+      const latencyMs = Date.now() - started;
+      const cost = this.estimateCost(model, tokenUsage);
+      const savings = this.estimateSavings(model, tokenUsage);
+
+      recordAiCall({
+        provider: "claude",
+        model,
+        prompt,
+        response: JSON.stringify(data),
+        tokensInput: tokenUsage.input,
+        tokensOutput: tokenUsage.output,
+        tokensCachedRead: tokenUsage.cachedRead,
+        tokensCachedWrite: tokenUsage.cachedWrite,
+        costSavingsUsd: savings,
+        estimatedCostUsd: cost,
+        ok: true,
+        latencyMs,
+      });
+
+      return {
+        text: JSON.stringify(data),
+        data: validation.data,
+        usage: tokenUsage,
+        latencyMs,
+        model,
+        provider: "claude",
+      };
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      recordAiCall({
+        provider: "claude",
+        model,
+        prompt,
+        ok: false,
+        latencyMs,
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
+      throw new PlatformAIError("Content engine is busy, please try again.");
     }
-
-    const usage = response.usage;
-    const tokenUsage: TokenUsage = {
-      input: usage.input_tokens,
-      output: usage.output_tokens,
-      cachedRead: (usage as any).cache_read_input_tokens ?? 0,
-      cachedWrite: (usage as any).cache_creation_input_tokens ?? 0,
-    };
-
-    const latencyMs = Date.now() - started;
-    const cost = this.estimateCost(model, tokenUsage);
-    const savings = this.estimateSavings(model, tokenUsage);
-
-    recordAiCall({
-      provider: "claude",
-      model,
-      prompt,
-      response: JSON.stringify(data),
-      tokensInput: tokenUsage.input,
-      tokensOutput: tokenUsage.output,
-      tokensCachedRead: tokenUsage.cachedRead,
-      tokensCachedWrite: tokenUsage.cachedWrite,
-      costSavingsUsd: savings,
-      estimatedCostUsd: cost,
-      ok: true,
-      latencyMs,
-    });
-
-    return {
-      text: JSON.stringify(data),
-      data: validation.data,
-      usage: tokenUsage,
-      latencyMs,
-      model,
-      provider: "claude",
-    };
   }
 }
 

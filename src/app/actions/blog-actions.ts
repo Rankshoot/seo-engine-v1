@@ -70,6 +70,10 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
     { userId: user.id, projectId: entry.project_id, feature: 'blog_generate' },
     async () => {
   try {
+    // Enforce user standard content limits
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(user.id, "standard_content");
+
     const { assertProjectContentCapacity } = await import('@/lib/admin/platform-settings-runtime');
     await assertProjectContentCapacity(entry.project_id);
 

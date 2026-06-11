@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AIProvider, CallOptions, ProviderResponse, StructuredResponse, TokenUsage, parseLooseJson } from "../base";
+import { AIProvider, CallOptions, ProviderResponse, StructuredResponse, TokenUsage, parseLooseJson, PlatformAIError } from "../base";
 import { recordAiCall } from "@/lib/admin/logging/record-provider-call";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
@@ -156,11 +156,13 @@ export class GeminiProvider implements AIProvider {
       try {
         return await tryOnce(Boolean(opts.responseSchema));
       } catch (e) {
-        if (attempt === retries - 1) throw e;
+        if (attempt === retries - 1) {
+          throw new PlatformAIError("Content engine is busy, please try again.");
+        }
         await new Promise((r) => setTimeout(r, 4000));
       }
     }
-    throw new Error(`Gemini ${model} failed after ${retries} retries`);
+    throw new PlatformAIError("Content engine is busy, please try again.");
   }
 
   async *stream(
@@ -178,127 +180,140 @@ export class GeminiProvider implements AIProvider {
     const url = `${GEMINI_BASE}/${model}:streamGenerateContent`;
     const started = Date.now();
 
-    const generationConfig: Record<string, unknown> = {
-      temperature: opts.temperature,
-      maxOutputTokens: opts.maxOutputTokens,
-    };
-    if (opts.topP !== undefined) generationConfig.topP = opts.topP;
-    if (opts.jsonMode) generationConfig.responseMimeType = "application/json";
+    try {
+      const generationConfig: Record<string, unknown> = {
+        temperature: opts.temperature,
+        maxOutputTokens: opts.maxOutputTokens,
+      };
+      if (opts.topP !== undefined) generationConfig.topP = opts.topP;
+      if (opts.jsonMode) generationConfig.responseMimeType = "application/json";
 
-    const body: Record<string, unknown> = {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig,
-    };
-    if (opts.systemPrompt) {
-      body.systemInstruction = { parts: [{ text: opts.systemPrompt }] };
-    }
-    if (opts.useGoogleSearch) {
-      body.tools = [{ googleSearch: {} }];
-    }
+      const body: Record<string, unknown> = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig,
+      };
+      if (opts.systemPrompt) {
+        body.systemInstruction = { parts: [{ text: opts.systemPrompt }] };
+      }
+      if (opts.useGoogleSearch) {
+        body.tools = [{ googleSearch: {} }];
+      }
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-goog-api-key": GEMINI_API_KEY,
-      },
-      body: JSON.stringify(body),
-      signal: opts.signal,
-    });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-goog-api-key": GEMINI_API_KEY,
+        },
+        body: JSON.stringify(body),
+        signal: opts.signal,
+      });
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini stream ${res.status}: ${err.slice(0, 400)}`);
-    }
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Gemini stream ${res.status}: ${err.slice(0, 400)}`);
+      }
 
-    const reader = res.body?.getReader();
-    if (!reader) {
-      throw new Error("Could not acquire reader for stream body");
-    }
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error("Could not acquire reader for stream body");
+      }
 
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullText = "";
-    let tokenUsage: TokenUsage = { input: 0, output: 0 };
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let fullText = "";
+      let tokenUsage: TokenUsage = { input: 0, output: 0 };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      
-      // Parse chunks. Gemini SSE returns a JSON array of stream events or segments
-      // depending on standard/non-standard headers.
-      let jsonArrayMatch = buffer.match(/\[([\s\S]*?)\]/);
-      if (jsonArrayMatch) {
-        try {
-          const parsed = JSON.parse(jsonArrayMatch[0]);
-          if (Array.isArray(parsed)) {
-            for (const item of parsed) {
-              const textChunk = item.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (textChunk) {
-                fullText += textChunk;
-                yield textChunk;
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Parse chunks. Gemini SSE returns a JSON array of stream events or segments
+        // depending on standard/non-standard headers.
+        let jsonArrayMatch = buffer.match(/\[([\s\S]*?)\]/);
+        if (jsonArrayMatch) {
+          try {
+            const parsed = JSON.parse(jsonArrayMatch[0]);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                const textChunk = item.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (textChunk) {
+                  fullText += textChunk;
+                  yield textChunk;
+                }
+                if (item.usageMetadata) {
+                  const u = item.usageMetadata;
+                  tokenUsage.input = u.promptTokenCount ?? u.prompt_token_count ?? tokenUsage.input;
+                  tokenUsage.output = u.candidatesTokenCount ?? u.candidates_token_count ?? tokenUsage.output;
+                }
               }
-              if (item.usageMetadata) {
-                const u = item.usageMetadata;
+              buffer = buffer.slice(jsonArrayMatch.index! + jsonArrayMatch[0].length);
+            }
+          } catch {
+            // Keep reading more chunks
+          }
+        } else {
+          // Fallback: parse lines looking for individual JSON blocks
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const parsed = JSON.parse(trimmed);
+              const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (chunk) {
+                fullText += chunk;
+                yield chunk;
+              }
+              if (parsed.usageMetadata) {
+                const u = parsed.usageMetadata;
                 tokenUsage.input = u.promptTokenCount ?? u.prompt_token_count ?? tokenUsage.input;
                 tokenUsage.output = u.candidatesTokenCount ?? u.candidates_token_count ?? tokenUsage.output;
               }
+            } catch {
+              // Partial JSON segment, continue
             }
-            buffer = buffer.slice(jsonArrayMatch.index! + jsonArrayMatch[0].length);
-          }
-        } catch {
-          // Keep reading more chunks
-        }
-      } else {
-        // Fallback: parse lines looking for individual JSON blocks
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          try {
-            const parsed = JSON.parse(trimmed);
-            const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (chunk) {
-              fullText += chunk;
-              yield chunk;
-            }
-            if (parsed.usageMetadata) {
-              const u = parsed.usageMetadata;
-              tokenUsage.input = u.promptTokenCount ?? u.prompt_token_count ?? tokenUsage.input;
-              tokenUsage.output = u.candidatesTokenCount ?? u.candidates_token_count ?? tokenUsage.output;
-            }
-          } catch {
-            // Partial JSON segment, continue
           }
         }
       }
+
+      const latencyMs = Date.now() - started;
+      const cost = this.estimateCost(model, tokenUsage);
+
+      recordAiCall({
+        provider: "gemini",
+        model,
+        prompt,
+        response: fullText,
+        tokensInput: tokenUsage.input,
+        tokensOutput: tokenUsage.output,
+        estimatedCostUsd: cost,
+        ok: true,
+        latencyMs,
+      });
+
+      return {
+        text: fullText,
+        usage: tokenUsage,
+        latencyMs,
+        model,
+        provider: "gemini",
+      };
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      recordAiCall({
+        provider: "gemini",
+        model,
+        prompt,
+        ok: false,
+        latencyMs,
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
+      throw new PlatformAIError("Content engine is busy, please try again.");
     }
-
-    const latencyMs = Date.now() - started;
-    const cost = this.estimateCost(model, tokenUsage);
-
-    recordAiCall({
-      provider: "gemini",
-      model,
-      prompt,
-      response: fullText,
-      tokensInput: tokenUsage.input,
-      tokensOutput: tokenUsage.output,
-      estimatedCostUsd: cost,
-      ok: true,
-      latencyMs,
-    });
-
-    return {
-      text: fullText,
-      usage: tokenUsage,
-      latencyMs,
-      model,
-      provider: "gemini",
-    };
   }
 
   async generateStructured<T>(
@@ -307,30 +322,35 @@ export class GeminiProvider implements AIProvider {
     schema: z.ZodType<T>,
     opts: CallOptions = {}
   ): Promise<StructuredResponse<T>> {
-    const res = await this.generate(model, prompt, {
-      ...opts,
-      jsonMode: true,
-    });
+    try {
+      const res = await this.generate(model, prompt, {
+        ...opts,
+        jsonMode: true,
+      });
 
-    const parsed = parseLooseJson<T>(res.text);
-    if (!parsed) {
-      throw new Error(`Failed to parse response as loose JSON. Raw output: ${res.text}`);
+      const parsed = parseLooseJson<T>(res.text);
+      if (!parsed) {
+        throw new Error(`Failed to parse response as loose JSON. Raw output: ${res.text}`);
+      }
+
+      const validation = schema.safeParse(parsed);
+      if (!validation.success) {
+        throw new Error(
+          `Zod schema validation failed: ${validation.error.message}\nRaw JSON: ${JSON.stringify(
+            parsed,
+            null,
+            2
+          )}`
+        );
+      }
+
+      return {
+        ...res,
+        data: validation.data,
+      };
+    } catch (e) {
+      if (e instanceof PlatformAIError) throw e;
+      throw new PlatformAIError("Content engine is busy, please try again.");
     }
-
-    const validation = schema.safeParse(parsed);
-    if (!validation.success) {
-      throw new Error(
-        `Zod schema validation failed: ${validation.error.message}\nRaw JSON: ${JSON.stringify(
-          parsed,
-          null,
-          2
-        )}`
-      );
-    }
-
-    return {
-      ...res,
-      data: validation.data,
-    };
   }
 }

@@ -6,10 +6,7 @@ import { PageShell, EmptyState } from "@/components/common";
 import { DataTable, type ColumnDef } from "@/components/DataTable";
 import { AdminFilters, type AdminFiltersState } from "@/components/admin/AdminFilters";
 import { AdminPagination } from "@/components/admin/AdminPagination";
-import {
-  AdminDetailDrawer,
-  AdminDetailRows,
-} from "@/components/admin/AdminDetailDrawer";
+import { AdminUserModal } from "@/components/admin/AdminUserModal";
 import { useAdminListUrlState } from "@/hooks/useAdminListUrlState";
 import { useAdminUsers } from "@/lib/query/admin-queries";
 import {
@@ -180,56 +177,16 @@ export function AdminUsersDashboard() {
         />
       )}
 
-      <AdminDetailDrawer
+      <AdminUserModal
         open={!!selected}
-        title={selected?.displayName ?? selected?.email ?? "User"}
-        subtitle={selected?.email ?? selected?.userId}
+        userId={selected?.userId ?? null}
         onClose={() => setSelected(null)}
-      >
-        {selected ? (
-          <>
-            <AdminDetailRows
-              rows={[
-                { label: "Clerk user ID", value: selected.userId },
-                { label: "Email", value: selected.email ?? "—" },
-                { label: "Display name", value: selected.displayName ?? "—" },
-                { label: "Projects", value: formatAdminInt(selected.projectCount) },
-                { label: "Keywords", value: formatAdminInt(selected.keywordCount) },
-                { label: "Blogs", value: formatAdminInt(selected.contentCount) },
-                {
-                  label: "AI requests (30d)",
-                  value: formatAdminInt(selected.aiRequests30d),
-                },
-                {
-                  label: "AI cost (30d)",
-                  value: formatAdminUsd(selected.aiCostUsd30d),
-                },
-                {
-                  label: "API cost (30d)",
-                  value: formatAdminUsd(selected.apiCostUsd30d),
-                },
-                {
-                  label: "Last active",
-                  value: formatAdminDate(selected.lastActiveAt),
-                },
-                {
-                  label: "First seen",
-                  value: formatAdminDate(selected.firstSeenAt),
-                },
-              ]}
-            />
-            <Link
-              href={`/admin/projects?userId=${encodeURIComponent(selected.userId)}`}
-              className={cn(
-                "mt-6 inline-flex h-9 items-center px-4 rounded-md text-[13px] font-medium",
-                "bg-brand-action text-white hover:opacity-90"
-              )}
-            >
-              View projects
-            </Link>
-          </>
-        ) : null}
-      </AdminDetailDrawer>
+        onSaveSuccess={() => {
+          void refetch();
+        }}
+        userEmail={selected?.email}
+        userDisplayName={selected?.displayName}
+      />
     </PageShell>
   );
 }

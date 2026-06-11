@@ -224,6 +224,16 @@ export async function importGapKeywords(projectId: string, gaps: CompetitorGapKe
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(user.id, "keywords_fetched");
+  } catch (qErr: any) {
+    return {
+      success: false,
+      error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
+    };
+  }
+
   const rows = gaps.map(g => ({
     project_id: projectId,
     keyword: g.keyword,

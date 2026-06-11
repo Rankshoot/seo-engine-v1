@@ -17,9 +17,39 @@ _dir="$PWD"
 while true; do
   for _envfile in "$_dir/.env" "$_dir/.env.local"; do
     if [[ -f "$_envfile" ]]; then
-      set -a
-      source "$_envfile"
-      set +a
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        # Trim leading and trailing whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        
+        # Skip empty lines and comments
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        
+        # Parse KEY=VALUE
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+          key="${BASH_REMATCH[1]}"
+          val="${BASH_REMATCH[2]}"
+          
+          # Allowlist validation
+          if [[ "$key" == "CLERK_SECRET_KEY" || "$key" == "CLERK_BAPI_SCOPES" || "$key" == "CLERK_REST_API_URL" ]]; then
+            # Strip surrounding double quotes
+            if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+              val="${BASH_REMATCH[1]}"
+            # Strip surrounding single quotes
+            elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+              val="${BASH_REMATCH[1]}"
+            fi
+            
+            # Reject command substitution and embedded newlines
+            if [[ "$val" == *"\$("* || "$val" == *"\`"* ]]; then
+              echo "WARNING: Unsafe command substitution ignored in $key" >&2
+              continue
+            fi
+            
+            export "$key"="$val"
+          fi
+        fi
+      done < "$_envfile"
     fi
   done
   [[ -n "${CLERK_SECRET_KEY:-}" ]] && break

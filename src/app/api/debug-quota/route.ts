@@ -18,13 +18,7 @@ export async function GET() {
       .select("id, name, user_id")
       .eq("user_id", user.id);
       
-    const altId = user.id.includes("l") ? user.id.replace("l", "I") : user.id.includes("I") ? user.id.replace("I", "l") : user.id;
-    const { data: altProjects } = await db
-      .from("projects")
-      .select("id, name, user_id")
-      .eq("user_id", altId);
-
-    // Get charcodes of both user.id and altId
+    // Get charcodes of user.id
     const getCharCodes = (str: string) => {
       const codes = [];
       for (let i = 0; i < str.length; i++) {
@@ -42,9 +36,6 @@ export async function GET() {
       quotaStatus: status,
       projectsInDb: projects,
       projErr: projErr ? projErr.message : null,
-      altId,
-      altIdCharCodes: getCharCodes(altId),
-      altProjectsInDb: altProjects
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

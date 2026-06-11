@@ -9,12 +9,19 @@ export async function GET() {
   }
 
   const db = getSupabaseAdmin();
-  const { data } = await db
+  const { data, error } = await db
     .from("user_approvals")
     .select("status")
     .eq("clerk_user_id", userId)
     .single();
 
-  const status = (data as { status: string } | null)?.status ?? "pending";
+  if (error) {
+    if (error.code === "PGRST116") {
+      return NextResponse.json({ status: "not_found" });
+    }
+    return NextResponse.json({ status: "db_error", message: error.message }, { status: 500 });
+  }
+
+  const status = data?.status ?? "pending";
   return NextResponse.json({ status });
 }

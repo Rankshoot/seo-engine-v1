@@ -196,7 +196,11 @@ export class QuotaService {
       kwErr
     };
     try {
-      require("fs").appendFileSync("c:/Users/prabh/seo engine/seo-engine/debug.log", JSON.stringify(logData, null, 2) + "\n---\n");
+      const fs = require("fs");
+      const path = require("path");
+      const os = require("os");
+      const logPath = process.env.DEBUG_LOG_PATH || path.join(os.tmpdir(), "seo-engine-debug.log");
+      fs.appendFileSync(logPath, JSON.stringify(logData, null, 2) + "\n---\n");
     } catch (e) {
       console.error("Failed to write to debug.log", e);
     }

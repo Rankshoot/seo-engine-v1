@@ -4,6 +4,17 @@ import { useEffect, useState } from "react";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 
+async function checkApprovalStatus(): Promise<string> {
+  try {
+    const res = await fetch("/api/v1/me/approval-status");
+    if (!res.ok) return "pending";
+    const json = await res.json() as { status: string };
+    return json.status ?? "pending";
+  } catch {
+    return "pending";
+  }
+}
+
 export default function PendingApprovalPage() {
   const { isLoaded, user } = useUser();
   const { signOut } = useClerk();
@@ -17,15 +28,15 @@ export default function PendingApprovalPage() {
       return;
     }
 
-    if (user.publicMetadata?.approved !== false) {
-      router.replace("/dashboard");
-      return;
-    }
+    // Check DB status immediately — don't rely on stale publicMetadata
+    void checkApprovalStatus().then((status) => {
+      if (status === "approved") router.replace("/dashboard");
+    });
 
     const interval = setInterval(async () => {
       try {
-        await user.reload();
-        if (user.publicMetadata?.approved !== false) {
+        const status = await checkApprovalStatus();
+        if (status === "approved") {
           router.replace("/dashboard");
         }
       } catch {
@@ -98,8 +109,9 @@ export default function PendingApprovalPage() {
 
           <button
             type="button"
-            onClick={() => user.reload().then(() => {
-              if (user.publicMetadata?.approved !== false) router.replace("/dashboard");
+            onClick={() => void checkApprovalStatus().then((status) => {
+              if (status === "approved") router.replace("/dashboard");
+              else setCheckCount((n) => n + 1);
             })}
             className="w-full h-9 rounded-lg bg-brand-action text-white text-[13px] font-medium hover:opacity-90 transition-opacity mb-3"
           >

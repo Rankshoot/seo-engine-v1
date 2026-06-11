@@ -55,6 +55,7 @@ const isApprovalBypassRoute = createRouteMatcher([
   "/sign-up(.*)",
   "/api/webhooks(.*)",
   "/api/v1/admin(.*)",
+  "/api/v1/me/approval-status(.*)",
 ]);
 
 const clerk = clerkMiddleware(async (auth, req) => {

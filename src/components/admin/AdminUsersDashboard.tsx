@@ -323,6 +323,17 @@ export function AdminUsersDashboard() {
         userEmail={selected?.email}
         userDisplayName={selected?.displayName}
       />
+
+      <NotesModal
+        open={!!notesModal}
+        action={notesModal?.action ?? "deny"}
+        isPending={updateApproval.isPending}
+        onClose={() => setNotesModal(null)}
+        onConfirm={(notes) => {
+          if (!notesModal) return;
+          handleApprovalAction(notesModal.userId, notesModal.action as ApprovalAction, notes);
+        }}
+      />
     </PageShell>
   );
 }

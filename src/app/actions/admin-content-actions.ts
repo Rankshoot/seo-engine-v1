@@ -86,49 +86,61 @@ export async function listAdminContent(
     const from = (params.page - 1) * params.pageSize;
     const to = from + params.pageSize - 1;
 
-    let query = db
-      .from("blogs")
-      .select(
-        `id, project_id, title, content_type, status, word_count, target_keyword,
+    const runQuery = async (selectStr: string) => {
+      let q = db.from("blogs").select(selectStr, { count: "exact" });
+
+      if (params.projectId) q = q.eq("project_id", params.projectId);
+      else if (projectIdsIn?.length) q = q.in("project_id", projectIdsIn);
+
+      if (params.provider) q = q.eq("content_type", params.provider);
+      if (params.status) q = q.eq("status", params.status);
+
+      q = applyAdminDateRange(q, params);
+
+      if (params.search) {
+        const qPattern = `%${escapeIlikePattern(params.search)}%`;
+        q = q.or(
+          `title.ilike.${qPattern},target_keyword.ilike.${qPattern},slug.ilike.${qPattern},article_type.ilike.${qPattern}`
+        );
+      }
+
+      const sortCol =
+        params.sort === "title"
+          ? "title"
+          : params.sort === "words"
+            ? "word_count"
+            : params.sort === "updated"
+              ? "updated_at"
+              : "created_at";
+
+      q = q.order(sortCol, {
+        ascending: params.sortDir === "asc",
+        nullsFirst: false,
+      });
+      q = q.range(from, to);
+      return q;
+    };
+
+    let selectStr = `id, project_id, title, content_type, status, word_count, target_keyword,
          article_type, slug, source_url, deep_analysis_score, created_at, updated_at,
-         projects(name, domain, user_id)`,
-        { count: "exact" }
-      );
+         projects(name, domain, user_id)`;
 
-    if (params.projectId) query = query.eq("project_id", params.projectId);
-    else if (projectIdsIn?.length) query = query.in("project_id", projectIdsIn);
+    let { data, error, count } = await runQuery(selectStr);
 
-    if (params.provider) query = query.eq("content_type", params.provider);
-    if (params.status) query = query.eq("status", params.status);
-
-    query = applyAdminDateRange(query, params);
-
-    if (params.search) {
-      const q = `%${escapeIlikePattern(params.search)}%`;
-      query = query.or(
-        `title.ilike.${q},target_keyword.ilike.${q},slug.ilike.${q},article_type.ilike.${q}`
-      );
+    if (error && (error.message.includes("deep_analysis_score") || error.code === "42703")) {
+      console.warn("[admin-content] blogs.deep_analysis_score missing; retrying with fallback.");
+      selectStr = `id, project_id, title, content_type, status, word_count, target_keyword,
+         article_type, slug, source_url, created_at, updated_at,
+         projects(name, domain, user_id)`;
+      const fallbackResult = await runQuery(selectStr);
+      data = fallbackResult.data;
+      error = fallbackResult.error;
+      count = fallbackResult.count;
     }
 
-    const sortCol =
-      params.sort === "title"
-        ? "title"
-        : params.sort === "words"
-          ? "word_count"
-          : params.sort === "updated"
-            ? "updated_at"
-            : "created_at";
-
-    query = query.order(sortCol, {
-      ascending: params.sortDir === "asc",
-      nullsFirst: false,
-    });
-    query = query.range(from, to);
-
-    const { data, error, count } = await query;
     if (error) throw new Error(error.message);
 
-    const items = ((data ?? []) as BlogDbRow[]).map(mapRow);
+    const items = ((data ?? []) as unknown as BlogDbRow[]).map(mapRow);
 
     return {
       success: true,

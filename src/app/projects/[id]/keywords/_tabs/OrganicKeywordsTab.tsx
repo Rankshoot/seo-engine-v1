@@ -864,8 +864,29 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     <div className="flex-1 flex flex-col min-h-0 relative animate-slide-in-left">
       <div className="flex-1 flex flex-col min-h-0">
         {error && (
-          <div className="mb-4 flex items-center gap-3 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral shrink-0">
-            {error}
+          <div className="mb-4 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral shrink-0 flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>{error}</span>
+            </div>
+            {error.toLowerCase().includes("limit") && (
+              <div className="flex items-center gap-2.5">
+                <a
+                  href="/pricing"
+                  className="inline-flex items-center justify-center rounded-full bg-brand-coral/20 px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-brand-coral hover:bg-brand-coral/30 transition-all duration-200"
+                >
+                  Upgrade Plan
+                </a>
+                <a
+                  href="mailto:support@seoengine.com?subject=Keyword Quota Increase Request"
+                  className="inline-flex items-center justify-center rounded-full border border-brand-coral/20 px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-brand-coral hover:bg-brand-coral/10 transition-all duration-200"
+                >
+                  Contact Support
+                </a>
+              </div>
+            )}
           </div>
         )}
 

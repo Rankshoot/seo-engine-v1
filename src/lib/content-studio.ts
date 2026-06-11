@@ -110,6 +110,7 @@ export async function generateEbook(
     maxOutputTokens: 24576,
     useGoogleSearch: true,
     cachePrompt: true,
+    timeoutMs: 0,
   });
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
@@ -199,6 +200,7 @@ export async function generateWhitepaper(
     maxOutputTokens: 20480,
     useGoogleSearch: true,
     cachePrompt: true,
+    timeoutMs: 0,
   });
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);

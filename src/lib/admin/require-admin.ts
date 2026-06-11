@@ -1,8 +1,9 @@
-import { currentUser } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import type { User } from "@clerk/nextjs/server";
 import type { PlatformAdminRole } from "@/constants/enums/platform-admin-role";
 import { platformAdminMeetsMinRole } from "@/constants/enums/platform-admin-role";
-import type { RequireAdminResult } from "@/types/admin";
+import type { RequireAdminResult, PlatformAdminRow } from "@/types/admin";
+import { supabaseAdmin } from "@/lib/supabase";
 import {
   fetchActivePlatformAdmin,
   linkPlatformAdminUserId,
@@ -34,7 +35,40 @@ export async function requireAdmin(
 ): Promise<RequireAdminResult> {
   const minRole = options.minRole ?? "support";
 
-  const user = await currentUser();
+  // 1. Fast Path: Use local JWT auth() to avoid hitting Clerk APIs if user_id is already linked
+  try {
+    const { userId } = await auth();
+    if (userId) {
+      const { data: row, error: dbErr } = await supabaseAdmin
+        .from("platform_admins")
+        .select("*")
+        .eq("user_id", userId)
+        .is("revoked_at", null)
+        .maybeSingle();
+
+      if (!dbErr && row) {
+        const role = row.role;
+        if (!platformAdminMeetsMinRole(role, minRole)) {
+          return { ok: false, status: 403, error: "Insufficient permissions" };
+        }
+        return {
+          ok: true,
+          admin: rowToAdminSession(row as PlatformAdminRow, userId),
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("[requireAdmin] auth() check failed, falling back to currentUser():", err);
+  }
+
+  // 2. Fallback Path: Fetch full Clerk user object if first-time sign-in or auth() check failed
+  let user: User | null = null;
+  try {
+    user = await currentUser();
+  } catch (err) {
+    console.error("[requireAdmin] currentUser() fetch failed completely:", err);
+  }
+
   if (!user) {
     return { ok: false, status: 401, error: "Not authenticated" };
   }

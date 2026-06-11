@@ -68,6 +68,14 @@ export class BudgetExceededError extends Error {
   }
 }
 
+/** Error thrown when an underlying AI provider (Claude, Gemini) API call fails. */
+export class PlatformAIError extends Error {
+  constructor(message: string = "Content engine is busy, please try again.") {
+    super(message);
+    this.name = "PlatformAIError";
+  }
+}
+
 /**
  * Strip code fences, leading "json", and trailing commas from a JSON-ish blob.
  * Returns the parsed object/array or `null` if it cannot be recovered.

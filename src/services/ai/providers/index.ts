@@ -275,10 +275,17 @@ export async function aiGenerate(
     timeoutMs?: number;
   } = {}
 ): Promise<string> {
+  const userId = opts.userId;
+  if (userId) {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(userId, "ai_credits");
+  }
+
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
   const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
 
+  let resultText: string;
   try {
     const res = await withTimeout(
       (signal) =>
@@ -296,7 +303,7 @@ export async function aiGenerate(
         }),
       timeoutMs
     );
-    return res.text;
+    resultText = res.text;
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
       throw err;
@@ -321,10 +328,17 @@ export async function aiGenerate(
           }),
         timeoutMs
       );
-      return res.text;
+      resultText = res.text;
+    } else {
+      throw err;
     }
-    throw err;
   }
+
+  if (userId) {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(userId, "ai_credits");
+  }
+  return resultText;
 }
 
 /**
@@ -347,6 +361,12 @@ export async function* aiStream(
     timeoutMs?: number;
   } = {}
 ) {
+  const userId = opts.userId;
+  if (userId) {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(userId, "ai_credits");
+  }
+
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
   const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
@@ -354,6 +374,7 @@ export async function* aiStream(
   const controller = timeoutMs > 0 ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
+  let success = false;
   try {
     const streamGen = provider.stream(model, prompt, {
       temperature: opts.temperature,
@@ -369,6 +390,7 @@ export async function* aiStream(
     for await (const chunk of streamGen) {
       yield chunk;
     }
+    success = true;
   } catch (err: unknown) {
     const error = err instanceof Error ? err : new Error(String(err));
     if (controller?.signal.aborted || error.name === "AbortError" || error.message?.includes("aborted")) {
@@ -400,6 +422,7 @@ export async function* aiStream(
         for await (const chunk of fallbackStream) {
           yield chunk;
         }
+        success = true;
       } catch (fbErr: unknown) {
         const fbError = fbErr instanceof Error ? fbErr : new Error(String(fbErr));
         if (fbController?.signal.aborted || fbError.name === "AbortError" || fbError.message?.includes("aborted")) {
@@ -416,6 +439,11 @@ export async function* aiStream(
     }
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
+  }
+
+  if (success && userId) {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(userId, "ai_credits");
   }
 }
 
@@ -438,10 +466,17 @@ export async function aiGenerateStructured<T>(
     timeoutMs?: number;
   } = {}
 ): Promise<T> {
+  const userId = opts.userId;
+  if (userId) {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(userId, "ai_credits");
+  }
+
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
   const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
 
+  let resultData: T;
   try {
     const res = await withTimeout(
       (signal) =>
@@ -456,7 +491,7 @@ export async function aiGenerateStructured<T>(
         }),
       timeoutMs
     );
-    return res.data;
+    resultData = res.data;
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
       throw err;
@@ -478,9 +513,16 @@ export async function aiGenerateStructured<T>(
           }),
         timeoutMs
       );
-      return res.data;
+      resultData = res.data;
+    } else {
+      throw err;
     }
-    throw err;
   }
+
+  if (userId) {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(userId, "ai_credits");
+  }
+  return resultData;
 }
 

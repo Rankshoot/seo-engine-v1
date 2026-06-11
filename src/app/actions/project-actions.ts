@@ -165,6 +165,17 @@ export async function createProject(data: {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
+  // Enforce user project limits
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.checkQuota(user.id, "projects");
+  } catch (qErr: any) {
+    return {
+      success: false,
+      error: "You have reached your project limit. Please upgrade your plan or contact the administrator to create more projects."
+    };
+  }
+
   const { competitors, ahrefs_rank_tracker_project_id, ...projectData } = data;
 
   const { data: project, error } = await supabaseAdmin

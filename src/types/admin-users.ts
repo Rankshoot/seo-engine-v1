@@ -1,3 +1,5 @@
+export type ApprovalStatus = "approved" | "pending" | "denied" | "revoked";
+
 export interface AdminUserRow {
   userId: string;
   email: string | null;
@@ -10,6 +12,7 @@ export interface AdminUserRow {
   aiCostUsd30d: number;
   lastActiveAt: string | null;
   firstSeenAt: string | null;
+  approvalStatus: ApprovalStatus;
 }
 
 export interface AdminUsersListResult {

@@ -3,7 +3,7 @@
 import { clerkClient } from "@clerk/nextjs/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import type { AdminListParams } from "@/lib/admin/parse-list-params";
-import type { AdminUserRow, AdminUsersListResult } from "@/types/admin-users";
+import type { AdminUserRow, AdminUsersListResult, ApprovalStatus } from "@/types/admin-users";
 
 function daysAgoIso(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -46,16 +46,35 @@ export async function listAdminUsers(
     const db = getSupabaseAdmin();
     const since30d = daysAgoIso(30);
 
-    const { data: projects, error: projErr } = await db
-      .from("projects")
-      .select("id, user_id, created_at, updated_at")
-      .returns<
-        { id: string; user_id: string; created_at: string; updated_at: string }[]
-      >();
+    const [{ data: projects, error: projErr }, { data: approvalUsers }] = await Promise.all([
+      db
+        .from("projects")
+        .select("id, user_id, created_at, updated_at")
+        .returns<{ id: string; user_id: string; created_at: string; updated_at: string }[]>(),
+      db
+        .from("user_approvals")
+        .select("clerk_user_id, requested_at")
+        .returns<{ clerk_user_id: string; requested_at: string }[]>(),
+    ]);
 
     if (projErr) throw new Error(projErr.message);
 
     const byUser = new Map<string, UserAgg>();
+
+    // Seed map from user_approvals so users with no projects still appear
+    for (const a of approvalUsers ?? []) {
+      if (!a.clerk_user_id) continue;
+      if (!byUser.has(a.clerk_user_id)) {
+        byUser.set(a.clerk_user_id, {
+          userId: a.clerk_user_id,
+          projectCount: 0,
+          projectIds: [],
+          lastActiveAt: null,
+          firstSeenAt: a.requested_at ?? null,
+        });
+      }
+    }
+
     for (const p of projects ?? []) {
       if (!p.user_id) continue;
       const cur = byUser.get(p.user_id) ?? {
@@ -127,8 +146,9 @@ export async function listAdminUsers(
     const pageRows = rows.slice(start, start + params.pageSize);
 
     const allPageProjectIds = pageRows.flatMap((r) => r.projectIds);
+    const pageUserIds = pageRows.map((r) => r.userId);
 
-    const [keywordsRes, blogsRes, aiLogsRes, apiLogsRes] = await Promise.all([
+    const [keywordsRes, blogsRes, aiLogsRes, apiLogsRes, approvalsRes] = await Promise.all([
       allPageProjectIds.length
         ? db.from("keywords").select("project_id").in("project_id", allPageProjectIds)
         : Promise.resolve({ data: [] as { project_id: string }[] }),
@@ -155,6 +175,12 @@ export async function listAdminUsers(
               pageRows.map((r) => r.userId)
             )
         : Promise.resolve({ data: [] as { user_id: string; estimated_cost_usd: number | null }[] }),
+      pageUserIds.length
+        ? db
+            .from("user_approvals")
+            .select("clerk_user_id, status")
+            .in("clerk_user_id", pageUserIds)
+        : Promise.resolve({ data: [] as { clerk_user_id: string; status: string }[] }),
     ]);
 
     const kwByProject = new Map<string, number>();
@@ -183,6 +209,12 @@ export async function listAdminUsers(
       );
     }
 
+    const approvalByUser = new Map<string, ApprovalStatus>();
+    for (const row of approvalsRes.data ?? []) {
+      if (!row.clerk_user_id) continue;
+      approvalByUser.set(row.clerk_user_id, row.status as ApprovalStatus);
+    }
+
     const items: AdminUserRow[] = await Promise.all(
       pageRows.map(async (row) => {
         const profile = await enrichClerkProfile(row.userId);
@@ -205,6 +237,7 @@ export async function listAdminUsers(
           aiCostUsd30d: ai?.cost ?? 0,
           lastActiveAt: row.lastActiveAt,
           firstSeenAt: row.firstSeenAt,
+          approvalStatus: approvalByUser.get(row.userId) ?? "approved",
         };
       })
     );

@@ -1,6 +1,7 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import Anthropic from "@anthropic-ai/sdk";
+import { buildBlogPrompt } from "@/lib/prompts/blog-prompt";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -33,10 +34,22 @@ export async function POST(req: Request) {
     );
   }
 
-  const body = (await req.json()) as { entryId: string; wordCount?: number; writerNotes?: string };
-  if (!body.entryId) {
+  const body = (await req.json()) as {
+    entryId?: string;
+    projectId?: string;
+    keyword?: string;
+    topic?: string;
+    audience?: string;
+    tone?: string;
+    goal?: string;
+    ctaObjective?: string;
+    secondaryKeywords?: string[];
+    wordCount?: number;
+    writerNotes?: string;
+  };
+  if (!body.entryId && (!body.projectId || !body.keyword)) {
     return new Response(
-      `data: ${JSON.stringify({ event: "error", message: "Expected { entryId, wordCount?, writerNotes? }" })}\n\n`,
+      `data: ${JSON.stringify({ event: "error", message: "Expected entryId OR { projectId, keyword }" })}\n\n`,
       { status: 400, headers: { "Content-Type": "text/event-stream" } }
     );
   }
@@ -58,32 +71,52 @@ export async function POST(req: Request) {
 
       try {
         // ── Stage 1: Load context ─────────────────────────────────────────
-        emit({ event: "stage", stage: "context", detail: "Loading project brief and calendar entry…" });
+        emit({ event: "stage", stage: "context", detail: "Loading project brief…" });
 
-        const { data: entry, error: eErr } = await supabaseAdmin
-          .from("calendar_entries").select("*").eq("id", body.entryId).single();
+        let project: any = null;
+        let brief: any = null;
+        let entry: any = null;
+        let projectId = "";
 
-        if (eErr || !entry) {
-          emit({ event: "error", message: "Calendar entry not found" });
-          controller.close();
-          return;
+        if (body.entryId) {
+          const { data: entryRow, error: eErr } = await supabaseAdmin
+            .from("calendar_entries").select("*").eq("id", body.entryId).single();
+
+          if (eErr || !entryRow) {
+            emit({ event: "error", message: "Calendar entry not found" });
+            controller.close();
+            return;
+          }
+          entry = entryRow;
+          projectId = entry.project_id;
+          await supabaseAdmin.from("calendar_entries").update({ status: "generating" }).eq("id", body.entryId);
+        } else {
+          projectId = body.projectId!;
+          const kw = body.keyword!;
+          // Build a synthetic entry object for direct generation
+          entry = {
+            focus_keyword: kw,
+            title: body.topic || kw,
+            article_type: "Blog Post",
+            secondary_keywords: body.secondaryKeywords || [],
+            content_health_audit: null,
+            slug: kw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80),
+          };
         }
 
-        const { data: project, error: pErr } = await supabaseAdmin
-          .from("projects").select("*").eq("id", entry.project_id).eq("user_id", user.id).single();
+        const { data: projectRow, error: pErr } = await supabaseAdmin
+          .from("projects").select("*").eq("id", projectId).eq("user_id", user.id).single();
 
-        if (pErr || !project) {
+        if (pErr || !projectRow) {
           emit({ event: "error", message: "Project not found or unauthorized" });
           controller.close();
           return;
         }
+        project = projectRow;
 
-        await supabaseAdmin.from("calendar_entries").update({ status: "generating" }).eq("id", body.entryId);
-
-        let brief: any = null;
         try {
           const { data: briefRow } = await supabaseAdmin
-            .from("project_briefs").select("brief").eq("project_id", entry.project_id).maybeSingle();
+            .from("project_briefs").select("brief").eq("project_id", projectId).maybeSingle();
           brief = briefRow?.brief ?? null;
         } catch { /* optional */ }
 
@@ -102,24 +135,90 @@ export async function POST(req: Request) {
         try {
           const { data: blogs } = await supabaseAdmin
             .from("blogs").select("title, slug, target_keyword")
-            .eq("project_id", entry.project_id).in("status", ["generated", "approved", "published"])
-            .neq("entry_id", body.entryId).limit(15);
+            .eq("project_id", projectId).in("status", ["generated", "approved", "published"])
+            .neq("entry_id", body.entryId || "").limit(15);
           existingBlogs = blogs ?? [];
         } catch { /* optional */ }
 
         // ── Stage 3: Outline ──────────────────────────────────────────────
         emit({ event: "stage", stage: "outline", detail: "Building SEO structure and topical outline…" });
 
-        const { formatContentHealthAuditForWriter } = await import("@/lib/content-health-calendar");
-        const contentHealthRaw = (entry as any).content_health_audit;
-        const auditWriterBlock = formatContentHealthAuditForWriter(contentHealthRaw);
-        const mergedWriterNotes = [body.writerNotes?.trim(), auditWriterBlock || ""]
-          .filter(Boolean).join("\n\n---\n\n");
+        let mergedWriterNotes = "";
+        if (body.entryId) {
+          const { formatContentHealthAuditForWriter } = await import("@/lib/content-health-calendar");
+          const contentHealthRaw = (entry as any).content_health_audit;
+          const auditWriterBlock = formatContentHealthAuditForWriter(contentHealthRaw);
+          mergedWriterNotes = [body.writerNotes?.trim(), auditWriterBlock || ""]
+            .filter(Boolean).join("\n\n---\n\n");
+        } else {
+          mergedWriterNotes = `Audience: ${body.audience || ""}\nTone: ${body.tone || ""}\nGoal: ${body.goal || ""}\nCTA: ${body.ctaObjective || ""}\nSecondary Keywords: ${(body.secondaryKeywords || []).join(", ")}`;
+          if (body.writerNotes) {
+            mergedWriterNotes = `${body.writerNotes.trim()}\n\n---\n\n${mergedWriterNotes}`;
+          }
+        }
 
-        // Build the blog prompt (same structure as generateBlogPost in gemini.ts)
-        const blogPrompt = await buildBlogPrompt({
-          entry, project, research, existingBlogs, brief, writerNotes: mergedWriterNotes || undefined,
+        // Pre-validate the internal link candidates
+        const { validateExternalUrl } = await import("@/lib/blog-content");
+        const allCandidates = [
+          ...(brief?.internal_link_candidates ?? []).filter((l: any) => l.url?.startsWith("http"))
+            .map((l: any) => ({ url: l.url, title: l.title || l.topic || "Page", type: "site" })),
+          ...(existingBlogs ?? []).filter((b: any) => b.target_keyword !== entry.focus_keyword)
+            .map((b: any) => ({ url: `https://${project.domain}/${b.slug}`, title: b.title, type: "generated" })),
+        ];
+
+        const validatedLinks = (await Promise.allSettled(
+          allCandidates.map(async (c) => ({ c, ok: await validateExternalUrl(c.url, 4000) }))
+        )).filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled" && r.value.ok)
+          .map((r) => r.value.c);
+
+        const filteredBrief = brief
+          ? {
+              ...brief,
+              internal_link_candidates: brief.internal_link_candidates.filter((c: any) =>
+                validatedLinks.some((vl: any) => vl.type === 'site' && vl.url === c.url)
+              )
+            }
+          : null;
+
+        const filteredExistingBlogs = existingBlogs
+          ? existingBlogs.filter((b: any) =>
+              validatedLinks.some((vl: any) => vl.type === 'generated' && vl.url === `https://${project.domain}/${b.slug}`)
+            )
+          : [];
+
+        // Pre-validate external research sources (Serper topArticles)
+        if (research && research.topArticles && research.topArticles.length > 0) {
+          const articlesToValidate = research.topArticles.slice(0, 8);
+          const validatedResearchResults = await Promise.allSettled(
+            articlesToValidate.map(async (art: any) => {
+              const ok = await validateExternalUrl(art.url, 4000);
+              return { art, ok };
+            })
+          );
+
+          const verifiedArticles = validatedResearchResults
+            .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled' && r.value.ok)
+            .map(r => r.value.art);
+
+          research.topArticles = research.topArticles.filter((art: any) =>
+            verifiedArticles.some((va: any) => va.url === art.url)
+          );
+        }
+
+        // Build the blog prompt
+        const blogPrompt = buildBlogPrompt({
+          entry: {
+            focus_keyword: entry.focus_keyword,
+            title: entry.title,
+            article_type: entry.article_type || 'Blog Post',
+            secondary_keywords: entry.secondary_keywords,
+          },
+          project,
           wordCount: body.wordCount ?? 2500,
+          research,
+          existingBlogs: filteredExistingBlogs,
+          brief: filteredBrief,
+          writerNotes: mergedWriterNotes || undefined,
         });
 
         // ── Stage 4: Draft with streaming thinking ────────────────────────
@@ -207,7 +306,7 @@ export async function POST(req: Request) {
           targetKeyword: entry.focus_keyword,
           articleType: entry.article_type,
           niche: project.niche,
-          audience: project.target_audience,
+          audience: body.audience || project.target_audience || "",
           company: project.company,
           wordCount: blogData.word_count,
         });
@@ -218,9 +317,6 @@ export async function POST(req: Request) {
         const finalWordCount = countWords(finalContent);
 
         // ── Save to DB ────────────────────────────────────────────────────
-        const { data: existing } = await supabaseAdmin
-          .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
-
         const upsertPayload = {
           title: blogData.title,
           content: finalContent,
@@ -229,7 +325,7 @@ export async function POST(req: Request) {
           word_count: finalWordCount,
           target_keyword: entry.focus_keyword,
           article_type: entry.article_type,
-          status: "generated",
+          status: "generated" as const,
           research_sources: blogData.research_sources,
           external_links: sanitized.externalLinks.slice(0, 10),
           internal_links: sanitized.internalLinks.slice(0, 12),
@@ -239,22 +335,33 @@ export async function POST(req: Request) {
         };
 
         let blogId: string;
-        if (existing) {
-          const { data, error } = await supabaseAdmin
-            .from("blogs").update(upsertPayload).eq("id", existing.id).select("id").single();
-          if (error) throw error;
-          blogId = data.id;
+        if (body.entryId) {
+          const { data: existing } = await supabaseAdmin
+            .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
+
+          if (existing) {
+            const { data, error } = await supabaseAdmin
+              .from("blogs").update(upsertPayload).eq("id", existing.id).select("id").single();
+            if (error) throw error;
+            blogId = data.id;
+          } else {
+            const { data, error } = await supabaseAdmin
+              .from("blogs").insert({ ...upsertPayload, entry_id: body.entryId, project_id: projectId })
+              .select("id").single();
+            if (error) throw error;
+            blogId = data.id;
+          }
+
+          await supabaseAdmin
+            .from("calendar_entries").update({ status: "generated", title: blogData.title })
+            .eq("id", body.entryId);
         } else {
           const { data, error } = await supabaseAdmin
-            .from("blogs").insert({ ...upsertPayload, entry_id: body.entryId, project_id: entry.project_id })
+            .from("blogs").insert({ ...upsertPayload, entry_id: null, project_id: projectId })
             .select("id").single();
           if (error) throw error;
           blogId = data.id;
         }
-
-        await supabaseAdmin
-          .from("calendar_entries").update({ status: "generated", title: blogData.title })
-          .eq("id", body.entryId);
 
         emit({ event: "done", blogId });
       } catch (err: any) {
@@ -263,9 +370,11 @@ export async function POST(req: Request) {
           message = "Gateway Timeout";
         }
         console.error("[blog stream] Error:", message);
-        try {
-          await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
-        } catch { /* best effort */ }
+        if (body.entryId) {
+          try {
+            await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
+          } catch { /* best effort */ }
+        }
         emit({ event: "error", message });
       } finally {
         if (stallTimeoutId) clearTimeout(stallTimeoutId);
@@ -284,117 +393,7 @@ export async function POST(req: Request) {
   });
 }
 
-// ── Prompt builder (mirrors generateBlogPost in gemini.ts) ───────────────────
-async function buildBlogPrompt(opts: {
-  entry: any; project: any; research: any; existingBlogs: any[];
-  brief: any; writerNotes?: string; wordCount: number;
-}): Promise<string> {
-  const { entry, project, research, existingBlogs, brief, writerNotes, wordCount } = opts;
-  const { formatResearchForPrompt } = await import("@/lib/research");
-  const { validateExternalUrl } = await import("@/lib/blog-content");
 
-  // Internal link pool
-  const allCandidates = [
-    ...(brief?.internal_link_candidates ?? []).filter((l: any) => l.url?.startsWith("http"))
-      .map((l: any) => ({ url: l.url, title: l.title || l.topic || "Page", type: "site" })),
-    ...(existingBlogs ?? []).filter((b: any) => b.target_keyword !== entry.focus_keyword)
-      .map((b: any) => ({ url: `https://${project.domain}/${b.slug}`, title: b.title, type: "generated" })),
-  ];
-
-  const validatedLinks = (await Promise.allSettled(
-    allCandidates.map(async (c) => ({ c, ok: await validateExternalUrl(c.url, 4000) }))
-  )).filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled" && r.value.ok)
-    .map((r) => r.value.c);
-
-  const siteLinks = validatedLinks.filter((c: any) => c.type === "site").slice(0, 12);
-  const generatedLinks = validatedLinks.filter((c: any) => c.type === "generated").slice(0, 8);
-
-  const internalLinksBlock = (siteLinks.length || generatedLinks.length)
-    ? `\nINTERNAL LINKING (pick 2–4 total):\n${[
-        siteLinks.length ? `User's own site pages:\n${siteLinks.map((l: any) => `- ${l.title} · ${l.url}`).join("\n")}` : "",
-        generatedLinks.length ? `Generated blogs:\n${generatedLinks.map((b: any) => `- "${b.title}" → ${b.url}`).join("\n")}` : "",
-      ].filter(Boolean).join("\n\n")}`
-    : "";
-
-  // External sources validation
-  let verifiedExternalBlock = "";
-  if (research?.topArticles?.length) {
-    const validated = (await Promise.allSettled(
-      research.topArticles.slice(0, 8).map(async (art: any) => ({ art, ok: await validateExternalUrl(art.url, 4000) }))
-    )).filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled" && r.value.ok)
-      .map((r) => r.value.art);
-    if (validated.length) {
-      verifiedExternalBlock = `\nVERIFIED EXTERNAL SOURCES (use ONLY these for external links):\n${validated.map((a: any) => `- ${a.title} → ${a.url}`).join("\n")}\n`;
-    }
-    research.topArticles = research.topArticles.filter((art: any) =>
-      (validated as any[]).some((va: any) => va.url === art.url)
-    );
-  }
-
-  const writerNotesBlock = writerNotes?.length
-    ? `\nWRITER NOTES (follow closely):\n${writerNotes.slice(0, 2500)}\n` : "";
-
-  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
-    ? `\nBRAND PERSONA & IDENTITY:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
-    : "";
-
-  const briefBlock = brief
-    ? `\nCOMPANY CONTEXT:\n- Summary: ${brief.summary || "(none)"}\n- Products: ${brief.products?.slice(0, 10).join(", ") || "(none)"}\n- Audience: ${brief.audiences?.slice(0, 6).join(" | ") || project.target_audience}\n- USPs: ${brief.usps?.slice(0, 6).join(" | ") || "(none)"}\n- Tone: ${project.brand_voice || brief.tone || "professional, expert, helpful"}\n${brandPersonaBlock}`
-    : brandPersonaBlock ? `\nBRAND PERSONA & IDENTITY:\n${brandPersonaBlock}\n` : "";
-
-  const researchBlock = research ? formatResearchForPrompt(research) : "";
-
-  const secondaryKeywords = entry.secondary_keywords?.length
-    ? entry.secondary_keywords.slice(0, 10).map((kw: string, i: number) => `${i + 1}. ${kw}`).join("\n")
-    : "none — derive 7–8 topically relevant H2s from the primary keyword";
-
-  const faqSeeds = research?.peopleAlsoAsk?.length
-    ? research.peopleAlsoAsk.slice(0, 7).map((q: any) => `• ${q.question}${q.answer ? `\n  Hint: ${q.answer}` : ""}`).join("\n")
-    : "none available — use the most common search questions around this topic";
-
-  return `You are an expert SEO content strategist. Produce a blog post that ranks in Google and converts readers for ${project.company}.
-
-CRITICAL: Your response must be a single valid JSON object ONLY. No markdown fences outside the JSON.
-
-JSON SCHEMA:
-{
-  "title": "A compelling H1 title that MUST include the primary keyword verbatim",
-  "metaDescription": "Exactly 150-160 characters, MUST contain the primary keyword",
-  "contentMarkdown": "Clean markdown starting with '# [H1 Title]'. Include intro, H2/H3 sections, FAQs, conclusion.",
-  "faqQuestions": ["Question 1", "Question 2", "Question 3", "Question 4", "Question 5"],
-  "internalLinksUsed": ["/slug-or-absolute-url"],
-  "externalLinksUsed": ["https://url"]
-}
-
-PRIMARY KEYWORD: "${entry.focus_keyword}"
-ARTICLE TITLE:   "${entry.title}"
-ARTICLE TYPE:    ${entry.article_type}
-TARGET AUDIENCE: ${project.target_audience}
-INDUSTRY/NICHE:  ${project.niche}
-COMPANY:         ${project.company} (${project.domain})
-WORD COUNT:      ~${wordCount} words
-${writerNotesBlock}${briefBlock}${internalLinksBlock}
-
-SECONDARY KEYWORDS / H2 TOPICS:
-${secondaryKeywords}
-
-FAQ SEEDS (People Also Ask):
-${faqSeeds}
-
-${researchBlock}
-${verifiedExternalBlock}
-
-SEO REQUIREMENTS:
-1. Minimum ${Math.max(wordCount, 1500)} words
-2. Primary keyword "${entry.focus_keyword}" in H1, first 100 words, and meta description
-3. At least 5 H2 headings, 2 H3 sub-headings
-4. FAQ section under "## FAQs" with 7-10 Q&A pairs (### headings)
-5. At least 5 external links (from verified sources only), 2 internal links
-6. Meta description 150-160 characters exactly
-7. No filler: avoid "In today's world", "game-changer", "delve", "unlock", "landscape"
-
-Return JSON only.`;
-}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function countWords(markdown: string): number {

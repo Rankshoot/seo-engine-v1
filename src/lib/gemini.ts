@@ -1,7 +1,7 @@
 import { CalendarEntry, Project } from './types';
 import { ResearchContext, formatResearchForPrompt } from './research';
 import type { BusinessBrief } from './business-brief';
-import { buildInstantWebResearchArticlePrompt } from './prompts/instant-web-research-article-prompt';
+import { buildBlogPrompt } from './prompts/blog-prompt';
 import { buildKeywordIntentPrompt } from './prompts/keyword-intent-prompt';
 import { buildCalendarPrompt } from './prompts/calendar-prompt';
 import { buildGapAnalysisPrompt } from './prompts/gap-analysis-prompt';
@@ -756,219 +756,36 @@ export async function generateBlogPost(
     .filter(c => c.type === 'generated')
     .slice(0, 8);
 
-  let internalLinksBlock = '';
-  if (siteLinks.length || generatedLinks.length) {
-    const siteBlock = siteLinks.length
-      ? `User's own website pages (prefer these — use the absolute URL as the link target, with natural anchor text):\n${siteLinks
-          .map(l => `- ${l.title} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
-          .join('\n')}`
-      : '';
-    const generatedBlock = generatedLinks.length
-      ? `Blog posts we've generated in this project (use absolute URLs like https://${project.domain}/blog/slug or https://${project.domain}/slug):\n${generatedLinks
-          .map(b => `- "${b.title}" → ${b.url} (keyword: ${b.topic})`)
-          .join('\n')}`
-      : '';
-    internalLinksBlock = `\nINTERNAL LINKING (pick 2–4 total, split across the two pools, placed where they genuinely help the reader):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
-  }
+  const filteredBrief = brief
+    ? {
+        ...brief,
+        internal_link_candidates: brief.internal_link_candidates.filter(c =>
+          validatedInternalLinks.some(vl => vl.type === 'site' && vl.url === c.url)
+        )
+      }
+    : null;
 
-  // Pre-validate external research sources (Serper topArticles)
-  let verifiedExternalSourcesBlock = '';
-  if (research && research.topArticles && research.topArticles.length > 0) {
-    const articlesToValidate = research.topArticles.slice(0, 8);
-    const validatedResearchResults = await Promise.allSettled(
-      articlesToValidate.map(async (art) => {
-        const ok = await validateExternalUrl(art.url, 4000);
-        return { art, ok };
-      })
-    );
+  const filteredExistingBlogs = existingBlogs
+    ? existingBlogs.filter(b =>
+        validatedInternalLinks.some(vl => vl.type === 'generated' && vl.url === `https://${project.domain}/${b.slug}`)
+      )
+    : [];
 
-    const verifiedArticles = validatedResearchResults
-      .filter((r): r is PromiseFulfilledResult<{ art: typeof articlesToValidate[number]; ok: boolean }> => r.status === 'fulfilled' && r.value.ok)
-      .map(r => r.value.art);
-
-    if (verifiedArticles.length > 0) {
-      verifiedExternalSourcesBlock = `\nVERIFIED EXTERNAL SOURCES (you may ONLY use these verified URLs for external links. Do NOT invent URLs or root-level-only domains):\n${verifiedArticles
-        .map(art => `- ${art.title} → ${art.url}`)
-        .join('\n')}\n`;
-    }
-
-    // Filter topArticles in-place so standard formatResearchForPrompt remains clean
-    research.topArticles = research.topArticles.filter(art =>
-      verifiedArticles.some(va => va.url === art.url)
-    );
-  }
-
-  // Company grounding from the Business Brief so the draft sounds like this
-  // specific company rather than a generic explainer.
-  const writerCap =
-    writerNotes && writerNotes.includes("CONTENT HEALTH AUDIT")
-      ? 12_000
-      : 2500;
-  const writerNotesBlock =
-    writerNotes && writerNotes.length > 0
-      ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, writerCap)}\n`
-      : "";
-
-  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
-    ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
-    : "";
-
-  const briefBlock = brief
-    ? `\nCOMPANY CONTEXT (use as grounding — the article must sound like it was written by ${project.company}, for their audience; weave products/entities in naturally; do NOT pitch competitor names)
-- Summary: ${brief.summary || '(none)'}
-- Products / offerings: ${brief.products.slice(0, 10).join(', ') || '(none listed)'}
-- Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
-- Audience segments: ${brief.audiences.slice(0, 6).join(' | ') || project.target_audience}
-- USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
-- Tone: ${project.brand_voice || brief.tone || 'professional, expert, helpful'}
-${brandPersonaBlock}`
-    : brandPersonaBlock ? `\nBRAND PERSONA:\n${brandPersonaBlock}\n` : "";
-
-  // Research context block
-  const researchBlock = research ? formatResearchForPrompt(research) : '';
-
-  // Optional live keyword + SERP context (when provided by the caller).
-  const ahrefsBlock = ahrefsContext && (ahrefsContext.ideas.length || ahrefsContext.serp.length)
-    ? formatAhrefsContextForPrompt(ahrefsContext)
-    : '';
-
-  // Build the ordered H2 list.
-  // Priority: live matching terms > entry.secondary_keywords > fallback instruction.
-  // We take the top 10 by volume so the LLM gets the most-searched sub-topics first.
-  const termsMatchList = ahrefsContext?.matchingTerms?.length
-    ? ahrefsContext.matchingTerms
-        .slice(0, 10)
-        .map((k, i) => `${i + 1}. ${k.keyword}${k.volume ? ` (${k.volume.toLocaleString()} searches/mo)` : ''}`)
-        .join('\n')
-    : entry.secondary_keywords?.length
-      ? entry.secondary_keywords
-          .slice(0, 10)
-          .map((kw, i) => `${i + 1}. ${kw}`)
-          .join('\n')
-      : 'none — derive 7–8 topically relevant H2s from the primary keyword';
-
-  // Build FAQ seed list.
-  // Priority: live question terms > Serper PAA > fallback instruction.
-  const ahrefsQuestions = ahrefsContext?.questions?.length
-    ? ahrefsContext.questions
-        .slice(0, 10)
-        .map(k => `• ${k.keyword}${k.volume ? ` (${k.volume.toLocaleString()} searches/mo)` : ''}`)
-        .join('\n')
-    : '';
-
-  const paaQuestions = research?.peopleAlsoAsk?.length
-    ? research.peopleAlsoAsk
-        .slice(0, 7)
-        .map(q => `• ${q.question}${q.answer ? `\n  Hint: ${q.answer}` : ''}`)
-        .join('\n')
-    : '';
-
-  // Combine: research question terms first (volume-ranked), then PAA (freshness/context).
-  const faqSeeds = [ahrefsQuestions, paaQuestions].filter(Boolean).join('\n') ||
-    'none available — use the most common search questions around this topic';
-
-  const prompt = `You are an expert SEO content strategist and writer. Your job is to produce a blog post that ranks in Google, gets cited by AI Overviews, and converts readers for ${project.company}.
-
-CRITICAL OUTPUT RULE: Your response must be a single, valid JSON object ONLY. Do NOT write any markdown fences outside the JSON, do NOT write any explanation before or after, and do NOT include raw JSON blocks inside the markdown body itself. The entire output must parse successfully as JSON.
-
-JSON SCHEMA:
-{
-  "title": "A compelling H1 title that MUST include the primary keyword verbatim",
-  "metaDescription": "Exactly 150-160 characters long, written as a clear sentence, and MUST contain the primary keyword verbatim",
-  "contentMarkdown": "Clean markdown content starting with '# [H1 Title]'. Must contain intro, modular H2/H3 sections, FAQs, and a conclusion. Do NOT leak raw JSON keys inside the markdown content.",
-  "faqQuestions": ["Question 1", "Question 2", "Question 3", "Question 4", "Question 5", "Question 6", "Question 7"],
-  "internalLinksUsed": ["/slug-or-absolute-url-1", "/slug-or-absolute-url-2"],
-  "externalLinksUsed": ["https://url1", "https://url2", "https://url3"]
-}
-
-════════════════════════════════════════
-INPUTS
-════════════════════════════════════════
-PRIMARY KEYWORD: "${entry.focus_keyword}"
-ARTICLE TITLE:   "${entry.title}"
-ARTICLE TYPE:    ${entry.article_type}
-TARGET AUDIENCE: ${project.target_audience}
-INDUSTRY/NICHE:  ${project.niche}
-COMPANY:         ${project.company} (${project.domain})
-WORD COUNT:      ~${wordCount} words
-${writerNotesBlock}${briefBlock}${internalLinksBlock}
-
-SECONDARY KEYWORDS / TERMS MATCH (from keyword research — these become your H2 topics):
-${termsMatchList}
-
-QUESTIONS FROM RESEARCH + PEOPLE ALSO ASK (use 3–4 verbatim in the FAQ section):
-${faqSeeds}
-
-${researchBlock}
-
-${ahrefsBlock}
-
-${verifiedExternalSourcesBlock}
-
-════════════════════════════════════════
-INTERNAL PLANNING STEPS — Mentally follow these steps before writing. Do NOT output these steps.
-════════════════════════════════════════
-Step 1: Choose the top 7-10 secondary keywords / terms-match keywords from the input lists above to structure your ## headings.
-Step 2: Review the Ahrefs/PAA questions to plan exactly 7-10 FAQs. Ensure at least 3-4 are seeded directly from the provided questions.
-Step 3: Devise 2-4 authority-building sections that subtly showcase ${project.company}'s real-world expertise and solutions for ${project.niche} based on the business brief.
-Step 4: Design a logical, SEO-friendly layout that flows smoothly for informational and commercial intent.
-Step 5: Draft answer-driven, highly readable content optimized for featured snippets and AI Overviews.
-
-════════════════════════════════════════
-SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
-════════════════════════════════════════
-1. WORD COUNT: Minimum ${Math.max(wordCount, 1500)} words (target ${wordCount}).
-2. TITLE KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear in the H1 title.
-3. INTRO KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear within the first 100 words of the intro paragraph.
-4. KEYWORD DENSITY: Mention "${entry.focus_keyword}" naturally 1× per ~150–200 words (0.5–3% density). Spread mentions evenly — not just intro + conclusion.
-5. H2 HEADINGS: At least 5 × ## headings in the contentMarkdown (the scorer requires >= 3).
-6. H3 SUB-HEADINGS: At least 2 × ### headings inside long H2 body sections to organize sub-topics.
-7. FAQ SECTION: MUST have a heading that reads exactly "## FAQs" (or "## Frequently Asked Questions"). Include exactly 7 to 10 Q&A pairs, each question as a ### heading.
-8. EXTERNAL LINKS: Include at least 5 credible external links (at least 3 are required). Format: [anchor text](https://...). Use ONLY the provided verified external sources.
-9. INTERNAL LINKS: Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or absolute URL.
-10. META DESCRIPTION: Exactly 150–160 characters long and MUST contain "${entry.focus_keyword}".
-11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer").
-
-════════════════════════════════════════
-EDITORIAL AND FORMATTING REQUIREMENTS:
-════════════════════════════════════════
-1. INTRODUCTION:
-   - Start immediately with an answer-first paragraph that plainly outlines the key takeaway optimized for AI Overviews.
-   - Mention the primary keyword "${entry.focus_keyword}" naturally within the first 100 words.
-   - Weave in exactly 1 credible, verified data point or statistic from the provided research context if available. Do NOT invent stats. If no verified stats are present, write a compelling, high-quality intro without fake numbers.
-
-2. ANSWER-FIRST SECTION DESIGN:
-   - Every major heading (H2/H3) should address the reader's intent quickly before expanding.
-   - Strictly avoid generic GPT-style heading words: "navigating", "nuances", "at a glance", "delve", "unlock", "landscape", "realm".
-   - **Snippet Answer Rule**: Immediately under every H2 heading, add a crisp, bold 40-50 word paragraph that directly answers that H2 topic (ideal for featured snippets). Then, continue with detailed explanation.
-
-3. CONTENT FORMATTING & READABILITY:
-   - Use a healthy, balanced mix of: short paragraphs (3-4 lines max), bullet lists, and markdown tables where comparisons or data are present.
-   - Sentences should average 10-12 words. Simple language, active voice, avoiding complex generic AI wording.
-   - Use transition words naturally to improve reading flow (e.g. "because", "for example", "however", "therefore", "meanwhile", "as a result"). Do not overuse them.
-
-4. IMAGES AND INFOGRAPHICS:
-   - Include exactly 2-3 relevant image placeholder suggestions inside \`contentMarkdown\` exactly in this format:
-     ![Suggested image: Description of a highly contextual image matching the paragraph](image-placeholder)
-     (e.g., ![Suggested image: HR team reviewing recruitment dashboard](image-placeholder))
-   - Include exactly 1 relevant infographic suggestion block where it adds workflow value in this format:
-     > Infographic suggestion: Description of the infographic flow/process here.
-     (e.g., > Infographic suggestion: A 5-step RPO hiring workflow from requirement intake to onboarding.)
-
-5. NATURAL INTERLINKING:
-   - Use verified internal links only. Do NOT invent internal URLs.
-   - Use external links from verifiedExternalLinks only. Never link to unverified blogs. Prefer authoritative sources (LinkedIn, SHRM, Gartner, Accenture, Deloitte, EY, government, or education).
-
-6. AUTHORITY-BUILDING SECTIONS:
-   - Weave in 2-4 headings representing authority-building angles based on ${project.company}'s niche and the focus keyword "${entry.focus_keyword}".
-   - Subtly highlight how professional expertise solves complex business issues (e.g. hiring challenges, strategic planning, case implementations) without being overly salesy.
-
-7. FAQ SECTION:
-   - Include exactly 7 to 10 FAQs. Seed 3-4 of them directly from the provided People Also Ask/Ahrefs questions.
-   - Format each question as ### [Question Text].
-   - Provide direct, helpful answers (around 50 words each) that are highly practical and non-repetitive.
-
-Return JSON only.`;
+  const prompt = buildBlogPrompt({
+    entry: {
+      focus_keyword: entry.focus_keyword,
+      title: entry.title,
+      article_type: entry.article_type || 'Blog Post',
+      secondary_keywords: entry.secondary_keywords,
+    },
+    project,
+    wordCount,
+    research,
+    existingBlogs: filteredExistingBlogs,
+    brief: filteredBrief,
+    ahrefsContext: ahrefsContext || undefined,
+    writerNotes,
+  });
 
   const text = await geminiGenerate(prompt, 3, true, 'application/json', project.user_id, project.id);
   const result = parseGeneratedBlogJson(text, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
@@ -1066,115 +883,6 @@ REPAIR INSTRUCTIONS:
   return finalBlog;
 }
 
-export async function generateInstantWebResearchArticle(input: {
-  project: Project;
-  topic: string;
-  primaryKeyword: string;
-  regionName: string;
-  languageLabel: string;
-  writingStyleLabel: string;
-  articleType: string;
-  articleTypeLabel: string;
-  optionalKeywordsCsv: string;
-  research: ResearchContext;
-  brief: BusinessBrief | null;
-  existingBlogs: Array<{ title: string; slug: string; target_keyword: string }>;
-  customSourcesMarkdown?: string | null;
-  researchMethod: 'web' | 'custom';
-  /** Number of user files/URLs successfully ingested into the prompt (for analytics). */
-  customSourceIngestCount?: number;
-}): Promise<GeneratedBlog> {
-  const {
-    project,
-    topic,
-    primaryKeyword,
-    regionName,
-    languageLabel,
-    writingStyleLabel,
-    articleType,
-    articleTypeLabel,
-    optionalKeywordsCsv,
-    research,
-    brief,
-    existingBlogs,
-    customSourcesMarkdown,
-    researchMethod,
-    customSourceIngestCount = 0,
-  } = input;
-
-  const siteLinks = (brief?.internal_link_candidates ?? [])
-    .filter(l => l.url && l.url.startsWith('http'))
-    .slice(0, 12);
-  const generatedLinks = (existingBlogs ?? [])
-    .filter(b => b.target_keyword !== primaryKeyword)
-    .slice(0, 8);
-
-  let internalLinksBlock = '';
-  if (siteLinks.length || generatedLinks.length) {
-    const siteBlock = siteLinks.length
-      ? `User's own website pages (prefer these — use the absolute URL as the link target):\n${siteLinks
-          .map(l => `- ${l.title || l.topic || 'Page'} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
-          .join('\n')}`
-      : '';
-    const generatedBlock = generatedLinks.length
-      ? `Blog posts generated in this project:\n${generatedLinks
-          .map(b => `- "${b.title}" → https://${project.domain}/${b.slug} (keyword: ${b.target_keyword})`)
-          .join('\n')}`
-      : '';
-    internalLinksBlock = `INTERNAL LINKING (pick 2–4 natural in-body links from the pools below):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
-  } else {
-    internalLinksBlock = 'INTERNAL LINKING: No internal URL pool is available for this project yet — do not invent internal links.';
-  }
-
-  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
-    ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
-    : "";
-
-  const briefBlock = brief
-    ? `
-- Summary: ${brief.summary || '(none)'}
-- Products / offerings: ${brief.products.slice(0, 10).join(', ') || '(none)'}
-- Key entities: ${brief.entities.slice(0, 15).join(', ') || '(none)'}
-- USPs: ${brief.usps.slice(0, 6).join(' | ') || '(none)'}
-- Default tone from brief: ${project.brand_voice || brief.tone || 'professional, expert, helpful'}
-${brandPersonaBlock}`
-    : `(No cached business brief — infer tone from the company name and niche.)
-${brandPersonaBlock}`;
-
-  const researchBlock = formatResearchForPrompt(research);
-
-  const prompt = buildInstantWebResearchArticlePrompt({
-    topic,
-    primaryKeyword,
-    secondaryKeywordsLine: optionalKeywordsCsv.trim(),
-    targetAudienceLine: `${project.target_audience} — infer the most relevant sub-audience for this specific topic.`,
-    targetRegionName: regionName,
-    languageLabel,
-    writingStyleLabel,
-    articleTypeId: articleType,
-    articleTypeLabel,
-    companyName: project.company,
-    companyDomain: project.domain,
-    niche: project.niche,
-    briefBlock,
-    internalLinksBlock,
-    researchBlock,
-    customSourcesBlock: (customSourcesMarkdown ?? '').trim(),
-    researchMethod,
-  });
-
-  const text = await geminiGenerate(prompt, 3, true);
-  const parsed = parseGeneratedBlogMarkdown(
-    text,
-    { title: topic.trim() || 'Article', slug: slugFromTopic(topic) },
-    project,
-    research
-  );
-  return {
-    ...parsed,
-    research_sources: (parsed.research_sources ?? 0) + customSourceIngestCount,
-  };
-}
 
 export async function generateContentCalendar(
   keywords: Array<{ keyword: string; volume: number; kd: number; secondary_keywords: string[] }>,

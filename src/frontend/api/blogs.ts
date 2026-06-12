@@ -114,7 +114,7 @@ export const blogsApi = {
     | { event: "done"; blogId: string }
     | { event: "error"; message: string }
   > {
-    const response = await fetch("/api/v1/blogs/generate/direct-stream", {
+    const response = await fetch("/api/v1/blogs/generate/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

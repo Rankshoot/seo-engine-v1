@@ -14,10 +14,12 @@ const DAY_LABELS = ["Su","Mo","Tu","We","Th","Fr","Sa"] as const;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function todayISO(): string { return new Date().toISOString().split("T")[0]; }
-function tomorrowISO(): string {
-  const d = new Date(); d.setDate(d.getDate() + 1);
-  return d.toISOString().split("T")[0];
+function todayISO(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const r = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${r}`;
 }
 function toISO(y: number, m: number, d: number): string {
   return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -39,11 +41,14 @@ interface PanelProps {
   scheduledDates: Set<string>;
   saving: boolean;
   position: { top: number; left: number };
+  variant: "pick" | "change";
+  onUnschedule?: () => void;
 }
 
 function CalendarPanel({
   panelRef, initialDate, onConfirm, onCancel,
   minDate, scheduledDates, saving, position,
+  variant, onUnschedule,
 }: PanelProps) {
   const [selected, setSelected] = useState(initialDate);
   const [viewYear, setViewYear] = useState(() => parseInt(initialDate.split("-")[0]));
@@ -223,28 +228,46 @@ function CalendarPanel({
             )}
 
             {/* Actions */}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                disabled={saving}
-                className="flex-1 h-9 rounded-[8px] border border-border-subtle text-[12px] font-medium text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => onConfirm(selected)}
-                disabled={saving || !selected || selected < minDate}
-                className="flex-1 h-9 rounded-[8px] bg-brand-action text-[12px] font-semibold text-white hover:opacity-90 transition-opacity disabled:opacity-40 flex items-center justify-center gap-1.5"
-              >
-                {saving ? (
-                  <>
-                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Saving…
-                  </>
-                ) : "Schedule"}
-              </button>
+            <div className="flex flex-col gap-2">
+              {onUnschedule && variant === "change" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUnschedule();
+                    onCancel();
+                  }}
+                  disabled={saving}
+                  className="w-full h-8 rounded-[8px] border border-brand-coral/25 bg-brand-coral/5 text-[11px] font-semibold text-brand-coral hover:bg-brand-coral/10 hover:border-brand-coral/40 transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+                >
+                  <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                  </svg>
+                  Unschedule
+                </button>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  disabled={saving}
+                  className="flex-1 h-9 rounded-[8px] border border-border-subtle text-[12px] font-medium text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onConfirm(selected)}
+                  disabled={saving || !selected || selected < minDate}
+                  className="flex-1 h-9 rounded-[8px] bg-brand-action text-[12px] font-semibold text-white hover:opacity-90 transition-opacity disabled:opacity-40 flex items-center justify-center gap-1.5"
+                >
+                  {saving ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving…
+                    </>
+                  ) : variant === "change" ? "Reschedule" : "Schedule"}
+                </button>
+              </div>
             </div>
           </div>
         </>
@@ -265,6 +288,11 @@ export interface CalendarDatePickerProps {
   variant?: "pick" | "change";
   /** Renders as a small pencil icon instead of a full pill button */
   iconOnly?: boolean;
+  /** Custom trigger button text override */
+  label?: string;
+  /** Custom trigger button className override */
+  className?: string;
+  onUnschedule?: () => void;
 }
 
 export function CalendarDatePicker({
@@ -276,6 +304,9 @@ export function CalendarDatePicker({
   scheduledDates = new Set<string>(),
   variant = "pick",
   iconOnly = false,
+  label,
+  className,
+  onUnschedule,
 }: CalendarDatePickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef   = useRef<HTMLDivElement>(null);
@@ -329,7 +360,7 @@ export function CalendarDatePicker({
     return () => window.removeEventListener("scroll", handler, true);
   }, [open, onOpenChange]);
 
-  const minDate     = tomorrowISO();
+  const minDate     = todayISO();
   const initialDate = currentDate && currentDate >= minDate ? currentDate : minDate;
 
   return (
@@ -360,7 +391,7 @@ export function CalendarDatePicker({
           type="button"
           disabled={saving}
           onClick={() => onOpenChange(!open)}
-          className={[
+          className={className ?? [
             "inline-flex items-center gap-1.5 h-7 px-3 rounded-full border text-[11px] font-semibold transition-colors disabled:opacity-50",
             open
               ? "border-brand-action/40 bg-brand-action/10 text-brand-action"
@@ -374,7 +405,7 @@ export function CalendarDatePicker({
               <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
               </svg>
-              {open ? "Close" : "Change date"}
+              {label ?? (open ? "Close" : "Change date")}
             </>
           ) : (
             <>
@@ -386,7 +417,7 @@ export function CalendarDatePicker({
                 <line x1="12" x2="12" y1="15" y2="18" />
                 <line x1="10.5" x2="13.5" y1="16.5" y2="16.5" />
               </svg>
-              {open ? "Close" : "Pick date"}
+              {label ?? (open ? "Close" : "Pick date")}
             </>
           )}
         </button>
@@ -402,6 +433,8 @@ export function CalendarDatePicker({
           scheduledDates={scheduledDates}
           saving={saving}
           position={panelPos}
+          variant={variant}
+          onUnschedule={onUnschedule}
         />,
         document.body,
       )}

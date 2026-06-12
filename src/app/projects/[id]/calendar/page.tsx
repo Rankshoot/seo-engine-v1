@@ -20,7 +20,9 @@ import {
 } from "@/lib/redux/keyword-workspace-slice";
 import { calendarApi } from "@/frontend/api/calendar";
 import { keywordsApi } from "@/frontend/api/keywords";
-import type { CalendarEntry } from "@/lib/types";
+import { CalendarEntry, CONTENT_TYPE_LABEL, type ContentType } from "@/lib/types";
+import { useGeneratedContentMap, generatedContentKey } from "@/hooks/useGeneratedContentMap";
+import { getContentPreviewUrl } from "@/lib/content-routing";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
@@ -100,6 +102,7 @@ interface CalendarListRowProps {
   isFirst: boolean;
   projectId: string;
   scheduledKeywordsMap: Record<string, CalendarKwState | undefined>;
+  generatedMap: Map<string, { id: string; contentType?: string }>;
   pickingDateForEntryId: string | null;
   savingDate: boolean;
   scheduledDatesSet: Set<string>;
@@ -115,6 +118,7 @@ const CalendarListRow = memo(function CalendarListRow({
   isFirst,
   projectId,
   scheduledKeywordsMap,
+  generatedMap,
   pickingDateForEntryId,
   savingDate,
   scheduledDatesSet,
@@ -138,12 +142,17 @@ const CalendarListRow = memo(function CalendarListRow({
   const effectiveStatus = entry.status ?? reduxState?.status;
   const effectiveDate   = entry.scheduled_date ?? reduxState?.date ?? "";
 
+  const historyKey     = generatedContentKey(entry.focus_keyword, entry.article_type ?? "blog");
+  const historyEntry   = generatedMap.get(historyKey);
+  const resolvedBlogId = historyEntry?.id;
+
   const lifecycleDisplay = resolveCalendarLifecycleStatus({
     hasCalendarEntry: true,
-    calendarStatus: effectiveStatus,
+    calendarStatus: resolvedBlogId ? "generated" : effectiveStatus,
   });
 
   const isLocked =
+    !!resolvedBlogId ||
     effectiveStatus === "generated" ||
     effectiveStatus === "downloaded" ||
     effectiveStatus === "approved" ||
@@ -249,10 +258,10 @@ const CalendarListRow = memo(function CalendarListRow({
         <LifecycleStatusBadge display={lifecycleDisplay} />
         {isLocked && (
           <ProjectNavLink
-            href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+            href={getContentPreviewUrl(projectId, resolvedBlogId || entry.id, historyEntry?.contentType || entry.article_type)}
             className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
           >
-            View Blog
+            View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
           </ProjectNavLink>
         )}
         {isRepairRow && !isLocked && !isGenerating && (
@@ -299,6 +308,7 @@ export default function CalendarPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
+  const { generatedMap } = useGeneratedContentMap(projectId);
 
   const calendarRefreshVersion = useAppSelector((s) =>
     selectCalendarRefreshVersion(s, projectId)
@@ -716,6 +726,7 @@ export default function CalendarPage() {
                 isFirst={idx === 0}
                 projectId={projectId}
                 scheduledKeywordsMap={scheduledKeywordsMap}
+                generatedMap={generatedMap}
                 pickingDateForEntryId={pickingDateForEntryId}
                 savingDate={savingDate}
                 scheduledDatesSet={scheduledDatesSet}
@@ -739,6 +750,7 @@ export default function CalendarPage() {
             scheduleBusy={savingDate || addKeywordBusy}
             onMoveEntryToDate={handleMoveEntryToDate}
             onRemoveEntry={handleRemoveEntry}
+            generatedMap={generatedMap}
           />
         )}
       </section>

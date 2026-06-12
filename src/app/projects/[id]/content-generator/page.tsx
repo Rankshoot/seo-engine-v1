@@ -131,11 +131,10 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
 
   const cards: ContentTypeCard[] = [
     {
-      id: "instant",
-      href: `${studioBase}/instant`,
-      badge: "Beta",
+      id: "blog",
+      href: `${studioBase}/blogs`,
       duration: "1 min",
-      title: "Instant article",
+      title: "Blogs",
       subtitle: "Topic in, draft out. Live web research + your brief.",
       bullets: [
         "Quickest path from a topic to a publishable post",

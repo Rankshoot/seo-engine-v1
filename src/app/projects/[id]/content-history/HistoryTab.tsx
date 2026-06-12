@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { Button, EmptyState } from "@/components/common";
 import {
@@ -13,6 +13,11 @@ import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/ap
 import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { CONTENT_TYPE_LABEL, CONTENT_TYPE_PLURAL, type ContentType } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { getContentPreviewUrl } from "@/lib/content-routing";
+import { calendarApi } from "@/frontend/api/calendar";
+import { CalendarDatePicker } from "@/components/CalendarDatePicker";
+import { unscheduleContentAction } from "@/app/actions/content-actions";
+import toast from "react-hot-toast";
 
 type SortKey = "updated" | "created" | "words" | "title";
 type StatusFilter = "all" | "generated" | "approved" | "published";
@@ -34,9 +39,46 @@ interface HistoryRowProps {
   row: ContentStudioHistoryRow;
   index: number;
   viewerHref: (row: ContentStudioHistoryRow) => string;
+  calendarEntries: any[];
+  scheduledDatesSet: Set<string>;
+  savingRowId: string | null;
+  onScheduleConfirm: (row: ContentStudioHistoryRow, date: string) => Promise<void>;
+  onUnschedule: (row: ContentStudioHistoryRow) => Promise<void>;
 }
 
-const HistoryRow = memo(function HistoryRow({ row, index, viewerHref }: HistoryRowProps) {
+const HistoryRow = memo(function HistoryRow({
+  row,
+  index,
+  viewerHref,
+  calendarEntries,
+  scheduledDatesSet,
+  savingRowId,
+  onScheduleConfirm,
+  onUnschedule,
+}: HistoryRowProps) {
+  const [open, setOpen] = useState(false);
+
+  const currentDate = useMemo(() => {
+    if (!row.entry_id || !calendarEntries) return null;
+    const hit = calendarEntries.find((e) => e.id === row.entry_id);
+    return hit ? hit.scheduled_date : null;
+  }, [row.entry_id, calendarEntries]);
+
+  const nextVacantDate = useMemo(() => {
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    
+    for (let i = 0; i < 500; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (!scheduledDatesSet.has(key)) {
+        return key;
+      }
+    }
+    return null;
+  }, [scheduledDatesSet]);
+
   return (
     <tr className="hover:bg-surface-hover/50 transition-colors">
       <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
@@ -77,16 +119,52 @@ const HistoryRow = memo(function HistoryRow({ row, index, viewerHref }: HistoryR
       <td className="px-4 py-2.5 align-middle text-[12px] tabular-nums text-text-secondary">
         {row.word_count.toLocaleString()}
       </td>
-      <td className="px-4 py-2.5 align-middle text-[12px] text-text-tertiary whitespace-nowrap">
-        {fmtDate(row.updated_at)}
+      <td className="px-4 py-2.5 align-middle">
+        {row.entry_id ? (
+          <div className="flex items-center gap-1.5 whitespace-nowrap">
+            <span className="text-[12.5px] font-medium text-text-secondary">
+              {currentDate ? fmtDate(currentDate) : "—"}
+            </span>
+            <CalendarDatePicker
+              open={open}
+              onOpenChange={setOpen}
+              currentDate={currentDate}
+              onConfirm={(date) => onScheduleConfirm(row, date)}
+              onUnschedule={() => onUnschedule(row)}
+              saving={savingRowId === row.id}
+              scheduledDates={scheduledDatesSet}
+              variant="change"
+              iconOnly={true}
+            />
+          </div>
+        ) : (
+          <CalendarDatePicker
+            open={open}
+            onOpenChange={setOpen}
+            currentDate={nextVacantDate}
+            onConfirm={(date) => onScheduleConfirm(row, date)}
+            saving={savingRowId === row.id}
+            scheduledDates={scheduledDatesSet}
+            variant="pick"
+            label="Schedule"
+            className={cn(
+              "inline-flex shrink-0 items-center justify-center rounded-full px-3.5 py-1.5 text-[12px] font-medium transition-colors border h-auto",
+              open
+                ? "border-brand-action/40 bg-brand-action/10 text-brand-action"
+                : "border-border-strong bg-surface-primary text-text-primary hover:bg-surface-hover hover:bg-surface-hover/80"
+            )}
+          />
+        )}
       </td>
       <td className="px-4 py-2.5 align-middle text-right">
-        <ProjectNavLink
-          href={viewerHref(row)}
-          className="inline-flex shrink-0 items-center justify-center rounded-full bg-text-primary px-4 py-1.5 text-[12px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
-        >
-          View
-        </ProjectNavLink>
+        <div className="inline-flex items-center justify-end gap-2 whitespace-nowrap">
+          <ProjectNavLink
+            href={viewerHref(row)}
+            className="inline-flex shrink-0 items-center justify-center rounded-full bg-text-primary px-4 py-1.5 text-[12px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
+          >
+            View
+          </ProjectNavLink>
+        </div>
       </td>
     </tr>
   );
@@ -96,17 +174,36 @@ interface HistoryTableBodyProps {
   rows: ContentStudioHistoryRow[];
   offset: number;
   viewerHref: (row: ContentStudioHistoryRow) => string;
+  calendarEntries: any[];
+  scheduledDatesSet: Set<string>;
+  savingRowId: string | null;
+  onScheduleConfirm: (row: ContentStudioHistoryRow, date: string) => Promise<void>;
+  onUnschedule: (row: ContentStudioHistoryRow) => Promise<void>;
 }
 
-const HistoryTableBody = memo(function HistoryTableBody({ rows, offset, viewerHref }: HistoryTableBodyProps) {
+const HistoryTableBody = memo(function HistoryTableBody({
+  rows,
+  offset,
+  viewerHref,
+  calendarEntries,
+  scheduledDatesSet,
+  savingRowId,
+  onScheduleConfirm,
+  onUnschedule,
+}: HistoryTableBodyProps) {
   return (
     <tbody className="divide-y divide-border-subtle">
       {rows.map((row, i) => (
         <HistoryRow
-          key={row.id} // Stable database UUID
+          key={row.id}
           row={row}
           index={offset + i + 1}
           viewerHref={viewerHref}
+          calendarEntries={calendarEntries}
+          scheduledDatesSet={scheduledDatesSet}
+          savingRowId={savingRowId}
+          onScheduleConfirm={onScheduleConfirm}
+          onUnschedule={onUnschedule}
         />
       ))}
     </tbody>
@@ -116,6 +213,78 @@ const HistoryTableBody = memo(function HistoryTableBody({ rows, offset, viewerHr
 export function HistoryTab() {
   const { id: projectId } = useParams<{ id: string }>();
   const studioBase = `/projects/${projectId}/content-generator`;
+  const queryClient = useQueryClient();
+
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
+
+  // Load calendar entries to populate the CalendarDatePicker and avoid date collisions
+  const { data: calendarData } = useQuery({
+    queryKey: qk.calendarWithBlogs(projectId),
+    queryFn: () => calendarApi.withBlogs(projectId),
+    enabled: !!projectId,
+  });
+  const calendarEntries = useMemo(() => {
+    if (!calendarData?.success) return [];
+    return calendarData.data.map((e) => ({
+      ...e,
+      scheduled_date: String(e.scheduled_date).slice(0, 10),
+    }));
+  }, [calendarData]);
+
+  const scheduledDatesSet = useMemo(() => {
+    if (!calendarData?.success) return new Set<string>();
+    return new Set(calendarData.data.map((e) => String(e.scheduled_date).slice(0, 10)));
+  }, [calendarData]);
+
+  const handleScheduleConfirm = async (row: ContentStudioHistoryRow, date: string) => {
+    if (!projectId) return;
+    setSavingRowId(row.id);
+    try {
+      const res = await calendarApi.scheduleExistingBlog(projectId, {
+        blogId: row.id,
+        targetDate: date,
+      });
+      if (res.success) {
+        const niceDate = new Date(`${res.scheduled_date}T00:00:00`).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+        toast.success(res.rescheduled ? `Rescheduled for ${niceDate}` : `Scheduled for ${niceDate}`);
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+      } else {
+        toast.error(res.error || "Could not schedule content");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not schedule content");
+    } finally {
+      setSavingRowId(null);
+    }
+  };
+
+  const handleUnschedule = async (row: ContentStudioHistoryRow) => {
+    if (!row.entry_id || !projectId) return;
+    setSavingRowId(row.id);
+    try {
+      const res = await unscheduleContentAction(projectId, row.id, row.entry_id);
+      if (res.success) {
+        toast.success("Unscheduled successfully");
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+      } else {
+        toast.error(res.error || "Could not unschedule content");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not unschedule content");
+    } finally {
+      setSavingRowId(null);
+    }
+  };
 
   const [activeTypes, setActiveTypes] = useState<Set<ContentType>>(() => new Set(TYPE_FILTERS));
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -188,12 +357,10 @@ export function HistoryTab() {
 
   const viewerHref = useMemo(() => {
     return (row: ContentStudioHistoryRow): string => {
-      if (row.content_type === "ebook") return `${studioBase}/ebooks/${row.id}`;
-      if (row.content_type === "whitepaper") return `${studioBase}/whitepapers/${row.id}`;
-      if (row.content_type === "linkedin") return `${studioBase}/linkedin/${row.id}`;
-      return `/projects/${projectId}/blogs/${row.id}?from=content-history`;
+      const url = getContentPreviewUrl(projectId, row.id, row.content_type);
+      return row.content_type === "blog" ? `${url}?from=content-history` : url;
     };
-  }, [projectId, studioBase]);
+  }, [projectId]);
 
   const hasActiveFilters = activeTypes.size !== TYPE_FILTERS.length || statusFilter !== "all" || search.trim() !== "";
   const isEmptyStateForNoContent = totalCount === 0 && !hasActiveFilters;
@@ -310,7 +477,7 @@ export function HistoryTab() {
                   <th className="px-4 py-3 min-w-[10rem]">Primary keyword</th>
                   <th className="px-4 py-3 w-28">Status</th>
                   <th className="px-4 py-3 w-24 whitespace-nowrap">Words</th>
-                  <th className="px-4 py-3 w-28 whitespace-nowrap">Updated</th>
+                  <th className="px-4 py-3 w-28 whitespace-nowrap">Scheduled</th>
                   <th className="px-4 py-3 text-right whitespace-nowrap w-[1%]">Actions</th>
                 </tr>
               </thead>
@@ -318,6 +485,11 @@ export function HistoryTab() {
                 rows={allRows}
                 offset={(page - 1) * PAGE_SIZE}
                 viewerHref={viewerHref}
+                calendarEntries={calendarEntries}
+                scheduledDatesSet={scheduledDatesSet}
+                savingRowId={savingRowId}
+                onScheduleConfirm={handleScheduleConfirm}
+                onUnschedule={handleUnschedule}
               />
             </table>
           </div>

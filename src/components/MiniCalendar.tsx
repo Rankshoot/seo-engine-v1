@@ -3,9 +3,11 @@
 import { useState, useMemo, useRef, useEffect, useCallback, type DragEvent } from "react";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
-import type { CalendarEntry, CalendarEntryWithBlog } from "@/lib/types";
+import { CalendarEntry, CalendarEntryWithBlog, CONTENT_TYPE_LABEL, type ContentType } from "@/lib/types";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
+import { getContentPreviewUrl } from "@/lib/content-routing";
+import { generatedContentKey } from "@/hooks/useGeneratedContentMap";
 
 const CAL_DRAG_MIME = "application/x-seo-calendar-entry";
 
@@ -43,6 +45,7 @@ export function MiniCalendar({
   onGenerateClick,
   onRemoveEntry,
   generatingId = null,
+  generatedMap,
 }: {
   entries: CalendarEntryWithBlog[];
   projectId: string;
@@ -56,6 +59,7 @@ export function MiniCalendar({
   onGenerateClick?: (entryId: string) => void;
   onRemoveEntry?: (entryId: string, keyword: string) => void;
   generatingId?: string | null;
+  generatedMap?: Map<string, { id: string; contentType?: string }>;
 }) {
   const [calendarViewYM, setCalendarViewYM] = useState(() => {
     const today = new Date();
@@ -376,7 +380,18 @@ export function MiniCalendar({
                     const volume = kwData?.volume;
                     const kd_ = kdLabel(kwData?.kd);
                     const isGenerating = entry.status === "generating" || generatingId === entry.id;
-                    const isGenerated = entry.status === "generated" || entry.status === "downloaded" || entry.status === "approved" || entry.status === "published";
+                    
+                    const calendarBlogId = entry.blog?.id;
+                    const historyKey = generatedMap ? generatedContentKey(entry.focus_keyword, entry.article_type ?? "blog") : "";
+                    const historyEntry = generatedMap?.get(historyKey);
+                    const resolvedBlogId = calendarBlogId ?? historyEntry?.id;
+
+                    const isGenerated =
+                      !!resolvedBlogId ||
+                      entry.status === "generated" ||
+                      entry.status === "downloaded" ||
+                      entry.status === "approved" ||
+                      entry.status === "published";
                     const origin = resolveCalendarKeywordOrigin({
                       contentHealthAudit: entry.content_health_audit,
                       keywordSourceType: kwData?.source_type,
@@ -387,7 +402,7 @@ export function MiniCalendar({
                     const effectiveStatus = isGenerating ? "generating" : entry.status;
                     const life = resolveCalendarLifecycleStatus({
                       hasCalendarEntry: true,
-                      calendarStatus: effectiveStatus,
+                      calendarStatus: resolvedBlogId ? "generated" : effectiveStatus,
                     });
                     const canDragThisEntry = dndActive && !isGenerating;
 
@@ -459,10 +474,10 @@ export function MiniCalendar({
                         </div>
                         {isGenerated ? (
                           <ProjectNavLink
-                            href={`/projects/${projectId}/blogs/${entry.blog?.id || entry.id}`}
+                            href={getContentPreviewUrl(projectId, resolvedBlogId || entry.blog?.id || entry.id, historyEntry?.contentType || entry.article_type)}
                             className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-[#10b981]/15 text-[#10b981] hover:bg-[#10b981]/25"
                           >
-                            View Blog
+                            View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
                           </ProjectNavLink>
                         ) : isGenerating ? (
                           <button

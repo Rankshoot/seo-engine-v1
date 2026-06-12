@@ -50,4 +50,6 @@ export { ScorecardView } from "./ScorecardView";
 export { ResourcesPanel } from "./ResourcesPanel";
 export { ExportMenu } from "./ExportMenu";
 export type { ExportMenuProps } from "./ExportMenu";
+export { PreviewerScheduler } from "./PreviewerScheduler";
 export * from "./validation";
+

@@ -69,14 +69,14 @@ export const CONTENT_TYPES: ContentType[] = ['blog', 'ebook', 'whitepaper', 'lin
 
 /** Display metadata used by sidebar nav, history filters, and preview chrome. */
 export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
-  blog: 'Blog article',
+  blog: 'Blog',
   ebook: 'Ebook',
   whitepaper: 'Whitepaper',
   linkedin: 'LinkedIn post',
 };
 
 export const CONTENT_TYPE_PLURAL: Record<ContentType, string> = {
-  blog: 'Blog articles',
+  blog: 'Blogs',
   ebook: 'Ebooks',
   whitepaper: 'Whitepapers',
   linkedin: 'LinkedIn posts',

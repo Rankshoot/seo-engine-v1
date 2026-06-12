@@ -6,13 +6,13 @@ import { cn } from "@/lib/cn";
 interface ThinkingPanelProps {
   /** All thinking text accumulated so far */
   thinking: string;
-  /** True while Claude is still streaming thinking tokens */
+  /** True while AI is still streaming thinking tokens */
   isStreaming: boolean;
   className?: string;
 }
 
 /**
- * Live Claude thinking panel.
+ * Live AI thinking panel.
  * - Collapsed by default; auto-expands when streaming starts.
  * - Shows animated cursor while streaming.
  * - Smooth scroll to keep the latest thinking in view.
@@ -69,7 +69,7 @@ export function ThinkingPanel({ thinking, isStreaming, className }: ThinkingPane
 
         <span className="flex-1 flex items-center gap-2">
           <span className="text-[12px] font-mono font-medium uppercase tracking-widest text-violet-300">
-            {isStreaming ? "Claude is thinking" : "Claude's reasoning"}
+            {isStreaming ? "AI is thinking" : "AI reasoning"}
           </span>
           {isStreaming && (
             <span className="inline-flex gap-0.5 items-end h-3">

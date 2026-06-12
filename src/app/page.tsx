@@ -97,9 +97,9 @@ const integrations = [
   { name: "DataForSEO", role: "Fallback keyword + SERP data" },
   { name: "Serper", role: "Live SERP + People Also Ask" },
   { name: "Jina Reader", role: "Frictionless competitor crawling" },
-  { name: "Gemini 2.5", role: "Brief synthesis + content generation" },
-  { name: "Claude", role: "Long-form editorial polish" },
-  { name: "OpenAI", role: "Hero image generation" },
+  { name: "AI Engine", role: "Brief synthesis + content generation" },
+  { name: "Editorial AI", role: "Long-form editorial polish" },
+  { name: "Image AI", role: "Hero image generation" },
 ];
 
 /* ───────────────────────────── Page ───────────────────────────── */

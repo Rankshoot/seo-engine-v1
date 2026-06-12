@@ -38,7 +38,7 @@ const DEFAULT_STAGES: GenerationStage[] = [
   { id: "context", label: "Loading project brief", weight: 0.06 },
   { id: "research", label: "Gathering live research", weight: 0.18 },
   { id: "outline", label: "Designing topical outline", weight: 0.12 },
-  { id: "draft", label: "Drafting with Gemini 2.5 Pro", weight: 0.5 },
+  { id: "draft", label: "Drafting content", weight: 0.5 },
   { id: "polish", label: "SEO + reference polish", weight: 0.14 },
 ];
 

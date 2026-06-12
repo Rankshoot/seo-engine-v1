@@ -169,7 +169,7 @@ export default function LinkedInGeneratorPage() {
     phase === "generating" ? "Drafting your LinkedIn post" : phase === "review" ? "Review & generate" : "LinkedIn post generator";
   const heroLead =
     phase === "generating"
-      ? "Gemini 2.5 Pro is crafting a feed-native, hook-first post sized for LinkedIn's 1,300-character collapse limit."
+      ? "Crafting a feed-native, hook-first post sized for LinkedIn's 1,300-character collapse limit."
       : phase === "review"
         ? "Confirm the angle and tone. We'll draft a post tuned for engagement — no AI cliché, no hashtag spam."
         : "Tell us the angle, the audience, and the kind of post. The engine handles the hook, structure, and CTA.";
@@ -227,7 +227,7 @@ export default function LinkedInGeneratorPage() {
           <GenerationProgress
             badgeLabel="LinkedIn post"
             title="Building your LinkedIn post"
-            lead="Gemini 2.5 Pro is writing a hook-first, feed-native post — no clichés, ≤ 1,300 chars."
+            lead="Writing a hook-first, feed-native post — no clichés, ≤ 1,300 chars."
             stages={[
               { id: "context", label: "Loading project brief", weight: 0.1 },
               { id: "hook", label: "Drafting the hook", weight: 0.25 },

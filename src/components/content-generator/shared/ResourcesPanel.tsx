@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Blog } from "@/lib/types";
 import { reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
 
@@ -25,6 +25,9 @@ export function ResourcesPanel({
   maxExternal?: number;
   maxInternal?: number;
 }) {
+  const [showAllExternal, setShowAllExternal] = useState(false);
+  const [showAllInternal, setShowAllInternal] = useState(false);
+
   const { externalLinks, internalLinks } = useMemo(
     () =>
       reclassifyBlogLinkSidebarLists(
@@ -39,6 +42,11 @@ export function ResourcesPanel({
     return null;
   }
 
+  const displayedExternal = showAllExternal ? externalLinks : externalLinks.slice(0, maxExternal);
+  const displayedInternal = showAllInternal ? internalLinks : internalLinks.slice(0, maxInternal);
+  const hasMoreExternal = externalLinks.length > maxExternal;
+  const hasMoreInternal = internalLinks.length > maxInternal;
+
   return (
     <div className={className}>
       {externalLinks.length > 0 ? (
@@ -46,9 +54,13 @@ export function ResourcesPanel({
           <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1.5" style={MONO_LABEL}>
             External sources ({externalLinks.length})
           </p>
-          <ul className="space-y-1">
-            {externalLinks.slice(0, maxExternal).map((url, i) => (
-              <li key={i}>
+          <ul
+            className={`space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-surface-tertiary scrollbar-track-transparent pr-1 transition-all duration-300 ease-out ${
+              showAllExternal ? "max-h-[160px]" : "max-h-[140px]"
+            }`}
+          >
+            {displayedExternal.map((url, i) => (
+              <li key={i} className="transition-opacity duration-200">
                 <a
                   href={url}
                   target="_blank"
@@ -62,8 +74,14 @@ export function ResourcesPanel({
               </li>
             ))}
           </ul>
-          {externalLinks.length > maxExternal ? (
-            <p className="mt-1 text-[10px] text-text-tertiary">+{externalLinks.length - maxExternal} more</p>
+          {hasMoreExternal ? (
+            <button
+              onClick={() => setShowAllExternal(v => !v)}
+              className="mt-2 text-[10px] text-text-tertiary hover:text-brand-action transition-all duration-200 cursor-pointer flex items-center gap-1"
+            >
+              <span className={`transform transition-transform duration-200 ${showAllExternal ? "rotate-180" : ""}`}>▼</span>
+              {showAllExternal ? "Show less" : `+${externalLinks.length - maxExternal} more`}
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -73,14 +91,18 @@ export function ResourcesPanel({
           <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-1.5" style={MONO_LABEL}>
             Internal links ({internalLinks.length})
           </p>
-          <ul className="space-y-0.5">
-            {internalLinks.slice(0, maxInternal).map((path, i) => {
+          <ul
+            className={`space-y-0.5 overflow-y-auto scrollbar-thin scrollbar-thumb-surface-tertiary scrollbar-track-transparent pr-1 transition-all duration-300 ease-out ${
+              showAllInternal ? "max-h-[140px]" : "max-h-[120px]"
+            }`}
+          >
+            {displayedInternal.map((path, i) => {
               const fullUrl =
                 path.startsWith("/") && projectDomain
                   ? `https://${projectDomain.replace(/^https?:\/\//, "").replace(/\/$/, "")}${path}`
                   : path;
               return (
-                <li key={i}>
+                <li key={i} className="transition-opacity duration-200">
                   <a
                     href={fullUrl}
                     target="_blank"
@@ -95,8 +117,14 @@ export function ResourcesPanel({
               );
             })}
           </ul>
-          {internalLinks.length > maxInternal ? (
-            <p className="mt-1 text-[10px] text-text-tertiary">+{internalLinks.length - maxInternal} more</p>
+          {hasMoreInternal ? (
+            <button
+              onClick={() => setShowAllInternal(v => !v)}
+              className="mt-2 text-[10px] text-text-tertiary hover:text-brand-action transition-all duration-200 cursor-pointer flex items-center gap-1"
+            >
+              <span className={`transform transition-transform duration-200 ${showAllInternal ? "rotate-180" : ""}`}>▼</span>
+              {showAllInternal ? "Show less" : `+${internalLinks.length - maxInternal} more`}
+            </button>
           ) : null}
         </div>
       ) : null}

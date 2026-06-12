@@ -154,7 +154,7 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
       title: "Ebooks",
       subtitle: "Long-form lead magnets with chapters, ToC, FAQs, references.",
       bullets: [
-        "Powered by Gemini 2.5 Pro long-context",
+        "Powered by advanced AI long-context",
         "Authoritative, citation-rich, premium UX",
         `${counts.ebook} in this project`,
       ],

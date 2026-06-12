@@ -9,6 +9,10 @@ import {
   countWords,
   keywordInText,
   plainText,
+  parseChaptersFromMarkdown,
+  parseFaqsFromMarkdown,
+  parseReferencesFromMarkdown,
+  parseSubtitleFromMarkdown,
   type ScoreCheck,
 } from "./score-helpers";
 
@@ -26,10 +30,17 @@ function computeEbookScore(blog: Blog): ScoreCheck[] {
   const text = plainText(md);
   const lower = text.toLowerCase();
   const titleLower = (blog.title ?? "").toLowerCase();
-  const subtitle = data.cover_subtitle ?? "";
-  const toc = data.table_of_contents ?? [];
-  const faqs = data.faqs ?? [];
-  const references = data.references ?? [];
+
+  // Robust parsing fallbacks for metadata fields
+  const parsedChapters = parseChaptersFromMarkdown(md);
+  const parsedFaqs = parseFaqsFromMarkdown(md);
+  const parsedReferences = parseReferencesFromMarkdown(md);
+  const parsedSubtitle = parseSubtitleFromMarkdown(md, blog.meta_description);
+
+  const subtitle = data.cover_subtitle || parsedSubtitle || "";
+  const toc = data.table_of_contents?.length ? data.table_of_contents : parsedChapters;
+  const faqs = data.faqs?.length ? data.faqs : parsedFaqs;
+  const references = data.references?.length ? data.references : parsedReferences;
   const cta = data.cta ?? "";
   const wordCount = blog.word_count || countWords(text);
 
@@ -41,13 +52,42 @@ function computeEbookScore(blog: Blog): ScoreCheck[] {
   const kw = (blog.target_keyword ?? "").trim().toLowerCase();
   const hasKeywordInTitle = kw ? keywordInText(kw, titleLower) : false;
   const hasKeywordEarly = kw ? keywordInText(kw, lower.split(/\s+/).slice(0, 200).join(" ")) : false;
-  const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(md);
+  const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(md) || faqs.length > 0;
   const hasReferences = /#{1,3}\s*(references|sources|further reading)/i.test(md) || references.length > 0;
-  const hasCTA = cta.trim().length > 0 || /#{1,3}\s*(next step|how|cta|call to action)/i.test(md);
-  const hasAuthorNote = /^>\s*\[?author/im.test(md) || /^>\s/.test(md);
+  const hasCTA = cta.trim().length > 0 || /#{1,3}\s*(next step|how.*can help|cta|call to action)/i.test(md);
+  const hasAuthorNote = /^>\s*\[?author/im.test(md) || /^>\s/m.test(md);
   const subtitleOK = subtitle.length >= 20 && subtitle.length <= 160;
   const tocCoverage = toc.length;
-  const avgChapterWords = toc.length > 0 ? Math.round(wordCount / toc.length) : 0;
+
+  let avgChapterWords = 0;
+  if (toc.length > 0) {
+    const hasWordCounts = toc.every(c => 'word_count' in c && typeof c.word_count === 'number' && c.word_count > 0);
+    if (hasWordCounts) {
+      const sum = (toc as any[]).reduce((acc, c) => acc + c.word_count, 0);
+      avgChapterWords = Math.round(sum / toc.length);
+    } else {
+      let parsedSum = 0;
+      let matchedCount = 0;
+      for (const item of toc) {
+        const match = parsedChapters.find(pc => pc.title.toLowerCase() === item.title.toLowerCase());
+        if (match) {
+          parsedSum += match.word_count;
+          matchedCount++;
+        }
+      }
+      if (matchedCount > 0) {
+        const avgMatched = parsedSum / matchedCount;
+        const totalEstimated = parsedSum + (toc.length - matchedCount) * avgMatched;
+        avgChapterWords = Math.round(totalEstimated / toc.length);
+      } else {
+        avgChapterWords = Math.round(wordCount / toc.length);
+      }
+    }
+  }
+
+  if (toc.length > 0 && avgChapterWords < 100) {
+    avgChapterWords = Math.round(wordCount / toc.length);
+  }
 
   return [
     // ── COVER ──────────────────────────────────────────────────────────

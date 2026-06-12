@@ -6,6 +6,7 @@ import { ScorecardView } from "./ScorecardView";
 import {
   buildScorecard,
   countClichePhrases,
+  parseLinkedInPostFromMarkdown,
   type ScoreCheck,
 } from "./score-helpers";
 
@@ -19,10 +20,14 @@ import {
  */
 function computeLinkedInScore(blog: Blog): ScoreCheck[] {
   const data = (blog.content_data ?? {}) as Partial<LinkedInContentData>;
-  const hook = (data.hook ?? "").trim();
-  const body = (data.body ?? "").trim();
-  const cta = (data.cta ?? "").trim();
-  const hashtags = data.hashtags ?? [];
+  const md = blog.content ?? "";
+
+  const parsed = parseLinkedInPostFromMarkdown(md);
+
+  const hook = (data.hook ?? "").trim() || parsed.hook;
+  const body = (data.body ?? "").trim() || parsed.body;
+  const cta = (data.cta ?? "").trim() || parsed.cta;
+  const hashtags = data.hashtags?.length ? data.hashtags : parsed.hashtags;
 
   const composedPost = [hook, body, cta, hashtags.join(" ")].filter(Boolean).join("\n\n");
   const charCount = composedPost.length;

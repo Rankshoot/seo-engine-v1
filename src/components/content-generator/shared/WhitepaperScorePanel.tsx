@@ -9,6 +9,9 @@ import {
   countWords,
   keywordInText,
   plainText,
+  parseWhitepaperSectionsFromMarkdown,
+  parseRecommendationsFromMarkdown,
+  parseReferencesFromMarkdown,
   type ScoreCheck,
 } from "./score-helpers";
 
@@ -28,12 +31,18 @@ function computeWhitepaperScore(blog: Blog): ScoreCheck[] {
   const titleLower = (blog.title ?? "").toLowerCase();
   const wordCount = blog.word_count || countWords(text);
 
+  // Fallback parsing from markdown
+  const parsedSections = parseWhitepaperSectionsFromMarkdown(md);
+  const parsedRecs = parseRecommendationsFromMarkdown(md);
+  const parsedRefs = parseReferencesFromMarkdown(md);
+
   const h2Count = (md.match(/^## /gm) ?? []).length;
-  const sectionsCount = (data.sections ?? []).length;
+  const sections = data.sections?.length ? data.sections : parsedSections;
+  const sectionsCount = sections.length;
   const externalLinks = blog.external_links?.length ?? 0;
   const internalLinks = blog.internal_links?.length ?? 0;
-  const recommendations = data.recommendations ?? [];
-  const references = data.references ?? [];
+  const recommendations = data.recommendations?.length ? data.recommendations : parsedRecs;
+  const references = data.references?.length ? data.references : parsedRefs;
 
   const kw = (blog.target_keyword ?? "").trim().toLowerCase();
   const hasKeywordInTitle = kw ? keywordInText(kw, titleLower) : false;

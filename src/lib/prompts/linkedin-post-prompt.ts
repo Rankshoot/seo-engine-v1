@@ -71,11 +71,12 @@ const LINKEDIN_PROMPT_TEMPLATE = Object.freeze({
 - Total length: 950–1,300 characters (LinkedIn collapses at 1,300; the hook + first line must be magnetic).
 - First line is the HOOK — must work standalone above the fold. ≤ 12 words. No "In today's world", no "I'm excited to share".
 - Use 1–2 sentences per paragraph. Generous whitespace. No walls of text.
-- No emojis (unless the topic genuinely demands one — never decorative).
-- Do NOT spam hashtags. End with 3–5 targeted hashtags only, on the last line.
-- No "👇" / "DM me" / "P.S." cliché endings. End with a real question, an observation, or a CTA tied to the objective.
+- Use minimal emojis (at most 3 emojis total across the entire post, and never use them decoratively).
+- Do NOT spam hashtags. End with 3–5 targeted hashtags only, on the last line. Format hashtags strictly as #camelCase or #lowercase without special characters or emojis.
+- No "👇" / "DM me" / "P.S." cliché endings. You MUST close the post (either the final line of the body or the CTA block) with a direct, engaging question (ending with "?") or a clear CTA.
 - No links inside the body (LinkedIn deprioritizes them). The CTA can mention "link in profile" if appropriate.
 - Avoid generic AI phrasing ("delve", "leverage", "unlock", "navigating", "in today's fast-paced", "game-changer", "synergy", "robust").
+- Ensure personal voice is clear: you MUST use first-person/collective pronouns (I, we, my, our, us, I'm) at least twice in the post.
 - Active voice, plain words. Specific > vague every time.`,
   outputContract: `OUTPUT CONTRACT — produce exactly this Markdown shape, then the ---META--- block:`
 });

@@ -92,12 +92,12 @@ OUTPUT CONTRACT — Markdown only, then the ---META--- block.
 
 Structure (use these heading levels exactly):
 # [Whitepaper title — credible, includes primary keyword, no clickbait]
-**[Subtitle — one line establishing the problem and the reader, ≤ 160 chars]**
+**[Subtitle — one line establishing the problem and the reader, between 20 and 160 characters]**
 
 > [Authorship + credibility line: published by ${ctx.companyName}, with the date as ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}, citing data through that period.]
 
 ## Executive Summary
-[3–5 short paragraphs. State the problem, the framework you propose, the headline finding, and the recommendation. The first 80 words must answer the topic question directly — this is the AI Overview anchor.]
+[3–5 short paragraphs. Must be between 100 and 600 words total. State the problem, the framework you propose, the headline finding, and the recommendation. The first 80 words must answer the topic question directly — this is the AI Overview anchor.]
 
 ## Industry Context
 [Frame the macro problem with cited data. Link to at least 3 authoritative sources here (regulators, McKinsey/Gartner/Deloitte/IEEE/ISO/government/peer-reviewed). Show what changed recently. ${ctx.industry === 'general' ? '' : `Center the discussion in ${ctx.industry}.`}]
@@ -115,10 +115,10 @@ Structure (use these heading levels exactly):
 • A clear "so what" line that connects to business outcomes.]
 
 ## Strategic Analysis
-[Synthesize the findings. Use a Markdown table when comparing approaches, vendors, or scenarios. Link to specific sources.]
+[Synthesize the findings. You MUST include at least one data comparison table in Markdown format comparing approaches, vendors, or scenarios. Link to specific sources.]
 
 ## Recommendations
-[Numbered list of 5–8 recommendations. Each recommendation = action verb + measurable outcome + horizon (90 days / 12 months / 24 months). No filler.]
+[Numbered list of 5–8 recommendations. You must have at least 5 recommendations. Each recommendation = action verb + measurable outcome + horizon (90 days / 12 months / 24 months). No filler.]
 
 ## Implementation Roadmap
 [Sequence the recommendations into 3 horizons (immediate / mid-term / long-term). Use a Markdown table or bulleted phases.]
@@ -138,16 +138,17 @@ CRITICAL RULES — every bullet is enforced:
 - EEAT first: every quantitative claim has a source, every recommendation is testable.
 - Use Google Search to find SPECIFIC, deep-linked URLs. Never link to root domains. Never cite Wikipedia.
 - Required citations: at least 10 across the body.
-- Required internal links: 2–3 from the pool, used verbatim.
-- No filler ("in today's world", "in recent years", "navigating", "delving"). No marketing adjectives ("best-in-class", "cutting-edge", "game-changer").
+- Required internal links: at least 2 internal links from the pool, used verbatim.
+- No filler or AI clichés ("in today's world", "in recent years", "navigating", "delving", "leverage", "unlock"). Absolutely avoid marketing adjectives/fluff ("best-in-class", "world-class", "industry-leading", "cutting-edge", "game-changer", "robust").
 - Active voice, average sentence ≤ 22 words.
 - No HTML, no schema JSON-LD, no fenced code blocks unless engineering depth.
+- Write at least 5 distinct numbered sections or H2 headings.
 
 After the whitepaper output EXACTLY this block (valid JSON, no trailing commas):
 ---META---
 {
   "cover_title": "string",
-  "cover_subtitle": "string ≤ 160 chars",
+  "cover_subtitle": "string (between 20 and 160 chars)",
   "meta_description": "150–160 chars summary including primary keyword",
   "slug": "url-slug-from-cover-title",
   "executive_summary": "≤ 600 char distillation of the executive summary",

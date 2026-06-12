@@ -13,6 +13,7 @@ import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/ap
 import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { CONTENT_TYPE_LABEL, CONTENT_TYPE_PLURAL, type ContentType } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { getContentPreviewUrl } from "@/lib/content-routing";
 
 type SortKey = "updated" | "created" | "words" | "title";
 type StatusFilter = "all" | "generated" | "approved" | "published";
@@ -188,12 +189,10 @@ export function HistoryTab() {
 
   const viewerHref = useMemo(() => {
     return (row: ContentStudioHistoryRow): string => {
-      if (row.content_type === "ebook") return `${studioBase}/ebooks/${row.id}`;
-      if (row.content_type === "whitepaper") return `${studioBase}/whitepapers/${row.id}`;
-      if (row.content_type === "linkedin") return `${studioBase}/linkedin/${row.id}`;
-      return `/projects/${projectId}/blogs/${row.id}?from=content-history`;
+      const url = getContentPreviewUrl(projectId, row.id, row.content_type);
+      return row.content_type === "blog" ? `${url}?from=content-history` : url;
     };
-  }, [projectId, studioBase]);
+  }, [projectId]);
 
   const hasActiveFilters = activeTypes.size !== TYPE_FILTERS.length || statusFilter !== "all" || search.trim() !== "";
   const isEmptyStateForNoContent = totalCount === 0 && !hasActiveFilters;

@@ -20,8 +20,9 @@ import {
 } from "@/lib/redux/keyword-workspace-slice";
 import { calendarApi } from "@/frontend/api/calendar";
 import { keywordsApi } from "@/frontend/api/keywords";
-import { CalendarEntry, CalendarEntryWithBlog } from "@/lib/types";
-import { useGeneratedContentMap, generatedContentKey } from "@/hooks/useGeneratedContentMap";
+import { CalendarEntry, CalendarEntryWithBlog, CONTENT_TYPE_LABEL, type ContentType } from "@/lib/types";
+import { useGeneratedContentMap, generatedContentKey, type GeneratedEntry } from "@/hooks/useGeneratedContentMap";
+import { getContentPreviewUrl } from "@/lib/content-routing";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
@@ -88,9 +89,9 @@ function getGeneratorSlug(articleType: string): string {
 
 // ── Default calendar view (module-level: not re-declared on every render) ──────
 function getDefaultCalendarView(): "list" | "grid" {
-  if (typeof window === "undefined") return "list";
+  if (typeof window === "undefined") return "grid";
   const stored = localStorage.getItem("calendar-view");
-  return stored === "grid" ? "grid" : "list";
+  return stored === "list" ? "list" : "grid";
 }
 
 // ── Internal types ─────────────────────────────────────────────────────────────
@@ -102,7 +103,7 @@ interface CalendarListRowProps {
   isFirst: boolean;
   projectId: string;
   scheduledKeywordsMap: Record<string, CalendarKwState | undefined>;
-  generatedMap: Map<string, { id: string }>;
+  generatedMap: Map<string, GeneratedEntry>;
   pickingDateForEntryId: string | null;
   savingDate: boolean;
   scheduledDatesSet: Set<string>;
@@ -262,14 +263,10 @@ const CalendarListRow = memo(function CalendarListRow({
         <LifecycleStatusBadge display={lifecycleDisplay} />
         {isLocked && (
           <ProjectNavLink
-            href={
-              resolvedBlogId
-                ? `/projects/${projectId}/blogs/${resolvedBlogId}`
-                : `/projects/${projectId}/blogs/${entry.id}`
-            }
+            href={getContentPreviewUrl(projectId, resolvedBlogId || entry.id, historyEntry?.contentType || entry.article_type)}
             className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
           >
-            View Blog
+            View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
           </ProjectNavLink>
         )}
         {!isLocked && !isGenerating && (
@@ -729,7 +726,7 @@ export function ScheduledCalendar() {
                 isFirst={idx === 0}
                 projectId={projectId}
                 scheduledKeywordsMap={scheduledKeywordsMap}
-                generatedMap={generatedMap as Map<string, { id: string }>}
+                generatedMap={generatedMap}
                 pickingDateForEntryId={pickingDateForEntryId}
                 savingDate={savingDate}
                 scheduledDatesSet={scheduledDatesSet}
@@ -759,6 +756,7 @@ export function ScheduledCalendar() {
             }}
             onRemoveEntry={handleRemoveEntry}
             generatingId={null}
+            generatedMap={generatedMap}
           />
         )}
       </section>

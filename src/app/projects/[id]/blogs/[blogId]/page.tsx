@@ -1928,7 +1928,7 @@ export default function BlogViewerPage() {
                     <div>
                       <SLabel>External links ({externalLinks.length})</SLabel>
                       <div className="space-y-1">
-                        {externalLinks.slice(0, 4).map((url, i) => {
+                        {externalLinks.map((url, i) => {
                           return (
                             <a key={i} href={url} target="_blank" rel="noopener noreferrer"
                               className="flex items-center gap-1.5 text-[11px] hover:underline truncate"
@@ -1946,7 +1946,7 @@ export default function BlogViewerPage() {
                     <div>
                       <SLabel>Internal links ({internalLinks.length})</SLabel>
                       <div className="space-y-0.5">
-                        {internalLinks.slice(0, 3).map((path, i) => {
+                        {internalLinks.map((path, i) => {
                           const fullUrl = path.startsWith('/') && project?.domain ? `https://${project.domain}${path}` : path;
                           return (
                             <a key={i} href={fullUrl} target="_blank" rel="noopener noreferrer" 

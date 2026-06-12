@@ -45,21 +45,17 @@ export const contentGeneratorApi = {
     hasMore: boolean;
     counts: Record<ContentType, number>;
   }> {
-    // Original query parameter logic (commented out - both endpoints return same response)
-    // const search = new URLSearchParams();
-    // if (filter.types?.length) search.set("types", filter.types.join(","));
-    // if (filter.statuses?.length) search.set("statuses", filter.statuses.join(","));
-    // if (filter.limit !== undefined) search.set("limit", String(filter.limit));
-    // if (filter.offset !== undefined) search.set("offset", String(filter.offset));
-    // if (filter.search) search.set("search", filter.search);
-    // if (filter.sort) search.set("sort", filter.sort);
-    // const qs = search.toString();
-    // const path = qs
-    //   ? `${V1Routes.projectContentStudioHistory(projectId)}?${qs}`
-    //   : V1Routes.projectContentStudioHistory(projectId);
-    
-    // Use simple endpoint without query parameters
-    const path = V1Routes.projectContentStudioHistory(projectId);
+    const qs = new URLSearchParams();
+    if (filter.types?.length) qs.set("types", filter.types.join(","));
+    if (filter.statuses?.length) qs.set("statuses", filter.statuses.join(","));
+    if (filter.limit !== undefined) qs.set("limit", String(filter.limit));
+    if (filter.offset !== undefined) qs.set("offset", String(filter.offset));
+    if (filter.search) qs.set("search", filter.search);
+    if (filter.sort) qs.set("sort", filter.sort);
+    const qsStr = qs.toString();
+    const path = qsStr
+      ? `${V1Routes.projectContentStudioHistory(projectId)}?${qsStr}`
+      : V1Routes.projectContentStudioHistory(projectId);
     return apiGet(path);
   },
 };

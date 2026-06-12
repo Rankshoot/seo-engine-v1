@@ -142,6 +142,7 @@ export default function ProjectSidebar({
     badgeColor?: string;
     prefetchLabel: string;
     exact?: boolean;
+    disabled?: boolean;
     children?: { label: string; href: string; exact?: boolean }[];
   };
 
@@ -197,9 +198,10 @@ export default function ProjectSidebar({
       icon: Icon.audit,
       label: "Content Health",
       href: auditBase,
-      badge: navCountsReady && liveStats?.auditPending ? `${liveStats.auditPending}` : undefined,
-      badgeColor: navCountsReady && liveStats?.auditPending ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/20" : undefined,
+      badge: "Soon",
+      badgeColor: "bg-surface-tertiary text-text-tertiary border-border-subtle opacity-60",
       prefetchLabel: "Content Health",
+      disabled: true,
       children: [
         { label: "Health Report", href: auditBase, exact: true },
         { label: "Page Explorer", href: `${auditBase}/discover-pages` },
@@ -347,15 +349,17 @@ export default function ProjectSidebar({
             return (
               <li key={item.label}>
                 <ProjectNavLink
-                  href={item.href}
-                  enablePrefetch
+                  href={item.disabled ? "#" : item.href}
+                  enablePrefetch={!item.disabled}
                   className={`flex items-center rounded-[8px] text-[14px] font-medium transition-all duration-300 ease-in-out group relative
                     ${isCollapsed ? "justify-center p-3" : "px-4 py-3"}
-                    ${active
-                      ? "bg-surface-elevated text-brand-action border border-border-subtle shadow-sm"
-                      : "text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"}`}
+                    ${item.disabled
+                      ? "text-text-tertiary/50 cursor-not-allowed pointer-events-none border border-transparent"
+                      : active
+                        ? "bg-surface-elevated text-brand-action border border-border-subtle shadow-sm"
+                        : "text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"}`}
                 >
-                  <span className={`shrink-0 transition-colors duration-300 ${active ? "text-brand-action" : "text-text-tertiary group-hover:text-text-primary"}`}>
+                  <span className={`shrink-0 transition-colors duration-300 ${active ? "text-brand-action" : item.disabled ? "text-text-tertiary/40" : "text-text-tertiary group-hover:text-text-primary"}`}>
                     {item.icon}
                   </span>
 
@@ -371,7 +375,7 @@ export default function ProjectSidebar({
                     )}
                   </span>
 
-                  {isCollapsed && (
+                  {isCollapsed && !item.disabled && (
                     <div className="absolute left-full ml-2 px-2 py-1 bg-surface-elevated border border-border-subtle text-text-primary text-[12px] rounded-[4px] shadow-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50">
                       {item.label}
                       {item.children && (
@@ -386,7 +390,7 @@ export default function ProjectSidebar({
                   )}
                 </ProjectNavLink>
 
-                {!isCollapsed && item.children && (
+                {!isCollapsed && item.children && !item.disabled && (
                   <ul className="mt-1.5 ml-4 space-y-0.5 overflow-hidden">
                     {item.children.map(sub => {
                       const subActive = sub.exact ? pathname === sub.href : isActive(sub.href);

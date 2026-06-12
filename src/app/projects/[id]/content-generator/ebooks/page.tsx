@@ -177,9 +177,9 @@ export default function EbookGeneratorPage() {
 
   const heroLead = useMemo(() => {
     if (phase === "generating")
-      return "Gemini 2.5 Pro is synthesising live research, your brief, and approved keywords into a publication-ready ebook. Keep this tab open.";
+      return "Synthesising live research, your brief, and approved keywords into a publication-ready ebook. Keep this tab open.";
     if (phase === "review")
-      return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a Pro-tier draft pass before saving.";
+      return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a premium draft pass before saving.";
     return "Configure the ebook angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
   }, [phase]);
 
@@ -236,7 +236,7 @@ export default function EbookGeneratorPage() {
           <GenerationProgress
             badgeLabel="Ebook"
             title="Building your premium ebook"
-            lead="Gemini 2.5 Pro is drafting a multi-chapter, lead-magnet ebook with real citations and your internal links woven in. This usually takes 3–6 minutes."
+            lead="Drafting a multi-chapter, lead-magnet ebook with real citations and your internal links woven in. This usually takes 3–6 minutes."
           />
         ) : phase === "review" ? (
           <ReviewView
@@ -497,7 +497,7 @@ function ReviewView({
         </p>
         <p className="mt-4 text-[12px] leading-relaxed text-text-tertiary">
           On generate, the engine pulls live SERP context for the primary keyword, drops in your internal link
-          pool from the project brief, and runs a Gemini 2.5 Pro pass. You&apos;ll land on the previewer when it&apos;s done.
+          pool from the project brief, and runs a premium AI pass. You&apos;ll land on the previewer when it&apos;s done.
         </p>
       </Card>
     </div>

@@ -65,7 +65,7 @@ const STREAM_STAGES: import("@/components/content-generator/shared").GenerationS
   { id: "context",  label: "Loading project brief",     detail: "Reading your project brief and calendar entry…",           weight: 0.06 },
   { id: "research", label: "Gathering live research",    detail: "Pulling live SERP data and keyword context…",              weight: 0.18 },
   { id: "outline",  label: "Designing topical outline",  detail: "Structuring sections and SEO hierarchy…",                  weight: 0.12 },
-  { id: "draft",    label: "Drafting with Claude Sonnet", detail: "Writing the full blog post — this is the longest step…",  weight: 0.50 },
+  { id: "draft",    label: "Drafting content", detail: "Writing the full blog post — this is the longest step…",  weight: 0.50 },
   { id: "polish",   label: "SEO + image polish",          detail: "Generating hero image and final SEO pass…",               weight: 0.14 },
 ];
 
@@ -320,9 +320,9 @@ export default function BlogGeneratorPage() {
 
   const heroLead = useMemo(() => {
     if (phase === "generating")
-      return "Claude Sonnet is synthesising live research, your brief, and approved keywords into a publication-ready blog post. Keep this tab open.";
+      return "Synthesising live research, your brief, and approved keywords into a publication-ready blog post. Keep this tab open.";
     if (phase === "review")
-      return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a Pro-tier draft pass before saving.";
+      return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a premium draft pass before saving.";
     return "Configure the blog angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
   }, [phase]);
 
@@ -380,7 +380,7 @@ export default function BlogGeneratorPage() {
             <GenerationProgress
               badgeLabel="Blog"
               title="Building your premium blog"
-              lead="Claude Sonnet is drafting a high-ranking blog post with real citations and your internal links woven in. Watch the stages light up as each step completes."
+              lead="Drafting a high-ranking blog post with real citations and your internal links woven in. Watch the stages light up as each step completes."
               stages={streamStages}
               externalProgress={streamProgress}
             />
@@ -634,7 +634,7 @@ function ReviewView({
         </p>
         <p className="mt-4 text-[12px] leading-relaxed text-text-tertiary">
           On generate, the engine pulls live SERP context for the primary keyword, drops in your internal link
-          pool from the project brief, and runs a Gemini 2.5 Pro pass. You&apos;ll land on the previewer when it&apos;s done.
+          pool from the project brief, and runs a premium AI pass. You&apos;ll land on the previewer when it&apos;s done.
         </p>
       </Card>
     </div>

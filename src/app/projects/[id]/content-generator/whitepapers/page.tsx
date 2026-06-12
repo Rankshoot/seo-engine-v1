@@ -172,9 +172,9 @@ export default function WhitepaperGeneratorPage() {
   const heroTitle = phase === "generating" ? "Drafting your whitepaper" : phase === "review" ? "Review & generate" : "Whitepaper generator";
   const heroLead =
     phase === "generating"
-      ? "Gemini 2.5 Pro is performing primary-source synthesis with Google Search grounding. This typically takes 4–8 minutes."
+      ? "Performing primary-source synthesis with Google Search grounding. This typically takes 4–8 minutes."
       : phase === "review"
-        ? "Confirm the angle. We'll run live SERP research, methodology framing, and a Pro-tier draft pass."
+        ? "Confirm the angle. We'll run live SERP research, methodology framing, and a premium draft pass."
         : "Configure the research angle, audience, and business objective. Whitepapers are EEAT-heavy by design.";
 
   return (
@@ -230,12 +230,12 @@ export default function WhitepaperGeneratorPage() {
           <GenerationProgress
             badgeLabel="Whitepaper"
             title="Building your enterprise whitepaper"
-            lead="Gemini 2.5 Pro is producing a fully-cited research document with executive summary, recommendations, and a roadmap."
+            lead="Producing a fully-cited research document with executive summary, recommendations, and a roadmap."
             stages={[
               { id: "context", label: "Loading project brief", weight: 0.05 },
               { id: "research", label: "Live SERP + primary source discovery", weight: 0.22 },
               { id: "outline", label: "Structuring methodology + findings", weight: 0.13 },
-              { id: "draft", label: "Drafting with Gemini 2.5 Pro", weight: 0.45 },
+              { id: "draft", label: "Drafting content", weight: 0.45 },
               { id: "polish", label: "Citation + SEO polish", weight: 0.15 },
             ]}
           />

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -20,9 +20,16 @@ import { unscheduleContentAction } from "@/app/actions/content-actions";
 import toast from "react-hot-toast";
 
 type SortKey = "updated" | "created" | "words" | "title";
-type StatusFilter = "all" | "generated" | "approved" | "published";
+type TypeFilter = ContentType | "all";
 
 const TYPE_FILTERS: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+const TYPE_FILTER_OPTIONS: { value: TypeFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "blog", label: "Blogs" },
+  { value: "ebook", label: "Ebooks" },
+  { value: "whitepaper", label: "Whitepapers" },
+  { value: "linkedin", label: "LinkedIn posts" },
+];
 const PAGE_SIZE = 20;
 
 function fmtDate(iso: string): string {
@@ -286,9 +293,21 @@ export function HistoryTab() {
     }
   };
 
-  const [activeTypes, setActiveTypes] = useState<Set<ContentType>>(() => new Set(TYPE_FILTERS));
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [sort, setSort] = useState<SortKey>("updated");
+  const [activeType, setActiveType] = useState<TypeFilter>("all");
+  const [typeDropdownOpen, setTypeDropdownOpen] = useState(false);
+  const typeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!typeDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (typeDropdownRef.current && !typeDropdownRef.current.contains(e.target as Node)) {
+        setTypeDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [typeDropdownOpen]);
+  const sort: SortKey = "updated";
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -306,8 +325,7 @@ export function HistoryTab() {
     queryKey: [
       ...qk.contentStudioHistory(projectId),
       {
-        types: Array.from(activeTypes),
-        status: statusFilter,
+        types: activeType === "all" ? [] : [activeType],
         search: debouncedSearch,
         sort,
         page,
@@ -315,8 +333,7 @@ export function HistoryTab() {
     ],
     queryFn: () =>
       contentGeneratorApi.studioHistory(projectId, {
-        types: Array.from(activeTypes),
-        statuses: statusFilter === "all" ? undefined : [statusFilter],
+        types: activeType === "all" ? undefined : [activeType as ContentType],
         search: debouncedSearch,
         sort,
         limit: PAGE_SIZE,
@@ -331,27 +348,9 @@ export function HistoryTab() {
   const totalCount = data?.success ? data.total : 0;
   const counts = data?.success ? data.counts : { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
 
-  const handleTypeToggle = (t: ContentType) => {
-    setActiveTypes(prev => {
-      const next = new Set(prev);
-      if (next.has(t)) {
-        if (next.size === 1) return prev;
-        next.delete(t);
-      } else {
-        next.add(t);
-      }
-      return next;
-    });
-    setPage(1);
-  };
-
-  const handleStatusFilterChange = (s: StatusFilter) => {
-    setStatusFilter(s);
-    setPage(1);
-  };
-
-  const handleSortChange = (s: SortKey) => {
-    setSort(s);
+  const handleTypeChange = (t: TypeFilter) => {
+    setActiveType(t);
+    setTypeDropdownOpen(false);
     setPage(1);
   };
 
@@ -362,7 +361,7 @@ export function HistoryTab() {
     };
   }, [projectId]);
 
-  const hasActiveFilters = activeTypes.size !== TYPE_FILTERS.length || statusFilter !== "all" || search.trim() !== "";
+  const hasActiveFilters = activeType !== "all" || search.trim() !== "";
   const isEmptyStateForNoContent = totalCount === 0 && !hasActiveFilters;
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -373,76 +372,79 @@ export function HistoryTab() {
     <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex flex-wrap items-center gap-1.5 rounded-full border border-border-subtle bg-surface-secondary p-1">
-          {TYPE_FILTERS.map(t => {
-            const active = activeTypes.has(t);
-            return (
-              <button
-                key={t}
-                onClick={() => handleTypeToggle(t)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors",
-                  active
-                    ? "bg-text-primary text-surface-primary"
-                    : "text-text-tertiary hover:text-text-primary",
-                )}
-              >
-                {CONTENT_TYPE_PLURAL[t]}
-                <span
+        {/* Content type dropdown */}
+        <div className="relative" ref={typeDropdownRef}>
+          <button
+            type="button"
+            onClick={() => setTypeDropdownOpen(o => !o)}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
+              typeDropdownOpen
+                ? "border-border-strong bg-surface-hover text-text-primary"
+                : "border-border-subtle bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary",
+            )}
+          >
+            <span>
+              {TYPE_FILTER_OPTIONS.find(o => o.value === activeType)?.label ?? "All"}
+            </span>
+            {activeType !== "all" && (
+              <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-surface-tertiary px-1 text-[10px] font-semibold text-text-tertiary">
+                {activeType in counts ? (counts as Record<string, number>)[activeType] : 0}
+              </span>
+            )}
+            <svg
+              width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"
+              className={cn("transition-transform duration-150", typeDropdownOpen && "rotate-180")}
+            >
+              <path d="M2 4.5L6 8.5L10 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          {typeDropdownOpen && (
+            <div className="absolute left-0 top-full mt-1.5 z-20 min-w-[168px] rounded-xl border border-border-subtle bg-surface-elevated shadow-xl overflow-hidden">
+              {TYPE_FILTER_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => handleTypeChange(opt.value)}
                   className={cn(
-                    "inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-semibold",
-                    active ? "bg-surface-primary/20 text-surface-primary" : "bg-surface-tertiary text-text-tertiary",
+                    "flex w-full items-center justify-between gap-3 px-4 py-2.5 text-[13px] font-medium transition-colors text-left",
+                    activeType === opt.value
+                      ? "bg-surface-hover text-text-primary"
+                      : "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
                   )}
                 >
-                  {counts[t]}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5 rounded-full border border-border-subtle bg-surface-secondary p-1">
-          {(["all", "generated", "approved", "published"] as StatusFilter[]).map(s => {
-            const active = statusFilter === s;
-            return (
-              <button
-                key={s}
-                onClick={() => handleStatusFilterChange(s)}
-                className={cn(
-                  "rounded-full px-3 py-1 text-[12px] font-medium capitalize transition-colors",
-                  active
-                    ? "bg-text-primary text-surface-primary"
-                    : "text-text-tertiary hover:text-text-primary",
-                )}
-              >
-                {s}
-              </button>
-            );
-          })}
+                  <span>{opt.label}</span>
+                  {opt.value !== "all" && (
+                    <span className="text-[11px] text-text-tertiary tabular-nums">
+                      {(counts as Record<string, number>)[opt.value] ?? 0}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="relative">
           <input
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); }}
             placeholder="Search title, keyword, type…"
             className="h-9 w-[260px] rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action focus:ring-1 focus:ring-brand-action/40"
           />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
         </div>
 
-        <div className="ml-auto flex items-center gap-2 text-[12px] text-text-tertiary">
-          <span>Sort</span>
-          <select
-            value={sort}
-            onChange={e => handleSortChange(e.target.value as SortKey)}
-            className="h-9 rounded-full border border-border-subtle bg-surface-secondary px-3 text-[13px] text-text-primary outline-none"
-          >
-            <option value="updated">Recently updated</option>
-            <option value="created">Recently created</option>
-            <option value="words">Word count</option>
-            <option value="title">Title</option>
-          </select>
-        </div>
       </div>
 
       {isLoading ? (

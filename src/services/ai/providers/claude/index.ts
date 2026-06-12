@@ -111,9 +111,10 @@ export class ClaudeProvider implements AIProvider {
 
       const userContent: any[] = [{ type: "text", text: prompt }];
 
+      const maxTokens = Math.min(opts.maxOutputTokens ?? 4096, 8192);
       const messageParams: Anthropic.MessageCreateParams = {
         model,
-        max_tokens: opts.maxOutputTokens ?? 4096,
+        max_tokens: maxTokens,
         temperature: opts.temperature,
         system: systemBlock.length ? systemBlock : undefined,
         messages: [{ role: "user", content: userContent }],
@@ -180,6 +181,7 @@ export class ClaudeProvider implements AIProvider {
             latencyMs,
             errorMessage: e instanceof Error ? e.message : String(e),
           });
+          console.error(`[claude] API call failed on final attempt for model ${model}:`, e);
           throw new PlatformAIError("Content engine is busy, please try again.");
         }
         await new Promise((r) => setTimeout(r, 4000 * Math.pow(2, attempt)));
@@ -209,9 +211,10 @@ export class ClaudeProvider implements AIProvider {
         });
       }
 
+      const maxTokens = Math.min(opts.maxOutputTokens ?? 4096, 8192);
       const stream = await client.messages.create({
         model,
-        max_tokens: opts.maxOutputTokens ?? 4096,
+        max_tokens: maxTokens,
         temperature: opts.temperature,
         system: systemBlock.length ? systemBlock : undefined,
         messages: [{ role: "user", content: prompt }],
@@ -273,6 +276,7 @@ export class ClaudeProvider implements AIProvider {
         latencyMs,
         errorMessage: e instanceof Error ? e.message : String(e),
       });
+      console.error(`[claude] Streaming API call failed for model ${model}:`, e);
       throw new PlatformAIError("Content engine is busy, please try again.");
     }
   }
@@ -301,9 +305,10 @@ export class ClaudeProvider implements AIProvider {
 
       // Force structured output by defining a tool and setting tool_choice to force call it
       const jsonSchema = zodToJsonSchema(schema);
+      const maxTokens = Math.min(opts.maxOutputTokens ?? 4096, 8192);
       const response = await client.messages.create({
         model,
-        max_tokens: opts.maxOutputTokens ?? 4096,
+        max_tokens: maxTokens,
         temperature: opts.temperature,
         system: systemBlock.length ? systemBlock : undefined,
         messages: [{ role: "user", content: prompt }],
@@ -385,6 +390,7 @@ export class ClaudeProvider implements AIProvider {
         latencyMs,
         errorMessage: e instanceof Error ? e.message : String(e),
       });
+      console.error(`[claude] Structured API call failed for model ${model}:`, e);
       throw new PlatformAIError("Content engine is busy, please try again.");
     }
   }

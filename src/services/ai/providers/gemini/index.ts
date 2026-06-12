@@ -157,6 +157,7 @@ export class GeminiProvider implements AIProvider {
         return await tryOnce(Boolean(opts.responseSchema));
       } catch (e) {
         if (attempt === retries - 1) {
+          console.error(`[gemini] API call failed on final attempt for model ${model}:`, e);
           throw new PlatformAIError("Content engine is busy, please try again.");
         }
         await new Promise((r) => setTimeout(r, 4000));
@@ -312,6 +313,7 @@ export class GeminiProvider implements AIProvider {
         latencyMs,
         errorMessage: e instanceof Error ? e.message : String(e),
       });
+      console.error(`[gemini] Streaming API call failed for model ${model}:`, e);
       throw new PlatformAIError("Content engine is busy, please try again.");
     }
   }
@@ -350,6 +352,7 @@ export class GeminiProvider implements AIProvider {
       };
     } catch (e) {
       if (e instanceof PlatformAIError) throw e;
+      console.error(`[gemini] Structured API call failed for model ${model}:`, e);
       throw new PlatformAIError("Content engine is busy, please try again.");
     }
   }

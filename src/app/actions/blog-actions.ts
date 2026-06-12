@@ -2335,9 +2335,10 @@ export async function getCalendarWithBlogs(projectId: string) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: [] };
 
+  // Use `keywords(*)` so we get every column including source_type
   const { data: entries, error: eErr } = await supabaseAdmin
     .from('calendar_entries')
-    .select('*')
+    .select('*, keywords(*)')
     .eq('project_id', projectId)
     .order('scheduled_date', { ascending: true });
 

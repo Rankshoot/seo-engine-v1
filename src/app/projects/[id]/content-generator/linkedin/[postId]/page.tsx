@@ -16,6 +16,7 @@ import {
   ResourcesPanel,
   StudioBreadcrumb,
   ViewModePill,
+  PreviewerScheduler,
   type PreviewMode,
 } from "@/components/content-generator/shared";
 import { LinkedInFeedCard } from "@/components/content-generator/linkedin/LinkedInFeedCard";
@@ -26,6 +27,7 @@ import {
   type LinkedInDraft,
 } from "@/components/content-generator/linkedin/LinkedInStructuredEditor";
 import { blogsApi } from "@/frontend/api/blogs";
+import { calendarApi } from "@/frontend/api/calendar";
 import {
   exportLinkedInPost,
   LINKEDIN_EXPORT_OPTIONS,
@@ -61,6 +63,61 @@ export default function LinkedInViewerPage() {
   const [draft, setDraft] = useState<LinkedInDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+
+  const handleDirectSchedule = async () => {
+    if (!projectId || !blog || scheduling) return;
+    setScheduling(true);
+    try {
+      const entriesRes = await calendarApi.entries(projectId);
+      if (!entriesRes.success || !entriesRes.data) {
+        toast.error("Could not fetch calendar dates");
+        return;
+      }
+      const taken = new Set(entriesRes.data.map(e => String(e.scheduled_date).slice(0, 10)));
+      const today = new Date();
+      today.setHours(12, 0, 0, 0);
+      let targetDate = "";
+      for (let i = 0; i < 500; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + i);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        if (!taken.has(key)) {
+          targetDate = key;
+          break;
+        }
+      }
+      if (!targetDate) {
+        toast.error("No free calendar dates found");
+        return;
+      }
+      const res = await calendarApi.scheduleExistingBlog(projectId, {
+        blogId: blog.id,
+        targetDate,
+      });
+      if (res.success) {
+        const niceDate = new Date(`${res.scheduled_date}T00:00:00`).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+        toast.success(`Scheduled for ${niceDate}`);
+        const updatedBlog = { ...blog, entry_id: res.data.id };
+        setBlog(updatedBlog);
+        queryClient.setQueryData(qk.blog(blog.id), { success: true, data: updatedBlog });
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+      } else {
+        toast.error(res.error || "Failed to schedule");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to schedule");
+    } finally {
+      setScheduling(false);
+    }
+  };
 
   useEffect(() => {
     if (blogRes?.success && blogRes.data) {
@@ -293,12 +350,23 @@ export default function LinkedInViewerPage() {
         </ul>
       </div>
 
-      {/* Resources */}
       <ResourcesPanel
         blog={blog}
         projectDomain={project?.domain}
         className="border-b border-border-subtle px-4 py-4"
       />
+
+      <div className="border-b border-border-subtle px-4 py-4">
+        <PreviewerScheduler
+          projectId={projectId}
+          blogId={blog.id}
+          entryId={blog.entry_id}
+          onScheduleUpdated={(newId) => {
+            setBlog((prev) => (prev ? { ...prev, entry_id: newId } : prev));
+            void queryClient.invalidateQueries({ queryKey: qk.blog(blog.id) });
+          }}
+        />
+      </div>
 
       {/* Export */}
       <ExportMenu
@@ -350,6 +418,16 @@ export default function LinkedInViewerPage() {
           Save edits
         </Button>
       </>
+    ) : !blog.entry_id ? (
+      <Button
+        variant="primary"
+        shape="pill"
+        size="sm"
+        onClick={() => void handleDirectSchedule()}
+        loading={scheduling}
+      >
+        Direct Schedule
+      </Button>
     ) : null;
 
   return (

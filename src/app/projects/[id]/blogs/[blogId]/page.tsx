@@ -36,6 +36,7 @@ import { rangeSelectionToMarkdown, rangeSelectionHtmlFragment } from "@/lib/edit
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { calendarApi } from "@/frontend/api/calendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
+import { PreviewerScheduler } from "@/components/content-generator/shared";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
 
@@ -1192,6 +1193,21 @@ export default function BlogViewerPage() {
     return hit ? String(hit.scheduled_date).slice(0, 10) : null;
   }, [blog?.entry_id, calendarEntries]);
 
+  const nextVacantDate = useMemo(() => {
+    const taken = new Set(calendarEntries.map((e) => String(e.scheduled_date).slice(0, 10)));
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    for (let i = 0; i < 500; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (!taken.has(key)) {
+        return key;
+      }
+    }
+    return null;
+  }, [calendarEntries]);
+
   const handleScheduleBlog = async (date: string) => {
     if (!blog) return;
     setScheduling(true);
@@ -1230,6 +1246,14 @@ export default function BlogViewerPage() {
       setScheduling(false);
       setSchedulePickerOpen(false);
     }
+  };
+
+  const handleDirectSchedule = async () => {
+    if (!nextVacantDate) {
+      toast.error("No free calendar dates found");
+      return;
+    }
+    await handleScheduleBlog(nextVacantDate);
   };
 
   const handleAddToArticles = async () => {
@@ -1601,6 +1625,17 @@ export default function BlogViewerPage() {
                   Edit
                 </button>
               )}
+              {!blog.entry_id && !editMode && (
+                <button
+                  type="button"
+                  onClick={handleDirectSchedule}
+                  disabled={scheduling || !nextVacantDate}
+                  className="rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all disabled:opacity-40"
+                  style={{ background: V.action, color: "#ffffff" }}
+                >
+                  {scheduling ? "Scheduling..." : "Direct Schedule"}
+                </button>
+              )}
               <button onClick={handleCopy} disabled={editMode}
                 className="rounded-full px-4 py-1.5 text-[12px] font-medium border border-border-subtle text-text-tertiary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                 {copied ? "Copied!" : "Copy MD"}
@@ -1929,6 +1964,26 @@ export default function BlogViewerPage() {
               </>
             )}
 
+            {/* ── Schedule ─────────────────────────────────────────────── */}
+            <Divider />
+            <div className="px-4 py-3.5">
+              <PreviewerScheduler
+                projectId={projectId}
+                blogId={blog.id}
+                entryId={blog.entry_id}
+                onScheduleUpdated={(newId) => {
+                  setBlog((b) => {
+                    const nextVal = b ? { ...b, entry_id: newId } : b;
+                    if (nextVal) {
+                      queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+                    }
+                    return nextVal;
+                  });
+                  setScheduleVersion((v) => v + 1);
+                }}
+              />
+            </div>
+
             {/* ── Export ───────────────────────────────────────────────── */}
             <Divider />
             <div className="px-4 py-3.5">
@@ -1950,64 +2005,6 @@ export default function BlogViewerPage() {
                 ))}
               </div>
             </div>
-
-            {/* ── Schedule on calendar (Instant Articles) ───────────────── */}
-            {isInstantArticle && (
-              <>
-                <Divider />
-                <div className="px-4 py-4">
-                  <SLabel>Schedule</SLabel>
-                  {scheduledDate ? (
-                    <>
-                      <div className="mb-2.5 flex items-center gap-2">
-                        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] bg-brand-action/10 text-brand-action">
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                            <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
-                            <line x1="16" x2="16" y1="2" y2="6" />
-                            <line x1="8" x2="8" y1="2" y2="6" />
-                            <line x1="3" x2="21" y1="10" y2="10" />
-                          </svg>
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-[12px] font-semibold text-text-primary leading-tight">
-                            {new Date(`${scheduledDate}T00:00:00`).toLocaleDateString("en-US", {
-                              month: "long",
-                              day: "numeric",
-                              year: "numeric",
-                            })}
-                          </p>
-                          <p className="text-[10px] text-text-tertiary">On the content calendar</p>
-                        </div>
-                      </div>
-                      <CalendarDatePicker
-                        open={schedulePickerOpen}
-                        onOpenChange={setSchedulePickerOpen}
-                        currentDate={scheduledDate}
-                        onConfirm={(d) => void handleScheduleBlog(d)}
-                        saving={scheduling}
-                        scheduledDates={scheduledDatesSet}
-                        variant="change"
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
-                        Place this draft on the content calendar to publish on a specific date.
-                      </p>
-                      <CalendarDatePicker
-                        open={schedulePickerOpen}
-                        onOpenChange={setSchedulePickerOpen}
-                        currentDate={null}
-                        onConfirm={(d) => void handleScheduleBlog(d)}
-                        saving={scheduling}
-                        scheduledDates={scheduledDatesSet}
-                        variant="pick"
-                      />
-                    </>
-                  )}
-                </div>
-              </>
-            )}
 
             {/* ── Generate — hidden for imported/repaired content ──────── */}
             {!isImport && !isRepair && (

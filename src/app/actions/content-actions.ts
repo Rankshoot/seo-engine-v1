@@ -635,6 +635,7 @@ export interface ContentStudioHistoryRow {
   content_data: EbookContentData | WhitepaperContentData | LinkedInContentData | Record<string, never>;
   created_at: string;
   updated_at: string;
+  entry_id?: string | null;
 }
 
 export async function listContentStudioHistory(
@@ -680,7 +681,7 @@ export async function listContentStudioHistory(
   // Use content_type when it exists; fall back to article_type heuristics so older
   // databases without the migration still produce a sensible history list.
   const COLS =
-    'id, title, meta_description, target_keyword, article_type, status, word_count, content_type, content_data, created_at, updated_at';
+    'id, title, meta_description, target_keyword, article_type, status, word_count, content_type, content_data, created_at, updated_at, entry_id';
 
   let query = supabaseAdmin
     .from('blogs')
@@ -738,6 +739,7 @@ export async function listContentStudioHistory(
     content_data?: ContentStudioHistoryRow['content_data'];
     created_at: string;
     updated_at: string;
+    entry_id?: string | null;
   }>;
 
   let mapped: ContentStudioHistoryRow[] = rows.map(r => {
@@ -754,6 +756,7 @@ export async function listContentStudioHistory(
       content_data: (r.content_data ?? {}) as ContentStudioHistoryRow['content_data'],
       created_at: r.created_at,
       updated_at: r.updated_at,
+      entry_id: r.entry_id,
     };
   });
 
@@ -804,4 +807,40 @@ function inferContentType(articleType: string): ContentType {
   if (t === 'whitepaper') return 'whitepaper';
   if (t === 'linkedin') return 'linkedin';
   return 'blog';
+}
+
+export async function unscheduleContentAction(
+  projectId: string,
+  blogId: string,
+  entryId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  // 1. Verify project ownership
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (pErr || !project) return { success: false, error: 'Project not found' };
+
+  // 2. Set blogs.entry_id = null first to break foreign key cascades
+  const { error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .update({ entry_id: null })
+    .eq('id', blogId)
+    .eq('project_id', projectId);
+  if (bErr) return { success: false, error: bErr.message };
+
+  // 3. Delete the calendar entry
+  const { error: cErr } = await supabaseAdmin
+    .from('calendar_entries')
+    .delete()
+    .eq('id', entryId)
+    .eq('project_id', projectId);
+  if (cErr) return { success: false, error: cErr.message };
+
+  return { success: true };
 }

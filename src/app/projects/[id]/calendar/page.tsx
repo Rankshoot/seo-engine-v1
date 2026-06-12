@@ -24,7 +24,6 @@ import { CalendarEntry, CONTENT_TYPE_LABEL, type ContentType } from "@/lib/types
 import { useGeneratedContentMap, generatedContentKey } from "@/hooks/useGeneratedContentMap";
 import { getContentPreviewUrl } from "@/lib/content-routing";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
-import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
 import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
@@ -50,19 +49,6 @@ function fmtDate(iso: string): string {
     day: "numeric",
     year: "numeric",
   });
-}
-
-function LifecycleStatusBadge({
-  display,
-}: {
-  display: ReturnType<typeof resolveCalendarLifecycleStatus>;
-}) {
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${display.color}`}>
-      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${display.dot}`} />
-      {display.label}
-    </span>
-  );
 }
 
 // ── KD cell ───────────────────────────────────────────────────────────────────
@@ -145,11 +131,6 @@ const CalendarListRow = memo(function CalendarListRow({
   const historyKey     = generatedContentKey(entry.focus_keyword, entry.article_type ?? "blog");
   const historyEntry   = generatedMap.get(historyKey);
   const resolvedBlogId = historyEntry?.id;
-
-  const lifecycleDisplay = resolveCalendarLifecycleStatus({
-    hasCalendarEntry: true,
-    calendarStatus: resolvedBlogId ? "generated" : effectiveStatus,
-  });
 
   const isLocked =
     !!resolvedBlogId ||
@@ -255,7 +236,6 @@ const CalendarListRow = memo(function CalendarListRow({
 
       {/* Right rail */}
       <div className="flex shrink-0 flex-col items-end justify-center gap-2 self-stretch pl-2">
-        <LifecycleStatusBadge display={lifecycleDisplay} />
         {isLocked && (
           <ProjectNavLink
             href={getContentPreviewUrl(projectId, resolvedBlogId || entry.id, historyEntry?.contentType || entry.article_type)}

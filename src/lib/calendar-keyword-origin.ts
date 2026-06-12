@@ -6,8 +6,8 @@
 import { contentHealthAuditForCalendarOrigin } from "@/lib/content-health-calendar";
 
 export type CalendarKeywordOrigin =
-  | "keyword_discovery"
-  | "competitor_insights"
+  | "organic_keywords"
+  | "competitor_keywords"
   | "domain"
   | "content_health"
   | "custom_keyword";
@@ -17,18 +17,10 @@ export interface ResolvedCalendarOrigin {
   /** Primary pill — matches the product area (page) the user came from */
   label: string;
   badgeClass: string;
-  /** Shown when the keyword or slot was stamped via the AI assistant */
+  /** AI badge removed from calendar as per requirements */
   aiBadge?: { label: string; className: string };
 }
 
-function mergeAiSource(
-  entryAi?: string | null,
-  keywordAi?: string | null
-): string {
-  const a = (entryAi ?? "").trim();
-  if (a.length > 0) return a;
-  return (keywordAi ?? "").trim();
-}
 
 /**
  * @param keywordSourceType — `keywords.source_type` (industry, competitor_gap, …)
@@ -44,22 +36,12 @@ export function resolveCalendarKeywordOrigin(input: {
   aiSourceFromEntry?: string | null;
   aiSourceFromKeyword?: string | null;
 }): ResolvedCalendarOrigin {
-  const aiRaw = mergeAiSource(input.aiSourceFromEntry, input.aiSourceFromKeyword);
-  const aiBadge =
-    aiRaw.length > 0
-      ? {
-          label: "AI",
-          className: "bg-[#8b5cf6]/12 text-[#a78bfa] border-[#8b5cf6]/25",
-        }
-      : undefined;
-
   const ch = contentHealthAuditForCalendarOrigin(input.contentHealthAudit);
   if (ch) {
     return {
       origin: "content_health",
       label: ch.label,
       badgeClass: "bg-[#ef4444]/10 text-[#f87171] border-[#ef4444]/20",
-      aiBadge,
     };
   }
 
@@ -68,7 +50,6 @@ export function resolveCalendarKeywordOrigin(input: {
       origin: "content_health",
       label: "Content health",
       badgeClass: "bg-[#ef4444]/10 text-[#f87171] border-[#ef4444]/20",
-      aiBadge,
     };
   }
 
@@ -78,7 +59,6 @@ export function resolveCalendarKeywordOrigin(input: {
       origin: "custom_keyword",
       label: "Custom keyword",
       badgeClass: "bg-slate-500/12 text-slate-300 border-slate-500/25",
-      aiBadge,
     };
   }
   if (st === "google_ads_domain") {
@@ -86,26 +66,24 @@ export function resolveCalendarKeywordOrigin(input: {
       origin: "domain",
       label: "Domain",
       badgeClass: "bg-cyan-500/10 text-cyan-300 border-cyan-500/25",
-      aiBadge,
     };
   }
   if (
     st === "competitor_gap" ||
     st === "quick_win" ||
-    st === "competitor_benchmark"
+    st === "competitor_benchmark" ||
+    st === "competitor"
   ) {
     return {
-      origin: "competitor_insights",
-      label: "Competitor insights",
+      origin: "competitor_keywords",
+      label: "Competitor keywords",
       badgeClass: "bg-[#f59e0b]/10 text-[#fbbf24] border-[#f59e0b]/22",
-      aiBadge,
     };
   }
 
   return {
-    origin: "keyword_discovery",
-    label: "Keyword discovery",
+    origin: "organic_keywords",
+    label: "Organic keywords",
     badgeClass: "bg-brand-action/10 text-brand-action border-brand-action/25",
-    aiBadge,
   };
 }

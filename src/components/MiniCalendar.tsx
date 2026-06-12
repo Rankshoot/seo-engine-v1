@@ -5,7 +5,6 @@ import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
 import { CalendarEntry, CalendarEntryWithBlog, CONTENT_TYPE_LABEL, type ContentType } from "@/lib/types";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
-import { resolveCalendarLifecycleStatus } from "@/lib/calendar-lifecycle";
 import { getContentPreviewUrl } from "@/lib/content-routing";
 import { generatedContentKey } from "@/hooks/useGeneratedContentMap";
 
@@ -286,7 +285,7 @@ export function MiniCalendar({
           const dayNum = idx - startOffset + 1;
 
           if (dayNum < 1 || dayNum > lastDayDate) {
-            return <div key={idx} className="min-h-[90px]" />;
+            return <div key={idx} className="min-h-[120px]" />;
           }
 
           const iso = toISO(viewYear, viewMonth, dayNum);
@@ -317,12 +316,12 @@ export function MiniCalendar({
             return (
               <div
                 key={idx}
-                className={`flex min-h-[90px] flex-col rounded-[8px] border border-dashed border-[#f59e0b]/50 bg-[#f59e0b]/[0.06] p-1.5 ${
+                className={`flex min-h-[120px] flex-col rounded-[8px] border border-dashed border-[#f59e0b]/50 bg-[#f59e0b]/[0.06] p-1.5 ${
                   isToday ? "ring-1 ring-[#f59e0b]/40" : ""
                 }`}
               >
                 <span className="self-end text-[10px] font-bold leading-none text-[#f59e0b]/60">{dayNum}</span>
-                <p className="line-clamp-2 flex flex-1 items-center justify-center px-1 text-center text-[9px] font-medium text-[#f59e0b]">
+                <p className="line-clamp-2 flex flex-1 items-center justify-center px-1 text-center text-[11px] font-medium text-[#f59e0b]">
                   {schedulingEntry?.focus_keyword}
                 </p>
                 <span className="pb-0.5 text-center text-[9px] text-[#f59e0b]/60">current date</span>
@@ -337,7 +336,7 @@ export function MiniCalendar({
               return (
                 <div
                   key={idx}
-                  className={`flex min-h-[90px] flex-col gap-1 rounded-[8px] border border-border-subtle/40 bg-surface-secondary/30 p-1.5 opacity-40 ${
+                  className={`flex min-h-[120px] flex-col gap-1 rounded-[8px] border border-border-subtle/40 bg-surface-secondary/30 p-1.5 opacity-40 ${
                     isToday ? "ring-1 ring-brand-action/20" : ""
                   }`}
                 >
@@ -346,7 +345,7 @@ export function MiniCalendar({
                     {dayEntries.map(e => (
                       <p
                         key={e.id}
-                        className="line-clamp-2 px-0.5 text-[9px] text-text-tertiary"
+                        className="line-clamp-2 px-0.5 text-[11px] text-text-tertiary"
                         title={e.focus_keyword}
                       >
                         {e.focus_keyword}
@@ -359,7 +358,7 @@ export function MiniCalendar({
 
             const stack = dayEntries.length > 1;
             return (
-              <div key={idx} className="flex min-h-[90px] flex-col gap-1">
+              <div key={idx} className="flex min-h-[120px] flex-col gap-1">
                 <span
                   className={`self-end text-[10px] font-bold leading-none ${
                     isToday ? "text-brand-action" : "text-brand-action/60"
@@ -398,11 +397,6 @@ export function MiniCalendar({
                       articleType: entry.article_type,
                       aiSourceFromEntry: entry.ai_source,
                       aiSourceFromKeyword: kwData?.ai_source ?? null,
-                    });
-                    const effectiveStatus = isGenerating ? "generating" : entry.status;
-                    const life = resolveCalendarLifecycleStatus({
-                      hasCalendarEntry: true,
-                      calendarStatus: resolvedBlogId ? "generated" : effectiveStatus,
                     });
                     const canDragThisEntry = dndActive && !isGenerating;
 
@@ -450,17 +444,16 @@ export function MiniCalendar({
                           </div>
                         ) : null}
                         <p
-                          className={`line-clamp-2 pl-4 text-[10px] font-semibold leading-tight text-text-primary ${
-                            stack ? "text-[9px]" : ""
+                          className={`line-clamp-2 pl-4 text-[12px] font-semibold leading-tight text-text-primary ${
+                            stack ? "text-[11px]" : ""
                           }`}
                           title={entry.focus_keyword}
                         >
                           {entry.focus_keyword}
                         </p>
-                        <div className={`origin-left ${stack ? "scale-[0.82]" : "scale-[0.88]"}`}>
+                        <div className={`origin-left ${stack ? "scale-[0.92]" : "scale-[1.0]"}`}>
                           <CalendarOriginPills resolved={origin} />
                         </div>
-                        <p className={`text-[8px] font-bold uppercase tracking-wide ${life.color}`}>{life.label}</p>
                         <div className="flex flex-wrap items-center gap-1">
                           {volume != null && (
                             <span className="font-mono text-[9px] text-text-tertiary">{fmtVol(volume)}</span>

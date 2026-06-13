@@ -1985,12 +1985,14 @@ export default function BlogViewerPage() {
                   titleRef={titleEditorRef}
                   descRef={descEditorRef}
                 />
-                <TipTapBlogEditor
-                  key={`tiptap-${currentBlog.id}-${editSessionKey}`}
-                  initialMarkdown={stripHeroHeading(currentBlog).body}
-                  containerRef={editorRef}
-                  ref={tiptapBodyRef}
-                />
+                <div className="text-text-secondary" style={{ fontSize: 17, lineHeight: 1.78 }}>
+                  <TipTapBlogEditor
+                    key={`tiptap-${currentBlog.id}-${editSessionKey}`}
+                    initialMarkdown={stripHeroHeading(currentBlog).body}
+                    containerRef={editorRef}
+                    ref={tiptapBodyRef}
+                  />
+                </div>
                 <footer className="mt-14 pt-6 text-[11px] text-text-tertiary border-t border-border-subtle">
                   — End of article —
                 </footer>

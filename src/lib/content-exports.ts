@@ -277,7 +277,7 @@ export async function exportLinkedInPost(blog: Blog, format: LinkedInExportForma
   if (format === 'markdown') {
     let md = `# ${blog.title}\n\n## Hook\n${hook}\n\n## Body\n${body}\n\n## Call to Action\n${cta}\n\n## Hashtags\n${hashtags.join(' ')}\n`;
     if (featuredImage) {
-      md += `\n## Featured image\n${featuredImage}\n`;
+      md += `\n## Featured image\n![Featured Image](${featuredImage})\n`;
     }
     triggerDownload(new Blob([md], { type: 'text/markdown' }), `${base}.md`);
     return;
@@ -312,7 +312,11 @@ export async function exportLinkedInPost(blog: Blog, format: LinkedInExportForma
   }
 
   if (format === 'docx') {
-    const blob = await exportToDocx(blog);
+    const patchedBlog = {
+      ...blog,
+      content: blog.content + (featuredImage ? `\n\n![Featured Image](${featuredImage})` : ''),
+    };
+    const blob = await exportToDocx(patchedBlog);
     triggerBlogDownload(blob, blog, 'docx');
     return;
   }

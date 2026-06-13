@@ -30,6 +30,7 @@ import {
   isAhrefsConfigured,
 } from '@/lib/ahrefs';
 import { isProviderEnabled } from '@/lib/admin/platform-settings-runtime';
+import { canUseOrganicCompetitorsApi } from '@/lib/plan-api-access';
 import { addKeywordToCalendarOnDate, collectEarliestVacantDates } from '@/app/actions/calendar-actions';
 import type {
   BenchmarkAverages,
@@ -128,6 +129,15 @@ interface RankingOpportunity {
 export async function runCompetitorBenchmark(projectId: string): Promise<RunBenchmarkResult> {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
+
+  // Check if user's plan allows the organic competitors API
+  const canUseApi = await canUseOrganicCompetitorsApi(user.id);
+  if (!canUseApi) {
+    return {
+      success: false,
+      error: 'The competitor benchmark feature is not available on your current plan. Please upgrade to access this feature.',
+    };
+  }
 
   const { data: projectRow, error: pErr } = await supabaseAdmin
     .from('projects')
@@ -785,6 +795,17 @@ export async function loadMoreCompetitorGapsFromAhrefs(
 ): Promise<LoadMoreCompetitorGapsResult> {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', added: 0, hasMore: false };
+
+  // Check if user's plan allows the organic competitors API
+  const canUseApi = await canUseOrganicCompetitorsApi(user.id);
+  if (!canUseApi) {
+    return {
+      success: false,
+      error: 'The competitor keyword loading feature is not available on your current plan. Please upgrade to access this feature.',
+      added: 0,
+      hasMore: false,
+    };
+  }
 
   const { data: project, error: pErr } = await supabaseAdmin
     .from('projects')

@@ -39,6 +39,7 @@ import {
   type ResolvedLinkOption,
 } from '@/services/linkResolver';
 import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
+import { fetchBlogAhrefsContext } from '@/lib/blog-ahrefs-context';
 
 export async function generateBlog(entryId: string, wordCount: number = 2500, writerNotes?: string) {
   const user = await currentUser();
@@ -243,6 +244,60 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       .filter(Boolean)
       .join('\n\n---\n\n');
 
+    // Fetch blog-specific Ahrefs context (secondary keywords for headings, FAQ keywords)
+    // This only makes API calls if the user's plan has these features enabled
+    let blogAhrefsContext = undefined;
+    try {
+      blogAhrefsContext = await fetchBlogAhrefsContext(
+        entry.focus_keyword,
+        project.target_region,
+        user.id
+      );
+      console.log('[blog-actions] Blog Ahrefs context fetched:', {
+        secondaryKeywords: blogAhrefsContext.secondaryKeywords.length,
+        faqKeywords: blogAhrefsContext.faqKeywords.length,
+        fromAhrefs: blogAhrefsContext.fromAhrefs,
+        secondaryKeywordsData: blogAhrefsContext.secondaryKeywords,
+        faqKeywordsData: blogAhrefsContext.faqKeywords,
+      });
+      if (!blogAhrefsContext.fromAhrefs) {
+        console.warn('[blog-actions] ⚠️ Plan gate blocked Ahrefs blog APIs — enable_ahrefs_blog_headings and enable_ahrefs_blog_faqs are both false for user:', user.id);
+      }
+    } catch (e) {
+      console.warn('[blog-actions] Failed to fetch blog Ahrefs context, continuing without:', e);
+    }
+
+    // Build ahrefsContext for the prompt - map blog-specific data to expected structure
+    const ahrefsContext = blogAhrefsContext?.fromAhrefs
+      ? {
+          // Map blog headings keywords to matchingTerms for the prompt
+          matchingTerms: blogAhrefsContext.secondaryKeywords.map(k => ({
+            keyword: k.keyword,
+            volume: k.volume,
+            difficulty: k.difficulty,
+          })),
+          // Map FAQ keywords to questions for the prompt
+          questions: blogAhrefsContext.faqKeywords.map(k => ({
+            keyword: k.keyword,
+            volume: k.volume,
+            difficulty: k.difficulty,
+          })),
+          // Empty arrays for required fields not used in this flow
+          ideas: [],
+          serp: [],
+          // Add the original data for the new prompt sections
+          secondaryKeywords: blogAhrefsContext.secondaryKeywords,
+          faqKeywords: blogAhrefsContext.faqKeywords,
+        }
+      : undefined;
+
+    console.log('[blog-actions] ahrefsContext being passed to generateBlogPost:', {
+      isDefined: !!ahrefsContext,
+      secondaryKeywords: ahrefsContext?.secondaryKeywords?.length ?? 0,
+      faqKeywords: ahrefsContext?.faqKeywords?.length ?? 0,
+      matchingTerms: ahrefsContext?.matchingTerms?.length ?? 0,
+    });
+
     const blogData = await generateBlogPost(
       entry,
       project,
@@ -250,7 +305,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       research ?? undefined,
       existingBlogs,
       brief,
-      undefined,
+      ahrefsContext,
       mergedWriterNotes || undefined,
     );
     const images = await generateBlogImages({

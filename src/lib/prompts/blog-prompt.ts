@@ -20,6 +20,21 @@ export interface BlogPromptContext {
 }
 
 function formatAhrefsContextForPrompt(ahrefs: any): string {
+  // DEBUG: Log incoming data to terminal
+  console.log('[blog-prompt] formatAhrefsContextForPrompt called with:', {
+    hasMatchingTerms: !!ahrefs?.matchingTerms?.length,
+    hasQuestions: !!ahrefs?.questions?.length,
+    hasSerp: !!ahrefs?.serp?.length,
+    hasSecondaryKeywords: !!ahrefs?.secondaryKeywords?.length,
+    hasFaqKeywords: !!ahrefs?.faqKeywords?.length,
+    matchingTermsCount: ahrefs?.matchingTerms?.length ?? 0,
+    questionsCount: ahrefs?.questions?.length ?? 0,
+    secondaryKeywordsCount: ahrefs?.secondaryKeywords?.length ?? 0,
+    faqKeywordsCount: ahrefs?.faqKeywords?.length ?? 0,
+    secondaryKeywords: ahrefs?.secondaryKeywords?.slice(0, 3),
+    faqKeywords: ahrefs?.faqKeywords?.slice(0, 3),
+  });
+
   const matching = (ahrefs.matchingTerms ?? [])
     .slice(0, 10)
     .map((k: any) => `- ${k.keyword} (vol: ${k.volume ?? 0})`)
@@ -33,7 +48,19 @@ function formatAhrefsContextForPrompt(ahrefs: any): string {
     .map((s: any) => `- Position ${s.position}: ${s.title} (${s.url})`)
     .join('\n');
 
-  return `
+  // NEW: Secondary keywords for blog headings (from API #3)
+  const secondaryKeywords = (ahrefs.secondaryKeywords ?? [])
+    .slice(0, 7)
+    .map((k: any) => `- ${k.keyword} (vol: ${k.volume ?? 0}${k.difficulty !== null ? `, KD: ${k.difficulty}` : ''})`)
+    .join('\n');
+
+  // NEW: FAQ keywords for blog FAQ section (from API #4)
+  const faqKeywords = (ahrefs.faqKeywords ?? [])
+    .slice(0, 5)
+    .map((k: any) => `- ${k.keyword} (vol: ${k.volume ?? 0}${k.difficulty !== null ? `, KD: ${k.difficulty}` : ''})`)
+    .join('\n');
+
+  let result = `
 AHREFS LIVE KEYWORD & SERP CONTEXT:
 Matching terms:
 ${matching || '(none)'}
@@ -44,6 +71,18 @@ ${questions || '(none)'}
 Top SERP competitors:
 ${serp || '(none)'}
 `;
+
+  // Add secondary keywords section if available
+  if (secondaryKeywords) {
+    result += `\nSECONDARY KEYWORDS (USE EXACTLY AS PROVIDED):\nUse these keywords EXACTLY as written below — do NOT rephrase, pluralize, shorten, expand, or change word order.\nInclude them naturally in the blog content, preferably in relevant H2/H3 headings.\nIf a keyword does not fit as a heading, use it naturally in paragraph text exactly as provided:\n${secondaryKeywords}\n`;
+  }
+
+  // Add FAQ keywords section if available
+  if (faqKeywords) {
+    result += `\nFAQ KEYWORDS/QUESTIONS (USE AS-IS, MERGE DUPLICATES):\nUse these questions EXACTLY as written below — do NOT rephrase, alter meaning, or change wording.\nIf two questions are duplicates or have the same meaning, merge them into ONE comprehensive FAQ.\nInclude ALL unique questions in the FAQ section with crisp, useful answers (~50 words each):\n${faqKeywords}\n`;
+  }
+
+  return result;
 }
 
 export function buildBlogPrompt(ctx: BlogPromptContext): string {
@@ -115,7 +154,13 @@ ${brandPersonaBlock}`
     : brandPersonaBlock ? `\nBRAND PERSONA:\n${brandPersonaBlock}\n` : "";
 
   const researchBlock = research ? formatResearchForPrompt(research) : '';
-  const ahrefsBlock = ahrefsContext && (ahrefsContext.ideas?.length || ahrefsContext.serp?.length)
+  const ahrefsBlock = ahrefsContext && (
+      ahrefsContext.ideas?.length ||
+      ahrefsContext.serp?.length ||
+      ahrefsContext.matchingTerms?.length ||
+      ahrefsContext.secondaryKeywords?.length ||
+      ahrefsContext.faqKeywords?.length
+    )
     ? formatAhrefsContextForPrompt(ahrefsContext)
     : '';
 

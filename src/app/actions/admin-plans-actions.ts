@@ -14,6 +14,11 @@ export interface PlanUpdateInput {
   limit_standard_content: number;
   limit_premium_content: number;
   limit_ai_credits: number;
+  // Ahrefs API controls
+  enable_ahrefs_matching_terms?: boolean;
+  enable_ahrefs_organic_competitors?: boolean;
+  enable_ahrefs_blog_headings?: boolean;
+  enable_ahrefs_blog_faqs?: boolean;
 }
 
 /**
@@ -64,6 +69,11 @@ export async function updateSubscriptionPlan(
       limit_standard_content: updates.limit_standard_content,
       limit_premium_content: updates.limit_premium_content,
       limit_ai_credits: updates.limit_ai_credits,
+      // Ahrefs API controls
+      enable_ahrefs_matching_terms: updates.enable_ahrefs_matching_terms ?? true,
+      enable_ahrefs_organic_competitors: updates.enable_ahrefs_organic_competitors ?? true,
+      enable_ahrefs_blog_headings: updates.enable_ahrefs_blog_headings ?? false,
+      enable_ahrefs_blog_faqs: updates.enable_ahrefs_blog_faqs ?? false,
       updated_at: new Date().toISOString(),
     })
     .eq("id", planId);
@@ -106,6 +116,11 @@ export async function createSubscriptionPlan(
       limit_standard_content: planData.limit_standard_content,
       limit_premium_content: planData.limit_premium_content,
       limit_ai_credits: planData.limit_ai_credits,
+      // Ahrefs API controls (defaults)
+      enable_ahrefs_matching_terms: planData.enable_ahrefs_matching_terms ?? true,
+      enable_ahrefs_organic_competitors: planData.enable_ahrefs_organic_competitors ?? true,
+      enable_ahrefs_blog_headings: planData.enable_ahrefs_blog_headings ?? false,
+      enable_ahrefs_blog_faqs: planData.enable_ahrefs_blog_faqs ?? false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });

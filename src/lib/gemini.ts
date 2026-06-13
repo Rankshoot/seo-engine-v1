@@ -328,6 +328,16 @@ export interface AhrefsBlogContext {
     volume: number;
     difficulty: number | null;
   }>;
+  secondaryKeywords?: Array<{
+    keyword: string;
+    volume: number;
+    difficulty: number | null;
+  }>;
+  faqKeywords?: Array<{
+    keyword: string;
+    volume: number;
+    difficulty: number | null;
+  }>;
 }
 
 /** Collapse leaked planning headers from Gemini blog output. */

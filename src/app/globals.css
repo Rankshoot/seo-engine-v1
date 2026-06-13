@@ -364,6 +364,189 @@
   cursor: text;
 }
 
+.tiptap-editor {
+  font-size: 17px;
+  line-height: 1.78;
+  min-height: 50vh;
+}
+
+.tiptap-editor .ProseMirror {
+  outline: none;
+  font-size: inherit;
+  font-family: inherit;
+  line-height: inherit;
+  color: inherit;
+  min-height: inherit;
+  padding: 0;
+}
+
+/* Spacing between block elements */
+.tiptap-editor .ProseMirror > * + * {
+  margin-top: 1.25rem;
+}
+
+/* Headings */
+.tiptap-editor .ProseMirror h1 {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.3px;
+  margin-top: 2.5rem;
+  margin-bottom: 1.25rem;
+  color: inherit;
+}
+.tiptap-editor .ProseMirror h2 {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.2px;
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+  color: inherit;
+}
+.tiptap-editor .ProseMirror h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  color: inherit;
+}
+
+/* Paragraphs */
+.tiptap-editor .ProseMirror p {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+/* Strong / Em */
+.tiptap-editor .ProseMirror strong { font-weight: 700; color: inherit; }
+.tiptap-editor .ProseMirror em     { font-style: italic; }
+
+/* Lists */
+.tiptap-editor .ProseMirror ul,
+.tiptap-editor .ProseMirror ol {
+  padding-left: 1.5rem;
+  margin-top: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+.tiptap-editor .ProseMirror ul { list-style-type: disc; }
+.tiptap-editor .ProseMirror ol { list-style-type: decimal; }
+.tiptap-editor .ProseMirror li { font-size: 17px; line-height: 1.7; margin-bottom: 0.5rem; }
+.tiptap-editor .ProseMirror li > p { margin: 0; }
+
+/* Blockquote */
+.tiptap-editor .ProseMirror blockquote {
+  border-left: 2px solid var(--text-tertiary);
+  background: var(--surface-secondary);
+  padding: 1rem 1rem 1rem 1.25rem;
+  border-radius: 0 4px 4px 0;
+  font-style: italic;
+  font-size: 17px;
+  line-height: 1.7;
+  color: inherit;
+  margin: 1.5rem 0;
+}
+.tiptap-editor .ProseMirror blockquote p { margin: 0; }
+
+/* Code */
+.tiptap-editor .ProseMirror code {
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--text-tertiary);
+}
+.tiptap-editor .ProseMirror pre {
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+.tiptap-editor .ProseMirror pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Horizontal rule */
+.tiptap-editor .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 2.5rem 0;
+}
+
+/* Links */
+.tiptap-editor .ProseMirror a {
+  color: var(--brand-action);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+/* Images */
+.tiptap-editor .ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  display: block;
+  margin: 2rem auto;
+}
+
+/* YouTube iframes */
+.tiptap-editor .ProseMirror div[data-youtube-video] {
+  margin: 2rem 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  aspect-ratio: 16/9;
+}
+.tiptap-editor .ProseMirror div[data-youtube-video] iframe {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Tables */
+.tiptap-editor .ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+  margin: 1.5rem 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.tiptap-editor .ProseMirror th {
+  background: var(--surface-secondary);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.6rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tiptap-editor .ProseMirror td {
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+.tiptap-editor .ProseMirror tr:last-child td { border-bottom: none; }
+.tiptap-editor .ProseMirror .selectedCell { background: var(--surface-hover); }
+
+/* Cursor placeholder */
+.tiptap-editor .ProseMirror.ProseMirror-focused { outline: none; }
+
 /* Right sidebar inner scroll: animated auto-hide → gradient on reveal */
 .blog-sidebar-scroll {
   scrollbar-width: thin;

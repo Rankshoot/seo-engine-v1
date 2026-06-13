@@ -20,6 +20,7 @@ import {
   type PreviewMode,
 } from "@/components/content-generator/shared";
 import { WhitepaperReader } from "@/components/content-generator/whitepaper/WhitepaperReader";
+import type { TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import { exportWhitepaper, WHITEPAPER_EXPORT_OPTIONS } from "@/lib/content-exports";
@@ -95,7 +96,7 @@ export default function WhitepaperViewerPage() {
       });
       if (res.success) {
         const niceDate = new Date(`${res.scheduled_date}T00:00:00`).toLocaleDateString("en-US", {
-          month: "short",
+          month: "long",
           day: "numeric",
           year: "numeric",
         });
@@ -119,7 +120,7 @@ export default function WhitepaperViewerPage() {
 
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const descRef = useRef<HTMLParagraphElement | null>(null);
-  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const tiptapRef = useRef<TipTapBlogEditorRef | null>(null);
 
   const ownSiteHost = useMemo(
     () => (project?.domain ? normalizeSiteHost(project.domain) : null),
@@ -167,17 +168,10 @@ export default function WhitepaperViewerPage() {
   const cancelEdit = () => setMode("preview");
 
   const saveEdit = async () => {
-    if (!bodyRef.current) return;
+    if (!tiptapRef.current) return;
     setSaving(true);
     try {
-      const TurndownService = (await import("turndown")).default;
-      const td = new TurndownService({
-        headingStyle: "atx",
-        codeBlockStyle: "fenced",
-        bulletListMarker: "-",
-      });
-      const html = bodyRef.current.innerHTML;
-      const bodyMd = td.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
+      const bodyMd = tiptapRef.current.getMarkdown().replace(/\n{3,}/g, "\n\n").trim();
       const title = titleRef.current?.textContent?.trim() || blog.title;
       const metaDescription =
         descRef.current?.textContent?.replace(/\s+/g, " ").trim() || blog.meta_description;
@@ -315,19 +309,11 @@ export default function WhitepaperViewerPage() {
   );
 
   const toolbarLeft = (
-    <ViewModePill<PreviewMode>
-      modes={[
-        { key: "preview", label: "Read" },
-        { key: "edit", label: "Edit" },
-        { key: "raw", label: "Raw" },
-      ]}
-      active={mode}
-      onChange={next => {
-        if (next === "edit") startEdit();
-        else if (mode === "edit") cancelEdit();
-        setMode(next);
-      }}
-    />
+    <div className="flex items-center gap-3">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary px-2 py-0.5 rounded border border-border-subtle bg-surface-secondary">
+        Whitepaper
+      </span>
+    </div>
   );
 
   const toolbarRight =
@@ -340,17 +326,29 @@ export default function WhitepaperViewerPage() {
           Save edits
         </Button>
       </>
-    ) : !blog.entry_id ? (
-      <Button
-        variant="primary"
-        shape="pill"
-        size="sm"
-        onClick={() => void handleDirectSchedule()}
-        loading={scheduling}
-      >
-        Direct Schedule
-      </Button>
-    ) : null;
+    ) : (
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          shape="pill"
+          size="sm"
+          onClick={startEdit}
+        >
+          Edit
+        </Button>
+        {!blog.entry_id && (
+          <Button
+            variant="primary"
+            shape="pill"
+            size="sm"
+            onClick={() => void handleDirectSchedule()}
+            loading={scheduling}
+          >
+            Schedule
+          </Button>
+        )}
+      </div>
+    );
 
   return (
     <PreviewShell
@@ -371,7 +369,7 @@ export default function WhitepaperViewerPage() {
         companyName={project?.company}
         titleRef={titleRef}
         descRef={descRef}
-        bodyRef={bodyRef}
+        tiptapRef={tiptapRef}
         editSessionKey={editSessionKey}
       />
     </PreviewShell>

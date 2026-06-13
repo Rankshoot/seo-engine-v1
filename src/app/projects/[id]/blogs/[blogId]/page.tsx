@@ -2,6 +2,7 @@
 
 import {
   useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, memo, lazy, Suspense,
+  isValidElement, Children, type ReactElement,
   type AnchorHTMLAttributes, type ComponentType,
   type HTMLAttributes, type ImgHTMLAttributes, type ReactNode,
   type RefObject,
@@ -36,7 +37,8 @@ import { rangeSelectionToMarkdown, rangeSelectionHtmlFragment } from "@/lib/edit
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { calendarApi } from "@/frontend/api/calendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
-import { PreviewerScheduler } from "@/components/content-generator/shared";
+import { PreviewerScheduler, PreviewShell } from "@/components/content-generator/shared";
+import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
 
@@ -138,41 +140,31 @@ const MemoizedVisualBlogEditors = memo(
     ownSiteHost,
     titleRef,
     descRef,
-    bodyRef,
   }: {
     blog: Blog;
     ownSiteHost: string | null;
     titleRef: RefObject<HTMLHeadingElement | null>;
     descRef: RefObject<HTMLParagraphElement | null>;
-    bodyRef: RefObject<HTMLDivElement | null>;
   }) {
     useLayoutEffect(() => {
       const h = titleRef.current;
       const p = descRef.current;
-      const bodyEl = bodyRef.current;
-      if (!h || !p || !bodyEl) return;
-      const { heroTitle, body } = stripHeroHeading(blog);
+      if (!h || !p) return;
+      const { heroTitle } = stripHeroHeading(blog);
       h.textContent = heroTitle;
       p.textContent = blog.meta_description ?? "";
-      bodyEl.innerHTML = markdownBodyToHtml(body, internalSetForBlog(blog), ownSiteHost);
-    }, [blog, ownSiteHost, titleRef, descRef, bodyRef]);
+    }, [blog, ownSiteHost, titleRef, descRef]);
 
     return (
-      <>
-        <header className="mb-10 pb-8 border-b border-border-subtle">
-          <h1 ref={titleRef} contentEditable suppressContentEditableWarning spellCheck
-            className="mb-4 outline-none text-text-primary"
-            style={{ fontSize: 36, fontWeight: 800, lineHeight: 1.15, letterSpacing: -0.5 }}
-          />
-          <p ref={descRef} contentEditable suppressContentEditableWarning spellCheck
-            className="outline-none text-text-tertiary" style={{ fontSize: 17, lineHeight: 1.7 }}
-          />
-        </header>
-        <div ref={bodyRef} contentEditable suppressContentEditableWarning spellCheck
-          className="editorial-body visual-blog-editor min-h-[50vh] space-y-5 outline-none text-text-secondary"
-          style={{ fontSize: 17, lineHeight: 1.78 }}
+      <header className="mb-10 pb-8 border-b border-border-subtle">
+        <h1 ref={titleRef} contentEditable suppressContentEditableWarning spellCheck
+          className="mb-4 outline-none text-text-primary"
+          style={{ fontSize: 36, fontWeight: 800, lineHeight: 1.15, letterSpacing: -0.5 }}
         />
-      </>
+        <p ref={descRef} contentEditable suppressContentEditableWarning spellCheck
+          className="outline-none text-text-tertiary" style={{ fontSize: 17, lineHeight: 1.7 }}
+        />
+      </header>
     );
   },
   editArticleSeedPropsEqual
@@ -334,16 +326,15 @@ function BlogEditAiFixOverlay({
     document.addEventListener("selectionchange", schedule);
     document.addEventListener("keyup", schedule);
     document.addEventListener("mouseup", schedule);
-    const panel = panelRef.current;
-    panel?.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("scroll", schedule, true);
     schedule();
     return () => {
       document.removeEventListener("selectionchange", schedule);
       document.removeEventListener("keyup", schedule);
       document.removeEventListener("mouseup", schedule);
-      panel?.removeEventListener("scroll", schedule);
+      window.removeEventListener("scroll", schedule, true);
     };
-  }, [active, tick, panelRef]);
+  }, [active, tick]);
 
   if (!active) return null;
 
@@ -721,10 +712,10 @@ export default function BlogViewerPage() {
   const [fixingIssue, setFixingIssue]     = useState<BlogSeoIssueKey | null>(null);
   const [fixError, setFixError]           = useState("");
   const [editError, setEditError]         = useState("");
-  const [activeView, setActiveView]       = useState<"preview" | "raw">("preview");
   const titleEditorRef = useRef<HTMLHeadingElement | null>(null);
   const descEditorRef  = useRef<HTMLParagraphElement | null>(null);
   const editorRef      = useRef<HTMLDivElement | null>(null);
+  const tiptapBodyRef  = useRef<TipTapBlogEditorRef | null>(null);
   const blogPanelRef   = useRef<HTMLDivElement | null>(null);
   const selectionSnapshotRef = useRef<{ range: Range } | null>(null);
 
@@ -1344,7 +1335,6 @@ export default function BlogViewerPage() {
   const startEditing  = () => {
     if (!displayBlog) return;
     setEditError("");
-    setActiveView("preview");
     setEditSessionKey(k => k + 1);
     setEditMode(true);
   };
@@ -1392,30 +1382,17 @@ export default function BlogViewerPage() {
     if (!displayBlog) return;
     setSavingContent(true);
     setEditError("");
-    const html = editorRef.current?.innerHTML ?? "";
-    const TurndownService = (await import("turndown")).default;
-    const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
-    
-    // Custom rule to handle our image wrappers so we don't get duplicate alt text
-    td.addRule('img-wrapper', {
-      filter: function (node) {
-        return node.nodeName === 'SPAN' && node.classList.contains('overflow-hidden') && node.querySelector('img') !== null;
-      },
-      replacement: function (content, node) {
-        const img = node.querySelector('img');
-        if (!img) return '';
-        return `\n\n![${img.getAttribute('alt') || ''}](${img.getAttribute('src') || ''})\n\n`;
-      }
-    });
 
-    const bodyMd = td.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
+    const bodyMd = (tiptapBodyRef.current?.getMarkdown() ?? "").replace(/\n{3,}/g, "\n\n").trim();
     const title = titleEditorRef.current?.textContent?.trim() || displayBlog.title;
     const metaDescription = descEditorRef.current?.textContent?.replace(/\s+/g, " ").trim() || "";
     const md = `# ${title}\n\n${bodyMd}`.replace(/\n{3,}/g, "\n\n").trim();
+
     const res = await blogsApi.updateContent(displayBlog.id, { content: md, title, metaDescription });
     if (res.success && res.data) {
       setScoreRefreshing(true);
-      updateDisplayBlog(res.data); setEditMode(false); setActiveView("preview");
+      updateDisplayBlog(res.data);
+      setEditMode(false);
       setScoreVersion(v => v + 1);
       window.setTimeout(() => setScoreRefreshing(false), 450);
     } else {
@@ -1505,144 +1482,454 @@ export default function BlogViewerPage() {
     ? "Content Analyzer"
     : "Blogs";
 
-  return (
-    <div className="flex flex-col h-full overflow-hidden gap-3">
-
-      {/* ── Top strip ───────────────────────────────────────────────────── */}
-      <div className="shrink-0 flex flex-col gap-2">
-        <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
-          <ProjectNavLink
-            href={`/projects/${projectId}/content-history?tab=generated`}
-            className="inline-flex items-center gap-1.5 hover:text-text-primary transition-colors group font-medium"
+  const breadcrumb = (
+    <div className="shrink-0 flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
+        <ProjectNavLink
+          href={historyParentHref}
+          className="inline-flex items-center gap-1.5 hover:text-text-primary transition-colors group font-medium"
+        >
+          <svg
+            className="w-3.5 h-3.5 shrink-0 transition-transform group-hover:-translate-x-0.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            <svg
-              className="w-3.5 h-3.5 shrink-0 transition-transform group-hover:-translate-x-0.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="19" y1="12" x2="5" y2="12" />
-              <polyline points="12 19 5 12 12 5" />
-            </svg>
-            Back
-          </ProjectNavLink>
-        </div>
-
-        {blog.source_url && blog.article_type === "Repair" && (
-          <RepairBanner sourceUrl={blog.source_url} repairNotes={blog.repair_notes ?? []} projectId={projectId} />
-        )}
-
-        {blog.article_type === "Import" && (
-          <div className="rounded-[8px] px-4 py-3 border border-border-subtle bg-surface-secondary">
-            <p className="text-[10px] font-medium uppercase text-text-tertiary mb-1" style={MONO}>Imported draft</p>
-            <p className="text-[13px] text-text-secondary leading-relaxed">
-              This article was uploaded from Content Health → Analyze upload. Preview, SEO score, edits, selection AI, and exports work the same as generated posts.
-              Full calendar regeneration is only available for posts created from the schedule.
-            </p>
-          </div>
-        )}
-
-        {(researchSources > 0 || externalLinks.length > 0 || internalLinks.length > 0) && (
-          <div className="flex flex-wrap items-center gap-2">
-            {researchSources > 0 && (
-              <Pill color={V.txtMute} border={V.borderS}>
-                <ResearchIcon /> Researched: {researchSources} live sources
-              </Pill>
-            )}
-            {researchSources > 0 && externalLinks.length > 0 && (
-              <Pill color={V.action} border={`${BRAND.actionBlue}44`} bg={`${BRAND.actionBlue}0d`}>
-                <ExternalLinkIcon /> {externalLinks.length} external links
-              </Pill>
-            )}
-            {researchSources > 0 && internalLinks.length > 0 && (
-              <Pill color={V.coral} border={`${BRAND.coral}44`} bg={`${BRAND.coral}0d`}>
-                <LinkIcon /> {internalLinks.length} internal links
-              </Pill>
-            )}
-          </div>
-        )}
+            <line x1="19" y1="12" x2="5" y2="12" />
+            <polyline points="12 19 5 12 12 5" />
+          </svg>
+          Back to {historyParentLabel}
+        </ProjectNavLink>
       </div>
 
-      {/* ── Panels ──────────────────────────────────────────────────────── */}
-      <div className="flex gap-5 flex-1 min-h-0">
+      {blog.source_url && blog.article_type === "Repair" && (
+        <RepairBanner sourceUrl={blog.source_url} repairNotes={blog.repair_notes ?? []} projectId={projectId} />
+      )}
 
-        {/* LEFT: blog content */}
-        <div ref={blogPanelRef} className="flex-1 min-w-0 overflow-y-auto blog-content-panel rounded-[10px] border border-border-subtle bg-surface-primary">
+      {blog.article_type === "Import" && (
+        <div className="rounded-[8px] px-4 py-3 border border-border-subtle bg-surface-secondary">
+          <p className="text-[10px] font-medium uppercase text-text-tertiary mb-1" style={MONO}>Imported draft</p>
+          <p className="text-[13px] text-text-secondary leading-relaxed">
+            This article was uploaded from Content Health → Analyze upload. Preview, SEO score, edits, selection AI, and exports work the same as generated posts.
+            Full calendar regeneration is only available for posts created from the schedule.
+          </p>
+        </div>
+      )}
 
-          {/* Sticky toolbar */}
-          <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-2.5 border-b border-border-subtle bg-surface-primary">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle">
-                {(["preview", "raw"] as const).map(v => (
-                  <button
-                    key={v}
-                    onClick={() => !editMode && setActiveView(v)}
-                    disabled={editMode && v === "raw"}
-                    className="px-4 py-1 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                    style={activeView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-              {beforeDeepEnhance && (
-                <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-secondary/60">
-                  {(["before", "after"] as const).map(v => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => !editMode && setDeepCompareView(v)}
-                      disabled={editMode}
-                      className="px-3.5 py-1 rounded-full text-[11px] font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                      style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
-                    >
-                      {v}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {editMode ? (
-                <>
-                  <button type="button" onClick={saveEditing} disabled={savingContent}
-                    className="flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-medium disabled:opacity-60"
-                    style={{ background: V.txt, color: V.bg }}>
-                    {savingContent ? <><SpinIcon />&nbsp;Saving…</> : "Save edits"}
-                  </button>
-                  <button type="button" onClick={cancelEditing} disabled={savingContent}
-                    className="rounded-full px-4 py-1.5 text-[12px] font-medium border border-border-subtle text-text-tertiary hover:text-text-primary transition-colors disabled:opacity-60">
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button type="button" onClick={startEditing} disabled={activeView !== "preview"}
-                  className="rounded-full px-4 py-1.5 text-[12px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ background: V.txt, color: V.bg }}>
-                  Edit
-                </button>
-              )}
-              {!blog.entry_id && !editMode && (
-                <button
-                  type="button"
-                  onClick={handleDirectSchedule}
-                  disabled={scheduling || !nextVacantDate}
-                  className="rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all disabled:opacity-40"
-                  style={{ background: V.action, color: "#ffffff" }}
-                >
-                  {scheduling ? "Scheduling..." : "Direct Schedule"}
-                </button>
-              )}
-              <button onClick={handleCopy} disabled={editMode}
-                className="rounded-full px-4 py-1.5 text-[12px] font-medium border border-border-subtle text-text-tertiary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-                {copied ? "Copied!" : "Copy MD"}
+      {(researchSources > 0 || externalLinks.length > 0 || internalLinks.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {researchSources > 0 && (
+            <Pill color={V.txtMute} border={V.borderS}>
+              <ResearchIcon /> Researched: {researchSources} live sources
+            </Pill>
+          )}
+          {researchSources > 0 && externalLinks.length > 0 && (
+            <Pill color={V.action} border={`${BRAND.actionBlue}44`} bg={`${BRAND.actionBlue}0d`}>
+              <ExternalLinkIcon /> {externalLinks.length} external links
+            </Pill>
+          )}
+          {researchSources > 0 && internalLinks.length > 0 && (
+            <Pill color={V.coral} border={`${BRAND.coral}44`} bg={`${BRAND.coral}0d`}>
+              <LinkIcon /> {internalLinks.length} internal links
+            </Pill>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const toolbarLeft = (
+    <div className="flex items-center gap-3">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary px-2 py-0.5 rounded border border-border-subtle bg-surface-secondary">
+        Blog Post
+      </span>
+      {beforeDeepEnhance && (
+        <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-secondary/60">
+          {(["before", "after"] as const).map(v => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => !editMode && setDeepCompareView(v)}
+              disabled={editMode}
+              className="px-3.5 py-1 rounded-full text-[11px] font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+              style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const toolbarRight = (
+    <div className="flex items-center gap-2">
+      {editMode ? (
+        <>
+          <button type="button" onClick={saveEditing} disabled={savingContent}
+            className="flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-medium disabled:opacity-60"
+            style={{ background: V.txt, color: V.bg }}>
+            {savingContent ? <><SpinIcon />&nbsp;Saving…</> : "Save edits"}
+          </button>
+          <button type="button" onClick={cancelEditing} disabled={savingContent}
+            className="rounded-full px-4 py-1.5 text-[12px] font-medium border border-border-subtle text-text-tertiary hover:text-text-primary transition-colors disabled:opacity-60">
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button type="button" onClick={startEditing}
+          className="rounded-full px-4 py-1.5 text-[12px] font-medium transition-all"
+          style={{ background: V.txt, color: V.bg }}>
+          Edit
+        </button>
+      )}
+      {!blog.entry_id && !editMode && (
+        <button
+          type="button"
+          onClick={handleDirectSchedule}
+          disabled={scheduling || !nextVacantDate}
+          className="rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all disabled:opacity-40"
+          style={{ background: V.action, color: "#ffffff" }}
+        >
+          {scheduling ? "Scheduling..." : "Schedule"}
+        </button>
+      )}
+      <button onClick={handleCopy} disabled={editMode}
+        className="rounded-full px-4 py-1.5 text-[12px] font-medium border border-border-subtle text-text-tertiary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+        {copied ? "Copied!" : "Copy MD"}
+      </button>
+    </div>
+  );
+
+  const sidebar = (
+    <>
+      {/* ── Before / After comparison ─────────────────────────── */}
+      {enhancedBlog && (
+        <div className="px-4 pt-4 pb-2">
+          <div className="flex w-full items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-primary/40">
+            {(["before", "after"] as const).map(v => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => !editMode && setCompareView(v)}
+                disabled={editMode}
+                className="flex-1 px-4 py-1.5 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                style={compareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                title={v === "before" ? "Original draft" : "AI-enhanced rewrite"}
+              >
+                {v}
               </button>
-            </div>
+            ))}
           </div>
+        </div>
+      )}
 
+      {/* ── Content Analysis (Analyze content page entry only) ───── */}
+      {fromAnalyzeContentPage && (
+        <>
+          <div className={`px-4 pb-3 ${enhancedBlog ? "pt-2" : "pt-4"}`}>
+            <button
+              type="button"
+              onClick={() => void openAnalysisModal()}
+              disabled={editMode || savingContent}
+              className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 ${
+                analysisIsStale
+                  ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
+                  : contentAnalysis
+                    ? "bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
+                    : "bg-brand-action text-brand-on-primary hover:opacity-90 shadow-md shadow-brand-action/20"
+              }`}
+            >
+              <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+              </svg>
+              {analysisIsStale ? "Content changed — re-analyse" : contentAnalysis ? "View analysis" : "Analyse content"}
+            </button>
+            {contentAnalysis && !analysisIsStale && (
+              <div className="mt-1.5 flex items-center justify-center gap-2 text-[10px] text-text-tertiary">
+                {contentAnalysis.conclusion && (
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold text-[9px] uppercase ${CONCLUSION_META[contentAnalysis.conclusion.verdict].cls}`}>
+                    {CONCLUSION_META[contentAnalysis.conclusion.verdict].label}
+                  </span>
+                )}
+                <span>{contentAnalysis.issues.length} issues</span>
+              </div>
+            )}
+          </div>
+          <div className="h-px mx-4 bg-border-subtle opacity-60" />
+        </>
+      )}
+
+      {/* Deep Analysis — SERP competitor gap vs our blog */}
+      {beforeDeepEnhance && (
+        <div className="px-4 pt-3 pb-1">
+          <div className="flex w-full items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-primary/40">
+            {(["before", "after"] as const).map(v => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => !editMode && setDeepCompareView(v)}
+                disabled={editMode}
+                className="flex-1 px-4 py-1.5 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
+                title={v === "before" ? "Original draft" : "AI-enhanced rewrite"}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className={`px-4 pb-3 ${fromAnalyzeContentPage ? "pt-2" : "pt-4"} ${sidebarMuted ? "opacity-25 pointer-events-none" : ""}`}>
+        <button
+          type="button"
+          onClick={() => void openDeepAnalysisModal()}
+          disabled={editMode || savingContent || !displayBlog?.target_keyword?.trim()}
+          className="w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
+          title={!displayBlog?.target_keyword?.trim() ? "Add a target keyword to run deep analysis" : undefined}
+        >
+          <svg className="h-4 w-4 shrink-0 text-brand-action" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+          </svg>
+          {hasSavedDeepAnalysis ? "View Deep Analysis" : "Deep Analysis"}
+        </button>
+        {deepScoreDisplay != null && (
+          <p className="mt-1.5 text-center text-[10px] text-text-tertiary">
+            Score <span className="font-semibold text-text-secondary">{deepScoreDisplay}/100</span>
+          </p>
+        )}
+      </div>
+      <div className="h-px mx-4 bg-border-subtle opacity-60" />
+
+      {/* SEO Score — borderless embed, blends into panel bg */}
+      <div className={`transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>
+        <SEOScorePanel
+          key={`${currentBlog.id}-${currentBlog.updated_at}-${scoreVersion}`}
+          blog={currentBlog}
+          projectDomain={project?.domain}
+          fixingIssue={fixingIssue}
+          onFixIssue={check => handleSeoFix(check.key)}
+          className="p-4 bg-transparent border-0"
+        />
+      </div>
+
+      {(editMode || savingContent || scoreRefreshing) && (
+        <div className="px-4 pb-3 -mt-1">
+          <p className="text-[10px] text-text-tertiary leading-relaxed">
+            {editMode ? "Score paused while editing. Save to recalculate." : "Recalculating SEO score…"}
+          </p>
+        </div>
+      )}
+      {fixError && (
+        <div className="px-4 pb-3">
+          <p className="text-[10px] text-rose-500">{fixError}</p>
+        </div>
+      )}
+
+      {/* ── Editorial metadata ──────────────────────────────────── */}
+      <Divider />
+      <div className="px-4 pt-3.5 pb-1">
+
+        {/* Status — only shown in edit mode */}
+        {editMode && (
+          <div className="mb-3.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <SLabel>Status</SLabel>
+              {savingStatus && <SpinIcon className="w-3 h-3" />}
+            </div>
+            <div className="relative">
+              <select
+                value={blogStatus}
+                onChange={e => handleStatusChange(e.target.value as BlogStatus)}
+                disabled={savingStatus}
+                className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
+                style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
+              >
+                {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+              <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+              </svg>
+            </div>
+            <div className="flex items-center gap-1.5 mt-1.5">
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusInfo.color }} />
+              <p className="text-[10px] text-text-tertiary">{statusInfo.hint}</p>
+            </div>
+            {statusError && <p className="mt-1 text-[10px] text-rose-500">{statusError}</p>}
+          </div>
+        )}
+
+        {/* Target keyword */}
+        <div className="mb-3.5">
+          <SLabel>Target Keyword</SLabel>
+          <p className="text-[13px] font-semibold text-text-primary leading-snug">{currentBlog.target_keyword}</p>
+        </div>
+
+        {/* Type + Slug side by side */}
+        <div className="grid grid-cols-2 gap-4 mb-3.5">
+          <div>
+            <SLabel>Type</SLabel>
+            <p className="text-[12px] font-medium text-text-primary">{currentBlog.article_type}</p>
+          </div>
+          <div className="min-w-0">
+            <SLabel>Slug</SLabel>
+            <p className="text-[11px] break-all text-text-tertiary leading-snug" style={{ fontFamily: "CohereMono, monospace" }}>
+              /{currentBlog.slug}
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      {/* ── Meta description ─────────────────────────────────────── */}
+      <Divider />
+      <div className="px-4 py-3.5">
+        <div className="flex items-center justify-between mb-1.5">
+          <SLabel>Meta Description</SLabel>
+          <span
+            className="text-[9px] font-semibold tabular-nums rounded-full px-1.5 py-0.5"
+            style={{
+              background: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a18" : "#b91c1c14",
+              color: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a" : "#b91c1c",
+            }}
+          >
+            {currentBlog.meta_description.length}/160
+          </span>
+        </div>
+        <p className="text-[11px] text-text-tertiary leading-relaxed">{currentBlog.meta_description}</p>
+      </div>
+
+      {/* ── Links ────────────────────────────────────────────────── */}
+      {(externalLinks.length > 0 || internalLinks.length > 0) && (
+        <>
+          <Divider />
+          <div className="px-4 py-3.5 space-y-3">
+            {externalLinks.length > 0 && (
+              <div>
+                <SLabel>External links ({externalLinks.length})</SLabel>
+                <div className="space-y-1">
+                  {externalLinks.map((url, i) => {
+                    return (
+                      <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-[11px] hover:underline truncate"
+                        style={{ color: V.action }}
+                        title={url}>
+                        <ExternalLinkIcon className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{url}</span>
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {internalLinks.length > 0 && (
+              <div>
+                <SLabel>Internal links ({internalLinks.length})</SLabel>
+                <div className="space-y-0.5">
+                  {internalLinks.map((path, i) => {
+                    const fullUrl = path.startsWith('/') && project?.domain ? `https://${project.domain}${path}` : path;
+                    return (
+                      <a key={i} href={fullUrl} target="_blank" rel="noopener noreferrer" 
+                        className="text-[11px] truncate block hover:underline" 
+                        style={{ fontFamily: "CohereMono, monospace", color: V.coral }}
+                        title={fullUrl}>
+                        {fullUrl}
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── Schedule ─────────────────────────────────────────────── */}
+      <Divider />
+      <div className="px-4 py-3.5">
+        <PreviewerScheduler
+          projectId={projectId}
+          blogId={blog.id}
+          entryId={blog.entry_id}
+          onScheduleUpdated={(newId) => {
+            setBlog((b) => {
+              const nextVal = b ? { ...b, entry_id: newId } : b;
+              if (nextVal) {
+                queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+              }
+              return nextVal;
+            });
+            setScheduleVersion((v) => v + 1);
+          }}
+        />
+      </div>
+
+      {/* ── Export ───────────────────────────────────────────────── */}
+      <Divider />
+      <div className="px-4 py-3.5">
+        <SLabel>Export</SLabel>
+        <div className="grid grid-cols-2 gap-1.5">
+          {FORMATS.map(fmt => (
+            <button
+              key={fmt.key}
+              onClick={() => handleDownload(fmt.key)}
+              disabled={downloading === fmt.key}
+              className="group flex items-center justify-between rounded-[6px] px-3 py-2 text-[11px] font-medium transition-all disabled:opacity-50"
+              style={{ border: `1px solid var(--border-subtle)`, background: "var(--surface-tertiary)", color: V.txtMute }}
+              onMouseEnter={e => { e.currentTarget.style.color = V.txt; e.currentTarget.style.borderColor = V.border; }}
+              onMouseLeave={e => { e.currentTarget.style.color = V.txtMute; e.currentTarget.style.borderColor = V.borderS; }}
+            >
+              <span style={MONO}>{fmt.ext}</span>
+              {downloading === fmt.key ? <SpinIcon className="w-3 h-3" /> : <DownloadIcon className="w-3 h-3" />}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Generate — hidden for imported/repaired content ──────── */}
+      {!isImport && !isRepair && (
+        <>
+          <Divider />
+          <div className="px-4 py-4">
+            <SLabel>Generate</SLabel>
+            <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
+              {isAfterView
+                ? "Calendar regeneration runs against the original draft. Switch to Before to use it."
+                : blog.entry_id
+                ? "Runs full research + generation with Gemini AI"
+                : "Not available for imported drafts — create a scheduled post from Calendar to run full generation."}
+            </p>
+            <button
+              onClick={handleRegenerate}
+              disabled={regenerating || !blog.entry_id || isAfterView}
+              className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
+              style={{ background: V.txt, color: V.bg }}
+            >
+              {regenerating ? <><SpinIcon />&nbsp;Generating…</> : "Generate blog"}
+            </button>
+            {editError && <p className="mt-2 text-[11px] text-brand-coral">{editError}</p>}
+          </div>
+        </>
+      )}
+    </>
+  );
+
+  return (
+    <>
+      <PreviewShell
+        header={breadcrumb}
+        toolbarLeft={toolbarLeft}
+        toolbarRight={toolbarRight}
+        sidebar={sidebar}
+        sidebarWidthPx={288}
+        framedCanvas={false}
+        toolbarInsideCanvas
+        immersiveFullscreen
+      >
+        <div ref={blogPanelRef} className="h-full overflow-y-auto">
           {editError && (
             <div className="px-5 py-2.5 text-[12px] text-rose-500 bg-rose-500/5 border-b border-border-subtle">
               {editError}
@@ -1697,7 +1984,12 @@ export default function BlogViewerPage() {
                   ownSiteHost={ownSiteHost}
                   titleRef={titleEditorRef}
                   descRef={descEditorRef}
-                  bodyRef={editorRef}
+                />
+                <TipTapBlogEditor
+                  key={`tiptap-${currentBlog.id}-${editSessionKey}`}
+                  initialMarkdown={stripHeroHeading(currentBlog).body}
+                  containerRef={editorRef}
+                  ref={tiptapBodyRef}
                 />
                 <footer className="mt-14 pt-6 text-[11px] text-text-tertiary border-t border-border-subtle">
                   — End of article —
@@ -1707,335 +1999,11 @@ export default function BlogViewerPage() {
                 Save to update title, description, SEO score, word count, and link counts.
               </p>
             </div>
-          ) : activeView === "preview" ? (
-            <EditorialPreview blog={currentBlog} ownSiteHost={ownSiteHost} />
           ) : (
-            <div className="p-8">
-              <pre className="text-[13px] whitespace-pre-wrap leading-relaxed overflow-x-auto text-text-secondary" style={{ fontFamily: "CohereMono, monospace" }}>
-                {currentBlog.content}
-              </pre>
-            </div>
+            <EditorialPreview blog={currentBlog} ownSiteHost={ownSiteHost} />
           )}
         </div>
-
-        {/* RIGHT: unified sidebar */}
-        {/* outer clips scrollbar inside the rounded border */}
-        <div className="w-[288px] shrink-0 rounded-[10px] border border-border-subtle bg-surface-secondary overflow-hidden">
-          <div className="h-full overflow-y-auto blog-sidebar-scroll">
-
-            {/* ── Before / After comparison ─────────────────────────── */}
-            {enhancedBlog && (
-              <div className="px-4 pt-4 pb-2">
-                <div className="flex w-full items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-primary/40">
-                  {(["before", "after"] as const).map(v => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => !editMode && setCompareView(v)}
-                      disabled={editMode}
-                      className="flex-1 px-4 py-1.5 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                      style={compareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
-                      title={v === "before" ? "Original draft" : "AI-enhanced rewrite"}
-                    >
-                      {v}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ── Content Analysis (Analyze content page entry only) ───── */}
-            {fromAnalyzeContentPage && (
-              <>
-                <div className={`px-4 pb-3 ${enhancedBlog ? "pt-2" : "pt-4"}`}>
-                  <button
-                    type="button"
-                    onClick={() => void openAnalysisModal()}
-                    disabled={editMode || savingContent}
-                    className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 ${
-                      analysisIsStale
-                        ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
-                        : contentAnalysis
-                          ? "bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
-                          : "bg-brand-action text-brand-on-primary hover:opacity-90 shadow-md shadow-brand-action/20"
-                    }`}
-                  >
-                    <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
-                    </svg>
-                    {analysisIsStale ? "Content changed — re-analyse" : contentAnalysis ? "View analysis" : "Analyse content"}
-                  </button>
-                  {contentAnalysis && !analysisIsStale && (
-                    <div className="mt-1.5 flex items-center justify-center gap-2 text-[10px] text-text-tertiary">
-                      {contentAnalysis.conclusion && (
-                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold text-[9px] uppercase ${CONCLUSION_META[contentAnalysis.conclusion.verdict].cls}`}>
-                          {CONCLUSION_META[contentAnalysis.conclusion.verdict].label}
-                        </span>
-                      )}
-                      <span>{contentAnalysis.issues.length} issues</span>
-                    </div>
-                  )}
-                </div>
-                <div className="h-px mx-4 bg-border-subtle opacity-60" />
-              </>
-            )}
-
-            {/* Deep Analysis — SERP competitor gap vs our blog */}
-            {beforeDeepEnhance && (
-              <div className="px-4 pt-3 pb-1">
-                <div className="flex w-full items-center gap-0.5 p-0.5 rounded-full border border-border-subtle bg-surface-primary/40">
-                  {(["before", "after"] as const).map(v => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => !editMode && setDeepCompareView(v)}
-                      disabled={editMode}
-                      className="flex-1 px-4 py-1.5 rounded-full text-[12px] font-medium capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                      style={deepCompareView === v ? { background: V.txt, color: V.bg } : { background: "transparent", color: V.txtMute }}
-                      title={v === "before" ? "Original draft" : "AI-enhanced rewrite"}
-                    >
-                      {v}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className={`px-4 pb-3 ${fromAnalyzeContentPage ? "pt-2" : "pt-4"} ${sidebarMuted ? "opacity-25 pointer-events-none" : ""}`}>
-              <button
-                type="button"
-                onClick={() => void openDeepAnalysisModal()}
-                disabled={editMode || savingContent || !displayBlog?.target_keyword?.trim()}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
-                title={!displayBlog?.target_keyword?.trim() ? "Add a target keyword to run deep analysis" : undefined}
-              >
-                <svg className="h-4 w-4 shrink-0 text-brand-action" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
-                </svg>
-                {hasSavedDeepAnalysis ? "View Deep Analysis" : "Deep Analysis"}
-              </button>
-              {deepScoreDisplay != null && (
-                <p className="mt-1.5 text-center text-[10px] text-text-tertiary">
-                  Score <span className="font-semibold text-text-secondary">{deepScoreDisplay}/100</span>
-                </p>
-              )}
-            </div>
-            <div className="h-px mx-4 bg-border-subtle opacity-60" />
-
-            {/* SEO Score — borderless embed, blends into panel bg */}
-            <div className={`transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>
-              <SEOScorePanel
-                key={`${currentBlog.id}-${currentBlog.updated_at}-${scoreVersion}`}
-                blog={currentBlog}
-                projectDomain={project?.domain}
-                fixingIssue={fixingIssue}
-                onFixIssue={check => handleSeoFix(check.key)}
-                className="p-4 bg-transparent border-0"
-              />
-            </div>
-
-            {(editMode || savingContent || scoreRefreshing) && (
-              <div className="px-4 pb-3 -mt-1">
-                <p className="text-[10px] text-text-tertiary leading-relaxed">
-                  {editMode ? "Score paused while editing. Save to recalculate." : "Recalculating SEO score…"}
-                </p>
-              </div>
-            )}
-            {fixError && (
-              <div className="px-4 pb-3">
-                <p className="text-[10px] text-rose-500">{fixError}</p>
-              </div>
-            )}
-
-            {/* ── Editorial metadata ──────────────────────────────────── */}
-            <Divider />
-            <div className="px-4 pt-3.5 pb-1">
-
-              {/* Status — only shown in edit mode */}
-              {editMode && (
-                <div className="mb-3.5">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <SLabel>Status</SLabel>
-                    {savingStatus && <SpinIcon className="w-3 h-3" />}
-                  </div>
-                  <div className="relative">
-                    <select
-                      value={blogStatus}
-                      onChange={e => handleStatusChange(e.target.value as BlogStatus)}
-                      disabled={savingStatus}
-                      className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
-                      style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
-                    >
-                      {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                    </select>
-                    <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                    </svg>
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusInfo.color }} />
-                    <p className="text-[10px] text-text-tertiary">{statusInfo.hint}</p>
-                  </div>
-                  {statusError && <p className="mt-1 text-[10px] text-rose-500">{statusError}</p>}
-                </div>
-              )}
-
-              {/* Target keyword */}
-              <div className="mb-3.5">
-                <SLabel>Target Keyword</SLabel>
-                <p className="text-[13px] font-semibold text-text-primary leading-snug">{currentBlog.target_keyword}</p>
-              </div>
-
-              {/* Type + Slug side by side */}
-              <div className="grid grid-cols-2 gap-4 mb-3.5">
-                <div>
-                  <SLabel>Type</SLabel>
-                  <p className="text-[12px] font-medium text-text-primary">{currentBlog.article_type}</p>
-                </div>
-                <div className="min-w-0">
-                  <SLabel>Slug</SLabel>
-                  <p className="text-[11px] break-all text-text-tertiary leading-snug" style={{ fontFamily: "CohereMono, monospace" }}>
-                    /{currentBlog.slug}
-                  </p>
-                </div>
-              </div>
-
-            </div>
-
-            {/* ── Meta description ─────────────────────────────────────── */}
-            <Divider />
-            <div className="px-4 py-3.5">
-              <div className="flex items-center justify-between mb-1.5">
-                <SLabel>Meta Description</SLabel>
-                <span
-                  className="text-[9px] font-semibold tabular-nums rounded-full px-1.5 py-0.5"
-                  style={{
-                    background: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a18" : "#b91c1c14",
-                    color: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a" : "#b91c1c",
-                  }}
-                >
-                  {currentBlog.meta_description.length}/160
-                </span>
-              </div>
-              <p className="text-[11px] text-text-tertiary leading-relaxed">{currentBlog.meta_description}</p>
-            </div>
-
-            {/* ── Links ────────────────────────────────────────────────── */}
-            {(externalLinks.length > 0 || internalLinks.length > 0) && (
-              <>
-                <Divider />
-                <div className="px-4 py-3.5 space-y-3">
-                  {externalLinks.length > 0 && (
-                    <div>
-                      <SLabel>External links ({externalLinks.length})</SLabel>
-                      <div className="space-y-1">
-                        {externalLinks.map((url, i) => {
-                          return (
-                            <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                              className="flex items-center gap-1.5 text-[11px] hover:underline truncate"
-                              style={{ color: V.action }}
-                              title={url}>
-                              <ExternalLinkIcon className="w-3 h-3 shrink-0" />
-                              <span className="truncate">{url}</span>
-                            </a>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {internalLinks.length > 0 && (
-                    <div>
-                      <SLabel>Internal links ({internalLinks.length})</SLabel>
-                      <div className="space-y-0.5">
-                        {internalLinks.map((path, i) => {
-                          const fullUrl = path.startsWith('/') && project?.domain ? `https://${project.domain}${path}` : path;
-                          return (
-                            <a key={i} href={fullUrl} target="_blank" rel="noopener noreferrer" 
-                              className="text-[11px] truncate block hover:underline" 
-                              style={{ fontFamily: "CohereMono, monospace", color: V.coral }}
-                              title={fullUrl}>
-                              {fullUrl}
-                            </a>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {/* ── Schedule ─────────────────────────────────────────────── */}
-            <Divider />
-            <div className="px-4 py-3.5">
-              <PreviewerScheduler
-                projectId={projectId}
-                blogId={blog.id}
-                entryId={blog.entry_id}
-                onScheduleUpdated={(newId) => {
-                  setBlog((b) => {
-                    const nextVal = b ? { ...b, entry_id: newId } : b;
-                    if (nextVal) {
-                      queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
-                    }
-                    return nextVal;
-                  });
-                  setScheduleVersion((v) => v + 1);
-                }}
-              />
-            </div>
-
-            {/* ── Export ───────────────────────────────────────────────── */}
-            <Divider />
-            <div className="px-4 py-3.5">
-              <SLabel>Export</SLabel>
-              <div className="grid grid-cols-2 gap-1.5">
-                {FORMATS.map(fmt => (
-                  <button
-                    key={fmt.key}
-                    onClick={() => handleDownload(fmt.key)}
-                    disabled={downloading === fmt.key}
-                    className="group flex items-center justify-between rounded-[6px] px-3 py-2 text-[11px] font-medium transition-all disabled:opacity-50"
-                    style={{ border: `1px solid var(--border-subtle)`, background: "var(--surface-tertiary)", color: V.txtMute }}
-                    onMouseEnter={e => { e.currentTarget.style.color = V.txt; e.currentTarget.style.borderColor = V.border; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = V.txtMute; e.currentTarget.style.borderColor = V.borderS; }}
-                  >
-                    <span style={MONO}>{fmt.ext}</span>
-                    {downloading === fmt.key ? <SpinIcon className="w-3 h-3" /> : <DownloadIcon className="w-3 h-3" />}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* ── Generate — hidden for imported/repaired content ──────── */}
-            {!isImport && !isRepair && (
-              <>
-                <Divider />
-                <div className="px-4 py-4">
-                  <SLabel>Generate</SLabel>
-                  <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
-                    {isAfterView
-                      ? "Calendar regeneration runs against the original draft. Switch to Before to use it."
-                      : blog.entry_id
-                      ? "Runs full research + generation with Gemini AI"
-                      : "Not available for imported drafts — create a scheduled post from Calendar to run full generation."}
-                  </p>
-                  <button
-                    onClick={handleRegenerate}
-                    disabled={regenerating || !blog.entry_id || isAfterView}
-                    className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
-                    style={{ background: V.txt, color: V.bg }}
-                  >
-                    {regenerating ? <><SpinIcon />&nbsp;Generating…</> : "Generate blog"}
-                  </button>
-                  {editError && <p className="mt-2 text-[11px] text-brand-coral">{editError}</p>}
-                </div>
-              </>
-            )}
-
-          </div>
-        </div>
-
-      </div>
+      </PreviewShell>
 
       <BlogEditAiFixOverlay
         active={editMode && !aiRewriter.open}
@@ -2112,7 +2080,7 @@ export default function BlogViewerPage() {
         }}
         onInsert={handleAiRewriterInsert}
       />
-    </div>
+    </>
   );
 }
 
@@ -2245,6 +2213,25 @@ function ArticleMetaRow({ blog }: { blog: Blog }) {
 // ─── Helpers ──────────────────────────────────────────────────────────────
 function internalSetForBlog(blog: Blog): Set<string> { return new Set(blog.internal_links ?? []); }
 
+function extractYouTubeId(url: string): string | null {
+  try {
+    const u = new URL(url.trim());
+    if (u.hostname.includes("youtube.com") || u.hostname.includes("youtube-nocookie.com")) {
+      const v = u.searchParams.get("v");
+      if (v) return v;
+      const m = u.pathname.match(/\/embed\/([^/?#]+)/);
+      if (m) return m[1];
+    }
+    if (u.hostname === "youtu.be") {
+      const id = u.pathname.slice(1).split("/")[0];
+      return id || null;
+    }
+  } catch {
+    // not a valid URL
+  }
+  return null;
+}
+
 function stripHeroHeading(blog: Blog): { heroTitle: string; body: string } {
   const h1 = blog.content.match(/^\s*#\s+(.+)\s*$/m);
   if (!h1) return { heroTitle: blog.title, body: blog.content };
@@ -2308,7 +2295,45 @@ function buildMarkdownComponents(internalSet: Set<string>, ownSiteHost: string |
       return <code className={`${className} font-mono text-[13px] text-text-secondary`} {...r}>{children}</code>;
     return <code className="rounded-[4px] px-1.5 py-0.5 text-[0.85em] font-mono bg-surface-secondary text-text-tertiary border border-border-subtle" {...r}>{children}</code>;
   };
-  const Pre: ComponentType<HTMLAttributes<HTMLPreElement>> = ({ children, ...r }) => <pre className="my-6 overflow-x-auto rounded-[8px] p-4 text-[13px] leading-relaxed border border-border-subtle bg-surface-secondary text-text-secondary" {...r}>{children}</pre>;
+  const Pre: ComponentType<HTMLAttributes<HTMLPreElement>> = ({ children, ...r }) => {
+    const childrenArray = Children.toArray(children);
+    const codeChild = childrenArray.find(
+      (child): child is ReactElement<{ className?: string; children?: ReactNode }> => {
+        if (!isValidElement(child)) return false;
+        const props = child.props as any;
+        return typeof props?.className === "string" && props.className.includes("language-youtube");
+      }
+    );
+
+    if (codeChild) {
+      const rawUrl = flattenChildren(codeChild.props.children).trim();
+      const videoId = extractYouTubeId(rawUrl);
+      if (videoId) {
+        return (
+          <div
+            className="my-8 overflow-hidden rounded-[12px] border border-border-subtle"
+            style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}
+          >
+            <iframe
+              src={`https://www.youtube-nocookie.com/embed/${videoId}`}
+              title="YouTube video"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+                border: 0,
+              }}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        );
+      }
+    }
+    return <pre className="my-6 overflow-x-auto rounded-[8px] p-4 text-[13px] leading-relaxed border border-border-subtle bg-surface-secondary text-text-secondary" {...r}>{children}</pre>;
+  };
   const HR: ComponentType<HTMLAttributes<HTMLHRElement>> = (p) => <hr className="my-10 border-t border-border-subtle" {...p} />;
   const Table: ComponentType<HTMLAttributes<HTMLTableElement>> = ({ children, ...r }) => (
     <div className="my-6 overflow-x-auto rounded-[8px] border border-border-subtle">

@@ -19,6 +19,8 @@ import {
   PreviewerScheduler,
   type PreviewMode,
 } from "@/components/content-generator/shared";
+import { InlineAiEditOverlay } from "@/components/content-generator/shared/InlineAiEditOverlay";
+import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { LinkedInFeedCard } from "@/components/content-generator/linkedin/LinkedInFeedCard";
 import {
   draftFromContentData,
@@ -38,6 +40,9 @@ import type {
   LinkedInContentData,
   Project,
 } from "@/lib/types";
+import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
 
@@ -126,6 +131,18 @@ export default function LinkedInViewerPage() {
 
   const tiptapRef = useRef<TipTapBlogEditorRef | null>(null);
   const [editSessionKey, setEditSessionKey] = useState(0);
+
+  // AI inline edit state
+  const [aiEdit, setAiEdit] = useState<{ open: boolean; snapshot: BlogRewriteSelectionSnapshot | null }>({
+    open: false,
+    snapshot: null,
+  });
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const getEditorRoots = useCallback(() => [editorContainerRef.current], []);
+
+  useEffect(() => {
+    if (mode !== "edit") setAiEdit({ open: false, snapshot: null });
+  }, [mode]);
 
   const handleDirectSchedule = async () => {
     if (!projectId || !blog || scheduling) return;
@@ -333,6 +350,15 @@ export default function LinkedInViewerPage() {
     }
   };
 
+  const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    if (tiptapRef.current) {
+      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
+      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
+    }
+    toast.error("Couldn't apply rewrite — select text again.");
+    setAiEdit({ open: false, snapshot: null });
+  }, []);
+
   const breadcrumb = (
     <div className="shrink-0 space-y-2">
       <StudioBreadcrumb parentHref={`${studioBase}/linkedin`} parentLabel="LinkedIn posts" current={blog.title} />
@@ -531,7 +557,7 @@ export default function LinkedInViewerPage() {
       <div className="h-full overflow-y-auto px-3 py-5 sm:px-6 sm:py-8 md:px-8 md:py-10">
         {mode === "edit" && draft ? (
           <div className="mx-auto grid max-w-[1200px] gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]">
-            <div className="rounded-lg border border-border-subtle bg-surface-primary p-2 sm:p-4">
+            <div ref={editorContainerRef} className="rounded-lg border border-border-subtle bg-surface-primary p-2 sm:p-4">
               <TipTapBlogEditor
                 key={`linkedin-tiptap-${editSessionKey}`}
                 initialMarkdown={blog.content}
@@ -579,6 +605,22 @@ export default function LinkedInViewerPage() {
           </div>
         )}
       </div>
+      <InlineAiEditOverlay
+        active={mode === "edit"}
+        getRoots={getEditorRoots}
+        onOpen={({ snapshot }) => setAiEdit({ open: true, snapshot })}
+      />
+      <BlogAiRewriterModal
+        open={aiEdit.open}
+        blogId={blog.id}
+        projectDomain={project?.domain ?? ""}
+        selection={aiEdit.snapshot}
+        renderMarkdownSnippet={md => (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+        )}
+        onClose={() => setAiEdit({ open: false, snapshot: null })}
+        onInsert={handleAiRewriterInsert}
+      />
     </PreviewShell>
   );
 }

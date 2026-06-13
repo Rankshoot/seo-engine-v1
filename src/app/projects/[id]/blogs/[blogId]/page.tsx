@@ -342,8 +342,15 @@ function BlogEditAiFixOverlay({
     <button
       ref={btnRef}
       type="button"
-      className="pointer-events-auto rounded-full border border-border-default px-2.5 py-1 text-[11px] font-semibold shadow-lg"
-      style={{ display: "none", background: "var(--text-primary)", color: "var(--surface-primary)" }}
+      className="pointer-events-auto rounded-full px-3 py-1.5 text-[11px] font-semibold shadow-lg transition-all"
+      style={{
+        display: "none",
+        background: "var(--text-primary)",
+        color: "var(--surface-primary)",
+        border: "1px solid rgba(255,255,255,0.1)",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+        letterSpacing: "0.01em",
+      }}
       onMouseDown={e => {
         e.preventDefault();
         const sel = window.getSelection();
@@ -369,7 +376,7 @@ function BlogEditAiFixOverlay({
         onOpen({ snapshot, range });
       }}
     >
-      Ai fix
+      ✦ Edit with AI
     </button>
   );
 }
@@ -1346,6 +1353,17 @@ export default function BlogViewerPage() {
   };
 
   const handleAiRewriterInsert = (rewritten: string) => {
+    // First try TipTap's native replaceSelection (preferred — keeps ProseMirror state consistent).
+    if (tiptapBodyRef.current) {
+      const ok = tiptapBodyRef.current.replaceSelection(rewritten.trim());
+      if (ok) {
+        setAiRewriter({ open: false, snapshot: null });
+        selectionSnapshotRef.current = null;
+        setEditError("");
+        return;
+      }
+    }
+    // Fallback: restore the saved DOM range (works when selection was in title/desc contentEditables).
     const snap = selectionSnapshotRef.current;
     if (!displayBlog || !snap?.range) {
       setEditError("Couldn't apply rewrite — select text again.");

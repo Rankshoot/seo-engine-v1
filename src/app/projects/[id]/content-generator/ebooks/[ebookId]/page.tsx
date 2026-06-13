@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,12 +21,17 @@ import {
 } from "@/components/content-generator/shared";
 import { EbookReader, type EbookTheme } from "@/components/content-generator/ebook/EbookReader";
 import type { TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
+import { InlineAiEditOverlay } from "@/components/content-generator/shared/InlineAiEditOverlay";
+import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import { exportEbook, EBOOK_EXPORT_OPTIONS } from "@/lib/content-exports";
 import { normalizeSiteHost } from "@/lib/blog-content";
 import type { StudioBrand } from "@/lib/studio-brand";
 import type { Blog, EbookContentData, Project } from "@/lib/types";
+import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
 
@@ -65,6 +70,19 @@ export default function EbookViewerPage() {
   const [theme, setTheme] = useState<EbookTheme>("sepia");
   const [fontScale, setFontScale] = useState(1);
   const [scheduling, setScheduling] = useState(false);
+
+  // AI inline edit state
+  const [aiEdit, setAiEdit] = useState<{ open: boolean; snapshot: BlogRewriteSelectionSnapshot | null }>({
+    open: false,
+    snapshot: null,
+  });
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const getEditorRoots = useCallback(() => [editorContainerRef.current], []);
+
+  // Close AI edit when leaving edit mode
+  useEffect(() => {
+    if (mode !== "edit") setAiEdit({ open: false, snapshot: null });
+  }, [mode]);
 
   const handleDirectSchedule = async () => {
     if (!projectId || !blog || scheduling) return;
@@ -196,6 +214,15 @@ export default function EbookViewerPage() {
       setSaving(false);
     }
   };
+
+  const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    if (tiptapRef.current) {
+      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
+      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
+    }
+    toast.error("Couldn't apply rewrite — select text again.");
+    setAiEdit({ open: false, snapshot: null });
+  }, []);
 
   const breadcrumb = (
     <div className="shrink-0 space-y-2">
@@ -391,6 +418,23 @@ export default function EbookViewerPage() {
         onThemeChange={setTheme}
         fontScale={fontScale}
         onFontScaleChange={setFontScale}
+        editorContainerRef={editorContainerRef}
+      />
+      <InlineAiEditOverlay
+        active={mode === "edit"}
+        getRoots={getEditorRoots}
+        onOpen={({ snapshot }) => setAiEdit({ open: true, snapshot })}
+      />
+      <BlogAiRewriterModal
+        open={aiEdit.open}
+        blogId={blog.id}
+        projectDomain={project?.domain ?? ""}
+        selection={aiEdit.snapshot}
+        renderMarkdownSnippet={md => (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+        )}
+        onClose={() => setAiEdit({ open: false, snapshot: null })}
+        onInsert={handleAiRewriterInsert}
       />
     </PreviewShell>
   );

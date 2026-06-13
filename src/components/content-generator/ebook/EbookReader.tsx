@@ -103,6 +103,8 @@ export interface EbookReaderProps {
   onFontScaleChange: (next: number) => void;
   /** Company + domain (+ favicon) for cover / chapter footers. */
   brand?: StudioBrand | null;
+  /** Exposed so the page can wire up InlineAiEditOverlay to detect selections. */
+  editorContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -126,6 +128,7 @@ export function EbookReader({
   fontScale,
   onFontScaleChange: _onFontScaleChange,
   brand = null,
+  editorContainerRef,
 }: EbookReaderProps) {
   const palette = THEME_BG[theme];
   const data = (blog.content_data ?? {}) as Partial<EbookContentData>;
@@ -164,6 +167,13 @@ export function EbookReader({
         })
         .join("\n\n")
         .trim();
+    },
+    replaceSelection: (markdown: string) => {
+      // Try each chapter editor — the one with an active selection will return true.
+      for (const edRef of Object.values(editorRefs.current)) {
+        if (edRef && edRef.replaceSelection(markdown)) return true;
+      }
+      return false;
     },
   }));
   const { hero } = stripHeroH1(blog.content);
@@ -231,7 +241,10 @@ export function EbookReader({
 
   return (
     <div
-      ref={containerRef}
+      ref={el => {
+        (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+        if (editorContainerRef) (editorContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+      }}
       className="relative h-full overflow-y-auto px-2 py-6 sm:px-8 sm:py-10"
       style={{
         background: palette.canvas,

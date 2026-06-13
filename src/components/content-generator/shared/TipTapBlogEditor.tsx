@@ -13,6 +13,11 @@ import { cn } from "@/lib/cn";
 
 export interface TipTapBlogEditorRef {
   getMarkdown: () => string;
+  /**
+   * Replace the current ProseMirror selection with `markdown` content.
+   * Returns true if the replacement was applied, false if no selection exists.
+   */
+  replaceSelection: (markdown: string) => boolean;
 }
 
 export interface TipTapBlogEditorProps {
@@ -161,6 +166,17 @@ export const TipTapBlogEditor = forwardRef<
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const raw = (editor.storage as any).markdown?.getMarkdown?.() ?? "";
       return postprocessMarkdown(raw).replace(/\n{3,}/g, "\n\n").trim();
+    },
+    replaceSelection: (markdown: string) => {
+      if (!editor) return false;
+      const { from, to } = editor.state.selection;
+      if (from === to) return false; // no selection
+      // preprocessMarkdown handles ```youtube``` fenced blocks → div[data-youtube-video]
+      const processed = preprocessMarkdown(markdown);
+      editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, processed, {
+        parseOptions: { preserveWhitespace: "full" },
+      }).run();
+      return true;
     },
   }));
 

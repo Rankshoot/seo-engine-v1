@@ -86,6 +86,8 @@ export interface WhitepaperReaderProps {
   /** TipTap editor ref — used by the parent page to call getMarkdown() on save. */
   tiptapRef: React.RefObject<TipTapBlogEditorRef | null>;
   editSessionKey: number;
+  /** Exposed so the page can wire up InlineAiEditOverlay to detect selections. */
+  editorContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -106,6 +108,7 @@ export function WhitepaperReader({
   descRef,
   tiptapRef,
   editSessionKey,
+  editorContainerRef,
 }: WhitepaperReaderProps) {
   const data = (blog.content_data ?? {}) as Partial<WhitepaperContentData>;
   
@@ -134,6 +137,12 @@ export function WhitepaperReader({
         })
         .join("\n\n")
         .trim();
+    },
+    replaceSelection: (markdown: string) => {
+      for (const edRef of Object.values(editorRefs.current)) {
+        if (edRef && edRef.replaceSelection(markdown)) return true;
+      }
+      return false;
     },
   }));
 
@@ -198,7 +207,10 @@ export function WhitepaperReader({
 
   return (
     <div
-      ref={containerRef}
+      ref={el => {
+        (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+        if (editorContainerRef) (editorContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+      }}
       className="relative h-full overflow-y-auto"
       style={{ background: "linear-gradient(180deg, #f4f7fc 0%, #fafbfd 100%)" }}
     >

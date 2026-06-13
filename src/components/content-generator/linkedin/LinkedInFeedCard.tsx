@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { cn } from "@/lib/cn";
+import type { LinkedInDraft } from "./LinkedInStructuredEditor";
 
 const COLLAPSE_LIMIT = 1300;
 
@@ -30,6 +31,9 @@ export interface LinkedInFeedCardProps {
   /** Compact variant for use inside the right rail or fullscreen previews. */
   variant?: "feed" | "compact";
   className?: string;
+  isEditing?: boolean;
+  editDraft?: LinkedInDraft | null;
+  onEditDraftChange?: (next: LinkedInDraft) => void;
 }
 
 /**
@@ -59,9 +63,37 @@ export function LinkedInFeedCard({
   expanded = false,
   variant = "feed",
   className,
+  isEditing = false,
+  editDraft = null,
+  onEditDraftChange,
 }: LinkedInFeedCardProps) {
   const [showMore, setShowMore] = useState(expanded);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [hashtagsInput, setHashtagsInput] = useState("");
+
+  const hookRef = useRef<HTMLTextAreaElement | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const ctaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const adjustHeight = (el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  };
+
+  useEffect(() => {
+    if (editDraft) {
+      setHashtagsInput((editDraft.hashtags ?? []).join(" "));
+    }
+  }, [editDraft]);
+
+  useEffect(() => {
+    if (isEditing) {
+      adjustHeight(hookRef.current);
+      adjustHeight(bodyRef.current);
+      adjustHeight(ctaRef.current);
+    }
+  }, [isEditing, editDraft?.hook, editDraft?.body, editDraft?.cta]);
 
   useEffect(() => {
     setAvatarFailed(false);
@@ -70,6 +102,28 @@ export function LinkedInFeedCard({
   useEffect(() => {
     setShowMore(expanded);
   }, [expanded]);
+
+  const handleFieldChange = (field: "hook" | "body" | "cta", value: string) => {
+    if (!onEditDraftChange || !editDraft) return;
+    onEditDraftChange({
+      ...editDraft,
+      [field]: value,
+    });
+  };
+
+  const handleHashtagsChange = (value: string) => {
+    setHashtagsInput(value);
+    if (onEditDraftChange && editDraft) {
+      const array = value
+        .split(/[,\s]+/)
+        .map(t => t.trim())
+        .filter(Boolean);
+      onEditDraftChange({
+        ...editDraft,
+        hashtags: array,
+      });
+    }
+  };
 
   const truncated = !showMore && postText.length > COLLAPSE_LIMIT;
   const visibleText = truncated ? postText.slice(0, COLLAPSE_LIMIT) : postText;
@@ -131,31 +185,81 @@ export function LinkedInFeedCard({
 
       {/* Post body */}
       <div className="px-4 pb-2 text-[14px] leading-[1.45]">
-        <pre className="whitespace-pre-wrap wrap-break-word font-sans">
-          {visibleText}
-          {truncated ? "…  " : ""}
-          {truncated ? (
-            <button
-              type="button"
-              onClick={() => setShowMore(true)}
-              className="ml-1 inline-flex font-semibold text-[#00000099] transition-colors hover:text-[#0a66c2] dark:text-[#a8aaab] dark:hover:text-[#70b5f9]"
-            >
-              …see more
-            </button>
-          ) : null}
-        </pre>
-        {hashtags.length > 0 && !truncated ? (
-          <p className="mt-2 flex flex-wrap gap-x-1.5 gap-y-1">
-            {hashtags.map((t, idx) => (
-              <span
-                key={`${t}-${idx}`}
-                className="text-[14px] font-semibold text-[#0a66c2] dark:text-[#70b5f9]"
-              >
-                {t.startsWith("#") ? t : `#${t}`}
-              </span>
-            ))}
-          </p>
-        ) : null}
+        {isEditing && editDraft ? (
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-[#00000099] dark:text-[#a8aaab] mb-1">Hook</label>
+              <textarea
+                ref={hookRef}
+                value={editDraft.hook}
+                onChange={(e) => handleFieldChange("hook", e.target.value)}
+                rows={1}
+                className="w-full bg-transparent resize-none outline-none border-b border-[#0000000f] dark:border-[#ffffff14] focus:border-[#0a66c2] dark:focus:border-[#70b5f9] pb-1 font-sans text-[14px] text-[#000000E0] dark:text-[#e7e9ea]"
+                placeholder="Write a hook line..."
+              />
+            </div>
+            <div>
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-[#00000099] dark:text-[#a8aaab] mb-1">Body</label>
+              <textarea
+                ref={bodyRef}
+                value={editDraft.body}
+                onChange={(e) => handleFieldChange("body", e.target.value)}
+                rows={3}
+                className="w-full bg-transparent resize-none outline-none border-b border-[#0000000f] dark:border-[#ffffff14] focus:border-[#0a66c2] dark:focus:border-[#70b5f9] pb-1 font-sans text-[14px] text-[#000000E0] dark:text-[#e7e9ea]"
+                placeholder="Write the post body..."
+              />
+            </div>
+            <div>
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-[#00000099] dark:text-[#a8aaab] mb-1">Call to Action (CTA)</label>
+              <textarea
+                ref={ctaRef}
+                value={editDraft.cta}
+                onChange={(e) => handleFieldChange("cta", e.target.value)}
+                rows={1}
+                className="w-full bg-transparent resize-none outline-none border-b border-[#0000000f] dark:border-[#ffffff14] focus:border-[#0a66c2] dark:focus:border-[#70b5f9] pb-1 font-sans text-[14px] text-[#000000E0] dark:text-[#e7e9ea]"
+                placeholder="Write a call to action..."
+              />
+            </div>
+            <div>
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-[#00000099] dark:text-[#a8aaab] mb-1">Hashtags</label>
+              <input
+                type="text"
+                value={hashtagsInput}
+                onChange={(e) => handleHashtagsChange(e.target.value)}
+                className="w-full bg-transparent outline-none border-b border-[#0000000f] dark:border-[#ffffff14] focus:border-[#0a66c2] dark:focus:border-[#70b5f9] pb-1 font-sans text-[14px] font-semibold text-[#0a66c2] dark:text-[#70b5f9]"
+                placeholder="#hashtag1 #hashtag2..."
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+            <pre className="whitespace-pre-wrap wrap-break-word font-sans">
+              {visibleText}
+              {truncated ? "…  " : ""}
+              {truncated ? (
+                <button
+                  type="button"
+                  onClick={() => setShowMore(true)}
+                  className="ml-1 inline-flex font-semibold text-[#00000099] transition-colors hover:text-[#0a66c2] dark:text-[#a8aaab] dark:hover:text-[#70b5f9]"
+                >
+                  …see more
+                </button>
+              ) : null}
+            </pre>
+            {hashtags.length > 0 && !truncated ? (
+              <p className="mt-2 flex flex-wrap gap-x-1.5 gap-y-1">
+                {hashtags.map((t, idx) => (
+                  <span
+                    key={`${t}-${idx}`}
+                    className="text-[14px] font-semibold text-[#0a66c2] dark:text-[#70b5f9]"
+                  >
+                    {t.startsWith("#") ? t : `#${t}`}
+                  </span>
+                ))}
+              </p>
+            ) : null}
+          </>
+        )}
       </div>
 
       {/* Optional single image — LinkedIn-native slot (text above, media below) */}

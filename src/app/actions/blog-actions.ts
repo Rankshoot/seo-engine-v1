@@ -1009,7 +1009,7 @@ function fixLowKeywordDensity(content: string, keyword: string): string | null {
 export async function updateBlogContent(
   blogId: string,
   content: string,
-  opts: { title?: string; metaDescription?: string } = {}
+  opts: { title?: string; metaDescription?: string; contentData?: any } = {}
 ) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: null };
@@ -1049,6 +1049,7 @@ export async function updateBlogContent(
   const metaDescription = opts.metaDescription?.trim();
   if (title) patch.title = title;
   if (typeof metaDescription === 'string') patch.meta_description = metaDescription;
+  if (opts.contentData) patch.content_data = opts.contentData;
 
   const { data, error } = await supabaseAdmin
     .from('blogs')

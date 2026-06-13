@@ -153,7 +153,7 @@ export const blogsApi = {
 
   updateContent(
     blogId: string,
-    body: { content: string; title?: string; metaDescription?: string }
+    body: { content: string; title?: string; metaDescription?: string; contentData?: any }
   ): Promise<{ success: boolean; error?: string; data: Blog | null }> {
     return apiPatch(V1Routes.blogContent(blogId), body);
   },

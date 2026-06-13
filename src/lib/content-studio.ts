@@ -313,7 +313,7 @@ export async function generateLinkedInPost(
   const titleH1 = bodyRaw.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? `LinkedIn — ${ctx.postStyle}`;
 
   // Persist as Markdown so the existing previewer renders the structured layout.
-  const markdownDoc = `# ${titleH1}\n\n## Hook\n${hook}\n\n## Body\n${body}\n\n## Call to Action\n${cta}\n\n## Hashtags\n${hashtags.join(' ')}\n\n${composedPlainText ? `> Copy-ready post:\n\n${composedPlainText.split('\n').map(l => `> ${l}`).join('\n')}` : ''}`.trim();
+  const markdownDoc = `# ${titleH1}\n\n## Hook\n${hook}\n\n## Body\n${body}\n\n## Call to Action\n${cta}\n\n## Hashtags\n${hashtags.join(' ')}`.trim();
 
   const content_data: LinkedInContentData = {
     post_style: ctx.postStyle,

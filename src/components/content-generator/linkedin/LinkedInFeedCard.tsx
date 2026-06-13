@@ -146,9 +146,9 @@ export function LinkedInFeedCard({
         </pre>
         {hashtags.length > 0 && !truncated ? (
           <p className="mt-2 flex flex-wrap gap-x-1.5 gap-y-1">
-            {hashtags.map(t => (
+            {hashtags.map((t, idx) => (
               <span
-                key={t}
+                key={`${t}-${idx}`}
                 className="text-[14px] font-semibold text-[#0a66c2] dark:text-[#70b5f9]"
               >
                 {t.startsWith("#") ? t : `#${t}`}

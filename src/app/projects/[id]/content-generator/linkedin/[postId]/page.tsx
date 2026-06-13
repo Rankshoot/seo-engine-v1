@@ -264,6 +264,15 @@ export default function LinkedInViewerPage() {
     }
   }, []);
 
+  const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    if (tiptapRef.current) {
+      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
+      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
+    }
+    toast.error("Couldn't apply rewrite — select text again.");
+    setAiEdit({ open: false, snapshot: null });
+  }, []);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -350,15 +359,6 @@ export default function LinkedInViewerPage() {
     }
   };
 
-  const handleAiRewriterInsert = useCallback((rewritten: string) => {
-    if (tiptapRef.current) {
-      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
-      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
-    }
-    toast.error("Couldn't apply rewrite — select text again.");
-    setAiEdit({ open: false, snapshot: null });
-  }, []);
-
   const breadcrumb = (
     <div className="shrink-0 space-y-2">
       <StudioBreadcrumb parentHref={`${studioBase}/linkedin`} parentLabel="LinkedIn posts" current={blog.title} />
@@ -425,9 +425,9 @@ export default function LinkedInViewerPage() {
               Hashtags ({composedHashtags.length})
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {composedHashtags.map(t => (
+              {composedHashtags.map((t, idx) => (
                 <span
-                  key={t}
+                  key={`${t}-${idx}`}
                   className="rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 text-[11px] font-medium text-text-secondary"
                 >
                   {t}

@@ -20,6 +20,7 @@ import {
   exportToText,
   triggerBlogDownload,
   triggerDownload,
+  extractYouTubeId,
 } from './export';
 import { safeFilename } from './blog-content';
 import type {
@@ -655,6 +656,43 @@ function renderMarkdownToBookHtml(markdown: string): string {
   while (i < lines.length) {
     const line = lines[i].trim();
     if (!line) { closeLists(); i++; continue; }
+
+    // Fenced code block or YouTube block.
+    if (line.startsWith('```')) {
+      closeLists();
+      if (line === '```youtube') {
+        i++;
+        let url = '';
+        if (i < lines.length) {
+          url = lines[i].trim();
+          i++;
+        }
+        if (i < lines.length && lines[i].trim() === '```') {
+          i++;
+        }
+        const videoId = extractYouTubeId(url);
+        if (videoId) {
+          out.push(
+            `<div class="youtube-container" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.55em 0;border-radius:8px;border:1px solid #eee;">` +
+            `<iframe src="https://www.youtube-nocookie.com/embed/${videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>` +
+            `</div>`
+          );
+        } else {
+          out.push(`<p><a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a></p>`);
+        }
+        continue;
+      } else {
+        const buf: string[] = [];
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith('```')) {
+          buf.push(lines[i]);
+          i++;
+        }
+        i++;
+        out.push(`<pre><code>${escapeHtml(buf.join('\n'))}</code></pre>`);
+        continue;
+      }
+    }
 
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {

@@ -3,6 +3,35 @@ import { EXPORT_FILE_INFO, safeFilename } from './blog-content';
 import { buildBlogSchemas, type ProjectMeta } from './schema';
 import { displayDomain } from './studio-brand';
 
+export function extractYouTubeId(url: string): string | null {
+  try {
+    const u = new URL(url.trim());
+    if (u.hostname.includes("youtube.com") || u.hostname.includes("youtube-nocookie.com")) {
+      const v = u.searchParams.get("v");
+      if (v) return v;
+      const m = u.pathname.match(/\/embed\/([^/?#]+)/);
+      if (m) return m[1];
+      const shorts = u.pathname.match(/\/shorts\/([^/?#]+)/);
+      if (shorts) return shorts[1];
+    }
+    if (u.hostname === "youtu.be") {
+      const id = u.pathname.slice(1).split("/")[0];
+      return id || null;
+    }
+  } catch {
+    // not a valid URL
+  }
+  return null;
+}
+
+function cleanMarkdownForExport(markdown: string): string {
+  return markdown.replace(/!\[([^\]]*)\]\(data:image\/([a-zA-Z+]+);base64,([^)]+)\)/g, (match, alt, mimeSubtype) => {
+    const ext = mimeSubtype === 'jpeg' ? 'jpg' : mimeSubtype;
+    const safeName = alt ? safeFilename(alt) : 'image';
+    return `![${alt}](${safeName}.${ext})`;
+  });
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────
 
 export function exportToMarkdown(blog: Blog, projectMeta?: ProjectMeta): Blob {
@@ -44,7 +73,7 @@ ${orgBlock}---
     .filter(Boolean)
     .join('\n');
 
-  return new Blob([frontmatter + blog.content + schemaBlock], {
+  return new Blob([frontmatter + cleanMarkdownForExport(blog.content) + schemaBlock], {
     type: EXPORT_FILE_INFO.markdown.mime,
   });
 }
@@ -155,10 +184,12 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
   const {
     Document, Packer, Paragraph, TextRun, ImageRun,
     HeadingLevel, ExternalHyperlink, AlignmentType,
+    Table, TableRow, TableCell, WidthType, BorderStyle,
   } = await import('docx');
 
   type ParagraphInstance = InstanceType<typeof Paragraph>;
-  const children: ParagraphInstance[] = [];
+  type TableInstance = InstanceType<typeof Table>;
+  const children: Array<ParagraphInstance | TableInstance> = [];
 
   children.push(
     new Paragraph({
@@ -176,11 +207,187 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
   // Cache image fetches so the same data: URL doesn't get decoded twice.
   const imageCache = new Map<string, Uint8Array>();
 
-  for (const rawLine of blog.content.split('\n')) {
+  const lines = blog.content.split('\n');
+  let i = 0;
+  let inYoutubeBlock = false;
+  let youtubeUrl = '';
+
+  while (i < lines.length) {
+    const rawLine = lines[i];
     const line = rawLine.trim();
 
     if (!line) {
       children.push(new Paragraph({ text: '' }));
+      i++;
+      continue;
+    }
+
+    // YouTube block detector: ```youtube
+    if (line === '```youtube') {
+      inYoutubeBlock = true;
+      youtubeUrl = '';
+      i++;
+      continue;
+    }
+
+    if (inYoutubeBlock) {
+      if (line === '```') {
+        inYoutubeBlock = false;
+        // Emit YouTube block in DOCX
+        if (youtubeUrl) {
+          children.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new TextRun({ text: "📺 YouTube Video: ", bold: true, color: "FF0000" }),
+                new ExternalHyperlink({
+                  link: youtubeUrl,
+                  children: [new TextRun({ text: youtubeUrl, color: "1863DC", underline: {} })],
+                })
+              ],
+            })
+          );
+          children.push(new Paragraph({ text: '' }));
+        }
+        i++;
+        continue;
+      }
+      youtubeUrl = line;
+      i++;
+      continue;
+    }
+
+    // Fenced code block detector (other than youtube)
+    if (line.startsWith('```')) {
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing ```
+      // Render code block in DOCX with Consolas font and background shading
+      for (const codeLine of codeLines) {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: codeLine,
+                font: 'Consolas',
+                size: 18,
+                color: '333333',
+              }),
+            ],
+            shading: {
+              fill: 'F5F5F5',
+            },
+          })
+        );
+      }
+      children.push(new Paragraph({ text: '' }));
+      continue;
+    }
+
+    // Horizontal Rule: ---, ***, ___
+    if (/^(---|\*\*\*|___)$/.test(line)) {
+      children.push(
+        new Paragraph({
+          border: {
+            bottom: {
+              color: 'D3D3D3',
+              space: 4,
+              style: BorderStyle.SINGLE,
+              size: 6,
+            },
+          },
+        })
+      );
+      i++;
+      continue;
+    }
+
+    // Pipe table — at least 2 lines (header + separator).
+    if (
+      line.startsWith('|') &&
+      i + 1 < lines.length &&
+      /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1].trim())
+    ) {
+      const headerCells = splitPipes(line);
+      const rowsData: string[][] = [];
+      i += 2; // skip header and separator
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        rowsData.push(splitPipes(lines[i].trim()));
+        i++;
+      }
+
+      // Build the docx Table
+      const tableRows: InstanceType<typeof TableRow>[] = [];
+
+      // 1. Header row
+      tableRows.push(
+        new TableRow({
+          children: headerCells.map(cellText => {
+            return new TableCell({
+              children: [
+                new Paragraph({
+                  children: buildInlineRuns(cellText, TextRun, ExternalHyperlink),
+                }),
+              ],
+              shading: {
+                fill: 'F2F2F2', // subtle gray header background
+              },
+              margins: {
+                top: 120, // 6pt cell padding
+                bottom: 120,
+                left: 150, // 7.5pt cell padding
+                right: 150,
+              },
+            });
+          }),
+        })
+      );
+
+      // 2. Data rows
+      for (const rowData of rowsData) {
+        tableRows.push(
+          new TableRow({
+            children: rowData.map(cellText => {
+              return new TableCell({
+                children: [
+                  new Paragraph({
+                    children: buildInlineRuns(cellText, TextRun, ExternalHyperlink),
+                  }),
+                ],
+                margins: {
+                  top: 120,
+                  bottom: 120,
+                  left: 150,
+                  right: 150,
+                },
+              });
+            }),
+          })
+        );
+      }
+
+      const docxTable = new Table({
+        rows: tableRows,
+        width: {
+          size: 100,
+          type: WidthType.PERCENTAGE,
+        },
+        borders: {
+          top: { style: BorderStyle.SINGLE, size: 4, color: 'D3D3D3' },
+          bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D3D3D3' },
+          left: { style: BorderStyle.SINGLE, size: 4, color: 'D3D3D3' },
+          right: { style: BorderStyle.SINGLE, size: 4, color: 'D3D3D3' },
+          insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: 'E6E6E6' },
+          insideVertical: { style: BorderStyle.SINGLE, size: 4, color: 'E6E6E6' },
+        },
+      });
+
+      children.push(docxTable as any);
+      children.push(new Paragraph({ text: '' })); // Spacer after table
       continue;
     }
 
@@ -214,8 +421,7 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
           );
         }
       }
-      // If we can't decode it (e.g. remote 404), skip silently — sanitization
-      // will normally have stripped these already.
+      i++;
       continue;
     }
 
@@ -239,7 +445,10 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
         break;
       }
     }
-    if (matchedHeading) continue;
+    if (matchedHeading) {
+      i++;
+      continue;
+    }
 
     if (line.startsWith('- ') || line.startsWith('• ') || /^\d+\.\s/.test(line)) {
       const stripped = line.replace(/^(?:[-•]\s|\d+\.\s)/, '');
@@ -249,6 +458,7 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
           children: buildInlineRuns(stripped, TextRun, ExternalHyperlink),
         })
       );
+      i++;
       continue;
     }
 
@@ -258,6 +468,7 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
           children: [new TextRun({ text: line.slice(2), italics: true, color: '555555' })],
         })
       );
+      i++;
       continue;
     }
 
@@ -266,6 +477,7 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
         children: buildInlineRuns(line, TextRun, ExternalHyperlink),
       })
     );
+    i++;
   }
 
   children.push(
@@ -277,7 +489,68 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
     })
   );
 
-  const doc = new Document({ sections: [{ properties: {}, children }] });
+  const doc = new Document({
+    styles: {
+      default: {
+        heading1: {
+          run: {
+            font: "Arial",
+            size: 32, // 16pt
+            bold: true,
+            color: "111111",
+          },
+          paragraph: {
+            spacing: { before: 360, after: 120 },
+          },
+        },
+        heading2: {
+          run: {
+            font: "Arial",
+            size: 26, // 13pt
+            bold: true,
+            color: "222222",
+          },
+          paragraph: {
+            spacing: { before: 300, after: 100 },
+          },
+        },
+        heading3: {
+          run: {
+            font: "Arial",
+            size: 22, // 11pt
+            bold: true,
+            color: "333333",
+          },
+          paragraph: {
+            spacing: { before: 240, after: 80 },
+          },
+        },
+        heading4: {
+          run: {
+            font: "Arial",
+            size: 20, // 10pt
+            bold: true,
+            color: "444444",
+          },
+          paragraph: {
+            spacing: { before: 180, after: 60 },
+          },
+        },
+        document: {
+          run: {
+            font: "Arial",
+            size: 22, // 11pt
+            color: "2A2A2A",
+          },
+          paragraph: {
+            spacing: { line: 280, after: 140 }, // 1.15 line spacing, 7pt space after paragraphs
+          },
+        },
+      },
+    },
+    sections: [{ properties: {}, children }],
+  });
+
   return Packer.toBlob(doc);
 }
 
@@ -380,6 +653,31 @@ function renderMarkdownToHtml(markdown: string): string {
         i++;
       }
       out.push(`<blockquote>${renderInline(buf.join(' '))}</blockquote>`);
+      continue;
+    }
+
+    // YouTube fenced block: ```youtube\nURL\n```
+    if (line === '```youtube') {
+      closeLists();
+      i++;
+      let url = '';
+      if (i < lines.length) {
+        url = lines[i].trim();
+        i++;
+      }
+      if (i < lines.length && lines[i].trim() === '```') {
+        i++;
+      }
+      const videoId = extractYouTubeId(url);
+      if (videoId) {
+        out.push(
+          `<div class="youtube-container" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:1.55em 0;border-radius:8px;border:1px solid #eee;">` +
+          `<iframe src="https://www.youtube-nocookie.com/embed/${videoId}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>` +
+          `</div>`
+        );
+      } else {
+        out.push(`<p><a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(url)}</a></p>`);
+      }
       continue;
     }
 

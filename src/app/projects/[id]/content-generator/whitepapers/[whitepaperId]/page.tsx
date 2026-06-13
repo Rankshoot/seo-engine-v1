@@ -149,6 +149,15 @@ export default function WhitepaperViewerPage() {
     return { company: project.company.trim(), domain: project.domain.trim() };
   }, [project?.company, project?.domain]);
 
+  const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    if (tiptapRef.current) {
+      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
+      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
+    }
+    toast.error("Couldn't apply rewrite — select text again.");
+    setAiEdit({ open: false, snapshot: null });
+  }, []);
+
   const studioBase = `/projects/${projectId}/content-generator`;
 
   if (loading) {
@@ -209,15 +218,6 @@ export default function WhitepaperViewerPage() {
       setSaving(false);
     }
   };
-
-  const handleAiRewriterInsert = useCallback((rewritten: string) => {
-    if (tiptapRef.current) {
-      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
-      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
-    }
-    toast.error("Couldn't apply rewrite — select text again.");
-    setAiEdit({ open: false, snapshot: null });
-  }, []);
 
   const breadcrumb = (
     <div className="shrink-0 space-y-2">

@@ -188,6 +188,9 @@ export const blogsApi = {
       prefValidatedInternalUrl?: string;
       prefValidatedReplacementUrl?: string;
       prefValidatedReplacements?: Array<{ linkId: string; newHref: string }>;
+      contentType?: string;
+      contentPart?: string;
+      surroundingContext?: string;
     }
   ): Promise<{
     success: boolean;

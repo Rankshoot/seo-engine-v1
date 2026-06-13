@@ -1631,6 +1631,9 @@ export type RewriteBlogEditorSelectionMeta = {
   prefValidatedReplacementUrl?: string;
   /** Per-link verified replacements from the UI (multi-link). */
   prefValidatedReplacements?: Array<{ linkId: string; newHref: string }>;
+  contentType?: string;
+  contentPart?: string;
+  surroundingContext?: string;
 };
 
 async function validateUrlForRewriter(
@@ -1955,9 +1958,17 @@ Do not invent URLs.
 `
           : '';
 
-  const prompt = `You are rewriting a short excerpt from an existing blog post.
+  const typeContext = meta.contentType ? `Content type: ${meta.contentType}` : 'Content type: Blog post';
+  const partContext = meta.contentPart ? `Section/Part being edited: ${meta.contentPart}` : '';
+  const contextBlock = meta.surroundingContext
+    ? `\nSurrounding text / context of this selection:\n"""\n${meta.surroundingContext}\n"""\n`
+    : '';
 
-Blog title: ${blog.title}
+  const prompt = `You are rewriting a short excerpt from an existing document.
+
+${typeContext}
+${partContext}
+Document title: ${blog.title}
 Target keyword: ${blog.target_keyword}
 
 User instruction:
@@ -1974,6 +1985,7 @@ Selection — Markdown excerpt (source of truth for links; format is [anchor tex
 """
 ${sel}
 """
+${contextBlock}
 
 Detected links as JSON (anchor + href from the Markdown excerpt):
 ${linksJson}

@@ -2092,6 +2092,17 @@ export default function BlogViewerPage() {
         blogId={currentBlog.id}
         projectDomain={project?.domain ?? ""}
         selection={aiRewriter.snapshot}
+        contentType="Blog Post"
+        contentPart={
+          typeof document !== "undefined"
+            ? document.activeElement === titleEditorRef.current
+              ? "Blog Title"
+              : document.activeElement === descEditorRef.current
+              ? "Meta Description"
+              : "Blog Body"
+            : "Blog Body"
+        }
+        surroundingContext={currentBlog.content}
         renderMarkdownSnippet={md => (
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

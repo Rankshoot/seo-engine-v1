@@ -674,6 +674,19 @@ export default function LinkedInViewerPage() {
         blogId={blog.id}
         projectDomain={project?.domain ?? ""}
         selection={aiEdit.snapshot}
+        contentType="LinkedIn Post"
+        contentPart={
+          typeof document !== "undefined" && textareaSelectionRef.current?.element
+            ? (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("hook")
+              ? "LinkedIn Hook"
+              : (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("body")
+              ? "LinkedIn Body"
+              : (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("action") || (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("cta")
+              ? "LinkedIn CTA"
+              : "LinkedIn Hashtags"
+            : "LinkedIn Post Body"
+        }
+        surroundingContext={composedPost}
         renderMarkdownSnippet={md => (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
         )}

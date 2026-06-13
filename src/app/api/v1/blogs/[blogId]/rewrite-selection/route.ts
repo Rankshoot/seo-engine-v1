@@ -21,6 +21,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ blogId:
       prefValidatedInternalUrl?: string;
       prefValidatedReplacementUrl?: string;
       prefValidatedReplacements?: Array<{ linkId?: string; newHref?: string }>;
+      contentType?: string;
+      contentPart?: string;
+      surroundingContext?: string;
     };
     const selectedText = typeof body.selectedText === "string" ? body.selectedText : "";
     const instruction = typeof body.instruction === "string" ? body.instruction : "";
@@ -73,6 +76,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ blogId:
       prefValidatedReplacements: prefValidatedReplacements?.length
         ? prefValidatedReplacements
         : undefined,
+      contentType: typeof body.contentType === "string" ? body.contentType : undefined,
+      contentPart: typeof body.contentPart === "string" ? body.contentPart : undefined,
+      surroundingContext: typeof body.surroundingContext === "string" ? body.surroundingContext : undefined,
     };
 
     if (body.intent === "resolve_link") {

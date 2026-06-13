@@ -471,6 +471,17 @@ export default function EbookViewerPage() {
         blogId={blog.id}
         projectDomain={project?.domain ?? ""}
         selection={aiEdit.snapshot}
+        contentType="Ebook"
+        contentPart={
+          typeof document !== "undefined"
+            ? document.activeElement === titleRef.current
+              ? "Cover Title"
+              : document.activeElement === descRef.current
+              ? "Cover Subtitle"
+              : "Ebook Body"
+            : "Ebook Body"
+        }
+        surroundingContext={blog.content}
         renderMarkdownSnippet={md => (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
         )}

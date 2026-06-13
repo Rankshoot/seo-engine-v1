@@ -42,6 +42,9 @@ export interface BlogAiRewriterModalProps {
   renderMarkdownSnippet: (markdown: string) => ReactNode;
   onClose: () => void;
   onInsert: (rewritten: string) => void;
+  contentType?: string;
+  contentPart?: string;
+  surroundingContext?: string;
 }
 
 export function BlogAiRewriterModal({
@@ -52,6 +55,9 @@ export function BlogAiRewriterModal({
   renderMarkdownSnippet,
   onClose,
   onInsert,
+  contentType,
+  contentPart,
+  surroundingContext,
 }: BlogAiRewriterModalProps) {
   const [customPrompt, setCustomPrompt] = useState("");
   const [rewriteBase, setRewriteBase] = useState<string | null>(null);
@@ -144,6 +150,9 @@ export function BlogAiRewriterModal({
           prefValidatedReplacementUrl:
             enrichedLinks.length === 1 ? pendingByLinkId[enrichedLinks[0].id!]?.newHref : undefined,
           prefValidatedReplacements: prefReplacements.length ? prefReplacements : undefined,
+          contentType,
+          contentPart,
+          surroundingContext,
         });
 
         if (res.success && res.rewritten) {

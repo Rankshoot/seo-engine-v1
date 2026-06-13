@@ -450,6 +450,17 @@ export default function WhitepaperViewerPage() {
         blogId={blog.id}
         projectDomain={project?.domain ?? ""}
         selection={aiEdit.snapshot}
+        contentType="Whitepaper"
+        contentPart={
+          typeof document !== "undefined"
+            ? document.activeElement === titleRef.current
+              ? "Cover Title"
+              : document.activeElement === descRef.current
+              ? "Cover Subtitle"
+              : "Whitepaper Body"
+            : "Whitepaper Body"
+        }
+        surroundingContext={blog.content}
         renderMarkdownSnippet={md => (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
         )}

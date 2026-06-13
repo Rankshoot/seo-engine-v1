@@ -205,6 +205,38 @@ export async function POST(req: Request) {
           );
         }
 
+        // Fetch blog-specific Ahrefs context (secondary keywords for headings, FAQ keywords)
+        let ahrefsContext: any = undefined;
+        try {
+          const { fetchBlogAhrefsContext } = await import("@/lib/blog-ahrefs-context");
+          const blogAhrefsCtx = await fetchBlogAhrefsContext(
+            entry.focus_keyword,
+            project.target_region,
+            user.id
+          );
+          console.log('[blog stream] Blog Ahrefs context:', {
+            fromAhrefs: blogAhrefsCtx.fromAhrefs,
+            secondaryKeywords: blogAhrefsCtx.secondaryKeywords.length,
+            faqKeywords: blogAhrefsCtx.faqKeywords.length,
+            secondaryKeywordsData: blogAhrefsCtx.secondaryKeywords,
+            faqKeywordsData: blogAhrefsCtx.faqKeywords,
+          });
+          if (blogAhrefsCtx.fromAhrefs) {
+            ahrefsContext = {
+              matchingTerms: blogAhrefsCtx.secondaryKeywords,
+              questions: blogAhrefsCtx.faqKeywords,
+              ideas: [],
+              serp: [],
+              secondaryKeywords: blogAhrefsCtx.secondaryKeywords,
+              faqKeywords: blogAhrefsCtx.faqKeywords,
+            };
+          } else {
+            console.warn('[blog stream] ⚠️ Plan gate blocked Ahrefs blog APIs for user:', user.id);
+          }
+        } catch (e) {
+          console.warn('[blog stream] Failed to fetch blog Ahrefs context, continuing without:', e);
+        }
+
         // Build the blog prompt
         const blogPrompt = buildBlogPrompt({
           entry: {
@@ -218,8 +250,14 @@ export async function POST(req: Request) {
           research,
           existingBlogs: filteredExistingBlogs,
           brief: filteredBrief,
+          ahrefsContext,
           writerNotes: mergedWriterNotes || undefined,
         });
+
+        // Log the full prompt for debugging
+        console.log('[blog stream] ===== FULL PROMPT BEING SENT TO CLAUDE =====');
+        console.log(blogPrompt);
+        console.log('[blog stream] ===== END PROMPT =====');
 
         // ── Stage 4: Draft with streaming thinking ────────────────────────
         emit({ event: "stage", stage: "draft", detail: "Claude Sonnet is thinking and drafting your blog post…" });

@@ -26,6 +26,7 @@ import {
 import { enrichKeywordInBackground } from '@/lib/keyword-modal';
 import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates, collectEarliestVacantDates } from './calendar-actions';
 import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
+import { canUseMatchingTermsApi } from '@/lib/plan-api-access';
 
 // ─── AI Evaluation types (mirrors Keyword.ai_eval_data) ──────────────────────
 export type AiEvalData = {
@@ -821,6 +822,15 @@ export async function loadMoreFromAhrefsAction(projectId: string) {
   const user = await currentUser();
   if (!user) {
     return { success: false, error: 'Not authenticated' };
+  }
+
+  // Check if user's plan allows the matching terms API
+  const canUseApi = await canUseMatchingTermsApi(user.id);
+  if (!canUseApi) {
+    return {
+      success: false,
+      error: 'The Ahrefs keyword discovery feature is not available on your current plan. Please upgrade to access this feature.',
+    };
   }
 
   try {

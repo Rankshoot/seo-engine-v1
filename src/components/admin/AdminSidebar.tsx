@@ -69,6 +69,12 @@ const navItems: {
     match: (p) => p.startsWith("/admin/plans"),
   },
   {
+    label: "API Control",
+    href: "/admin/api-control",
+    minRole: "admin",
+    match: (p) => p.startsWith("/admin/api-control"),
+  },
+  {
     label: "Admins",
     href: "/admin/settings",
     minRole: "admin",

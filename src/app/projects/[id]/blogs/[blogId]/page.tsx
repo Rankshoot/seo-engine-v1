@@ -39,6 +39,7 @@ import { calendarApi } from "@/frontend/api/calendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { PreviewerScheduler, PreviewShell } from "@/components/content-generator/shared";
 import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
+import { normalizeMarkdownImages } from "@/services/openAiImages";
 
 const BRAND = { actionBlue: "#1863dc", coral: "#ff7759" } as const;
 
@@ -75,6 +76,16 @@ const BLOG_STATUSES: Array<{ value: BlogStatus; label: string; hint: string; col
 
 function asBlogStatus(s: string | undefined): BlogStatus {
   return s === "approved" || s === "published" ? s : "generated";
+}
+
+function normalizeBlogPlaceholders(blog: Blog): Blog;
+function normalizeBlogPlaceholders(blog: Blog | null): Blog | null;
+function normalizeBlogPlaceholders(blog: Blog | null): Blog | null {
+  if (!blog || !blog.content) return blog;
+  return {
+    ...blog,
+    content: normalizeMarkdownImages(blog.content),
+  };
 }
 
 // ─── Inset section divider ─────────────────────────────────────────────────
@@ -812,7 +823,9 @@ export default function BlogViewerPage() {
         setEnhancedBlog(prev => {
           const nextVal = prev ? apply(prev) : prev;
           if (nextVal) {
-            queryClient.setQueryData(["blog-enhanced", blogId], { success: true, data: nextVal });
+            const normalized = normalizeBlogPlaceholders(nextVal);
+            queryClient.setQueryData(["blog-enhanced", blogId], { success: true, data: normalized });
+            return normalized;
           }
           return nextVal;
         });
@@ -820,7 +833,9 @@ export default function BlogViewerPage() {
         setBlog(prev => {
           const nextVal = prev ? apply(prev) : prev;
           if (nextVal) {
-            queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+            const normalized = normalizeBlogPlaceholders(nextVal);
+            queryClient.setQueryData(qk.blog(blogId), { success: true, data: normalized });
+            return normalized;
           }
           return nextVal;
         });
@@ -861,7 +876,7 @@ export default function BlogViewerPage() {
     reader.onload = (event) => {
       const base64 = event.target?.result as string;
       if (base64) {
-        editingImage.src = base64;
+        tiptapBodyRef.current?.updateImageAtDom?.(editingImage, base64);
       }
     };
     reader.readAsDataURL(file);
@@ -882,12 +897,7 @@ export default function BlogViewerPage() {
         contextAfter: "",
       });
       if (res.success && res.data) {
-        img.src = res.data.url;
-        img.alt = res.data.alt;
-        const nextSibling = img.nextElementSibling;
-        if (nextSibling && nextSibling.tagName === "SPAN") {
-          nextSibling.textContent = res.data.alt;
-        }
+        tiptapBodyRef.current?.updateImageAtDom?.(img, res.data.url, res.data.alt);
       } else {
         setEditError(res.error ?? "Failed to regenerate image");
       }
@@ -900,12 +910,7 @@ export default function BlogViewerPage() {
   };
 
   const handleImageRemove = (img: HTMLImageElement) => {
-    const parent = img.parentElement;
-    if (parent && parent.tagName === "SPAN" && parent.classList.contains("overflow-hidden")) {
-      parent.remove();
-    } else {
-      img.remove();
-    }
+    tiptapBodyRef.current?.deleteImageAtDom?.(img);
   };
 
   const getEditRoots = useCallback(() => [titleEditorRef.current, descEditorRef.current, editorRef.current], []);
@@ -925,7 +930,8 @@ export default function BlogViewerPage() {
 
   useEffect(() => {
     if (blogQueryRes?.success && blogQueryRes.data) {
-      setBlog(blogQueryRes.data);
+      const normalized = normalizeBlogPlaceholders(blogQueryRes.data);
+      setBlog(normalized);
       if (blogQueryRes.data.id !== blogId) {
         window.history.replaceState(null, "", `/projects/${projectId}/blogs/${blogQueryRes.data.id}${window.location.search}`);
       }
@@ -940,7 +946,7 @@ export default function BlogViewerPage() {
 
   useEffect(() => {
     if (enhancedQueryRes?.success && enhancedQueryRes.data) {
-      setEnhancedBlog(enhancedQueryRes.data);
+      setEnhancedBlog(normalizeBlogPlaceholders(enhancedQueryRes.data));
     }
   }, [enhancedQueryRes]);
 
@@ -1064,7 +1070,7 @@ export default function BlogViewerPage() {
         toast.error(enhancedRes.error || "Enhanced blog generated but could not be loaded.");
         return;
       }
-      setEnhancedBlog(enhancedRes.data);
+      setEnhancedBlog(normalizeBlogPlaceholders(enhancedRes.data));
       setCompareView("after");
       setAnalysisModalOpen(false);
       toast.success("Enhanced version ready — viewing After.");
@@ -1318,8 +1324,9 @@ export default function BlogViewerPage() {
     try {
       const res = await blogsApi.generate({ entryId: blog.entry_id, wordCount: blog.word_count || 2500 });
       if (res.success && res.data) {
-        setBlog(res.data);
-        queryClient.setQueryData(qk.blog(blogId), { success: true, data: res.data });
+        const normalized = normalizeBlogPlaceholders(res.data);
+        setBlog(normalized);
+        queryClient.setQueryData(qk.blog(blogId), { success: true, data: normalized });
       } else if (!res.success) {
         setEditError(res.error || "Failed to generate blog.");
       } else {
@@ -2260,7 +2267,8 @@ function stripHeroHeading(blog: Blog): { heroTitle: string; body: string } {
 
 function markdownUrlTransform(url: string): string {
   const t = url.trim();
-  if (/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(t)) return t;
+  if (/^data:image\/(?:png|jpe?g|webp|gif|svg\+xml);base64,[a-z0-9+/=]+$/i.test(t)) return t;
+  if (/^data:image\/svg\+xml;[a-z0-9;=,-]+,[\s\S]+$/i.test(t)) return t;
   if (/^(https?:|mailto:|tel:)/i.test(t)) return t;
   if (t.startsWith("/") || t.startsWith("#")) return t;
   return "";

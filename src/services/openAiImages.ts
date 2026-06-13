@@ -37,31 +37,43 @@ interface OpenAiImageResponse {
   };
 }
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
-const OPENAI_IMAGE_ENDPOINT = "https://api.openai.com/v1/images/generations";
-const OPENAI_MODEL = "dall-e-3";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY?.trim() ?? "";
+const GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent";
+
+const SVG_RAW = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img">
+  <rect width="1600" height="900" fill="#27272a"/>
+  <rect x="1" y="1" width="1598" height="898" fill="none" stroke="#3f3f46" stroke-width="2"/>
+</svg>`;
 
 /**
  * Neutral inline SVG placeholder so markdown rendering survives without broken images.
+ * Uses base64 encoding to prevent markdown parser breaks on special characters or nested quotes/parentheses.
  */
-const BLOG_IMAGE_PLACEHOLDER_URL =
-  'data:image/svg+xml;charset=utf-8,' +
-  encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img">
-      <rect width="1600" height="900" fill="#27272a"/>
-      <rect x="1" y="1" width="1598" height="898" fill="none" stroke="#3f3f46" stroke-width="2"/>
-    </svg>`
-  );
+export const BLOG_IMAGE_PLACEHOLDER_URL =
+  'data:image/svg+xml;base64,' + Buffer.from(SVG_RAW).toString('base64');
 
 function assetWithPlaceholder(request: Omit<BlogImageAsset, 'url'>): BlogImageAsset {
   return { ...request, url: BLOG_IMAGE_PLACEHOLDER_URL };
 }
 
+/**
+ * Normalizes all instances of SVG data URL placeholders in a markdown string
+ * to the clean base64-encoded format. This prevents markdown parser errors
+ * when loading existing blogs containing percent-encoded raw SVG content.
+ */
+export function normalizeMarkdownImages(content: string): string {
+  if (!content) return content;
+  return content.replace(
+    /(!\[[^\]]*\]\()(data:image\/svg\+xml[^)]*)(\))/gi,
+    `$1${BLOG_IMAGE_PLACEHOLDER_URL}$3`
+  );
+}
+
 export async function generateBlogImages(input: GenerateBlogImagesInput): Promise<BlogImageAsset[]> {
   const imageRequests = buildImageRequests(input);
 
-  if (!OPENAI_API_KEY) {
-    console.warn('[openai-images] OPENAI_API_KEY missing — saving blog with image placeholders.');
+  if (!GEMINI_API_KEY) {
+    console.warn('[gemini-images] GEMINI_API_KEY missing — saving blog with image placeholders.');
     return imageRequests.map(assetWithPlaceholder);
   }
 
@@ -84,12 +96,12 @@ export async function generateBlogImages(input: GenerateBlogImagesInput): Promis
 export async function generateContextualBlogImage(
   input: GenerateContextualBlogImageInput
 ): Promise<BlogImageAsset | null> {
-  if (!OPENAI_API_KEY) return null;
+  if (!GEMINI_API_KEY) return null;
 
   const prompt = [
-    `Editorial blog illustration for "${input.title}" about "${input.targetKeyword}" in ${input.niche}.`,
+    `Editorial branded blog illustration for "${input.title}" about "${input.targetKeyword}" in ${input.niche} industry.`,
     `Image intent: ${input.imageAlt || `${input.targetKeyword} visual`}. Nearby context: ${compactContext(input.contextBefore, input.contextAfter)}.`,
-    `Style: premium modern SaaS/editorial, clean 16:9 composition, sharp focus, high quality, no text, no words, no letters, no logos, no watermark, no distorted hands, no blurry artifacts.`,
+    `Style: premium modern SaaS/editorial graphic, clean 16:9 composition, sharp focus, high quality. Cleanly and accurately render the brand/company name "${input.company}" as a modern text logo or header within the visual. Do not output any garbled or random text outside of "${input.company}".`,
   ].filter(Boolean).join(' ');
 
   return generateSingleImage({
@@ -134,14 +146,14 @@ export function insertBlogImages(content: string, images: BlogImageAsset[]): str
 function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImageAsset, 'url'>> {
   const count = input.wordCount >= 1400 ? 2 : 1;
   const baseStyle =
-    'premium editorial blog illustration, modern SaaS website style, clean composition, realistic lighting, sharp focus, high quality, no text, no words, no letters, no logos, no watermark, no distorted hands, no blurry artifacts';
-  const context = `${input.niche} industry, for ${input.audience}, company context: ${input.company}`;
+    `premium editorial branded illustration, modern SaaS website graphic style, clean composition, realistic lighting, sharp focus, high quality. Cleanly and accurately render the brand/company name "${input.company}" as a prominent text logo or card header in the graphic. Avoid generic garbled text.`;
+  const context = `${input.niche} industry, target audience: ${input.audience}`;
 
   const requests: Array<Omit<BlogImageAsset, 'url'>> = [
     {
       placement: 'hero',
       alt: `${input.title} illustration`,
-      prompt: `${baseStyle}. Hero image for an article titled "${input.title}" about "${input.targetKeyword}". ${context}.`,
+      prompt: `${baseStyle}. Hero image for an article titled "${input.title}" about "${input.targetKeyword}". Include "${input.company}" branding and theme. ${context}.`,
     },
   ];
 
@@ -149,7 +161,7 @@ function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImag
     requests.push({
       placement: 'section',
       alt: `${input.targetKeyword} strategy visual`,
-      prompt: `${baseStyle}. Strategic visual explaining "${input.targetKeyword}" for a ${input.articleType} article. Show abstract workflow, research, and growth concepts. ${context}.`,
+      prompt: `${baseStyle}. Strategic visual explaining "${input.targetKeyword}" for a ${input.articleType} article. Include a clean user interface mockup or abstract workflow chart showing the brand name "${input.company}" as the application title. ${context}.`,
     });
   }
 
@@ -159,44 +171,58 @@ function buildImageRequests(input: GenerateBlogImagesInput): Array<Omit<BlogImag
 async function generateSingleImage(
   request: Omit<BlogImageAsset, 'url'>
 ): Promise<BlogImageAsset | null> {
+  if (!GEMINI_API_KEY) {
+    console.warn('[gemini-images] GEMINI_API_KEY missing — cannot generate image.');
+    return null;
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
 
   try {
-    const response = await fetch(OPENAI_IMAGE_ENDPOINT, {
+    const response = await fetch(GEMINI_IMAGE_ENDPOINT, {
       method: "POST",
       signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "X-goog-api-key": GEMINI_API_KEY,
       },
       body: JSON.stringify({
-        model: OPENAI_MODEL,
-        prompt: request.prompt,
-        n: 1,
-        size: "1792x1024", // 16:9 widescreen aspect ratio
+        contents: [
+          {
+            parts: [
+              { text: request.prompt }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseModalities: ["IMAGE"],
+          imageConfig: {
+            aspectRatio: "16:9"
+          }
+        }
       }),
     });
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      console.warn(`OpenAI DALL-E image generation failed (${response.status}): ${detail.slice(0, 500)}`);
+      console.warn(`Gemini image generation failed (${response.status}): ${detail.slice(0, 500)}`);
       return null;
     }
 
-    const data = (await response.json()) as OpenAiImageResponse;
-    const imageUrl = data.data?.[0]?.url;
-    if (!imageUrl) {
-      console.warn("OpenAI DALL-E returned no image URL.");
+    const data = await response.json();
+    const inlineData = data.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (!inlineData?.data || !inlineData?.mimeType) {
+      console.warn("Gemini returned no image data. Full response:", JSON.stringify(data));
       return null;
     }
 
     return {
       ...request,
-      url: imageUrl,
+      url: `data:${inlineData.mimeType};base64,${inlineData.data}`,
     };
   } catch (error) {
-    console.warn("OpenAI DALL-E image generation skipped:", error);
+    console.warn("Gemini image generation skipped/failed:", error);
     return null;
   } finally {
     clearTimeout(timeout);

@@ -18,6 +18,15 @@ export interface TipTapBlogEditorRef {
    * Returns true if the replacement was applied, false if no selection exists.
    */
   replaceSelection: (markdown: string) => boolean;
+  /**
+   * Update the attributes (src and optional alt) of the image node
+   * at the exact ProseMirror position of a target HTMLImageElement.
+   */
+  updateImageAtDom?: (img: HTMLImageElement, newSrc: string, newAlt?: string) => boolean;
+  /**
+   * Delete the image node corresponding to a target HTMLImageElement from the editor document.
+   */
+  deleteImageAtDom?: (img: HTMLImageElement) => boolean;
 }
 
 export interface TipTapBlogEditorProps {
@@ -177,6 +186,40 @@ export const TipTapBlogEditor = forwardRef<
         parseOptions: { preserveWhitespace: "full" },
       }).run();
       return true;
+    },
+    updateImageAtDom: (img: HTMLImageElement, newSrc: string, newAlt?: string) => {
+      if (!editor) return false;
+      try {
+        const pos = editor.view.posAtDOM(img, 0);
+        const node = editor.state.doc.nodeAt(pos);
+        if (node && node.type.name === "image") {
+          const attrs = { ...(node.attrs as any), src: newSrc };
+          if (newAlt !== undefined) {
+            attrs.alt = newAlt;
+          }
+          const transaction = editor.state.tr.setNodeMarkup(pos, undefined, attrs);
+          editor.view.dispatch(transaction);
+          return true;
+        }
+      } catch (e) {
+        console.error("Failed to update image at DOM position", e);
+      }
+      return false;
+    },
+    deleteImageAtDom: (img: HTMLImageElement) => {
+      if (!editor) return false;
+      try {
+        const pos = editor.view.posAtDOM(img, 0);
+        const node = editor.state.doc.nodeAt(pos);
+        if (node && node.type.name === "image") {
+          const transaction = editor.state.tr.delete(pos, pos + node.nodeSize);
+          editor.view.dispatch(transaction);
+          return true;
+        }
+      } catch (e) {
+        console.error("Failed to delete image at DOM position", e);
+      }
+      return false;
     },
   }));
 

@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  InlineMarkdownEditor,
   LongFormMarkdown,
   ReadOnlyArticle,
   StudioBrandMasthead,
@@ -11,9 +10,53 @@ import {
   type LongFormReaderInk,
   type PreviewMode,
 } from "@/components/content-generator/shared";
+import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import { cn } from "@/lib/cn";
 import type { StudioBrand } from "@/lib/studio-brand";
 import type { Blog, EbookContentData } from "@/lib/types";
+
+export interface EbookSegment {
+  title: string;
+  headerLine: string | null;
+  body: string;
+  isEditable: boolean;
+}
+
+export function splitMarkdownIntoSegments(markdown: string): EbookSegment[] {
+  const lines = markdown.split("\n");
+  const out: EbookSegment[] = [];
+  let current: EbookSegment | null = null;
+  
+  for (const line of lines) {
+    if (/^#\s+/.test(line)) continue; // skip H1 cover title
+    
+    const m = line.match(/^##\s+(.+?)\s*$/);
+    if (m) {
+      if (current) out.push(current);
+      const title = m[1].replace(/^Chapter\s+\d+\s*[\u2014-]\s*/i, "").trim();
+      current = {
+        title,
+        headerLine: line,
+        body: "",
+        isEditable: true,
+      };
+    } else {
+      if (!current && line.trim() !== "") {
+        current = {
+          title: "Introduction",
+          headerLine: null,
+          body: "",
+          isEditable: true,
+        };
+      }
+      if (current) {
+        current.body += line + "\n";
+      }
+    }
+  }
+  if (current) out.push(current);
+  return out.filter(c => c.body.trim().length > 0);
+}
 
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
 
@@ -47,10 +90,11 @@ export interface EbookReaderProps {
   blog: Blog;
   ownSiteHost: string | null;
   mode: PreviewMode;
-  /** Title-only refs forwarded to the inline editor when in edit mode. */
+  /** Title/desc refs forwarded to the contentEditable header in edit mode. */
   titleRef: React.RefObject<HTMLHeadingElement | null>;
   descRef: React.RefObject<HTMLParagraphElement | null>;
-  bodyRef: React.RefObject<HTMLDivElement | null>;
+  /** TipTap editor ref — used by the parent page to call getMarkdown() on save. */
+  tiptapRef: React.RefObject<TipTapBlogEditorRef | null>;
   editSessionKey: number;
   /** Callbacks for the toolbar selectors (theme, font size). */
   theme: EbookTheme;
@@ -59,6 +103,8 @@ export interface EbookReaderProps {
   onFontScaleChange: (next: number) => void;
   /** Company + domain (+ favicon) for cover / chapter footers. */
   brand?: StudioBrand | null;
+  /** Exposed so the page can wire up InlineAiEditOverlay to detect selections. */
+  editorContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -76,12 +122,13 @@ export function EbookReader({
   mode,
   titleRef,
   descRef,
-  bodyRef,
+  tiptapRef,
   editSessionKey,
   theme,
   fontScale,
   onFontScaleChange: _onFontScaleChange,
   brand = null,
+  editorContainerRef,
 }: EbookReaderProps) {
   const palette = THEME_BG[theme];
   const data = (blog.content_data ?? {}) as Partial<EbookContentData>;
@@ -97,7 +144,38 @@ export function EbookReader({
     };
   }, [palette.text, palette.muted, palette.border, theme]);
 
-  const chapters = useMemo(() => splitMarkdownByH2(blog.content), [blog.content]);
+  const localChapters = useMemo(() => {
+    return splitMarkdownIntoSegments(blog.content);
+  }, [blog.content]);
+
+  const chapters = localChapters;
+
+  const editorRefs = useRef<Record<number, TipTapBlogEditorRef | null>>({});
+
+  useImperativeHandle(tiptapRef, () => ({
+    getMarkdown: () => {
+      return localChapters
+        .map((chap, idx) => {
+          let body = chap.body.trim();
+          if (editorRefs.current[idx]) {
+            body = editorRefs.current[idx]!.getMarkdown().trim();
+          }
+          if (chap.headerLine) {
+            return `${chap.headerLine}\n\n${body}`;
+          }
+          return body;
+        })
+        .join("\n\n")
+        .trim();
+    },
+    replaceSelection: (markdown: string) => {
+      // Try each chapter editor — the one with an active selection will return true.
+      for (const edRef of Object.values(editorRefs.current)) {
+        if (edRef && edRef.replaceSelection(markdown)) return true;
+      }
+      return false;
+    },
+  }));
   const { hero } = stripHeroH1(blog.content);
   const heroTitle = data.cover_title || hero || blog.title;
   const subtitle = data.cover_subtitle ?? "";
@@ -133,26 +211,17 @@ export function EbookReader({
     return () => observer.disconnect();
   }, [chapters, mode]);
 
-  if (mode === "edit") {
-    return (
-      <div
-        ref={containerRef}
-        className="h-full overflow-y-auto"
-        style={{ background: palette.canvas, color: palette.text }}
-      >
-        <InlineMarkdownEditor
-          blog={blog}
-          ownSiteHost={ownSiteHost}
-          sessionKey={editSessionKey}
-          titleRef={titleRef}
-          descRef={descRef}
-          bodyRef={bodyRef}
-          readerInk={readerInk}
-          markdownToolbar
-        />
-      </div>
-    );
-  }
+  // Seed title/desc contentEditable elements when entering edit mode.
+  useLayoutEffect(() => {
+    if (mode !== "edit") return;
+    const h = titleRef.current;
+    const p = descRef.current;
+    if (!h || !p) return;
+    const { hero } = stripHeroH1(blog.content);
+    h.textContent = hero ?? blog.title;
+    p.textContent = blog.meta_description ?? "";
+  }, [blog, mode, titleRef, descRef]);
+
 
   if (mode === "raw") {
     return (
@@ -172,7 +241,10 @@ export function EbookReader({
 
   return (
     <div
-      ref={containerRef}
+      ref={el => {
+        (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+        if (editorContainerRef) (editorContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+      }}
       className="relative h-full overflow-y-auto px-2 py-6 sm:px-8 sm:py-10"
       style={{
         background: palette.canvas,
@@ -232,7 +304,11 @@ export function EbookReader({
           Ebook · published {coverDate}
         </p>
         <h1
-          className="relative mt-8 mb-4"
+          ref={mode === "edit" ? titleRef : undefined}
+          contentEditable={mode === "edit"}
+          suppressContentEditableWarning={mode === "edit"}
+          spellCheck={mode === "edit"}
+          className={`relative mt-8 mb-4 outline-none ${mode === "edit" ? "focus:ring-2 focus:ring-brand-action/40 rounded px-1 -mx-1" : ""}`}
           style={{
             fontSize: "clamp(28px, 4.6vw, 44px)",
             fontWeight: 800,
@@ -244,9 +320,13 @@ export function EbookReader({
         >
           {heroTitle}
         </h1>
-        {subtitle ? (
+        {subtitle || mode === "edit" ? (
           <p
-            className="relative mx-auto max-w-2xl text-balance"
+            ref={mode === "edit" ? descRef : undefined}
+            contentEditable={mode === "edit"}
+            suppressContentEditableWarning={mode === "edit"}
+            spellCheck={mode === "edit"}
+            className={`relative mx-auto max-w-2xl text-balance outline-none ${mode === "edit" ? "focus:ring-2 focus:ring-brand-action/40 rounded px-1 -mx-1 min-h-[1.5em]" : ""}`}
             style={{ fontSize: "clamp(15px, 1.6vw, 19px)", lineHeight: 1.55, color: palette.muted }}
           >
             {subtitle}
@@ -374,12 +454,30 @@ export function EbookReader({
               lineHeight: 1.78,
             }}
           >
-            <LongFormMarkdown
-              markdown={chapter.body}
-              internalLinks={blog.internal_links ?? []}
-              ownSiteHost={ownSiteHost}
-              readerInk={readerInk}
-            />
+            {mode === "edit" ? (
+              <TipTapBlogEditor
+                key={`ebook-tiptap-${editSessionKey}-${i}`}
+                initialMarkdown={chapter.body}
+                ref={el => {
+                  editorRefs.current[i] = el;
+                }}
+                className="min-h-0"
+                style={{
+                  color: palette.text,
+                  fontFamily: 'Georgia, "Times New Roman", serif',
+                  fontSize: "1.0625em",
+                  lineHeight: 1.78,
+                  minHeight: "150px",
+                }}
+              />
+            ) : (
+              <LongFormMarkdown
+                markdown={chapter.body}
+                internalLinks={blog.internal_links ?? []}
+                ownSiteHost={ownSiteHost}
+                readerInk={readerInk}
+              />
+            )}
           </div>
 
           <div
@@ -446,21 +544,4 @@ function readingMinutes(words: number): number {
   return Math.max(1, Math.round(words / 220));
 }
 
-/** Split markdown by `## Heading`, dropping the H1 cover. */
-function splitMarkdownByH2(markdown: string): Array<{ title: string; body: string }> {
-  const lines = markdown.split("\n");
-  const out: Array<{ title: string; body: string }> = [];
-  let current: { title: string; body: string } | null = null;
-  for (const line of lines) {
-    if (/^#\s+/.test(line)) continue;
-    const m = line.match(/^##\s+(.+?)\s*$/);
-    if (m) {
-      if (current) out.push(current);
-      current = { title: m[1].replace(/^Chapter\s+\d+\s*[\u2014-]\s*/i, "").trim(), body: "" };
-    } else if (current) {
-      current.body += `${line}\n`;
-    }
-  }
-  if (current) out.push(current);
-  return out.filter(c => c.body.trim().length > 0);
-}
+

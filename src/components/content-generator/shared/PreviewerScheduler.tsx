@@ -70,7 +70,7 @@ export function PreviewerScheduler({
       });
       if (res.success) {
         const niceDate = new Date(`${res.scheduled_date}T00:00:00`).toLocaleDateString("en-US", {
-          month: "short",
+          month: "long",
           day: "numeric",
           year: "numeric",
         });
@@ -173,7 +173,7 @@ export function PreviewerScheduler({
             disabled={busy || !nextVacantDate}
             className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-text-primary px-3 py-2 text-[12px] font-semibold text-surface-primary transition-opacity hover:opacity-90 disabled:opacity-50"
           >
-            {busy ? "Scheduling..." : "Direct Schedule"}
+            {busy ? "Scheduling..." : "Schedule"}
           </button>
           
           <div className="flex justify-center">

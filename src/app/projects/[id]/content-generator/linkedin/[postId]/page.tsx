@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,13 +19,14 @@ import {
   PreviewerScheduler,
   type PreviewMode,
 } from "@/components/content-generator/shared";
+import { InlineAiEditOverlay } from "@/components/content-generator/shared/InlineAiEditOverlay";
+import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
 import { LinkedInFeedCard } from "@/components/content-generator/linkedin/LinkedInFeedCard";
 import {
-  LinkedInStructuredEditor,
   draftFromContentData,
-  draftToMarkdown,
   type LinkedInDraft,
 } from "@/components/content-generator/linkedin/LinkedInStructuredEditor";
+import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import {
@@ -39,8 +40,71 @@ import type {
   LinkedInContentData,
   Project,
 } from "@/lib/types";
+import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
+
+export function parseLinkedInMarkdown(markdown: string): LinkedInDraft {
+  const lines = markdown.split(/\r?\n/);
+  let currentSection: "title" | "hook" | "body" | "cta" | "hashtags" | null = null;
+  const sections = {
+    hook: [] as string[],
+    body: [] as string[],
+    cta: [] as string[],
+    hashtags: [] as string[],
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (line.startsWith("# ")) {
+      currentSection = "title";
+      continue;
+    }
+    if (line.startsWith("## ")) {
+      const heading = trimmed.replace(/^##\s+/, "").toLowerCase();
+      if (heading.includes("hook")) {
+        currentSection = "hook";
+      } else if (heading.includes("body") || heading.includes("content")) {
+        currentSection = "body";
+      } else if (heading.includes("call to action") || heading.includes("cta")) {
+        currentSection = "cta";
+      } else if (heading.includes("hashtag")) {
+        currentSection = "hashtags";
+      } else {
+        if (currentSection && currentSection !== "title") {
+          sections[currentSection].push(line);
+        } else {
+          currentSection = "body";
+          sections.body.push(line);
+        }
+      }
+      continue;
+    }
+
+    if (currentSection && currentSection !== "title") {
+      sections[currentSection].push(line);
+    } else if (!currentSection && trimmed !== "") {
+      currentSection = "body";
+      sections.body.push(line);
+    }
+  }
+
+  const hook = sections.hook.join("\n").trim();
+  const body = sections.body.join("\n").trim();
+  const cta = sections.cta.join("\n").trim();
+  const hashtagsRaw = sections.hashtags.join("\n").trim();
+  const hashtags = hashtagsRaw
+    ? hashtagsRaw
+        .split(/[,\s]+/)
+        .map(t => t.trim())
+        .filter(Boolean)
+        .map(t => (t.startsWith("#") ? t : `#${t}`))
+    : [];
+
+  return { hook, body, cta, hashtags };
+}
 
 export default function LinkedInViewerPage() {
   const { id: projectId, postId } = useParams<{ id: string; postId: string }>();
@@ -64,6 +128,21 @@ export default function LinkedInViewerPage() {
   const [saving, setSaving] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+
+  const tiptapRef = useRef<TipTapBlogEditorRef | null>(null);
+  const [editSessionKey, setEditSessionKey] = useState(0);
+
+  // AI inline edit state
+  const [aiEdit, setAiEdit] = useState<{ open: boolean; snapshot: BlogRewriteSelectionSnapshot | null }>({
+    open: false,
+    snapshot: null,
+  });
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const getEditorRoots = useCallback(() => [editorContainerRef.current], []);
+
+  useEffect(() => {
+    if (mode !== "edit") setAiEdit({ open: false, snapshot: null });
+  }, [mode]);
 
   const handleDirectSchedule = async () => {
     if (!projectId || !blog || scheduling) return;
@@ -97,7 +176,7 @@ export default function LinkedInViewerPage() {
       });
       if (res.success) {
         const niceDate = new Date(`${res.scheduled_date}T00:00:00`).toLocaleDateString("en-US", {
-          month: "short",
+          month: "long",
           day: "numeric",
           year: "numeric",
         });
@@ -122,8 +201,25 @@ export default function LinkedInViewerPage() {
   useEffect(() => {
     if (blogRes?.success && blogRes.data) {
       const data = blogRes.data;
-      setBlog(data);
-      setDraft(prev => prev ?? draftFromContentData(data.content_data as Partial<LinkedInContentData>));
+      // Parse content to build updated content_data dynamically so edited markdown is the source of truth
+      const parsedDraft = data.content?.trim() ? parseLinkedInMarkdown(data.content) : null;
+      const enrichedContentData = parsedDraft
+        ? {
+            ...data.content_data,
+            hook: parsedDraft.hook,
+            body: parsedDraft.body,
+            cta: parsedDraft.cta,
+            hashtags: parsedDraft.hashtags,
+          }
+        : data.content_data;
+
+      const patchedBlog: Blog = {
+        ...data,
+        content_data: enrichedContentData as ContentDataPayload,
+      };
+
+      setBlog(patchedBlog);
+      setDraft(prev => prev ?? parsedDraft ?? draftFromContentData(data.content_data as Partial<LinkedInContentData>));
     }
   }, [blogRes]);
 
@@ -201,26 +297,28 @@ export default function LinkedInViewerPage() {
   const authorAvatarUrl = project?.domain?.trim() ? brandFaviconUrl(project.domain.trim()) : null;
 
   const startEdit = () => {
-    setDraft(draftFromContentData(blog.content_data as Partial<LinkedInContentData>));
+    setDraft(blog.content ? parseLinkedInMarkdown(blog.content) : draftFromContentData(blog.content_data as Partial<LinkedInContentData>));
+    setEditSessionKey(k => k + 1);
     setMode("edit");
   };
 
   const cancelEdit = () => {
-    setDraft(draftFromContentData(blog.content_data as Partial<LinkedInContentData>));
+    setDraft(blog.content ? parseLinkedInMarkdown(blog.content) : draftFromContentData(blog.content_data as Partial<LinkedInContentData>));
     setMode("preview");
   };
 
   const saveEdit = async () => {
-    if (!draft) return;
+    if (!tiptapRef.current) return;
     setSaving(true);
     try {
-      const md = draftToMarkdown(blog.title, draft);
+      const md = tiptapRef.current.getMarkdown();
+      const parsedDraft = parseLinkedInMarkdown(md);
       const updatedContentData: LinkedInContentData = {
         post_style: data.post_style ?? "educational",
-        hook: draft.hook,
-        body: draft.body,
-        cta: draft.cta,
-        hashtags: draft.hashtags,
+        hook: parsedDraft.hook,
+        body: parsedDraft.body,
+        cta: parsedDraft.cta,
+        hashtags: parsedDraft.hashtags,
         audience: data.audience ?? "",
         tone: data.tone ?? "",
         primary_keyword: data.primary_keyword ?? blog.target_keyword,
@@ -230,14 +328,10 @@ export default function LinkedInViewerPage() {
       };
       const res = await blogsApi.updateContent(blog.id, {
         content: md,
-        title: draft.hook || blog.title,
-        metaDescription: (draft.body || draft.hook).replace(/\s+/g, " ").slice(0, 160),
+        title: parsedDraft.hook || blog.title,
+        metaDescription: (parsedDraft.body || parsedDraft.hook).replace(/\s+/g, " ").slice(0, 160),
       });
       if (res.success && res.data) {
-        // The blogs API persists `content`, `title`, `meta_description`,
-        // `word_count`, and external/internal links — but doesn't touch
-        // `content_data`. We patch it locally for instant UX so the score
-        // panel + feed card reflect the new structured fields immediately.
         const patched: Blog = {
           ...res.data,
           content_data: updatedContentData as ContentDataPayload,
@@ -255,6 +349,15 @@ export default function LinkedInViewerPage() {
       setSaving(false);
     }
   };
+
+  const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    if (tiptapRef.current) {
+      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
+      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
+    }
+    toast.error("Couldn't apply rewrite — select text again.");
+    setAiEdit({ open: false, snapshot: null });
+  }, []);
 
   const breadcrumb = (
     <div className="shrink-0 space-y-2">
@@ -392,14 +495,11 @@ export default function LinkedInViewerPage() {
   );
 
   const toolbarLeft = (
-    <ViewModePill<PreviewMode>
-      modes={[
-        { key: "preview", label: "Preview" },
-        { key: "edit", label: "Edit" },
-      ]}
-      active={mode}
-      onChange={next => (next === "edit" ? startEdit() : cancelEdit())}
-    />
+    <div className="flex items-center gap-3">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary px-2 py-0.5 rounded border border-border-subtle bg-surface-secondary">
+        LinkedIn Post
+      </span>
+    </div>
   );
 
   const toolbarRight =
@@ -418,17 +518,29 @@ export default function LinkedInViewerPage() {
           Save edits
         </Button>
       </>
-    ) : !blog.entry_id ? (
-      <Button
-        variant="primary"
-        shape="pill"
-        size="sm"
-        onClick={() => void handleDirectSchedule()}
-        loading={scheduling}
-      >
-        Direct Schedule
-      </Button>
-    ) : null;
+    ) : (
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          shape="pill"
+          size="sm"
+          onClick={startEdit}
+        >
+          Edit
+        </Button>
+        {!blog.entry_id && (
+          <Button
+            variant="primary"
+            shape="pill"
+            size="sm"
+            onClick={() => void handleDirectSchedule()}
+            loading={scheduling}
+          >
+            Schedule
+          </Button>
+        )}
+      </div>
+    );
 
   return (
     <PreviewShell
@@ -442,11 +554,19 @@ export default function LinkedInViewerPage() {
       immersiveFullscreen
       canvasBg="var(--surface-secondary)"
     >
-      <div className="min-h-full px-3 py-5 sm:px-6 sm:py-8 md:px-8 md:py-10">
+      <div className="h-full overflow-y-auto px-3 py-5 sm:px-6 sm:py-8 md:px-8 md:py-10">
         {mode === "edit" && draft ? (
           <div className="mx-auto grid max-w-[1200px] gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]">
-            <div className="rounded-lg border border-border-subtle bg-surface-primary p-2 sm:p-4">
-              <LinkedInStructuredEditor draft={draft} onChange={setDraft} />
+            <div ref={editorContainerRef} className="rounded-lg border border-border-subtle bg-surface-primary p-2 sm:p-4">
+              <TipTapBlogEditor
+                key={`linkedin-tiptap-${editSessionKey}`}
+                initialMarkdown={blog.content}
+                ref={tiptapRef}
+                onChange={(md) => {
+                  const parsed = parseLinkedInMarkdown(md);
+                  setDraft(parsed);
+                }}
+              />
             </div>
             <div className="space-y-3 lg:sticky lg:top-3 lg:self-start">
               <p className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary" style={MONO_LABEL}>
@@ -485,6 +605,22 @@ export default function LinkedInViewerPage() {
           </div>
         )}
       </div>
+      <InlineAiEditOverlay
+        active={mode === "edit"}
+        getRoots={getEditorRoots}
+        onOpen={({ snapshot }) => setAiEdit({ open: true, snapshot })}
+      />
+      <BlogAiRewriterModal
+        open={aiEdit.open}
+        blogId={blog.id}
+        projectDomain={project?.domain ?? ""}
+        selection={aiEdit.snapshot}
+        renderMarkdownSnippet={md => (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+        )}
+        onClose={() => setAiEdit({ open: false, snapshot: null })}
+        onInsert={handleAiRewriterInsert}
+      />
     </PreviewShell>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import React, { useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
@@ -45,6 +45,26 @@ export interface LongFormReaderInk {
   border: string;
   /** Blockquote, fenced code, table header */
   surfaceMuted: string;
+}
+
+/** Extract YouTube video ID from various YouTube URL formats. */
+function extractYouTubeId(url: string): string | null {
+  try {
+    const u = new URL(url.trim());
+    if (u.hostname.includes("youtube.com") || u.hostname.includes("youtube-nocookie.com")) {
+      const v = u.searchParams.get("v");
+      if (v) return v;
+      const m = u.pathname.match(/\/embed\/([^/?#]+)/);
+      if (m) return m[1];
+    }
+    if (u.hostname === "youtu.be") {
+      const id = u.pathname.slice(1).split("/")[0];
+      return id || null;
+    }
+  } catch {
+    // not a valid URL
+  }
+  return null;
 }
 
 function safeUrl(url: string): string {
@@ -251,22 +271,61 @@ function buildComponents({ internalSet, ownSiteHost, readerInk }: MarkdownCompon
       </code>
     );
   };
-  const Pre: ComponentType<HTMLAttributes<HTMLPreElement>> = ({ children, ...r }) => (
-    <pre
-      className={cn(
-        "my-6 overflow-x-auto rounded-[8px] p-4 text-[13px] leading-relaxed border",
-        !ink && "border-border-subtle bg-surface-secondary text-text-secondary",
-      )}
-      style={
-        ink
-          ? { color: ink.secondary, backgroundColor: ink.surfaceMuted, borderColor: ink.border }
-          : undefined
+  const Pre: ComponentType<HTMLAttributes<HTMLPreElement>> = ({ children, ...r }) => {
+    // Detect YouTube fenced block: ```youtube\nURL\n```
+    const childrenArray = React.Children.toArray(children);
+    const codeChild = childrenArray.find(
+      (child): child is React.ReactElement<{ className?: string; children?: ReactNode }> => {
+        if (!React.isValidElement(child)) return false;
+        const props = child.props as any;
+        return typeof props?.className === "string" && props.className.includes("language-youtube");
       }
-      {...r}
-    >
-      {children}
-    </pre>
-  );
+    );
+
+    if (codeChild) {
+      const rawUrl = flattenChildren(codeChild.props.children).trim();
+      const videoId = extractYouTubeId(rawUrl);
+      if (videoId) {
+        return (
+          <div
+            className="my-8 overflow-hidden rounded-[12px] border border-border-subtle"
+            style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}
+          >
+            <iframe
+              src={`https://www.youtube-nocookie.com/embed/${videoId}`}
+              title="YouTube video"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+                border: 0,
+              }}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        );
+      }
+    }
+    return (
+      <pre
+        className={cn(
+          "my-6 overflow-x-auto rounded-[8px] p-4 text-[13px] leading-relaxed border",
+          !ink && "border-border-subtle bg-surface-secondary text-text-secondary",
+        )}
+        style={
+          ink
+            ? { color: ink.secondary, backgroundColor: ink.surfaceMuted, borderColor: ink.border }
+            : undefined
+        }
+        {...r}
+      >
+        {children}
+      </pre>
+    );
+  };
   const HR: ComponentType<HTMLAttributes<HTMLHRElement>> = p => (
     <hr className={cn("my-10 border-t", !ink && "border-border-subtle")} style={ink ? { borderColor: ink.border } : undefined} {...p} />
   );

@@ -1,16 +1,67 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  InlineMarkdownEditor,
   LongFormMarkdown,
   StudioBrandMasthead,
   stripHeroH1,
   type LongFormReaderInk,
   type PreviewMode,
 } from "@/components/content-generator/shared";
+import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import type { StudioBrand } from "@/lib/studio-brand";
 import type { Blog, WhitepaperContentData } from "@/lib/types";
+
+export interface WhitepaperSegment {
+  title: string;
+  headerLine: string | null;
+  body: string;
+  isEditable: boolean;
+}
+
+export function splitMarkdownIntoSegments(markdown: string): WhitepaperSegment[] {
+  const lines = markdown.split("\n");
+  const out: WhitepaperSegment[] = [];
+  let current: WhitepaperSegment | null = null;
+  
+  for (const line of lines) {
+    if (/^#\s+/.test(line)) continue; // skip H1 cover title
+    
+    const m = line.match(/^##\s+(.+?)\s*$/);
+    if (m) {
+      if (current) out.push(current);
+      const title = m[1].trim();
+      const lower = title.toLowerCase();
+      // Determine if this segment is editable
+      const isEditable = !(
+        lower === "executive summary" ||
+        lower === "recommendations" ||
+        lower === "references"
+      );
+      current = {
+        title,
+        headerLine: line,
+        body: "",
+        isEditable,
+      };
+    } else {
+      if (!current && line.trim() !== "") {
+        // Text before the first H2 is treated as an editable Introduction segment
+        current = {
+          title: "Introduction",
+          headerLine: null,
+          body: "",
+          isEditable: true,
+        };
+      }
+      if (current) {
+        current.body += line + "\n";
+      }
+    }
+  }
+  if (current) out.push(current);
+  return out;
+}
 
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
 
@@ -32,8 +83,11 @@ export interface WhitepaperReaderProps {
   brand?: StudioBrand | null;
   titleRef: React.RefObject<HTMLHeadingElement | null>;
   descRef: React.RefObject<HTMLParagraphElement | null>;
-  bodyRef: React.RefObject<HTMLDivElement | null>;
+  /** TipTap editor ref — used by the parent page to call getMarkdown() on save. */
+  tiptapRef: React.RefObject<TipTapBlogEditorRef | null>;
   editSessionKey: number;
+  /** Exposed so the page can wire up InlineAiEditOverlay to detect selections. */
+  editorContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -52,11 +106,46 @@ export function WhitepaperReader({
   brand = null,
   titleRef,
   descRef,
-  bodyRef,
+  tiptapRef,
   editSessionKey,
+  editorContainerRef,
 }: WhitepaperReaderProps) {
   const data = (blog.content_data ?? {}) as Partial<WhitepaperContentData>;
-  const sections = useMemo(() => splitMarkdownByH2(blog.content), [blog.content]);
+  
+  const localSegments = useMemo(() => {
+    return splitMarkdownIntoSegments(blog.content);
+  }, [blog.content]);
+
+  const sections = useMemo(() => {
+    return localSegments.filter(s => s.isEditable);
+  }, [localSegments]);
+
+  const editorRefs = useRef<Record<number, TipTapBlogEditorRef | null>>({});
+
+  useImperativeHandle(tiptapRef, () => ({
+    getMarkdown: () => {
+      return localSegments
+        .map((seg, idx) => {
+          let body = seg.body.trim();
+          if (seg.isEditable && editorRefs.current[idx]) {
+            body = editorRefs.current[idx]!.getMarkdown().trim();
+          }
+          if (seg.headerLine) {
+            return `${seg.headerLine}\n\n${body}`;
+          }
+          return body;
+        })
+        .join("\n\n")
+        .trim();
+    },
+    replaceSelection: (markdown: string) => {
+      for (const edRef of Object.values(editorRefs.current)) {
+        if (edRef && edRef.replaceSelection(markdown)) return true;
+      }
+      return false;
+    },
+  }));
+
   const { hero } = stripHeroH1(blog.content);
   const cover = data.cover_title || hero || blog.title;
   const subtitle = data.cover_subtitle || blog.meta_description || "";
@@ -91,21 +180,17 @@ export function WhitepaperReader({
     return () => obs.disconnect();
   }, [sections, mode]);
 
-  if (mode === "edit") {
-    return (
-      <div ref={containerRef} className="h-full overflow-y-auto bg-surface-primary">
-        <InlineMarkdownEditor
-          blog={blog}
-          ownSiteHost={ownSiteHost}
-          sessionKey={editSessionKey}
-          titleRef={titleRef}
-          descRef={descRef}
-          bodyRef={bodyRef}
-          markdownToolbar
-        />
-      </div>
-    );
-  }
+  // Seed title/desc contentEditable elements when entering edit mode.
+  useLayoutEffect(() => {
+    if (mode !== "edit") return;
+    const h = titleRef.current;
+    const p = descRef.current;
+    if (!h || !p) return;
+    const { hero } = stripHeroH1(blog.content);
+    h.textContent = hero ?? blog.title;
+    p.textContent = blog.meta_description ?? "";
+  }, [blog, mode, titleRef, descRef]);
+
 
   if (mode === "raw") {
     return (
@@ -122,7 +207,10 @@ export function WhitepaperReader({
 
   return (
     <div
-      ref={containerRef}
+      ref={el => {
+        (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+        if (editorContainerRef) (editorContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+      }}
       className="relative h-full overflow-y-auto"
       style={{ background: "linear-gradient(180deg, #f4f7fc 0%, #fafbfd 100%)" }}
     >
@@ -169,7 +257,11 @@ export function WhitepaperReader({
             Whitepaper{companyName ? ` · ${companyName}` : ""}
           </p>
           <h1
-            className="mt-6 mb-4"
+            ref={mode === "edit" ? titleRef : undefined}
+            contentEditable={mode === "edit"}
+            suppressContentEditableWarning={mode === "edit"}
+            spellCheck={mode === "edit"}
+            className={`mt-6 mb-4 outline-none ${mode === "edit" ? "focus:ring-2 focus:ring-brand-action/40 rounded px-1 -mx-1" : ""}`}
             style={{
               fontSize: "clamp(28px, 4.4vw, 44px)",
               fontWeight: 800,
@@ -181,9 +273,13 @@ export function WhitepaperReader({
           >
             {cover}
           </h1>
-          {subtitle ? (
+          {subtitle || mode === "edit" ? (
             <p
-              className="mt-2 max-w-3xl text-balance"
+              ref={mode === "edit" ? descRef : undefined}
+              contentEditable={mode === "edit"}
+              suppressContentEditableWarning={mode === "edit"}
+              spellCheck={mode === "edit"}
+              className={`mt-2 max-w-3xl text-balance outline-none ${mode === "edit" ? "focus:ring-2 focus:ring-brand-action/40 rounded px-1 -mx-1 min-h-[1.5em]" : ""}`}
               style={{ fontSize: "clamp(14px, 1.3vw, 18px)", lineHeight: 1.55, color: "#44546a" }}
             >
               {subtitle}
@@ -255,61 +351,83 @@ export function WhitepaperReader({
       ) : null}
 
       {/* SECTIONS */}
-      {sections.map((s, i) => (
-        <article
-          key={i}
-          data-section-index={i + 2}
-          className="relative mx-auto mb-8 max-w-[860px] rounded-[16px] border bg-white px-8 py-10 shadow-sm sm:px-12 sm:py-14"
-          style={{ borderColor: "#d6dde8", color: "#101828" }}
-        >
-          <div className="mb-8 flex items-center gap-3">
-            <span
-              className="flex h-9 w-9 items-center justify-center rounded-full text-[12px] font-bold tabular-nums text-white"
-              style={{ background: "#1257c1" }}
-            >
-              {String(i + 1).padStart(2, "0")}
-            </span>
-            <div>
-              <p
-                className="font-mono text-[10px] uppercase tracking-[0.32em]"
-                style={{ color: "#1257c1" }}
-              >
-                Section {String(i + 1).padStart(2, "0")}
-              </p>
-              <h2
-                className="mt-0.5"
-                style={{
-                  fontSize: "clamp(20px, 2.2vw, 26px)",
-                  fontWeight: 700,
-                  lineHeight: 1.2,
-                  letterSpacing: -0.2,
-                  fontFamily: 'ui-sans-serif, "Helvetica Neue", Arial, sans-serif',
-                  color: "#101828",
-                }}
-              >
-                {s.title}
-              </h2>
-            </div>
-          </div>
-
-          <div
-            className="editorial-body whitepaper-theme space-y-5"
-            style={{
-              color: "#1f2937",
-              fontFamily: 'ui-sans-serif, "Helvetica Neue", Arial, sans-serif',
-              fontSize: 15,
-              lineHeight: 1.7,
-            }}
+      {localSegments.map((s, idx) => {
+        if (!s.isEditable) return null;
+        const editableIndex = localSegments.filter((x, itemIdx) => x.isEditable && itemIdx < idx).length;
+        
+        return (
+          <article
+            key={idx}
+            data-section-index={editableIndex + 2}
+            className="relative mx-auto mb-8 max-w-[860px] rounded-[16px] border bg-white px-8 py-10 shadow-sm sm:px-12 sm:py-14"
+            style={{ borderColor: "#d6dde8", color: "#101828" }}
           >
-            <LongFormMarkdown
-              markdown={s.body}
-              internalLinks={blog.internal_links ?? []}
-              ownSiteHost={ownSiteHost}
-              readerInk={WHITEPAPER_READER_INK}
-            />
-          </div>
-        </article>
-      ))}
+            <div className="mb-8 flex items-center gap-3">
+              <span
+                className="flex h-9 w-9 items-center justify-center rounded-full text-[12px] font-bold tabular-nums text-white"
+                style={{ background: "#1257c1" }}
+              >
+                {String(editableIndex + 1).padStart(2, "0")}
+              </span>
+              <div>
+                <p
+                  className="font-mono text-[10px] uppercase tracking-[0.32em]"
+                  style={{ color: "#1257c1" }}
+                >
+                  Section {String(editableIndex + 1).padStart(2, "0")}
+                </p>
+                <h2
+                  className="mt-0.5"
+                  style={{
+                    fontSize: "clamp(20px, 2.2vw, 26px)",
+                    fontWeight: 700,
+                    lineHeight: 1.2,
+                    letterSpacing: -0.2,
+                    fontFamily: 'ui-sans-serif, "Helvetica Neue", Arial, sans-serif',
+                    color: "#101828",
+                  }}
+                >
+                  {s.title}
+                </h2>
+              </div>
+            </div>
+
+            <div
+              className="editorial-body whitepaper-theme space-y-5"
+              style={{
+                color: "#1f2937",
+                fontFamily: 'ui-sans-serif, "Helvetica Neue", Arial, sans-serif',
+                fontSize: 15,
+                lineHeight: 1.7,
+              }}
+            >
+              {mode === "edit" ? (
+                <TipTapBlogEditor
+                  key={`whitepaper-tiptap-${editSessionKey}-${idx}`}
+                  initialMarkdown={s.body}
+                  ref={el => {
+                    editorRefs.current[idx] = el;
+                  }}
+                  style={{
+                    color: "#1f2937",
+                    fontFamily: 'ui-sans-serif, "Helvetica Neue", Arial, sans-serif',
+                    fontSize: 15,
+                    lineHeight: 1.7,
+                    minHeight: "150px",
+                  }}
+                />
+              ) : (
+                <LongFormMarkdown
+                  markdown={s.body}
+                  internalLinks={blog.internal_links ?? []}
+                  ownSiteHost={ownSiteHost}
+                  readerInk={WHITEPAPER_READER_INK}
+                />
+              )}
+            </div>
+          </article>
+        );
+      })}
 
       {/* RECOMMENDATIONS */}
       {data.recommendations?.length ? (
@@ -398,31 +516,4 @@ function readingMinutes(words: number): number {
   return Math.max(1, Math.round(words / 220));
 }
 
-function splitMarkdownByH2(markdown: string): Array<{ title: string; body: string }> {
-  const lines = markdown.split("\n");
-  const out: Array<{ title: string; body: string }> = [];
-  let current: { title: string; body: string } | null = null;
-  for (const line of lines) {
-    if (/^#\s+/.test(line)) continue;
-    // Skip the meta sections that are already rendered as their own panels.
-    const m = line.match(/^##\s+(.+?)\s*$/);
-    if (m) {
-      const title = m[1].trim();
-      const lower = title.toLowerCase();
-      if (current) out.push(current);
-      if (
-        lower === "executive summary" ||
-        lower === "recommendations" ||
-        lower === "references"
-      ) {
-        current = null;
-        continue;
-      }
-      current = { title, body: "" };
-    } else if (current) {
-      current.body += `${line}\n`;
-    }
-  }
-  if (current) out.push(current);
-  return out.filter(c => c.body.trim().length > 0);
-}
+

@@ -727,7 +727,15 @@ function sanitizeBlogMarkdown(markdown: string): string {
   // JSON (e.g. `{"title":"...","contentMarkdown":"# H1\n\n...","..."}`)
   // extract contentMarkdown before any other processing.
   const rescued = rescueJsonBlogContent(markdown);
-  let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(rescued))
+  
+  // Mask ```youtube\n...\n``` blocks
+  const youtubeBlocks: string[] = [];
+  let masked = rescued.replace(/```youtube\r?\n([\s\S]*?)\r?\n```/g, (match) => {
+    youtubeBlocks.push(match);
+    return `__YOUTUBE_BLOCK_PLACEHOLDER_${youtubeBlocks.length - 1}__`;
+  });
+
+  let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(masked))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, '')
@@ -756,6 +764,11 @@ function sanitizeBlogMarkdown(markdown: string): string {
       /^\s*[,}]\s*"(?:external_links|internal_links|meta_description|slug)".*$/gm,
       ''
     );
+
+  // Restore ```youtube\n...\n``` blocks
+  cleaned = cleaned.replace(/__YOUTUBE_BLOCK_PLACEHOLDER_(\d+)__/g, (_, idx) => {
+    return youtubeBlocks[parseInt(idx, 10)];
+  });
 
   return cleaned
     .replace(/\n{3,}/g, '\n\n')

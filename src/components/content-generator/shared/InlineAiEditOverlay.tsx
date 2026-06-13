@@ -42,7 +42,15 @@ export interface InlineAiEditOverlayProps {
   /** Refs whose DOM subtrees are considered "inside the editor". */
   getRoots: () => Array<HTMLElement | null>;
   /** Called when the user clicks the button; receives the captured selection. */
-  onOpen: (payload: { snapshot: BlogRewriteSelectionSnapshot; range: Range }) => void;
+  onOpen: (payload: {
+    snapshot: BlogRewriteSelectionSnapshot;
+    range: Range | null;
+    textareaInfo?: {
+      element: HTMLTextAreaElement | HTMLInputElement;
+      start: number;
+      end: number;
+    };
+  }) => void;
 }
 
 export function InlineAiEditOverlay({
@@ -56,6 +64,33 @@ export function InlineAiEditOverlay({
     const btn = btnRef.current;
     if (!btn) return;
     if (!active) { btn.style.display = "none"; return; }
+
+    const activeEl = document.activeElement;
+    const isTextarea = activeEl && (activeEl.tagName === "TEXTAREA" || (activeEl.tagName === "INPUT" && (activeEl as HTMLInputElement).type === "text"));
+
+    if (isTextarea) {
+      const inputEl = activeEl as HTMLTextAreaElement | HTMLInputElement;
+      const start = inputEl.selectionStart;
+      const end = inputEl.selectionEnd;
+      if (start === null || end === null || start === end) {
+        btn.style.display = "none";
+        return;
+      }
+
+      const roots = getRoots().filter(Boolean) as HTMLElement[];
+      if (!roots.some(r => r.contains(inputEl))) {
+        btn.style.display = "none";
+        return;
+      }
+
+      const rect = inputEl.getBoundingClientRect();
+      btn.style.display = "block";
+      btn.style.position = "fixed";
+      btn.style.top = `${rect.bottom + 8}px`;
+      btn.style.left = `${Math.min(rect.left + (rect.width / 2) - 60, window.innerWidth - 160)}px`;
+      btn.style.zIndex = "200";
+      return;
+    }
 
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) { btn.style.display = "none"; return; }
@@ -128,6 +163,35 @@ export function InlineAiEditOverlay({
       }}
       onMouseDown={e => {
         e.preventDefault();
+
+        const activeEl = document.activeElement;
+        const isTextarea = activeEl && (activeEl.tagName === "TEXTAREA" || (activeEl.tagName === "INPUT" && (activeEl as HTMLInputElement).type === "text"));
+
+        if (isTextarea) {
+          const inputEl = activeEl as HTMLTextAreaElement | HTMLInputElement;
+          const start = inputEl.selectionStart ?? 0;
+          const end = inputEl.selectionEnd ?? 0;
+          const selectedText = inputEl.value.slice(start, end);
+          if (!selectedText.trim()) return;
+
+          const snapshot: BlogRewriteSelectionSnapshot = {
+            markdown: selectedText,
+            plainText: selectedText,
+            links: extractInlineMarkdownLinks(selectedText),
+          };
+
+          onOpen({
+            snapshot,
+            range: null,
+            textareaInfo: {
+              element: inputEl,
+              start,
+              end,
+            },
+          });
+          return;
+        }
+
         const sel = window.getSelection();
         if (!sel?.rangeCount || sel.isCollapsed) return;
 

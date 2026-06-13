@@ -20,6 +20,11 @@ import {
   type PreviewMode,
 } from "@/components/content-generator/shared";
 import { LinkedInFeedCard } from "@/components/content-generator/linkedin/LinkedInFeedCard";
+import { InlineAiEditOverlay } from "@/components/content-generator/shared/InlineAiEditOverlay";
+import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   draftFromContentData,
   draftToMarkdown,
@@ -132,6 +137,49 @@ export default function LinkedInViewerPage() {
   const [saving, setSaving] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+
+  const [aiEdit, setAiEdit] = useState<{
+    open: boolean;
+    snapshot: BlogRewriteSelectionSnapshot | null;
+  }>({ open: false, snapshot: null });
+
+  const textareaSelectionRef = useRef<{
+    element: HTMLTextAreaElement | HTMLInputElement;
+    start: number;
+    end: number;
+  } | null>(null);
+
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const getEditorRoots = useCallback(() => [editorContainerRef.current], []);
+
+  const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    if (textareaSelectionRef.current && draft) {
+      const { element, start, end } = textareaSelectionRef.current;
+      const placeholder = (element.placeholder || "").toLowerCase();
+      let field: "hook" | "body" | "cta" | null = null;
+      if (placeholder.includes("hook")) field = "hook";
+      else if (placeholder.includes("body")) field = "body";
+      else if (placeholder.includes("action") || placeholder.includes("cta")) field = "cta";
+
+      if (field) {
+        const val = element.value;
+        const nextVal = val.slice(0, start) + rewritten.trim() + val.slice(end);
+        setDraft({
+          ...draft,
+          [field]: nextVal,
+        });
+        toast.success("AI edit applied.");
+      } else {
+        toast.error("Could not determine which field to edit.");
+      }
+    }
+    setAiEdit({ open: false, snapshot: null });
+    textareaSelectionRef.current = null;
+  }, [draft]);
+
+  useEffect(() => {
+    if (mode !== "edit") setAiEdit({ open: false, snapshot: null });
+  }, [mode]);
 
 
 
@@ -569,7 +617,7 @@ export default function LinkedInViewerPage() {
       immersiveFullscreen
       canvasBg="var(--surface-secondary)"
     >
-      <div className="h-full overflow-y-auto px-3 py-5 sm:px-6 sm:py-8 md:px-8 md:py-10">
+      <div ref={editorContainerRef} className="h-full overflow-y-auto px-3 py-5 sm:px-6 sm:py-8 md:px-8 md:py-10">
         {mode === "edit" && draft ? (
           <div className="mx-auto max-w-[580px] space-y-5">
             <LinkedInFeedCard
@@ -611,6 +659,27 @@ export default function LinkedInViewerPage() {
           </div>
         )}
       </div>
+      <InlineAiEditOverlay
+        active={mode === "edit"}
+        getRoots={getEditorRoots}
+        onOpen={({ snapshot, range, textareaInfo }) => {
+          setAiEdit({ open: true, snapshot });
+          if (textareaInfo) {
+            textareaSelectionRef.current = textareaInfo;
+          }
+        }}
+      />
+      <BlogAiRewriterModal
+        open={aiEdit.open}
+        blogId={blog.id}
+        projectDomain={project?.domain ?? ""}
+        selection={aiEdit.snapshot}
+        renderMarkdownSnippet={md => (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+        )}
+        onClose={() => setAiEdit({ open: false, snapshot: null })}
+        onInsert={handleAiRewriterInsert}
+      />
     </PreviewShell>
   );
 }

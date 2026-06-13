@@ -76,12 +76,16 @@ export default function EbookViewerPage() {
     open: false,
     snapshot: null,
   });
+  const selectionSnapshotRef = useRef<{ range: Range } | null>(null);
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const getEditorRoots = useCallback(() => [editorContainerRef.current], []);
 
   // Close AI edit when leaving edit mode
   useEffect(() => {
-    if (mode !== "edit") setAiEdit({ open: false, snapshot: null });
+    if (mode !== "edit") {
+      setAiEdit({ open: false, snapshot: null });
+      selectionSnapshotRef.current = null;
+    }
   }, [mode]);
 
   const handleDirectSchedule = async () => {
@@ -152,6 +156,49 @@ export default function EbookViewerPage() {
     return { company: project.company.trim(), domain: project.domain.trim() };
   }, [project?.company, project?.domain]);
 
+  const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    if (tiptapRef.current) {
+      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
+      if (ok) {
+        setAiEdit({ open: false, snapshot: null });
+        selectionSnapshotRef.current = null;
+        return;
+      }
+    }
+
+    // Fallback: replace selection in DOM range (for contentEditable fields like Cover Title/Subtitle)
+    const snap = selectionSnapshotRef.current;
+    if (snap?.range) {
+      try {
+        const range = snap.range.cloneRange();
+        if (document.contains(range.startContainer)) {
+          range.deleteContents();
+          const frag = document.createDocumentFragment();
+          frag.appendChild(document.createTextNode(rewritten.trim()));
+          range.insertNode(frag);
+
+          const end = frag.lastChild;
+          if (end) {
+            range.setStartAfter(end);
+            range.collapse(true);
+          }
+          const s = window.getSelection();
+          s?.removeAllRanges();
+          s?.addRange(range);
+          selectionSnapshotRef.current = null;
+          setAiEdit({ open: false, snapshot: null });
+          toast.success("AI edit applied.");
+          return;
+        }
+      } catch (e) {
+        console.error("DOM fallback insert failed", e);
+      }
+    }
+
+    toast.error("Couldn't apply rewrite — select text again.");
+    setAiEdit({ open: false, snapshot: null });
+  }, []);
+
   const studioBase = `/projects/${projectId}/content-generator`;
 
   if (loading) {
@@ -214,15 +261,6 @@ export default function EbookViewerPage() {
       setSaving(false);
     }
   };
-
-  const handleAiRewriterInsert = useCallback((rewritten: string) => {
-    if (tiptapRef.current) {
-      const ok = tiptapRef.current.replaceSelection(rewritten.trim());
-      if (ok) { setAiEdit({ open: false, snapshot: null }); return; }
-    }
-    toast.error("Couldn't apply rewrite — select text again.");
-    setAiEdit({ open: false, snapshot: null });
-  }, []);
 
   const breadcrumb = (
     <div className="shrink-0 space-y-2">
@@ -423,7 +461,10 @@ export default function EbookViewerPage() {
       <InlineAiEditOverlay
         active={mode === "edit"}
         getRoots={getEditorRoots}
-        onOpen={({ snapshot }) => setAiEdit({ open: true, snapshot })}
+        onOpen={({ snapshot, range }) => {
+          setAiEdit({ open: true, snapshot });
+          if (range) selectionSnapshotRef.current = { range };
+        }}
       />
       <BlogAiRewriterModal
         open={aiEdit.open}

@@ -56,6 +56,8 @@ function extractYouTubeId(url: string): string | null {
       if (v) return v;
       const m = u.pathname.match(/\/embed\/([^/?#]+)/);
       if (m) return m[1];
+      const shorts = u.pathname.match(/\/shorts\/([^/?#]+)/);
+      if (shorts) return shorts[1];
     }
     if (u.hostname === "youtu.be") {
       const id = u.pathname.slice(1).split("/")[0];

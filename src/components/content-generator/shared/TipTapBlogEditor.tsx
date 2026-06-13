@@ -48,6 +48,8 @@ function extractYouTubeId(url: string): string | null {
       if (v) return v;
       const m = u.pathname.match(/\/embed\/([^/?#]+)/);
       if (m) return m[1];
+      const shorts = u.pathname.match(/\/shorts\/([^/?#]+)/);
+      if (shorts) return shorts[1];
     }
     if (u.hostname === "youtu.be") {
       const id = u.pathname.slice(1).split("/")[0];
@@ -226,7 +228,7 @@ export const TipTapBlogEditor = forwardRef<
   return (
     <div className={cn("tiptap-editor", className)} style={style}>
       {/* Formatting toolbar — sticky below the page's main toolbar (top-[51px]) */}
-      <div className="sticky top-[51px] z-[9]">
+      <div className="sticky top-[51px] z-[9] -mx-4 md:-mx-8 lg:-mx-16 xl:-mx-20">
         <TipTapFormatToolbar editor={editor ?? null} />
       </div>
       <div ref={containerRef}>

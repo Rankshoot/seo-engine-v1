@@ -8,7 +8,7 @@ const cspHeader = `
   img-src 'self' data: blob: https://logo.clearbit.com https://icons.duckduckgo.com https://www.google.com https://flagcdn.com https://img.clerk.com https://i.ytimg.com https://*.ytimg.com;
   style-src 'self' 'unsafe-inline';
   font-src 'self' data:;
-  frame-src 'self' https://js.stripe.com https://*.clerk.com https://*.clerk.accounts.dev https://www.youtube.com https://www.youtube-nocookie.com;
+  frame-src 'self' https://js.stripe.com https://*.clerk.com https://*.clerk.accounts.dev https://*.youtube.com https://youtube.com https://*.youtube-nocookie.com https://youtube-nocookie.com https://*.youtu.be https://youtu.be;
   worker-src 'self' blob:;
   object-src 'none';
   base-uri 'self';

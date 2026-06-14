@@ -21,7 +21,7 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] relative bg-background">
       {/* ── Sticky Header ─────────────────────────────────────────────── */}
-      <header className="shrink-0 z-40 bg-surface-primary/95 backdrop-blur-md px-6 pt-6 pb-0">
+      <header className="shrink-0 z-40 bg-surface-primary/95 backdrop-blur-md px-2  pb-0">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           {/* Title area */}
           <div className="min-w-0 flex-1">
@@ -59,11 +59,11 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
         {/* Gradient separator — replaces the hard border */}
         <div className="mt-5 h-px bg-gradient-to-r from-transparent via-border-subtle to-transparent" />
         {/* Subtle brand glow under active area */}
-        <div className="h-px bg-gradient-to-r from-transparent via-brand-action/20 to-transparent" />
+        <div className="h-px bg-gradient-to-r from-transparent via-brand-action/30 to-transparent" />
       </header>
 
       {/* ── Content ───────────────────────────────────────────────────── */}
-      <section className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-5">
+      <section className="flex-1 flex flex-col min-h-0 px-2 pt-5 pb-">
         <div className="w-full flex-1 flex flex-col min-h-0">
           <Suspense key={activeTab} fallback={<KeywordTableSkeleton />}>
             {activeTab === "organic" ? (

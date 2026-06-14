@@ -9,7 +9,6 @@ import { competitorsApi } from "@/frontend/api/competitors";
 import { calendarApi } from "@/frontend/api/calendar";
 import { KeywordGap, ContentType } from "@/lib/types";
 import { KeywordActionCell } from "@/components/keywords/KeywordActionCell";
-import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { useAppSelector, selectAiSuggestedGapKeywords, useAppDispatch, selectKeywordPrefs } from "@/lib/redux/hooks";
 import { rememberCompetitorKeywordFilter, type KeywordFilterTab } from "@/lib/redux/keyword-workspace-slice";
 import { EmptyState } from "@/components/common";
@@ -22,7 +21,7 @@ import { useKeywordTableState } from "../_hooks/useKeywordTableState";
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled" | "generated";
-type GapSortColumn = "keyword" | "gap_type" | "volume" | "competitor_weakness" | "ai_eval_score" | "action";
+type GapSortColumn = "keyword" | "gap_type" | "volume" | "kd" | "competitor_weakness" | "ai_eval_score" | "action";
 type SortDir = "asc" | "desc";
 type GapAiEvalData = NonNullable<KeywordGap["ai_eval_data"]>;
 
@@ -56,6 +55,8 @@ function compareGaps(a: KeywordGap, b: KeywordGap, col: GapSortColumn, dir: Sort
       return m * a.gap_type.localeCompare(b.gap_type);
     case "volume":
       return m * ((a.volume || 0) - (b.volume || 0));
+    case "kd":
+      return m * ((a.kd || 0) - (b.kd || 0));
     case "competitor_weakness":
       return m * ((a.competitor_weakness || 0) - (b.competitor_weakness || 0));
     case "ai_eval_score":
@@ -85,7 +86,7 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
   ].filter(d => d.val > 0);
 
   return (
-    <div className="w-[340px] space-y-3 p-1 text-left">
+    <div className="w-[340px] space-y-3 p-3.5 text-left">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className={`inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[13px] font-bold tabular-nums ${cat.colorClass}`}>
@@ -161,6 +162,97 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
   );
 }
 
+// ─── COLUMN VISIBILITY ───────────────────────────────────────────────────────
+function useLocalColumnVisibility(storageKey: string, defaultHidden: string[] = []) {
+  const [hidden, setHidden] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set(defaultHidden);
+    try {
+      const stored = localStorage.getItem(storageKey);
+      return stored ? new Set(JSON.parse(stored) as string[]) : new Set(defaultHidden);
+    } catch { return new Set(defaultHidden); }
+  });
+  const toggle = (id: string) => {
+    setHidden(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+  return { hidden, toggle };
+}
+
+function ColumnToggleDropdown({
+  allColumns,
+  hidden,
+  alwaysVisible,
+  onToggle,
+}: {
+  allColumns: { id: string; label: string }[];
+  hidden: Set<string>;
+  alwaysVisible: string[];
+  onToggle: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  const alwaysSet = new Set(alwaysVisible);
+  const visibleCount = allColumns.filter(c => !hidden.has(c.id)).length;
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px hover:border-border-strong hover:text-text-primary active:scale-95 motion-safe:hover:scale-105"
+      >
+        <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.85} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125Z" />
+        </svg>
+        <span>Columns</span>
+        <span className="ml-0.5 tabular-nums opacity-60">({visibleCount})</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 z-50 w-52 rounded-xl border border-border-subtle bg-surface-elevated shadow-lg overflow-hidden">
+          <div className="px-3 py-2 border-b border-border-subtle/60">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Toggle columns</p>
+          </div>
+          <div className="py-1">
+            {allColumns.map(col => {
+              const isAlways = alwaysSet.has(col.id);
+              const isVisible = !hidden.has(col.id);
+              return (
+                <label
+                  key={col.id}
+                  className={`flex items-center gap-2.5 px-3 py-1.5 ${isAlways ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:bg-surface-hover"}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isVisible}
+                    disabled={isAlways}
+                    onChange={() => !isAlways && onToggle(col.id)}
+                    className="h-3.5 w-3.5 rounded border-border-subtle accent-brand-action"
+                  />
+                  <span className="text-[12.5px] text-text-primary">{col.label}</span>
+                  {isAlways && (
+                    <span className="ml-auto text-[10px] text-text-tertiary">always</span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function CompetitorKeywordsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -175,12 +267,13 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
   const [hasMoreAhrefs, setHasMoreAhrefs] = useState(true);
   const [error, setError] = useState("");
-  const [lastRunSummary, setLastRunSummary] = useState("");
   const [aiScoring, setAiScoring] = useState(false);
-  const [aiScoringDone, setAiScoringDone] = useState(false);
   const [bulkSchedulingGaps, setBulkSchedulingGaps] = useState(false);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  const filterDropdownRef = useRef<HTMLDivElement>(null);
+  const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
+  const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_competitor", ["top_competitor_url"]);
 
   const { data: state, isLoading: loading } = useQuery<BenchmarkState>({
     queryKey: COMPETITORS_KEY,
@@ -272,8 +365,9 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     if (!res.success) {
       setError(res.error ?? "Benchmark failed");
     } else {
-      setLastRunSummary(
-        `Benchmarked ${res.competitorsFound ?? 0} competitors across ${res.pagesScraped ?? 0} pages. Found ${res.gapsFound ?? 0} opportunities.`
+      toast.success(
+        `Benchmarked ${res.competitorsFound ?? 0} competitors across ${res.pagesScraped ?? 0} pages. Found ${res.gapsFound ?? 0} opportunities.`,
+        { id: "benchmark-summary", duration: 5000 }
       );
       await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
     }
@@ -312,12 +406,11 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const handleRunAiScoring = useCallback(async () => {
     if (aiScoring) return;
     setAiScoring(true);
-    setAiScoringDone(false);
     try {
       const res = await scoreCompetitorKeywordsWithAI(projectId);
       if (res.success) {
         await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
-        setAiScoringDone(true);
+        toast.success("AI scoring complete — scores are now visible in the AI Score column.", { id: "ai-scoring-done" });
       } else {
         setError(res.error ?? "AI scoring failed");
       }
@@ -459,29 +552,11 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       id: "kd",
       header: "KD",
       align: "center",
-      sortable: false,
+      sortable: true,
       tooltip: "Keyword Difficulty (0–100). Higher = harder to rank.",
       cell: (g: KeywordGap) => typeof g.kd === "number" && g.kd > 0 ? (
         <span className={`text-[13px] font-semibold tabular-nums ${KD_COLOR(g.kd)}`}>
           {g.kd}
-        </span>
-      ) : (
-        <span className="text-[12px] text-text-tertiary">—</span>
-      )
-    },
-    {
-      id: "position",
-      header: "Rank",
-      align: "center",
-      sortable: false,
-      tooltip: "Competitor's current ranking position for this keyword.",
-      cell: (g: KeywordGap) => typeof g.position === "number" && g.position > 0 ? (
-        <span
-          className={`text-[13px] font-semibold tabular-nums ${
-            g.position <= 3 ? "text-[#10b981]" : g.position <= 10 ? "text-[#f59e0b]" : "text-text-secondary"
-          }`}
-        >
-          #{g.position}
         </span>
       ) : (
         <span className="text-[12px] text-text-tertiary">—</span>
@@ -524,6 +599,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       cell: (g: KeywordGap) => g.ai_eval_score && g.ai_eval_data ? (
         <Tooltip
           placement="above"
+          padding={false}
           content={<GapAiScoreTooltip data={g.ai_eval_data} score={g.ai_eval_score} />}
         >
           {(() => {
@@ -538,27 +614,45 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
           })()}
         </Tooltip>
       ) : (
-        <span className="text-[12px] text-text-tertiary">—</span>
+        <span className="text-[12px] min-w-[200px] text-text-tertiary">—</span>
       )
     },
     {
       id: "top_competitor_url",
       header: "Ranking page",
       sortable: false,
-      tooltip: "The competitor's URL currently ranking for this keyword.",
-      cell: (g: KeywordGap) => g.top_competitor_url ? (
-        <a
-          href={g.top_competitor_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={g.top_competitor_url}
-          className="block truncate text-[12px] text-brand-action/80 hover:text-brand-action hover:underline"
-        >
-          {compactUrl(g.top_competitor_url)} ↗
-        </a>
-      ) : (
-        <span className="text-[12px] text-text-tertiary">—</span>
-      )
+      tooltip: "The competitor's top-ranking URL for this keyword. Badge shows their position.",
+      cell: (g: KeywordGap) => {
+        const pos = typeof g.position === "number" && g.position > 0 ? g.position : null;
+        const badgeCls = pos === null ? "" :
+          pos <= 3 ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" :
+          pos <= 10 ? "border-amber-500/30 bg-amber-500/10 text-amber-400" :
+          "border-border-subtle bg-surface-secondary text-text-tertiary";
+        return (
+          <div className="flex items-center gap-1.5 min-w-0 max-w-[280px]">
+            {pos !== null && (
+              <Tooltip placement="above" content={`Competitor ranks #${pos} for this keyword`}>
+                <span className={`shrink-0 inline-flex items-center justify-center rounded-md h-5 min-w-[26px] px-1 text-[10px] font-bold tabular-nums border cursor-default ${badgeCls}`}>
+                  #{pos}
+                </span>
+              </Tooltip>
+            )}
+            {g.top_competitor_url ? (
+              <a
+                href={g.top_competitor_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={g.top_competitor_url}
+                className="truncate text-[12px] text-brand-action/80 hover:text-brand-action hover:underline min-w-0"
+              >
+                {compactUrl(g.top_competitor_url)} ↗
+              </a>
+            ) : (
+              <span className="text-[12px] text-text-tertiary">—</span>
+            )}
+          </div>
+        );
+      }
     },
     {
       id: "content_type",
@@ -585,18 +679,67 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     [tableState.counts]
   );
 
+  const visibleColumns = useMemo(
+    () => columns.filter(c => !hiddenCols.has(c.id) || c.id === "keyword" || c.id === "action"),
+    [columns, hiddenCols]
+  );
+
   const handleWorkspaceTabChange = (tab: OpportunityWorkspaceTab) => {
     dispatch(rememberCompetitorKeywordFilter({ projectId, filter: tab as unknown as KeywordFilterTab }));
   };
 
+  useEffect(() => {
+    if (!filterDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
+        setFilterDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [filterDropdownOpen]);
+
   const renderControls = () => (
     <div className="flex flex-wrap items-center justify-between gap-3 bg-surface-primary">
-      <PillTabFilterBar<OpportunityWorkspaceTab>
-        className="min-w-0 flex-1"
-        items={OPPORTUNITY_TAB_ITEMS}
-        activeId={workspaceTab}
-        onChange={handleWorkspaceTabChange}
-      />
+      {/* Filter dropdown */}
+      <div className="relative" ref={filterDropdownRef}>
+        <button
+          type="button"
+          onClick={() => setFilterDropdownOpen(o => !o)}
+          className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors ${
+            filterDropdownOpen
+              ? "border-border-strong bg-surface-hover text-text-primary"
+              : "border-border-subtle bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+          }`}
+        >
+          <span>{OPPORTUNITY_TAB_ITEMS.find(t => t.id === workspaceTab)?.label ?? "All"}</span>
+          <span className="tabular-nums text-text-tertiary">
+            ({OPPORTUNITY_TAB_ITEMS.find(t => t.id === workspaceTab)?.count ?? 0})
+          </span>
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`transition-transform duration-150 ${filterDropdownOpen ? "rotate-180" : ""}`}>
+            <path d="M2 4.5L6 8.5L10 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        {filterDropdownOpen && (
+          <div className="absolute left-0 top-full mt-1.5 z-30 min-w-[180px] rounded-xl border border-border-subtle bg-surface-elevated shadow-xl overflow-hidden">
+            {OPPORTUNITY_TAB_ITEMS.map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => { handleWorkspaceTabChange(opt.id); setFilterDropdownOpen(false); }}
+                className={`flex w-full items-center justify-between gap-3 px-4 py-2.5 text-[13px] font-medium transition-colors text-left ${
+                  workspaceTab === opt.id
+                    ? "bg-surface-hover text-text-primary"
+                    : "text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                }`}
+              >
+                <span>{opt.label}</span>
+                <span className="text-[11px] text-text-tertiary tabular-nums">{opt.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
         {(gaps.length > 0 || loading) && !tableState.massSelectMode && (
           <button
@@ -695,6 +838,12 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             )}
           </>
         )}
+        <ColumnToggleDropdown
+          allColumns={columns.map(c => ({ id: c.id, label: typeof c.header === "string" ? c.header : c.id }))}
+          hidden={hiddenCols}
+          alwaysVisible={["keyword", "action"]}
+          onToggle={toggleCol}
+        />
       </div>
     </div>
   );
@@ -727,12 +876,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
           )}
         </div>
       )}
-      {lastRunSummary && !error && (
-        <div className="mb-4 rounded-[16px] border border-brand-action/20 bg-brand-action/5 p-5 text-[14px] text-brand-action shrink-0">
-          {lastRunSummary}
-        </div>
-      )}
-
       {!hasBenchmark && !loading ? (
         <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
           <div className="mb-6 flex justify-center">
@@ -763,24 +906,11 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         </div>
       ) : (
         <div className="flex-1 flex flex-col min-h-0 space-y-6">
-          {gaps.length > 0 && aiScoringDone && (
-            <div className="flex items-center gap-3 rounded-[12px] border border-[#8b5cf6]/25 bg-[#8b5cf6]/10 px-4 py-3 text-[13px] text-[#8b5cf6] shrink-0">
-              <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-                />
-              </svg>
-              <span>AI scoring complete — scores are now visible in the AI Score column.</span>
-            </div>
-          )}
-
           <section className="flex-1 flex flex-col min-h-0 space-y-3">
             <Suspense fallback={<KeywordTableSkeleton />}>
               <SharedKeywordTable<KeywordGap>
                 data={tableState.displayedData}
-                columns={columns}
+                columns={visibleColumns}
                 keyExtractor={g => g.id}
                 scrollContainerRef={tableScrollRef}
                 sortColumn={tableState.activeSortColumn}

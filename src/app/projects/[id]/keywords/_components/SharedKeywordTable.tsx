@@ -238,13 +238,13 @@ export function SharedKeywordTable<T>({
               {(footerLeft || footerRight) && (
                 <TableRow className="hover:bg-transparent bg-surface-secondary/30 border-t border-border-subtle">
                   <TableCell
-                    colSpan={columns.length + (massSelectMode ? 1 : 0) - 1}
+                    colSpan={columns.length + 1}
                     className="px-6 py-3.5 align-middle"
                   >
-                    {footerLeft}
-                  </TableCell>
-                  <TableCell className="px-4 py-3.5 align-middle text-center">
-                    {footerRight}
+                    <div className="flex items-center justify-between gap-4">
+                      <div>{footerLeft}</div>
+                      <div>{footerRight}</div>
+                    </div>
                   </TableCell>
                 </TableRow>
               )}

@@ -23,12 +23,14 @@ export function Tooltip({
   className = "",
   placement = "above",
   interactive = false,
+  padding = true,
 }: {
   children: React.ReactNode;
   content: React.ReactNode;
   className?: string;
   placement?: TooltipPlacement;
   interactive?: boolean;
+  padding?: boolean;
 }) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const tooltipRef = React.useRef<HTMLDivElement>(null);
@@ -44,7 +46,7 @@ export function Tooltip({
     const tip = tooltipRef.current;
     if (!tip) return;
 
-    const tw = tip.offsetWidth  || 320;
+    const tw = tip.offsetWidth  || 440;
     const th = tip.offsetHeight || 200;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -144,7 +146,7 @@ export function Tooltip({
             overflow: "auto",
           }}
         >
-          <div className="relative w-max max-w-xs rounded-xl border border-border-subtle bg-surface-elevated text-xs font-medium text-text-secondary shadow-2xl shadow-black/50">
+          <div className={`relative w-max max-w-[440px] rounded-xl border border-border-subtle bg-surface-elevated text-xs font-medium text-text-secondary shadow-2xl shadow-black/50 ${padding ? "px-3 py-2.5" : ""}`}>
             {content}
           </div>
         </div>,

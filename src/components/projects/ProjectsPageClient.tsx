@@ -1,16 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "@/components/dashboard/Sidebar";
 import ProjectsClient from "@/components/projects/ProjectsClient";
+import { OnboardingFlow } from "@/components/onboarding/OnboardingFlow";
 import type { Project } from "@/lib/types";
 
 export default function ProjectsPageClient({
   projects,
   initialNewModalOpen,
+  userName = "",
 }: {
   projects: Project[];
   initialNewModalOpen: boolean;
+  userName?: string;
 }) {
   const [newProjectModalOpen, setNewProjectModalOpen] = useState(initialNewModalOpen);
 
@@ -25,6 +28,11 @@ export default function ProjectsPageClient({
       window.history.replaceState(null, "", `/projects${qs ? `?${qs}` : ""}`);
     }
   }, []);
+
+  // New user — no projects yet → show full-screen onboarding wizard
+  if (projects.length === 0 && !initialNewModalOpen) {
+    return <OnboardingFlow userName={userName} />;
+  }
 
   return (
     <div className="min-h-screen flex bg-surface-primary">

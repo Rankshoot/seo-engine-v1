@@ -22,5 +22,13 @@ export default async function ProjectsPage({
   const sp = await searchParams;
   const initialNewModalOpen = sp.new === "1" || sp.new === "true";
 
-  return <ProjectsPageClient projects={projects ?? []} initialNewModalOpen={initialNewModalOpen} />;
+  const userName = [user.firstName, user.lastName].filter(Boolean).join(" ");
+
+  return (
+    <ProjectsPageClient
+      projects={projects ?? []}
+      initialNewModalOpen={initialNewModalOpen}
+      userName={userName}
+    />
+  );
 }

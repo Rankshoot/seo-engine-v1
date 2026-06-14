@@ -29,7 +29,6 @@ import { ColumnDef, SharedKeywordTable } from "../_components/SharedKeywordTable
 import { KeywordTableSkeleton } from "@/components/Skeleton";
 import { KeywordDetailModal } from "@/components/KeywordDetailModal";
 import { KeywordActionCell } from "@/components/keywords/KeywordActionCell";
-import { PillTabFilterBar } from "@/components/filters/PillTabFilterBar";
 import { Tooltip } from "@/components/Tooltip";
 import { toast } from "react-hot-toast";
 import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
@@ -172,6 +171,97 @@ function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
   );
 }
 
+// ─── COLUMN VISIBILITY ───────────────────────────────────────────────────────
+function useLocalColumnVisibility(storageKey: string, defaultHidden: string[] = []) {
+  const [hidden, setHidden] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set(defaultHidden);
+    try {
+      const stored = localStorage.getItem(storageKey);
+      return stored ? new Set(JSON.parse(stored) as string[]) : new Set(defaultHidden);
+    } catch { return new Set(defaultHidden); }
+  });
+  const toggle = (id: string) => {
+    setHidden(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+  return { hidden, toggle };
+}
+
+function ColumnToggleDropdown({
+  allColumns,
+  hidden,
+  alwaysVisible,
+  onToggle,
+}: {
+  allColumns: { id: string; label: string }[];
+  hidden: Set<string>;
+  alwaysVisible: string[];
+  onToggle: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  const alwaysSet = new Set(alwaysVisible);
+  const visibleCount = allColumns.filter(c => !hidden.has(c.id)).length;
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide text-text-secondary shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px hover:border-border-strong hover:text-text-primary active:scale-95 motion-safe:hover:scale-105"
+      >
+        <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.85} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125Z" />
+        </svg>
+        <span>Columns</span>
+        <span className="ml-0.5 tabular-nums opacity-60">({visibleCount})</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 z-50 w-52 rounded-xl border border-border-subtle bg-surface-elevated shadow-lg overflow-hidden">
+          <div className="px-3 py-2 border-b border-border-subtle/60">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Toggle columns</p>
+          </div>
+          <div className="py-1">
+            {allColumns.map(col => {
+              const isAlways = alwaysSet.has(col.id);
+              const isVisible = !hidden.has(col.id);
+              return (
+                <label
+                  key={col.id}
+                  className={`flex items-center gap-2.5 px-3 py-1.5 ${isAlways ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:bg-surface-hover"}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isVisible}
+                    disabled={isAlways}
+                    onChange={() => !isAlways && onToggle(col.id)}
+                    className="h-3.5 w-3.5 rounded border-border-subtle accent-brand-action"
+                  />
+                  <span className="text-[12.5px] text-text-primary">{col.label}</span>
+                  {isAlways && (
+                    <span className="ml-auto text-[10px] text-text-tertiary">always</span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type FilterTab = "all" | "unscheduled" | "scheduled" | "generated";
 
 type SourceTab = "industry" | "domain";
@@ -286,6 +376,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   // Always show industry (merged) data — dropdown removed.
   const sourceTab: SourceTab = "industry";
   const keywordTableScrollRef = useRef<HTMLDivElement>(null);
+  const filterDropdownRef = useRef<HTMLDivElement>(null);
+  const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
+  const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_organic");
 
   const [bulkScheduling, setBulkScheduling] = useState(false);
   const [aiScoring, setAiScoring] = useState(false);
@@ -626,6 +719,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       cell: (kw: Keyword) => (
         <Tooltip
           placement="above"
+          padding={false}
           content={kw.monthly_searches ? <MonthlySearchesChart data={kw.monthly_searches} /> : null}
         >
           <span className="text-[14px] font-mono text-text-secondary cursor-help tabular-nums">
@@ -707,7 +801,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         }
         const cat = AI_SCORE_CATEGORY(score);
         return (
-          <Tooltip placement="above" content={<AiScoreTooltip data={data} score={score} />}>
+          <Tooltip placement="above" padding={false} content={<AiScoreTooltip data={data} score={score} />}>
             <span className={`inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[12px] font-bold tabular-nums cursor-help ${cat.cls}`}>
               <span>{cat.icon}</span>
               {score}
@@ -748,15 +842,66 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     }
   ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, project, tableState]);
 
+  const visibleColumns = useMemo(
+    () => industryColumns.filter(c => !hiddenCols.has(c.id) || c.id === "keyword" || c.id === "action"),
+    [industryColumns, hiddenCols]
+  );
+
+  useEffect(() => {
+    if (!filterDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
+        setFilterDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [filterDropdownOpen]);
+
   // Sticky Filter / Header bar controls
   const renderControls = () => (
     <div className="flex flex-wrap items-center justify-between gap-3 bg-surface-primary">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-        <PillTabFilterBar<FilterTab>
-          items={FILTER_TAB_ITEMS}
-          activeId={filter}
-          onChange={tab => dispatch(rememberKeywordFilter({ projectId, filter: tab as unknown as KeywordFilterTab }))}
-        />
+      {/* Filter dropdown */}
+      <div className="relative" ref={filterDropdownRef}>
+        <button
+          type="button"
+          onClick={() => setFilterDropdownOpen(o => !o)}
+          className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors ${
+            filterDropdownOpen
+              ? "border-border-strong bg-surface-hover text-text-primary"
+              : "border-border-subtle bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+          }`}
+        >
+          <span>{FILTER_TAB_ITEMS.find(t => t.id === filter)?.label ?? "All"}</span>
+          <span className="tabular-nums text-text-tertiary">
+            ({FILTER_TAB_ITEMS.find(t => t.id === filter)?.count ?? 0})
+          </span>
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className={`transition-transform duration-150 ${filterDropdownOpen ? "rotate-180" : ""}`}>
+            <path d="M2 4.5L6 8.5L10 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        {filterDropdownOpen && (
+          <div className="absolute left-0 top-full mt-1.5 z-30 min-w-[180px] rounded-xl border border-border-subtle bg-surface-elevated shadow-xl overflow-hidden">
+            {FILTER_TAB_ITEMS.map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  dispatch(rememberKeywordFilter({ projectId, filter: opt.id as unknown as KeywordFilterTab }));
+                  setFilterDropdownOpen(false);
+                }}
+                className={`flex w-full items-center justify-between gap-3 px-4 py-2.5 text-[13px] font-medium transition-colors text-left ${
+                  filter === opt.id
+                    ? "bg-surface-hover text-text-primary"
+                    : "text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                }`}
+              >
+                <span>{opt.label}</span>
+                <span className="text-[11px] text-text-tertiary tabular-nums">{opt.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
@@ -856,6 +1001,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
             </>
           )
         ) : null}
+        <ColumnToggleDropdown
+          allColumns={industryColumns.map(c => ({ id: c.id, label: typeof c.header === "string" ? c.header : c.id }))}
+          hidden={hiddenCols}
+          alwaysVisible={["keyword", "action"]}
+          onToggle={toggleCol}
+        />
       </div>
     </div>
   );
@@ -893,7 +1044,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         <Suspense fallback={<KeywordTableSkeleton />}>
           <SharedKeywordTable<Keyword>
             data={tableState.displayedData}
-            columns={industryColumns}
+            columns={visibleColumns}
             keyExtractor={kw => kw.id}
             scrollContainerRef={keywordTableScrollRef}
             sortColumn={tableState.activeSortColumn}

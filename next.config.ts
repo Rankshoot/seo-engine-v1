@@ -3,12 +3,12 @@ import type { NextConfig } from "next";
 
 const cspHeader = `
   default-src 'self';
-  script-src 'self' 'unsafe-eval' 'unsafe-inline' https://*.clerk.com https://*.clerk.accounts.dev https://js.stripe.com;
-  connect-src 'self' https://*.clerk.com https://*.clerk.accounts.dev https://*.supabase.co https://api.stripe.com https://vitals.vercel-insights.com https://vitals.vercel-analytics.com;
+  script-src 'self' 'unsafe-eval' 'unsafe-inline' https://*.clerk.com https://*.clerk.accounts.dev https://js.stripe.com https://challenges.cloudflare.com;
+  connect-src 'self' https://*.clerk.com https://*.clerk.accounts.dev https://*.supabase.co https://api.stripe.com https://vitals.vercel-insights.com https://vitals.vercel-analytics.com https://challenges.cloudflare.com;
   img-src 'self' data: blob: https://logo.clearbit.com https://icons.duckduckgo.com https://www.google.com https://flagcdn.com https://img.clerk.com https://i.ytimg.com https://*.ytimg.com;
   style-src 'self' 'unsafe-inline';
   font-src 'self' data:;
-  frame-src 'self' https://js.stripe.com https://*.clerk.com https://*.clerk.accounts.dev https://*.youtube.com https://youtube.com https://*.youtube-nocookie.com https://youtube-nocookie.com https://*.youtu.be https://youtu.be;
+  frame-src 'self' https://js.stripe.com https://*.clerk.com https://*.clerk.accounts.dev https://*.youtube.com https://youtube.com https://*.youtube-nocookie.com https://youtube-nocookie.com https://*.youtu.be https://youtu.be https://challenges.cloudflare.com;
   worker-src 'self' blob:;
   object-src 'none';
   base-uri 'self';

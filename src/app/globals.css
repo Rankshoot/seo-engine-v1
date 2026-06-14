@@ -93,16 +93,18 @@
 /* ===== BASE LAYERS ===== */
 @layer base {
   :root {
-    /* Light Mode — Rankit, refined Linear/Notion-inspired neutrals */
-    --surface-primary: #ffffff;
-    --surface-secondary: #fafafa;
-    --surface-tertiary: #f4f4f6;
+    /* Light Mode — Rankit, refined Linear/Notion-inspired neutrals
+       Background uses a warm-grey wash so white-elevated cards pop visually.
+       Border tokens are stronger to create clear delineation in forms & cards. */
+    --surface-primary: #f4f4f8;
+    --surface-secondary: #ececf2;
+    --surface-tertiary: #e2e2ea;
     --surface-elevated: #ffffff;
-    --surface-hover: #f4f4f6;
+    --surface-hover: #e8e8f0;
 
-    --border-subtle: #ebebef;
-    --border-default: #d9d9df;
-    --border-strong: #9494a0;
+    --border-subtle: #d0d0dc;
+    --border-default: #b8b8c8;
+    --border-strong: #8888a0;
 
     --text-primary: #0d0d12;
     --text-secondary: #2a2a35;

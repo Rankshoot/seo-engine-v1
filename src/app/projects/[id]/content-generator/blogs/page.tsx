@@ -71,7 +71,6 @@ const STREAM_STAGES: import("@/components/content-generator/shared").GenerationS
 
 const STAGE_ORDER: StreamStage[] = ["context", "research", "outline", "draft", "polish"];
 
-// Cumulative progress thresholds per stage
 const STAGE_CUMULATIVE: number[] = (() => {
   let acc = 0;
   return STREAM_STAGES.map(s => { acc += s.weight; return acc; });
@@ -86,7 +85,7 @@ export default function BlogGeneratorPage() {
   const studioBase = `${base}/content-generator`;
 
   const entryId = searchParams?.get("entryId");
-  const shouldSchedule = searchParams?.get("shouldSchedule") !== "false"; // Default to true
+  const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
 
   const { data: entriesData } = useQuery({
     queryKey: qk.calendarWithBlogs(projectId),
@@ -139,14 +138,11 @@ export default function BlogGeneratorPage() {
     if (tr && TARGET_REGIONS.some(r => r.code === tr)) setRegion(tr);
     const tl = project?.target_language?.toLowerCase();
     if (tl) setLanguage(tl);
-    // Stable to project signal — only fires once per project change.
   }, [project?.target_audience, project?.target_region, project?.target_language, audience]);
 
   useEffect(() => {
     if (scheduledEntry) {
-      if (scheduledEntry.focus_keyword) {
-        setPrimaryKeyword(scheduledEntry.focus_keyword);
-      }
+      if (scheduledEntry.focus_keyword) setPrimaryKeyword(scheduledEntry.focus_keyword);
       if (scheduledEntry.title || scheduledEntry.blog_title) {
         const t = scheduledEntry.title || scheduledEntry.blog_title;
         setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
@@ -156,6 +152,17 @@ export default function BlogGeneratorPage() {
       }
     }
   }, [scheduledEntry]);
+
+  // Compute which required fields are empty — drives CTA disabled state
+  const emptyRequiredFields = useMemo(() => {
+    const missing: string[] = [];
+    if (!topic.trim()) missing.push("Blog topic");
+    if (!primaryKeyword.trim()) missing.push("Primary SEO keyword");
+    if (!audience.trim()) missing.push("Target audience");
+    return missing;
+  }, [topic, primaryKeyword, audience]);
+
+  const isFormValid = emptyRequiredFields.length === 0;
 
   const askAi = async () => {
     setAskLoading(true);
@@ -181,12 +188,12 @@ export default function BlogGeneratorPage() {
   };
 
   const goReview = () => {
-    if (!topic.trim()) return toast.error("Add a topic or use Ask AI.");
-    if (!primaryKeyword.trim()) return toast.error("Add the primary SEO keyword.");
-    if (!audience.trim()) return toast.error("Describe your target audience.");
+    if (!isFormValid) {
+      toast.error(`Please fill in: ${emptyRequiredFields.join(", ")}`);
+      return;
+    }
     setPhase("review");
   };
-
 
   const runGeneration = async () => {
     setPhase("generating");
@@ -197,7 +204,6 @@ export default function BlogGeneratorPage() {
 
     try {
       let finalEntryId = entryId;
-      // Only create calendar entry if shouldSchedule is true and no entryId exists
       if (!finalEntryId && shouldSchedule) {
         const calRes = await calendarApi.addCustomKeyword(projectId, {
           keyword: primaryKeyword,
@@ -214,9 +220,7 @@ export default function BlogGeneratorPage() {
         finalEntryId = calRes.data.id;
       }
 
-      // If no entryId and shouldSchedule is false, generate without calendar entry
       if (!finalEntryId) {
-        // Use the direct generation API that doesn't require entryId
         for await (const event of blogsApi.generateStreamDirect({
           projectId: projectId!,
           keyword: primaryKeyword,
@@ -259,20 +263,17 @@ export default function BlogGeneratorPage() {
             return;
           }
         }
-        // Stream ended without a "done" event
         toast.error("Generation ended unexpectedly. Please try again.");
         setPhase("form");
         setStreamProgress(undefined);
         return;
       }
 
-      // Existing flow: use entryId-based generation
       for await (const event of blogsApi.generateStream({ entryId: finalEntryId!, wordCount })) {
         if (event.event === "stage") {
           const stageIdx = STAGE_ORDER.indexOf(event.stage as StreamStage);
           const progressAtStage = stageIdx === 0 ? 0.02 : STAGE_CUMULATIVE[stageIdx - 1];
           setStreamProgress(progressAtStage);
-          // When we move past draft, thinking is done
           if (event.stage === "polish") setIsThinking(false);
           if (event.detail) {
             setStreamStages(prev =>
@@ -301,7 +302,6 @@ export default function BlogGeneratorPage() {
         }
       }
 
-      // Stream ended without a "done" event — treat as error
       toast.error("Generation ended unexpectedly. Please try again.");
       setPhase("form");
       setStreamProgress(undefined);
@@ -327,8 +327,9 @@ export default function BlogGeneratorPage() {
   }, [phase]);
 
   return (
-    <div className="relative space-y-10 pb-16 pl-4 pr-4">
-      <div className="border-b border-border-subtle pb-8 pt-4">
+    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8">
+      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
+      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
         <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Blogs" />
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0 max-w-3xl">
@@ -347,9 +348,19 @@ export default function BlogGeneratorPage() {
               >
                 {askLoading ? "Thinking…" : "Ask AI for a topic"}
               </Button>
-              <Button variant="primary" shape="pill" size="lg" onClick={goReview}>
+              <button
+                onClick={goReview}
+                disabled={!isFormValid}
+                title={!isFormValid ? `Required: ${emptyRequiredFields.join(", ")}` : undefined}
+                className={
+                  "inline-flex h-10 items-center justify-center rounded-full px-5 text-[14px] font-semibold transition-all " +
+                  (isFormValid
+                    ? "bg-brand-action text-white hover:opacity-90 cursor-pointer"
+                    : "bg-text-primary/15 text-text-tertiary cursor-not-allowed opacity-60")
+                }
+              >
                 Review &amp; continue
-              </Button>
+              </button>
             </div>
           ) : phase === "review" ? (
             <div className="flex flex-wrap items-center gap-3">

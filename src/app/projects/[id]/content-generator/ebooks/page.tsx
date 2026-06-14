@@ -26,7 +26,6 @@ import {
   StepRow,
   StudioBreadcrumb,
   RecentHistorySkeleton,
-  validateEbookForm,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -92,14 +91,11 @@ export default function EbookGeneratorPage() {
     if (tr && TARGET_REGIONS.some(r => r.code === tr)) setRegion(tr);
     const tl = project?.target_language?.toLowerCase();
     if (tl) setLanguage(tl);
-    // Stable to project signal — only fires once per project change.
   }, [project?.target_audience, project?.target_region, project?.target_language, audience]);
 
   useEffect(() => {
     if (scheduledEntry) {
-      if (scheduledEntry.focus_keyword) {
-        setPrimaryKeyword(scheduledEntry.focus_keyword);
-      }
+      if (scheduledEntry.focus_keyword) setPrimaryKeyword(scheduledEntry.focus_keyword);
       if (scheduledEntry.title || scheduledEntry.blog_title) {
         const t = scheduledEntry.title || scheduledEntry.blog_title;
         setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
@@ -109,6 +105,17 @@ export default function EbookGeneratorPage() {
       }
     }
   }, [scheduledEntry]);
+
+  // Compute which required fields are empty — drives CTA disabled state
+  const emptyRequiredFields = useMemo(() => {
+    const missing: string[] = [];
+    if (!topic.trim()) missing.push("Ebook topic");
+    if (!primaryKeyword.trim()) missing.push("Primary SEO keyword");
+    if (!audience.trim()) missing.push("Target audience");
+    return missing;
+  }, [topic, primaryKeyword, audience]);
+
+  const isFormValid = emptyRequiredFields.length === 0;
 
   const askAi = async () => {
     setAskLoading(true);
@@ -132,9 +139,9 @@ export default function EbookGeneratorPage() {
   };
 
   const goReview = () => {
-    const val = validateEbookForm(topic, primaryKeyword, audience);
-    if (!val.isValid) {
-      return toast.error(val.error || "Validation failed");
+    if (!isFormValid) {
+      toast.error(`Please fill in: ${emptyRequiredFields.join(", ")}`);
+      return;
     }
     setPhase("review");
   };
@@ -184,8 +191,9 @@ export default function EbookGeneratorPage() {
   }, [phase]);
 
   return (
-    <div className="relative space-y-10 pb-16 pl-4 pr-4">
-      <div className="border-b border-border-subtle pb-8 pt-4">
+    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8">
+      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
+      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
         <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Ebooks" />
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0 max-w-3xl">
@@ -204,9 +212,19 @@ export default function EbookGeneratorPage() {
               >
                 {askLoading ? "Thinking…" : "Ask AI for a topic"}
               </Button>
-              <Button variant="primary" shape="pill" size="lg" onClick={goReview}>
+              <button
+                onClick={goReview}
+                disabled={!isFormValid}
+                title={!isFormValid ? `Required: ${emptyRequiredFields.join(", ")}` : undefined}
+                className={
+                  "inline-flex h-10 items-center justify-center rounded-full px-5 text-[14px] font-semibold transition-all " +
+                  (isFormValid
+                    ? "bg-brand-action text-white hover:opacity-90 cursor-pointer"
+                    : "bg-text-primary/15 text-text-tertiary cursor-not-allowed opacity-60")
+                }
+              >
                 Review &amp; continue
-              </Button>
+              </button>
             </div>
           ) : phase === "review" ? (
             <div className="flex flex-wrap items-center gap-3">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, Suspense } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { PageTitle } from "@/components/common";
@@ -19,7 +19,6 @@ interface ContentTypeCard {
   bullets: string[];
   art: React.ReactNode;
   artBg: string;
-  primary?: boolean;
 }
 
 function ClockIcon({ className }: { className?: string }) {
@@ -33,77 +32,83 @@ function ClockIcon({ className }: { className?: string }) {
 
 function ArtInstant() {
   return (
-    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
-      <rect x="40" y="20" width="120" height="88" rx="10" className="stroke-text-tertiary/25" strokeWidth="1.5" />
-      <circle cx="100" cy="64" r="22" className="stroke-violet-500/60 dark:stroke-violet-400/60" strokeWidth="2" />
-      <circle cx="100" cy="64" r="8" className="fill-violet-500/20 stroke-violet-500 dark:fill-violet-400/20 dark:stroke-violet-400" strokeWidth="1.5" />
+    <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
+      <rect x="20" y="8" width="80" height="56" rx="8" className="stroke-text-tertiary/25" strokeWidth="1.5" />
+      <circle cx="60" cy="36" r="14" className="stroke-violet-500/60 dark:stroke-violet-400/60" strokeWidth="2" />
+      <circle cx="60" cy="36" r="5" className="fill-violet-500/20 stroke-violet-500 dark:fill-violet-400/20 dark:stroke-violet-400" strokeWidth="1.5" />
     </svg>
   );
 }
 
 function ArtEbook() {
   return (
-    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
-      <rect x="36" y="14" width="60" height="92" rx="6" className="stroke-violet-500/60 dark:stroke-violet-400/60 fill-violet-500/8 dark:fill-violet-400/10" strokeWidth="1.5" />
-      <rect x="100" y="14" width="60" height="92" rx="6" className="stroke-violet-400/40 dark:stroke-violet-300/40" strokeWidth="1.5" />
-      <path d="M48 32h36M48 44h28M48 56h36M48 68h22" className="stroke-violet-500/70 dark:stroke-violet-300/70" strokeWidth="2" strokeLinecap="round" />
+    <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
+      <rect x="16" y="6" width="36" height="60" rx="4" className="stroke-violet-500/60 dark:stroke-violet-400/60 fill-violet-500/8 dark:fill-violet-400/10" strokeWidth="1.5" />
+      <rect x="54" y="6" width="36" height="60" rx="4" className="stroke-violet-400/40 dark:stroke-violet-300/40" strokeWidth="1.5" />
+      <path d="M22 18h24M22 26h18M22 34h24M22 42h14" className="stroke-violet-500/70 dark:stroke-violet-300/70" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
 
 function ArtWhitepaper() {
   return (
-    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
-      <rect x="32" y="12" width="136" height="96" rx="6" className="stroke-blue-500/60 dark:stroke-blue-400/60" strokeWidth="1.5" />
-      <path d="M48 32h104M48 46h84M48 60h104M48 74h64" className="stroke-blue-500/55 dark:stroke-blue-300/55" strokeWidth="2" strokeLinecap="round" />
-      <rect x="48" y="86" width="56" height="14" rx="2" className="stroke-blue-500/45 dark:stroke-blue-300/45 fill-blue-500/8 dark:fill-blue-400/10" strokeWidth="1.5" />
+    <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
+      <rect x="12" y="6" width="96" height="60" rx="4" className="stroke-blue-500/60 dark:stroke-blue-400/60" strokeWidth="1.5" />
+      <path d="M24 20h72M24 30h54M24 40h72M24 50h40" className="stroke-blue-500/55 dark:stroke-blue-300/55" strokeWidth="1.5" strokeLinecap="round" />
+      <rect x="24" y="56" width="36" height="8" rx="2" className="stroke-blue-500/45 dark:stroke-blue-300/45 fill-blue-500/8 dark:fill-blue-400/10" strokeWidth="1" />
     </svg>
   );
 }
 
 function ArtLinkedIn() {
   return (
-    <svg viewBox="0 0 200 120" className="h-full w-full max-h-[140px]" fill="none" aria-hidden>
-      <rect x="24" y="14" width="152" height="92" rx="10" className="stroke-text-tertiary/25" strokeWidth="1.5" />
-      <circle cx="48" cy="40" r="10" className="fill-cyan-500/15 stroke-cyan-500/60 dark:fill-cyan-400/20 dark:stroke-cyan-400/60" strokeWidth="1.5" />
-      <path d="M64 36h72M64 46h52" className="stroke-text-tertiary/55" strokeWidth="2" strokeLinecap="round" />
-      <path d="M40 64h120M40 76h96M40 88h60" className="stroke-text-tertiary/35" strokeWidth="2" strokeLinecap="round" />
+    <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
+      <rect x="10" y="6" width="100" height="60" rx="8" className="stroke-text-tertiary/25" strokeWidth="1.5" />
+      <circle cx="30" cy="24" r="7" className="fill-cyan-500/15 stroke-cyan-500/60 dark:fill-cyan-400/20 dark:stroke-cyan-400/60" strokeWidth="1.5" />
+      <path d="M42 20h44M42 28h32" className="stroke-text-tertiary/55" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M20 42h80M20 50h64M20 58h40" className="stroke-text-tertiary/35" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
 
 export default function ContentGeneratorHubPage() {
   const { id: projectId } = useParams<{ id: string }>();
+  const router = useRouter();
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
 
   return (
-    <div className="space-y-10 pb-16 pl-4 pr-4">
-      <div className="pt-4 pb-8 border-b border-border-subtle">
-        <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
-          <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
-            <span className="h-2 w-2 rounded-full bg-brand-action" />
-            AI content studio
-          </span>
-        </div>
-        <PageTitle>What are you writing today?</PageTitle>
-        <p className="mt-3 max-w-2xl text-[16px] leading-relaxed text-text-tertiary">
-          Pick a content type. Every studio uses your project brief, approved keywords, and live research —
-          so the draft sounds like your business, not a template.
-        </p>
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <ProjectNavLink
-            href={`${studioBase}/history`}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary transition-colors hover:border-border-default hover:text-text-primary"
-          >
-            <span className="h-2 w-2 rounded-full bg-brand-action" />
-            View content history
-          </ProjectNavLink>
+    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8">
+      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
+      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
+        <div className="flex flex-wrap items-start justify-between gap-6">
+          <div className="min-w-0 max-w-3xl">
+            <PageTitle>What are you writing today?</PageTitle>
+            <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">
+              Pick a content type. Every studio uses your project brief, approved keywords, and live research —
+              so the draft sounds like your business, not a template.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <ProjectNavLink
+              href={`${studioBase}/history`}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-border-default bg-surface-elevated px-5 text-[14px] font-medium text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary"
+            >
+              View content history
+            </ProjectNavLink>
+            <button
+              onClick={() => router.push(`${studioBase}/blogs`)}
+              className="inline-flex h-10 items-center justify-center rounded-full bg-brand-action px-5 text-[14px] font-semibold text-white transition-opacity hover:opacity-90"
+            >
+              Start writing
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="mx-auto max-w-6xl">
-        <h2 className="mb-6 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">
+      {/* Cards */}
+      <div>
+        <h2 className="mb-5 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">
           Choose your content type
         </h2>
         <Suspense fallback={<ContentCardsSkeleton />}>
@@ -139,12 +144,10 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
       bullets: [
         "Quickest path from a topic to a publishable post",
         "Live SERP context + Serper PAA included",
-        "Optional custom PDF/DOCX/link sources",
         `${counts.blog} blog${counts.blog === 1 ? "" : "s"} in this project`,
       ],
       art: <ArtInstant />,
       artBg: "bg-violet-100/80 dark:bg-violet-500/10",
-      primary: true,
     },
     {
       id: "ebook",
@@ -152,10 +155,10 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
       badge: "Pro",
       duration: "3–6 min",
       title: "Ebooks",
-      subtitle: "Long-form lead magnets with chapters, ToC, FAQs, references.",
+      subtitle: "Long-form lead magnets with chapters, ToC, FAQs.",
       bullets: [
-        "Powered by advanced AI long-context",
-        "Authoritative, citation-rich, premium UX",
+        "Advanced AI long-context",
+        "Authoritative, citation-rich",
         `${counts.ebook} in this project`,
       ],
       art: <ArtEbook />,
@@ -181,10 +184,10 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
       href: `${studioBase}/linkedin`,
       duration: "30–60 sec",
       title: "LinkedIn posts",
-      subtitle: "Hook-first, feed-native posts. No clichés. No hashtag spam.",
+      subtitle: "Hook-first, feed-native posts. No clichés.",
       bullets: [
-        "Educational · founder · industry · storytelling · list · carousel",
-        "Sized for LinkedIn's 1,300-char collapse limit",
+        "Educational · founder · storytelling · carousel",
+        "Sized for LinkedIn's 1,300-char limit",
         `${counts.linkedin} in this project`,
       ],
       art: <ArtLinkedIn />,
@@ -193,7 +196,7 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
   ];
 
   return (
-    <div className="grid gap-6 md:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {cards.map(card => (
         <ContentCard key={card.id} card={card} />
       ))}
@@ -203,38 +206,36 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
 
 function ContentCard({ card }: { card: ContentTypeCard }) {
   return (
-    <article className="flex h-full flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated transition-all duration-200 ease-out hover:border-border-strong hover:shadow-(--shadow-sm)">
-      <div className={`relative ${card.artBg} px-6 pb-4 pt-8`}>
+    <article className="flex h-full flex-col overflow-hidden rounded-[14px] border border-border-subtle bg-surface-elevated transition-all duration-200 ease-out hover:border-border-strong hover:shadow-(--shadow-sm)">
+      {/* Art area */}
+      <div className={`relative ${card.artBg} px-4 pb-3 pt-6`}>
         {card.badge ? (
-          <span className="absolute left-4 top-4 inline-flex rounded-full bg-text-primary/10 px-2.5 py-0.5 text-[11px] font-semibold text-text-primary backdrop-blur">
+          <span className="absolute left-3 top-3 inline-flex rounded-full bg-text-primary/10 px-2 py-0.5 text-[10px] font-semibold text-text-primary backdrop-blur">
             {card.badge}
           </span>
         ) : null}
-        <span className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full bg-text-primary/10 px-2 py-0.5 text-[11px] font-semibold text-text-primary backdrop-blur">
-          <ClockIcon className="h-3 w-3" />
+        <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-text-primary/10 px-2 py-0.5 text-[10px] font-semibold text-text-primary backdrop-blur">
+          <ClockIcon className="h-2.5 w-2.5" />
           {card.duration}
         </span>
-        <div className="mx-auto flex h-[132px] items-center justify-center">{card.art}</div>
+        <div className="mx-auto flex h-[80px] items-center justify-center">{card.art}</div>
       </div>
 
-      <div className="flex flex-1 flex-col border-t border-border-subtle p-6">
-        <h3 className="text-[20px] font-bold text-text-primary">{card.title}</h3>
-        <p className="mt-1 text-[13px] text-text-secondary">{card.subtitle}</p>
-        <ul className="mt-4 mb-6 flex-1 space-y-2 text-[13px] leading-snug text-text-tertiary">
+      {/* Card body */}
+      <div className="flex flex-1 flex-col border-t border-border-subtle p-4">
+        <h3 className="text-[16px] font-bold text-text-primary">{card.title}</h3>
+        <p className="mt-0.5 text-[12px] text-text-secondary leading-snug">{card.subtitle}</p>
+        <ul className="mt-3 mb-4 flex-1 space-y-1.5 text-[12px] leading-snug text-text-tertiary">
           {card.bullets.map((b, i) => (
-            <li key={i} className="flex gap-2">
-              <span className="text-brand-action">•</span>
+            <li key={i} className="flex gap-1.5">
+              <span className="text-brand-action mt-0.5 shrink-0">•</span>
               {b}
             </li>
           ))}
         </ul>
         <ProjectNavLink
           href={card.href}
-          className={
-            card.primary
-              ? "flex w-full items-center justify-center rounded-full bg-text-primary px-5 py-3 text-[14px] font-medium text-surface-primary no-underline transition-opacity hover:opacity-90"
-              : "flex w-full items-center justify-center rounded-full border border-brand-action bg-transparent py-3 text-[14px] font-medium text-text-primary transition-colors hover:bg-brand-action/10"
-          }
+          className="flex w-full items-center justify-center rounded-full border border-border-default bg-transparent py-2 text-[13px] font-medium text-text-primary transition-colors hover:border-brand-action hover:bg-brand-action/8 hover:text-brand-action"
         >
           Open studio
         </ProjectNavLink>
@@ -245,20 +246,20 @@ function ContentCard({ card }: { card: ContentTypeCard }) {
 
 function ContentCardsSkeleton() {
   return (
-    <div className="grid gap-6 md:grid-cols-2 animate-pulse" aria-hidden="true">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 animate-pulse" aria-hidden="true">
       {[1, 2, 3, 4].map(idx => (
-        <div key={idx} className="flex h-full flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated">
-          <div className="relative bg-surface-secondary px-6 pb-4 pt-8 h-[180px] flex items-center justify-center">
-            <div className="h-24 w-40 rounded bg-text-primary/10" />
+        <div key={idx} className="flex h-full flex-col overflow-hidden rounded-[14px] border border-border-subtle bg-surface-elevated">
+          <div className="relative bg-surface-secondary px-4 pb-3 pt-6 h-[120px] flex items-center justify-center">
+            <div className="h-16 w-28 rounded bg-text-primary/10" />
           </div>
-          <div className="flex flex-1 flex-col border-t border-border-subtle p-6 space-y-4">
-            <div className="h-6 w-32 rounded bg-text-primary/10" />
-            <div className="h-4 w-full rounded bg-text-primary/5" />
-            <div className="space-y-2 py-2">
-              <div className="h-3 w-4/5 rounded bg-text-primary/5" />
-              <div className="h-3 w-3/4 rounded bg-text-primary/5" />
+          <div className="flex flex-1 flex-col border-t border-border-subtle p-4 space-y-3">
+            <div className="h-5 w-24 rounded bg-text-primary/10" />
+            <div className="h-3 w-full rounded bg-text-primary/5" />
+            <div className="space-y-1.5 py-1">
+              <div className="h-2.5 w-4/5 rounded bg-text-primary/5" />
+              <div className="h-2.5 w-3/4 rounded bg-text-primary/5" />
             </div>
-            <div className="h-10 w-full rounded-full bg-text-primary/10 mt-auto" />
+            <div className="h-8 w-full rounded-full bg-text-primary/10 mt-auto" />
           </div>
         </div>
       ))}

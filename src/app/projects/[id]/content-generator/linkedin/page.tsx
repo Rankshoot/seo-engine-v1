@@ -25,7 +25,6 @@ import {
   StepRow,
   StudioBreadcrumb,
   RecentHistorySkeleton,
-  validateLinkedInForm,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -103,6 +102,16 @@ export default function LinkedInGeneratorPage() {
     }
   }, [scheduledEntry]);
 
+  // Compute which required fields are empty — drives CTA disabled state
+  const emptyRequiredFields = useMemo(() => {
+    const missing: string[] = [];
+    if (!topic.trim()) missing.push("Post topic / angle");
+    if (!primaryKeyword.trim()) missing.push("Primary keyword / theme");
+    return missing;
+  }, [topic, primaryKeyword]);
+
+  const isFormValid = emptyRequiredFields.length === 0;
+
   const askAi = async () => {
     setAskLoading(true);
     try {
@@ -130,9 +139,9 @@ export default function LinkedInGeneratorPage() {
   };
 
   const goReview = () => {
-    const val = validateLinkedInForm(topic, primaryKeyword);
-    if (!val.isValid) {
-      return toast.error(val.error || "Validation failed");
+    if (!isFormValid) {
+      toast.error(`Please fill in: ${emptyRequiredFields.join(", ")}`);
+      return;
     }
     setPhase("review");
   };
@@ -175,8 +184,9 @@ export default function LinkedInGeneratorPage() {
         : "Tell us the angle, the audience, and the kind of post. The engine handles the hook, structure, and CTA.";
 
   return (
-    <div className="relative space-y-10 pb-16 pl-4 pr-4">
-      <div className="border-b border-border-subtle pb-8 pt-4">
+    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8">
+      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
+      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
         <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="LinkedIn posts" />
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0 max-w-3xl">
@@ -195,9 +205,19 @@ export default function LinkedInGeneratorPage() {
               >
                 {askLoading ? "Thinking…" : "Ask AI for a hook"}
               </Button>
-              <Button variant="primary" shape="pill" size="lg" onClick={goReview}>
+              <button
+                onClick={goReview}
+                disabled={!isFormValid}
+                title={!isFormValid ? `Required: ${emptyRequiredFields.join(", ")}` : undefined}
+                className={
+                  "inline-flex h-10 items-center justify-center rounded-full px-5 text-[14px] font-semibold transition-all " +
+                  (isFormValid
+                    ? "bg-brand-action text-white hover:opacity-90 cursor-pointer"
+                    : "bg-text-primary/15 text-text-tertiary cursor-not-allowed opacity-60")
+                }
+              >
                 Review &amp; continue
-              </Button>
+              </button>
             </div>
           ) : phase === "review" ? (
             <div className="flex flex-wrap items-center gap-3">

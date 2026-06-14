@@ -253,9 +253,10 @@ export async function validateExternalUrl(url: string, timeoutMs = 5000, deepChe
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let ok = false;
+  let method = 'HEAD';
   try {
     let res = await fetch(url, {
-      method: 'HEAD',
+      method,
       redirect: 'follow',
       signal: controller.signal,
       headers: {
@@ -267,8 +268,9 @@ export async function validateExternalUrl(url: string, timeoutMs = 5000, deepChe
     });
     if (res.status === 405 || res.status === 403 || res.status === 501) {
       // Some servers block HEAD — retry with GET (no body read).
+      method = 'GET';
       res = await fetch(url, {
-        method: 'GET',
+        method,
         redirect: 'follow',
         signal: controller.signal,
         headers: {
@@ -281,7 +283,7 @@ export async function validateExternalUrl(url: string, timeoutMs = 5000, deepChe
     
     ok = res.status >= 200 && res.status < 400;
 
-    if (ok && deepCheck) {
+    if (ok && deepCheck && method === 'GET') {
       const ct = res.headers.get('content-type') ?? '';
       if (ct.includes('text/html') && res.status === 200) {
         const bodyText = await res.text();

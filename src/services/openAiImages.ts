@@ -37,7 +37,7 @@ interface OpenAiImageResponse {
   };
 }
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY?.trim() ?? "";
+const GEMINI_API_KEY = (process.env.GEMINI_IMAGE_API_KEY || process.env.GEMINI_API_KEY)?.trim() ?? "";
 const GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent";
 
 const SVG_RAW = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img">

@@ -63,7 +63,6 @@ export const V1Routes = {
   blogsGenerate: "/blogs/generate",
   blogContent: (blogId: string) => `/blogs/${blogId}/content`,
   blogStatus: (blogId: string) => `/blogs/${blogId}/status`,
-  blogArticlesLibrary: (blogId: string) => `/blogs/${blogId}/articles-library`,
   blogFixSeo: (blogId: string) => `/blogs/${blogId}/fix-seo`,
   blogRewriteSelection: (blogId: string) => `/blogs/${blogId}/rewrite-selection`,
   blogEnhanced: (blogId: string) => `/blogs/${blogId}/enhanced`,

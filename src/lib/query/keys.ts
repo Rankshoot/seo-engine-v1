@@ -15,7 +15,6 @@ export const qk = {
 
   calendar: (id: string) => ["calendar", id] as const,
   calendarWithBlogs: (id: string) => ["calendar", id, "with-blogs"] as const,
-  articlesLibrary: (id: string) => ["project", id, "articles-library"] as const,
   contentGeneratorHistory: (id: string) => ["project", id, "content-generator-history"] as const,
   /**
    * Unified Content Studio history (blog + ebook + whitepaper + linkedin).

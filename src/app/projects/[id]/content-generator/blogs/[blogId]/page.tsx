@@ -489,7 +489,6 @@ export default function BlogViewerPage() {
       setCompareView("after");
       setAnalysisModalOpen(false);
       toast.success("Enhanced version ready — viewing After.");
-      void queryClient.invalidateQueries({ queryKey: qk.articlesLibrary(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
     } catch (ex) {
       toast.error(ex instanceof Error ? ex.message : "Could not generate enhanced version.");

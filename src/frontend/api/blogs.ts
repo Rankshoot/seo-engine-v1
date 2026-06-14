@@ -17,15 +17,6 @@ export const blogsApi = {
     return apiGet(V1Routes.blogEnhanced(blogId));
   },
 
-  addToArticlesLibrary(
-    blogId: string
-  ): Promise<
-    | { success: true; alreadySaved: boolean }
-    | { success: false; error: string; alreadySaved: boolean }
-  > {
-    return apiPost(V1Routes.blogArticlesLibrary(blogId), {});
-  },
-
   generate(body: {
     entryId: string;
     wordCount?: number;

@@ -3,6 +3,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { assertAdminApi } from "@/lib/admin/assert-admin-api";
 import { logAdminAudit } from "@/lib/admin/logging/admin-audit-logger";
+import { QuotaService } from "@/services/quota";
 
 function apiJson(data: unknown, status = 200) {
   return NextResponse.json(data, { status });
@@ -50,6 +51,22 @@ export async function POST(
   if (error) {
     console.error("[approval] upsert error", error);
     return apiJson({ success: false, error: "Failed to update approval record." }, 500);
+  }
+
+  if (action === "approve") {
+    const { data: approvalRow } = await db
+      .from("user_approvals")
+      .select("email")
+      .eq("clerk_user_id", userId)
+      .maybeSingle();
+    await QuotaService.ensureUserRecords(userId, approvalRow?.email ?? "");
+    if (approvalRow?.email) {
+      await db
+        .from("users")
+        .update({ email: approvalRow.email, updated_at: now })
+        .eq("id", userId)
+        .eq("email", `user_${userId}@placeholder.com`);
+    }
   }
 
   const client = await clerkClient();

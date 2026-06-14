@@ -99,7 +99,7 @@ export default function ContentHistoryPage() {
     if (row.content_type === "ebook") return `${studioBase}/ebooks/${row.id}`;
     if (row.content_type === "whitepaper") return `${studioBase}/whitepapers/${row.id}`;
     if (row.content_type === "linkedin") return `${studioBase}/linkedin/${row.id}`;
-    return `/projects/${projectId}/blogs/${row.id}?from=content-history`;
+    return `/projects/${projectId}/content-generator/blogs/${row.id}`;
   };
 
   return (

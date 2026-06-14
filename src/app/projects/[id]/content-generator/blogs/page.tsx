@@ -249,7 +249,7 @@ export default function BlogGeneratorPage() {
             toast.success("Blog generated!");
             void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
             void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-            router.push(`${base}/blogs/${event.blogId}`);
+            router.push(`${studioBase}/blogs/${event.blogId}`);
             return;
           } else if (event.event === "error") {
             toast.error(event.message || "Generation failed");
@@ -290,7 +290,7 @@ export default function BlogGeneratorPage() {
           toast.success("Blog generated!");
           void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-          router.push(`${base}/blogs/${event.blogId}`);
+          router.push(`${studioBase}/blogs/${event.blogId}`);
           return;
         } else if (event.event === "error") {
           toast.error(event.message || "Generation failed");

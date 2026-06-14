@@ -354,6 +354,8 @@ export interface ContentTopicSuggestion {
   primary_keyword: string;
   semantic_keywords: string[];
   rationale: string;
+  goal?: string;
+  cta_objective?: string;
 }
 
 interface RawTopicSuggestion {
@@ -361,6 +363,8 @@ interface RawTopicSuggestion {
   primary_keyword?: string;
   semantic_keywords?: string[];
   rationale?: string;
+  goal?: string;
+  cta_objective?: string;
 }
 
 /** Gemini schema dialect (`v1beta`) — same shape as `INSTANT_KEYWORD_TOPIC_SCHEMA` in `lib/gemini.ts`. */
@@ -371,8 +375,10 @@ const TOPIC_SUGGESTION_SCHEMA = {
     primary_keyword: { type: 'STRING' },
     semantic_keywords: { type: 'ARRAY', items: { type: 'STRING' } },
     rationale: { type: 'STRING' },
+    goal: { type: 'STRING' },
+    cta_objective: { type: 'STRING' },
   },
-  required: ['topic', 'primary_keyword', 'semantic_keywords', 'rationale'],
+  required: ['topic', 'primary_keyword', 'semantic_keywords', 'rationale', 'goal', 'cta_objective'],
 } as const;
 
 /** Last-resort line scrape so a slightly malformed model reply still produces a usable suggestion. */
@@ -402,6 +408,8 @@ function looseExtractTopicSuggestion(raw: string): RawTopicSuggestion | null {
     primary_keyword: primary ?? undefined,
     semantic_keywords: grabArray('semantic_keywords') ?? undefined,
     rationale: grab('rationale') ?? undefined,
+    goal: grab('goal') ?? undefined,
+    cta_objective: grab('cta_objective') ?? undefined,
   };
 }
 
@@ -413,6 +421,8 @@ function normalizeSuggestion(raw: RawTopicSuggestion): ContentTopicSuggestion {
       ? raw.semantic_keywords.filter((s): s is string => typeof s === 'string').slice(0, 14)
       : [],
     rationale: (raw.rationale ?? '').trim(),
+    goal: (raw.goal ?? '').trim() || undefined,
+    cta_objective: (raw.cta_objective ?? '').trim() || undefined,
   };
 }
 
@@ -424,23 +434,28 @@ export async function suggestContentTopicWithFlash(input: {
   briefSummary: string | null;
   approvedKeywords: string[];
   avoidPhrases: string[];
+  usedKeywords: string[];
   seedKeyword?: string;
 }): Promise<ContentTopicSuggestion> {
-  const seedBlock = input.approvedKeywords.length
-    ? input.approvedKeywords.slice(0, 14).map(k => `- ${k}`).join('\n')
-    : '(no approved keywords yet)';
-
   const briefBlock = input.briefSummary?.trim()
     ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
     : '(no cached brief)';
 
   const avoidBlock = input.avoidPhrases.length
-    ? `Avoid these phrases (already used):\n${input.avoidPhrases.map(p => `- ${p}`).join('\n')}`
-    : '(no banned phrases)';
+    ? `Avoid these semantic keyword phrases (already used as secondary keywords):\n${input.avoidPhrases.map(p => `- ${p}`).join('\n')}`
+    : '';
+
+  const allAvoidKeywords = Array.from(
+    new Set([...input.usedKeywords, ...input.approvedKeywords])
+  ).slice(0, 40);
+
+  const avoidKeywordsBlock = allAvoidKeywords.length
+    ? `FORBIDDEN PRIMARY KEYWORDS — do NOT use any of these as primary_keyword (they are already scheduled, generated, or in the discovery pipeline):\n${allAvoidKeywords.map(k => `- ${k}`).join('\n')}`
+    : '';
 
   const seedRule = input.seedKeyword?.trim()
     ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one. Design the topic, semantic_keywords, and rationale specifically for this keyword.`
-    : `APPROVED KEYWORDS (prefer one of these as the primary keyword if it fits):\n${seedBlock}`;
+    : `Choose a fresh primary keyword that the brand can rank for — one that is NOT in the forbidden list above and is not a close variant of any forbidden keyword.`;
 
   const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankit content engine should produce next.
 
@@ -450,18 +465,22 @@ CONTEXT
 - Target audience: ${input.audience}
 ${briefBlock}
 
+${avoidKeywordsBlock}
+
 ${seedRule}
 
 ${avoidBlock}
 
 Rules:
 - Pick a topic the audience genuinely searches for and that the brand can write with authority.
-- The primary_keyword must be 2-6 words. Keep it natural; no brand stuffing unless the brand is the search.
+- The primary_keyword must be 2-3 words maximum, completely different from any forbidden keyword above — not a synonym, not a sub-phrase.
 - semantic_keywords: 6-10 supporting phrases (long-tail / NLP / questions) that should be covered in the piece.
 - rationale: 1 sentence on why this topic earns organic traffic for THIS domain.
+- goal: 1 sentence describing what the reader should know or do after reading (reader takeaway).
+- cta_objective: 1 sentence describing the action the conclusion should steer the reader toward (e.g. book a demo, download a guide, start a free trial).
 
 Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
-{"topic": "...", "primary_keyword": "...", "semantic_keywords": ["..."], "rationale": "..."}`;
+{"topic": "...", "primary_keyword": "...", "semantic_keywords": ["..."], "rationale": "...", "goal": "...", "cta_objective": "..."}`;
 
   // Pass 1 — Gemini Flash with a strict response schema.
   // Temperature kept moderate so the model stays JSON-clean; bumping output

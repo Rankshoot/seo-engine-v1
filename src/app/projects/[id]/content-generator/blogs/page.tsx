@@ -109,10 +109,8 @@ export default function BlogGeneratorPage() {
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
   const [tone, setTone] = useState<(typeof TONES)[number]["id"]>("premium-educational");
-  const [goal, setGoal] = useState("Educate the reader and capture qualified leads.");
-  const [ctaObjective, setCtaObjective] = useState(
-    "Book a demo or download a deeper resource on our site.",
-  );
+  const [goal, setGoal] = useState("");
+  const [ctaObjective, setCtaObjective] = useState("");
   const [wordCount, setWordCount] = useState<number>(2500);
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
@@ -171,6 +169,8 @@ export default function BlogGeneratorPage() {
         setTopic(res.topic);
         setPrimaryKeyword(res.primary_keyword);
         if (res.semantic_keywords.length) setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
+        if (res.goal) setGoal(res.goal);
+        if (res.cta_objective) setCtaObjective(res.cta_objective);
         toast.success("Filled topic, keyword, and supporting cluster");
       } else {
         toast.error(res.error);

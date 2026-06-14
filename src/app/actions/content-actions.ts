@@ -123,6 +123,33 @@ async function loadApprovedKeywords(projectId: string): Promise<string[]> {
   }
 }
 
+async function loadUsedKeywords(projectId: string): Promise<string[]> {
+  try {
+    const [blogsRes, keywordsRes] = await Promise.all([
+      supabaseAdmin
+        .from('blogs')
+        .select('target_keyword')
+        .eq('project_id', projectId)
+        .not('target_keyword', 'is', null)
+        .limit(100),
+      supabaseAdmin
+        .from('keywords')
+        .select('keyword')
+        .eq('project_id', projectId)
+        .limit(100),
+    ]);
+    const fromBlogs = (blogsRes.data ?? [])
+      .map(r => String(r.target_keyword ?? '').trim())
+      .filter(Boolean);
+    const fromKeywords = (keywordsRes.data ?? [])
+      .map(r => String(r.keyword ?? '').trim())
+      .filter(Boolean);
+    return Array.from(new Set([...fromBlogs, ...fromKeywords]));
+  } catch {
+    return [];
+  }
+}
+
 function regionLabel(code: string): string {
   return TARGET_REGIONS.find(r => r.code === code)?.name ?? code;
 }
@@ -147,6 +174,7 @@ export async function suggestContentTopicAction(
       primary_keyword: string; 
       semantic_keywords: string[]; 
       rationale: string;
+      goal?: string;
       audience?: string;
       post_style?: string;
       voice?: string;
@@ -193,7 +221,10 @@ export async function suggestContentTopicAction(
     }
   }
 
-  const approved = await loadApprovedKeywords(projectId);
+  const [approved, used] = await Promise.all([
+    loadApprovedKeywords(projectId),
+    loadUsedKeywords(projectId),
+  ]);
   const labelMap: Record<ContentType, string> = {
     blog: 'blog article',
     ebook: 'ebook',
@@ -209,6 +240,7 @@ export async function suggestContentTopicAction(
       domain: project.domain,
       briefSummary: brief?.summary ?? null,
       approvedKeywords: approved,
+      usedKeywords: used,
       avoidPhrases: (payload.avoidPhrases ?? []).slice(0, 6),
       seedKeyword: payload.seedKeyword,
     });

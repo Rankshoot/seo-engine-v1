@@ -83,7 +83,8 @@ export async function geminiGenerate(
   responseMimeType?: string,
   userId?: string | null,
   projectId?: string | null,
-  maxOutputTokens?: number
+  maxOutputTokens?: number,
+  timeoutMs?: number
 ): Promise<string> {
   return aiGenerate("blog", prompt, {
     useGoogleSearch,
@@ -92,6 +93,7 @@ export async function geminiGenerate(
     userId,
     projectId,
     maxOutputTokens,
+    timeoutMs,
   });
 }
 

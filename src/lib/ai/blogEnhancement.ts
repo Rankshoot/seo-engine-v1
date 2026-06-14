@@ -115,7 +115,7 @@ export async function enhanceBlogFromDeepAnalysis(
   let responseText = "";
   try {
     const prompt = buildBlogEnhancementPrompt(input);
-    responseText = await geminiGenerate(prompt, 3, false, "application/json");
+    responseText = await geminiGenerate(prompt, 3, false, "application/json", null, null, undefined, 180_000);
   } catch (apiError) {
     console.error(
       "[blog-enhancement] API generate call failed or promise rejected:",

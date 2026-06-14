@@ -496,7 +496,7 @@ Rules:
 - competitorUrls must be exactly: ${JSON.stringify(input.competitorUrls)}
 - priorityFixes: 3-8 items, High impact first.`;
 
-  const raw = await geminiGenerate(prompt, 4, false, 'application/json', null, null, 8192);
+  const raw = await geminiGenerate(prompt, 4, false, 'application/json', null, null, 8192, 180_000);
   const parsed = parseLooseJson<unknown>(raw);
   if (!parsed) {
     throw new Error('Failed to parse deep analysis response. The AI response might have been cut off or is malformed.');

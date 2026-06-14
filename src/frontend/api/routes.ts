@@ -38,7 +38,6 @@ export const V1Routes = {
   calendarContentHealth: (projectId: string) => `/projects/${projectId}/calendar/content-health`,
   calendarApproveAi: (projectId: string) => `/projects/${projectId}/calendar/approve-ai-suggestion`,
   calendarDeleteEntry: (projectId: string, entryId: string) => `/projects/${projectId}/calendar/entries/${entryId}`,
-  projectArticlesLibrary: (projectId: string) => `/projects/${projectId}/articles`,
   projectContentGeneratorHistory: (projectId: string) =>
     `/projects/${projectId}/content-generator/history`,
   projectContentStudioHistory: (projectId: string) =>

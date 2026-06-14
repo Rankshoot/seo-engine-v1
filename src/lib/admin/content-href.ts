@@ -11,6 +11,6 @@ export function adminContentEditorHref(row: AdminContentRow): string {
       return `${base}/content-generator/linkedin/${row.id}`;
     case "blog":
     default:
-      return `${base}/blogs/${row.id}`;
+      return `${base}/content-generator/blogs/${row.id}`;
   }
 }

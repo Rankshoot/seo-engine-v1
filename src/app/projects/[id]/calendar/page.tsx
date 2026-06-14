@@ -246,7 +246,7 @@ const CalendarListRow = memo(function CalendarListRow({
         )}
         {isRepairRow && !isLocked && !isGenerating && (
           <ProjectNavLink
-            href={`/projects/${projectId}/blogs?entry=${entry.id}`}
+            href={`/projects/${projectId}/content-generator/blogs?entryId=${entry.id}`}
             className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle bg-surface-secondary px-4 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary whitespace-nowrap"
           >
             Generate
@@ -570,7 +570,7 @@ export default function CalendarPage() {
         <div className="flex flex-wrap items-center gap-3">
           {blogReady > 0 && (
             <ProjectNavLink
-              href={`/projects/${projectId}/blogs`}
+              href={`/projects/${projectId}/content-generator/blogs`}
               className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
             >
               View Blogs

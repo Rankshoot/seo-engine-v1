@@ -171,7 +171,7 @@ export function KeywordActionCell({
           variant="outline"
           size="sm"
           className="px-2.5 text-[10px] h-7 rounded-full border border-border-subtle bg-surface-elevated text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-all whitespace-nowrap flex items-center justify-center"
-          onClick={() => router.push(`/projects/${projectId}/blogs/${blogId}`)}
+          onClick={() => router.push(`/projects/${projectId}/content-generator/blogs/${blogId}`)}
         >
           View
         </Button>

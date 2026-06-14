@@ -192,7 +192,7 @@ export default function ProjectOverviewPage() {
           {
             label: "Blogs generated",
             value: stats?.blogsGenerated,
-            href: `/projects/${id}/blogs`,
+            href: `/projects/${id}/content-generator/blogs`,
             icon: <FileText className="h-3.5 w-3.5" />,
           },
           {
@@ -577,7 +577,7 @@ function CalendarRow({
 
   return (
     <ProjectNavLink
-      href={blogId ? `/projects/${projectId}/blogs/${blogId}` : `/projects/${projectId}/calendar`}
+      href={blogId ? `/projects/${projectId}/content-generator/blogs/${blogId}` : `/projects/${projectId}/calendar`}
       className={`group flex items-center gap-5 px-5 py-4 transition-colors hover:bg-surface-hover ${
         divider ? "border-t border-border-subtle" : ""
       }`}

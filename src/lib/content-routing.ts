@@ -14,7 +14,7 @@ export function getContentPreviewUrl(
     case "blog_article":
     case "blog post":
     case "blog_post":
-      return `/projects/${projectId}/blogs/${contentId}`;
+      return `/projects/${projectId}/content-generator/blogs/${contentId}`;
 
     case "ebook":
     case "e-book":
@@ -32,6 +32,6 @@ export function getContentPreviewUrl(
 
     default:
       // Fallback path
-      return `/projects/${projectId}/blogs/${contentId}`;
+      return `/projects/${projectId}/content-generator/blogs/${contentId}`;
   }
 }

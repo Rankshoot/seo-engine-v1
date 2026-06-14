@@ -639,7 +639,7 @@ export default function BlogViewerPage() {
         setBlog(normalized);
         queryClient.setQueryData(qk.blog(blogId), { success: true, data: normalized });
       } else {
-        setEditError(res.error || "Failed to generate blog.");
+        setEditError(!res.success ? (res.error || "Failed to generate blog.") : "Failed to generate blog.");
       }
     } catch (e: unknown) {
       setEditError(e instanceof Error ? e.message : "Failed to generate blog.");

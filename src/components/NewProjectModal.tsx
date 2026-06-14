@@ -171,7 +171,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
       const result = await projectsApi.create(payload);
       if (result.success && result.data) {
         onSaved?.();
-        router.push(`/projects/${result.data.id}/keywords`);
+        router.push(`/projects/${result.data.id}`);
       } else {
         setError(result.error ?? "Something went wrong");
         setLoading(false);

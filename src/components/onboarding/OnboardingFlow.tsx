@@ -93,7 +93,7 @@ export function OnboardingFlow({ userName }: { userName: string }) {
         brand_description: draft.brand_description,
       });
       if (res.success && res.data) {
-        router.push(`/projects/${res.data.id}/keywords`);
+        router.push(`/projects/${res.data.id}`);
       } else {
         setError(res.error ?? "Something went wrong. Please try again.");
         setCreating(false);

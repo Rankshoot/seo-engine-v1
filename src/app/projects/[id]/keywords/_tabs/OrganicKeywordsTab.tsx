@@ -171,6 +171,13 @@ function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
   );
 }
 
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function simpleHash(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
 // ─── COLUMN VISIBILITY ───────────────────────────────────────────────────────
 function useLocalColumnVisibility(storageKey: string, defaultHidden: string[] = []) {
   const [hidden, setHidden] = useState<Set<string>>(() => {
@@ -378,6 +385,8 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const keywordTableScrollRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
+  const [orgWarnDismissed, setOrgWarnDismissed] = useState(false);
+  const [orgHasMismatch, setOrgHasMismatch] = useState(false);
   const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_organic");
 
   const [bulkScheduling, setBulkScheduling] = useState(false);
@@ -438,6 +447,22 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const allProjects = projectsListRes?.success && projectsListRes.data ? projectsListRes.data : [];
   const project = allProjects.find(p => p.id === projectId);
   const projectDomain = project?.domain || "";
+
+  const ORG_HASH_KEY = `kw_org_discovery_params_${projectId}`;
+  const orgCurrentHash = useMemo(() =>
+    project ? simpleHash([project.domain, project.niche, project.target_region, project.target_language].filter(Boolean).join("|")) : "",
+    [project]
+  );
+  useEffect(() => {
+    if (!orgCurrentHash) return;
+    const stored = localStorage.getItem(ORG_HASH_KEY);
+    if (stored === null) {
+      // No baseline yet — if keywords already exist we can't verify they match current settings
+      if (serverKeywords.length > 0) setOrgHasMismatch(true);
+      return;
+    }
+    setOrgHasMismatch(stored !== orgCurrentHash);
+  }, [orgCurrentHash, ORG_HASH_KEY, serverKeywords.length]);
 
   const toggleSortColumn = (columnId: string) => {
     const col = columnId as TableSortColumn;
@@ -514,6 +539,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       console.groupEnd();
     }
     if (res.success) {
+      if (orgCurrentHash) {
+        localStorage.setItem(ORG_HASH_KEY, orgCurrentHash);
+        setOrgHasMismatch(false);
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.brief(projectId) }),
@@ -1011,9 +1040,49 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     </div>
   );
 
+  const showOrgWarning = orgHasMismatch && !orgWarnDismissed;
+
   return (
     <div className="flex-1 flex flex-col min-h-0 relative animate-slide-in-left">
       <div className="flex-1 flex flex-col min-h-0">
+        {showOrgWarning && (
+          <div className="mb-4 shrink-0 flex items-start gap-3.5 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5">
+            <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10">
+              <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-semibold text-amber-400">Project details have changed</p>
+              <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
+                Your niche, domain, or region was updated since the last keyword discovery. Rediscover to get keywords matching your current settings.
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 ml-2">
+              <button
+                type="button"
+                onClick={() => { setOrgWarnDismissed(true); void handleDiscover(); }}
+                disabled={discovering}
+                className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3.5 py-1.5 text-[12px] font-semibold text-amber-400 transition-colors hover:bg-amber-500/25 disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {discovering ? "Discovering…" : "Rediscover"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOrgWarnDismissed(true);
+                  if (orgCurrentHash) localStorage.setItem(ORG_HASH_KEY, orgCurrentHash);
+                }}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-secondary"
+                aria-label="Dismiss"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
         {error && (
           <div className="mb-4 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral shrink-0 flex flex-col gap-3">
             <div className="flex items-center gap-3">

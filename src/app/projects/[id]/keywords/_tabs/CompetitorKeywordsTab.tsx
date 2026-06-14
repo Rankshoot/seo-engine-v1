@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS, useProjects } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -162,6 +162,13 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
   );
 }
 
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function simpleHash(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
 // ─── COLUMN VISIBILITY ───────────────────────────────────────────────────────
 function useLocalColumnVisibility(storageKey: string, defaultHidden: string[] = []) {
   const [hidden, setHidden] = useState<Set<string>>(() => {
@@ -273,7 +280,12 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
+  const [compWarnDismissed, setCompWarnDismissed] = useState(false);
   const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_competitor", ["top_competitor_url"]);
+
+  const { data: projectsListRes } = useProjects();
+  const allProjects = projectsListRes?.success && projectsListRes.data ? projectsListRes.data : [];
+  const project = allProjects.find(p => p.id === projectId);
 
   const { data: state, isLoading: loading } = useQuery<BenchmarkState>({
     queryKey: COMPETITORS_KEY,
@@ -316,6 +328,21 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const competitors = useMemo(() => state?.competitors ?? [], [state?.competitors]);
   const gaps = useMemo(() => state?.gaps ?? [], [state?.gaps]);
   const hasBenchmark = competitors.length > 0;
+
+  const configuredDomains = useMemo(
+    () => project?.project_competitors?.map(c => c.domain).sort() ?? null,
+    [project]
+  );
+  const benchmarkedDomains = useMemo(
+    () => competitors.map(c => c.domain).sort(),
+    [competitors]
+  );
+  const compHasMismatch = useMemo(() => {
+    if (!project || !state || compWarnDismissed) return false;
+    if (configuredDomains === null) return false;
+    if (configuredDomains.length === 0 && benchmarkedDomains.length === 0) return false;
+    return configuredDomains.join("|") !== benchmarkedDomains.join("|");
+  }, [project, state, configuredDomains, benchmarkedDomains, compWarnDismissed]);
 
   const compareFn = useCallback((a: KeywordGap, b: KeywordGap, col: string, dir: "asc" | "desc") => {
     return compareGaps(a, b, col as GapSortColumn, dir);
@@ -850,6 +877,41 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
 
   return (
     <div className="flex-1 flex flex-col min-h-0 relative animate-slide-in-right">
+      {compHasMismatch && (
+        <div className="mb-4 shrink-0 flex items-start gap-3.5 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5">
+          <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10">
+            <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-semibold text-amber-400">Competitor list has changed</p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
+              Your configured competitors no longer match the last benchmark. Run a new benchmark to find gaps based on your updated competitor list.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 ml-2">
+            <button
+              type="button"
+              onClick={() => { setCompWarnDismissed(true); void handleRun(); }}
+              disabled={running}
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3.5 py-1.5 text-[12px] font-semibold text-amber-400 transition-colors hover:bg-amber-500/25 disabled:opacity-50 disabled:pointer-events-none"
+            >
+              {running ? "Benchmarking…" : "Re-benchmark"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCompWarnDismissed(true)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-secondary"
+              aria-label="Dismiss"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="mb-4 rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral shrink-0 flex flex-col gap-3">
           <div className="flex items-center gap-3">

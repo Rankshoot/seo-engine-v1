@@ -38,19 +38,15 @@ interface OpenAiImageResponse {
 }
 
 const GEMINI_API_KEY = (process.env.GEMINI_IMAGE_API_KEY || process.env.GEMINI_API_KEY)?.trim() ?? "";
-const GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent";
+const GEMINI_IMAGE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent";
 
 const SVG_RAW = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img">
   <rect width="1600" height="900" fill="#27272a"/>
   <rect x="1" y="1" width="1598" height="898" fill="none" stroke="#3f3f46" stroke-width="2"/>
 </svg>`;
 
-/**
- * Neutral inline SVG placeholder so markdown rendering survives without broken images.
- * Uses base64 encoding to prevent markdown parser breaks on special characters or nested quotes/parentheses.
- */
 export const BLOG_IMAGE_PLACEHOLDER_URL =
-  'data:image/svg+xml;base64,' + Buffer.from(SVG_RAW).toString('base64');
+  'https://placehold.co/1600x900/27272a/3f3f46.png?text=Placeholder';
 
 function assetWithPlaceholder(request: Omit<BlogImageAsset, 'url'>): BlogImageAsset {
   return { ...request, url: BLOG_IMAGE_PLACEHOLDER_URL };
@@ -177,7 +173,7 @@ async function generateSingleImage(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const timeout = setTimeout(() => controller.abort(), 15_000);
 
   try {
     const response = await fetch(GEMINI_IMAGE_ENDPOINT, {

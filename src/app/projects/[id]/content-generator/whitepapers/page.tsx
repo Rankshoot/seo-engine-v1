@@ -50,6 +50,11 @@ export default function WhitepaperGeneratorPage() {
   const queryClient = useQueryClient();
   const studioBase = `/projects/${projectId}/content-generator`;
 
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const entryId = searchParams?.get("entryId");
 
   const { data: entriesData } = useQuery({
@@ -189,7 +194,7 @@ export default function WhitepaperGeneratorPage() {
         : "Configure the research angle, audience, and business objective. Whitepapers are EEAT-heavy by design.";
 
   return (
-    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8 animate-slide-in-right">
+    <div className={`relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8 ${mounted ? "animate-slide-in-right" : ""}`}>
       {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
       <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
         <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Whitepapers" />

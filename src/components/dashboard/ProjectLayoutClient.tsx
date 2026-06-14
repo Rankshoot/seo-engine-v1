@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { notFound } from "next/navigation";
 import ProjectSidebar from "./ProjectSidebar";
+import { NavigationOverlay } from "@/components/NavigationOverlay";
 import type { Project } from "@/lib/types";
 import { useProject, useProjects } from "@/lib/query";
 
@@ -44,6 +45,7 @@ export default function ProjectLayoutClient({
       >
         {children}
       </main>
+      <NavigationOverlay />
     </div>
   );
 }

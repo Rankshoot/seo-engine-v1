@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useKeywordParam } from "@/hooks/useKeywordParam";
 import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -68,9 +69,11 @@ export default function EbookGeneratorPage() {
   const { data: projectRes } = useProject(projectId);
   const project = projectRes?.success ? projectRes.data : undefined;
 
+  const keywordParam = searchParams?.get("keyword") || "";
+  const { value: primaryKeyword, setValue: setPrimaryKeyword, isTyping: isKeywordTyping } = useKeywordParam(keywordParam);
+
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
-  const [primaryKeyword, setPrimaryKeyword] = useState(searchParams?.get("keyword") || "");
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
   const [tone, setTone] = useState<(typeof EBOOK_TONES)[number]["id"]>("premium-educational");
@@ -191,7 +194,7 @@ export default function EbookGeneratorPage() {
   }, [phase]);
 
   return (
-    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8">
+    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8 animate-slide-in-right">
       {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
       <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
         <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Ebooks" />
@@ -295,7 +298,17 @@ export default function EbookGeneratorPage() {
                       value={primaryKeyword}
                       onChange={e => setPrimaryKeyword(e.target.value)}
                       placeholder="recruitment process outsourcing"
+                      className={isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
                     />
+                    {/* {keywordParam && (
+                      <p className={`mt-1.5 flex items-center gap-1.5 text-[11px] transition-colors duration-300 ${isKeywordTyping ? "text-brand-action" : "text-emerald-400"}`}>
+                        {isKeywordTyping ? (
+                          <><span className="h-1.5 w-1.5 rounded-full bg-brand-action animate-pulse shrink-0" />Filling from keyword discovery…</>
+                        ) : (
+                          <><svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>Auto-filled from keyword discovery</>
+                        )}
+                      </p>
+                    )} */}
                   </Field>
                   <Field label="Target audience" required htmlFor="ebook-audience">
                     <Input

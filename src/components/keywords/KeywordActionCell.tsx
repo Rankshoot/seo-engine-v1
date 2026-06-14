@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { triggerPageTransition } from "@/components/NavigationOverlay";
 import { toast } from "react-hot-toast";
 import { Button, Spinner } from "@/components/common";
 import { ContentType, KeywordSourceType } from "@/lib/types";
@@ -52,13 +54,20 @@ export function KeywordActionCell({
   const router = useRouter();
   const queryClient = useQueryClient();
   const dispatch = useAppDispatch();
+  const [launching, setLaunching] = useState(false);
 
   const handleGenerate = () => {
-    // Navigate to the respective generator page with autofill params
-    // shouldSchedule=false indicates this is a generate-only action, not a schedule action
+    if (launching) return;
+    setLaunching(true);
     const slug = contentType === "blog" ? "blogs" : contentType === "linkedin" ? "linkedin" : `${contentType}s`;
     const params = new URLSearchParams({ keyword, source: sourceType, shouldSchedule: "false" });
-    router.push(`/projects/${projectId}/content-generator/${slug}?${params.toString()}`);
+    const url = `/projects/${projectId}/content-generator/${slug}?${params.toString()}`;
+    // Delay gives React one render cycle to paint the launching state (dots + overlay)
+    // before the router causes the component tree to swap
+    setTimeout(() => {
+      triggerPageTransition();
+      router.push(url);
+    }, 120);
   };
 
   const scheduleMutation = useMutation({
@@ -179,10 +188,20 @@ export function KeywordActionCell({
         <Button
           variant="primary"
           size="sm"
-          className="px-2.5 text-[10px] h-7 rounded-full shadow-sm transition-all whitespace-nowrap flex items-center justify-center"
+          className="px-2.5 text-[10px] h-7 rounded-full shadow-sm transition-all whitespace-nowrap flex items-center justify-center min-w-[68px]"
           onClick={handleGenerate}
         >
-          Generate
+          {launching ? (
+            <span className="flex items-center gap-[3px]">
+              {[0, 1, 2].map(i => (
+                <span
+                  key={i}
+                  className="h-1.5 w-1.5 rounded-full bg-white animate-bounce"
+                  style={{ animationDelay: `${i * 90}ms` }}
+                />
+              ))}
+            </span>
+          ) : "Generate"}
         </Button>
       )}
 

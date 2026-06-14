@@ -2,6 +2,7 @@ import { Webhook } from "svix";
 import { headers } from "next/headers";
 import { clerkClient } from "@clerk/nextjs/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { QuotaService } from "@/services/quota";
 
 export async function POST(req: Request) {
   const webhookSecret = process.env.CLERK_WEBHOOK_SECRET;
@@ -59,6 +60,8 @@ export async function POST(req: Request) {
       },
       { onConflict: "clerk_user_id" }
     );
+
+    await QuotaService.ensureUserRecords(userId, primaryEmail);
 
     const client = await clerkClient();
     await client.users.updateUserMetadata(userId, {

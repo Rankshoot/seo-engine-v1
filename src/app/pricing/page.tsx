@@ -2,8 +2,8 @@ import { currentUser } from "@clerk/nextjs/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { PricingCards } from "./PricingCards";
 
-// Cache for 1 hour, revalidated instantly on plan updates in Admin panel
-export const revalidate = 3600;
+// Render dynamically at request time to fetch live plan features and active user subscription status
+export const dynamic = "force-dynamic";
 
 export default async function PricingPage() {
   const db = getSupabaseAdmin();

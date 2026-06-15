@@ -1,0 +1,28 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--network=cloudbuild'
+      - '--no-cache'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/rankshoot/rankshoot-repo/app:v1'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$_NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_CLERK_SIGN_IN_URL=$_NEXT_PUBLIC_CLERK_SIGN_IN_URL'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_CLERK_SIGN_UP_URL=$_NEXT_PUBLIC_CLERK_SIGN_UP_URL'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=$_NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=$_NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_SUPABASE_URL=$_NEXT_PUBLIC_SUPABASE_URL'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_SUPABASE_ANON_KEY=$_NEXT_PUBLIC_SUPABASE_ANON_KEY'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=$_NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY'
+      - '.'
+
+images:
+  - 'us-central1-docker.pkg.dev/rankshoot/rankshoot-repo/app:v1'

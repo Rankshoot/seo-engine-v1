@@ -26,7 +26,7 @@
   --color-brand-deep-green: var(--brand-deep-green);
   --color-brand-dark-navy: var(--brand-dark-navy);
 
-  /* AI-native accent (Rankit) — used for glows, gradient text, hero halos. */
+  /* AI-native accent (Rankshoot) — used for glows, gradient text, hero halos. */
   --color-brand-violet: var(--brand-violet);
   --color-brand-violet-soft: var(--brand-violet-soft);
   --color-brand-aqua: var(--brand-aqua);
@@ -93,7 +93,7 @@
 /* ===== BASE LAYERS ===== */
 @layer base {
   :root {
-    /* Light Mode — Rankit, refined Linear/Notion-inspired neutrals
+    /* Light Mode — Rankshoot, refined Linear/Notion-inspired neutrals
        Background uses a warm-grey wash so white-elevated cards pop visually.
        Border tokens are stronger to create clear delineation in forms & cards. */
     --surface-primary: #f4f4f8;
@@ -228,7 +228,7 @@
     color: var(--text-primary);
   }
 
-  /* Rankit gradient text — AI-native blue→violet→aqua. */
+  /* Rankshoot gradient text — AI-native blue→violet→aqua. */
   .gradient-text {
     background: linear-gradient(135deg, var(--brand-violet) 0%, var(--brand-violet-soft) 50%, var(--brand-aqua) 100%);
     -webkit-background-clip: text;

@@ -5,7 +5,7 @@ import * as RadixTabs from "@radix-ui/react-tabs";
 import { cn } from "@/lib/cn";
 
 /**
- * Headless-driven tabs with Rankit styling. Use in pages that switch between
+ * Headless-driven tabs with Rankshoot styling. Use in pages that switch between
  * peer views (e.g. content history filters, audit categories).
  *
  *   <Tabs defaultValue="all">

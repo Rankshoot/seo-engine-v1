@@ -24,7 +24,7 @@ const radiusClass: Record<NonNullable<SkeletonProps["rounded"]>, string> = {
 /**
  * Premium loading placeholder used by every page-level Suspense boundary.
  * Uses a soft pulse against the elevated surface + a sliding violet-tinted
- * shimmer so the visual matches Rankit's AI-native theme in both light and
+ * shimmer so the visual matches Rankshoot's AI-native theme in both light and
  * dark mode.
  */
 export function Skeleton({

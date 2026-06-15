@@ -22,13 +22,13 @@ const jetbrainsMono = JetBrains_Mono({
 const isClerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 export const metadata: Metadata = {
-  title: "Rankit — AI SEO Operating System",
+  title: "Rankshoot — AI SEO Operating System",
   description:
-    "Rankit is an AI-native SEO operating system. Discover keywords, audit competitors, plan your editorial calendar, and ship ranked content — automatically.",
+    "Rankshoot is an AI-native SEO operating system. Discover keywords, audit competitors, plan your editorial calendar, and ship ranked content — automatically.",
   keywords:
     "AI SEO platform, keyword research, competitor analysis, content calendar, AI content generation, GEO, AI Overviews, SEO automation",
   openGraph: {
-    title: "Rankit — AI SEO Operating System",
+    title: "Rankshoot — AI SEO Operating System",
     description:
       "Research keywords, audit competitors, plan editorial calendars, and ship ranked content — all from one AI-native workspace.",
     type: "website",

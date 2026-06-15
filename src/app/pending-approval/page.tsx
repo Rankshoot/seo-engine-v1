@@ -193,7 +193,7 @@ export default function PendingApprovalPage() {
               <span className="text-white font-bold text-sm">R</span>
             </div>
             <span className="text-[18px] font-semibold text-text-primary tracking-tight">
-              Rankit
+              Rankshoot
             </span>
           </div>
         </div>

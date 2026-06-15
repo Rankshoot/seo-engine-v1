@@ -90,7 +90,7 @@ export interface BlogAuditAnalysis {
   /** Type of page detected (helps the UI decide tone). */
   page_status: 'ok' | 'broken' | 'redirected' | 'empty';
   /**
-   * Deterministic checklist vs Rankit blog quality rules (GEO + on-page SEO).
+   * Deterministic checklist vs Rankshoot blog quality rules (GEO + on-page SEO).
    * Computed server-side from the live scrape — not from the LLM.
    */
   quality_rubric?: QualityRubricRow[];
@@ -878,9 +878,9 @@ async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalys
     ? `SITE CONTEXT (for light grounding only — do NOT penalize this blog for "not matching" the brief): ${brief.summary}`
     : '';
 
-  const prompt = `You are a senior SEO + GEO auditor for Rankit. Audit the blog post below on its own merits — do NOT compare it to a business brief or other pages. Decide WHY this specific blog may not be getting traffic.
+  const prompt = `You are a senior SEO + GEO auditor for Rankshoot. Audit the blog post below on its own merits — do NOT compare it to a business brief or other pages. Decide WHY this specific blog may not be getting traffic.
 
-Rankit-generated blogs target these quality bars (use them when judging issues and when picking llm_quality_score):
+Rankshoot-generated blogs target these quality bars (use them when judging issues and when picking llm_quality_score):
 - A direct, useful answer in the first ~80 words (AI Overviews / GEO).
 - Modular H2/H3 sections (clear hierarchy, RAG-friendly).
 - FAQ section and BOTH Article + FAQPage JSON-LD where applicable.
@@ -949,7 +949,7 @@ CATEGORY GUIDE:
 - "ux": reader experience — walls of text, no subheads, no images implied, no lists, no takeaways box.
 
 RULES:
-- Set "llm_quality_score" to an integer 0–100 (not the placeholder 0): holistic SEO+GEO quality vs the Rankit bars in the intro. 90+ = meets or nearly meets all bars; 70–89 = solid with gaps; 50–69 = several misses; below 50 = thin or structurally weak. Use 0 only if the body is empty or unusable.
+- Set "llm_quality_score" to an integer 0–100 (not the placeholder 0): holistic SEO+GEO quality vs the Rankshoot bars in the intro. 90+ = meets or nearly meets all bars; 70–89 = solid with gaps; 50–69 = several misses; below 50 = thin or structurally weak. Use 0 only if the body is empty or unusable.
 - Maximum 8 issues. Order by severity desc then impact desc.
 - "high" severity = likely blocks ranking or AI Overview citation today. "medium" = dents CTR/engagement. "low" = polish.
 - Each fix must be specific to THIS post (reference the actual topic or heading when possible). No generic "write better content".

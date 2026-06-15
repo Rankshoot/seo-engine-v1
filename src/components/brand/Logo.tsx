@@ -18,13 +18,13 @@ interface LogoProps {
   markOnly?: boolean;
   /** Size token controlling glyph + text. */
   size?: LogoSize;
-  /** Apply the Rankit gradient to the wordmark. */
+  /** Apply the Rankshoot gradient to the wordmark. */
   gradient?: boolean;
   className?: string;
 }
 
 /**
- * Rankit wordmark. The glyph is an upward-trending bar pair that doubles as a
+ * Rankshoot wordmark. The glyph is an upward-trending bar pair that doubles as a
  * stylised "R", surrounded by a soft violet glow ring — distinctive enough
  * not to read as the generic lightning bolt the previous brand used.
  */

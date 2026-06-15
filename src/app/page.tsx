@@ -79,9 +79,9 @@ const features = [
 ];
 
 const workflowSteps = [
-  { num: "01", title: "Tell Rankit about your business", desc: "Drop your domain, audience, and competitors. We scrape and brief everything." },
+  { num: "01", title: "Tell Rankshoot about your business", desc: "Drop your domain, audience, and competitors. We scrape and brief everything." },
   { num: "02", title: "Discover real demand", desc: "Live DataForSEO + Ahrefs research, classified by funnel and filtered against your brief." },
-  { num: "03", title: "Approve and schedule", desc: "Pick the winners, drop them into the calendar. Rankit handles the queue." },
+  { num: "03", title: "Approve and schedule", desc: "Pick the winners, drop them into the calendar. Rankshoot handles the queue." },
   { num: "04", title: "Ship ranked content", desc: "Generate, audit, repair, and publish — GEO + SEO optimised by default." },
 ];
 
@@ -401,7 +401,7 @@ function WorkflowSection() {
           From <span className="gradient-text">brief</span> to <span className="gradient-text">published</span>, in days.
         </SectionTitle>
         <SectionSub>
-          Rankit guides you through each step — never lost, never overwhelmed, every action contextual to what you just did.
+          Rankshoot guides you through each step — never lost, never overwhelmed, every action contextual to what you just did.
         </SectionSub>
 
         <div className="relative mt-14 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -618,7 +618,7 @@ function AssistantShowcase() {
             A copilot that <span className="gradient-text">knows your business.</span>
           </SectionTitle>
           <SectionSub className="max-w-none">
-            The Rankit assistant lives on every page and changes behaviour with context — on Keywords it suggests clusters, on Competitors it surfaces gaps, on Content Health it ranks fixes by traffic impact. No prompt engineering needed.
+            The Rankshoot assistant lives on every page and changes behaviour with context — on Keywords it suggests clusters, on Competitors it surfaces gaps, on Content Health it ranks fixes by traffic impact. No prompt engineering needed.
           </SectionSub>
 
           <ul className="mt-8 space-y-3">
@@ -645,7 +645,7 @@ function AssistantShowcase() {
             <div className="flex items-center justify-between border-b border-border-subtle pb-3">
               <div className="flex items-center gap-2">
                 <span className="ai-orb" />
-                <span className="text-[13px] font-semibold">Rankit assistant</span>
+                <span className="text-[13px] font-semibold">Rankshoot assistant</span>
               </div>
               <span className="rounded-full border border-border-subtle bg-surface-elevated px-2 py-0.5 text-[10.5px] text-text-tertiary">
                 Keywords · Acme Recruit
@@ -720,7 +720,7 @@ function IntegrationsRow() {
           Live data from the tools <span className="gradient-text">enterprise SEO teams trust.</span>
         </SectionTitle>
         <SectionSub>
-          Rankit routes requests to the right provider automatically — Ahrefs first when configured, DataForSEO as a clean fallback — and caches everything aggressively so spend stays predictable.
+          Rankshoot routes requests to the right provider automatically — Ahrefs first when configured, DataForSEO as a clean fallback — and caches everything aggressively so spend stays predictable.
         </SectionSub>
 
         <div className="mt-10 grid grid-cols-1 gap-px overflow-hidden rounded-card border border-border-subtle bg-border-subtle md:grid-cols-2 lg:grid-cols-4">
@@ -751,7 +751,7 @@ function FinalCTA() {
           <span className="gradient-text">Ship more ranked content.</span>
         </h2>
         <p className="mx-auto mt-5 max-w-[540px] text-[15px] leading-relaxed text-text-secondary">
-          Plug in your domain and competitors. Rankit will brief, research, plan, generate, and audit — so your team can spend the day on strategy, not spreadsheets.
+          Plug in your domain and competitors. Rankshoot will brief, research, plan, generate, and audit — so your team can spend the day on strategy, not spreadsheets.
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <SignedOut>

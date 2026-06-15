@@ -457,7 +457,7 @@ export async function suggestContentTopicWithFlash(input: {
     ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one. Design the topic, semantic_keywords, and rationale specifically for this keyword.`
     : `Choose a fresh primary keyword that the brand can rank for — one that is NOT in the forbidden list above and is not a close variant of any forbidden keyword.`;
 
-  const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankit content engine should produce next.
+  const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankshoot content engine should produce next.
 
 CONTEXT
 - Domain: ${input.domain}

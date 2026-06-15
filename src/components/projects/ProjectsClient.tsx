@@ -200,7 +200,7 @@ function EmptyState({ onCreate, canCreateProject }: { onCreate: () => void; canC
         <div className="mx-auto mt-10 grid max-w-[640px] grid-cols-3 gap-px overflow-hidden rounded-xl border border-border-subtle bg-border-subtle text-left">
           {[
             { num: "01", label: "Drop your domain + competitors" },
-            { num: "02", label: "Rankit briefs your business automatically" },
+            { num: "02", label: "Rankshoot briefs your business automatically" },
             { num: "03", label: "Approve keywords, ship content" },
           ].map(step => (
             <div key={step.num} className="bg-surface-elevated p-4">

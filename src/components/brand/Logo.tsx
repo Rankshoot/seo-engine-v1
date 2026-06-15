@@ -6,11 +6,11 @@ import { BRAND } from "@/constants/brand";
 export type LogoSize = "xs" | "sm" | "md" | "lg" | "xl";
 
 const sizeMap: Record<LogoSize, { mark: string; text: string; gap: string }> = {
-  xs: { mark: "w-6 h-6 text-[11px]", text: "text-[14px]", gap: "gap-2" },
-  sm: { mark: "w-7 h-7 text-[12px]", text: "text-[15px]", gap: "gap-2" },
-  md: { mark: "w-8 h-8 text-[13px]", text: "text-[18px]", gap: "gap-2.5" },
-  lg: { mark: "w-9 h-9 text-[15px]", text: "text-[20px]", gap: "gap-3" },
-  xl: { mark: "w-11 h-11 text-[18px]", text: "text-[24px]", gap: "gap-3" },
+  xs: { mark: "w-[28px] h-[28px]", text: "text-[14px]", gap: "gap-2" },
+  sm: { mark: "w-[32px] h-[32px]", text: "text-[15px]", gap: "gap-2" },
+  md: { mark: "w-[40px] h-[40px]", text: "text-[18px]", gap: "gap-" },
+  lg: { mark: "w-[46px] h-[46px]", text: "text-[20px]", gap: "gap-" },
+  xl: { mark: "w-[56px] h-[56px]", text: "text-[24px]", gap: "gap-" },
 };
 
 interface LogoProps {
@@ -24,9 +24,7 @@ interface LogoProps {
 }
 
 /**
- * Rankshoot wordmark. The glyph is an upward-trending bar pair that doubles as a
- * stylised "R", surrounded by a soft violet glow ring — distinctive enough
- * not to read as the generic lightning bolt the previous brand used.
+ * Rankshoot logo. Renders the logo-mark PNG and a text-based wordmark.
  */
 export function Logo({
   markOnly = false,
@@ -46,46 +44,34 @@ export function Logo({
     >
       <span
         className={cn(
-          "relative inline-flex items-center justify-center shrink-0 rounded-[8px]",
-          "bg-[radial-gradient(circle_at_30%_25%,var(--brand-violet-soft),var(--brand-violet)_55%,#3a3d99)]",
-          "text-white shadow-(--shadow-glow-sm)",
+          "relative inline-flex items-center justify-center shrink-0",
           dim.mark,
         )}
         aria-hidden
       >
-        <LogoGlyph />
-        <span className="absolute inset-0 rounded-[8px] ring-1 ring-inset ring-white/12" />
+        <img
+          src="/logo.png"
+          alt="Rankshoot Symbol"
+          className="w-full h-full  object-contain select-none"
+        />
       </span>
       {!markOnly && (
         <span
           className={cn(
-            "leading-none whitespace-nowrap text-text-primary",
-            gradient && "gradient-text",
+            "flex items-center tracking-wider leading-none uppercase whitespace-nowrap",
             dim.text,
           )}
         >
-          {BRAND.name}
+          {/* RANK in bold brand-violet */}
+          <span className={cn("font-extrabold", gradient ? "gradient-text" : "text-brand-violet")}>
+            RANK
+          </span>
+          {/* SHOOT in normal text-primary */}
+          <span className={cn("font-normal ml-[0.02em]", gradient ? "gradient-text" : "text-text-primary")}>
+            SHOOT
+          </span>
         </span>
       )}
     </span>
-  );
-}
-
-function LogoGlyph() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="w-[55%] h-[55%]"
-    >
-      <path d="M5 19V11" />
-      <path d="M11 19V7" />
-      <path d="M17 19V13" />
-      <path d="M3 5l4 4 4-6 6 5 4-4" opacity="0.95" />
-    </svg>
   );
 }

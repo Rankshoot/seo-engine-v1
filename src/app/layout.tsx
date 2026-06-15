@@ -27,11 +27,31 @@ export const metadata: Metadata = {
     "Rankshoot is an AI-native SEO operating system. Discover keywords, audit competitors, plan your editorial calendar, and ship ranked content — automatically.",
   keywords:
     "AI SEO platform, keyword research, competitor analysis, content calendar, AI content generation, GEO, AI Overviews, SEO automation",
+  icons: {
+    icon: "/favicon.png",
+    shortcut: "/favicon.png",
+    apple: "/logo.png",
+  },
   openGraph: {
     title: "Rankshoot — AI SEO Operating System",
     description:
       "Research keywords, audit competitors, plan editorial calendars, and ship ranked content — all from one AI-native workspace.",
     type: "website",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "Rankshoot — AI SEO Operating System",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Rankshoot — AI SEO Operating System",
+    description:
+      "Research keywords, audit competitors, plan editorial calendars, and ship ranked content — all from one AI-native workspace.",
+    images: ["/og-image.png"],
   },
 };
 

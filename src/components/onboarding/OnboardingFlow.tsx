@@ -114,22 +114,24 @@ export function OnboardingFlow({ userName }: { userName: string }) {
         <div className="absolute bottom-0 right-0 h-[400px] w-[500px] rounded-full bg-brand-aqua/6 blur-[120px]" />
       </div>
 
-      {/* Top bar */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border-subtle/60">
-        <Logo size="sm" />
-        {step > 0 && (
-          <div className="flex items-center gap-3">
-            <span className="text-[12px] text-text-tertiary hidden sm:block">
-              Step {step} of {TOTAL_STEPS}
-            </span>
-            <div className="w-28 h-1.5 bg-surface-secondary rounded-full overflow-hidden">
-              <div
-                className="h-full bg-brand-violet rounded-full transition-all duration-500 ease-out"
-                style={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
-              />
+      {/* Top bar — floating pill style */}
+      <header className="sticky top-0 z-40 flex justify-center px-4 pt-4 pb-1">
+        <div className="flex w-full max-w-[760px] items-center justify-between rounded-full border border-border-subtle bg-glass px-5 py-2.5 shadow-[0_4px_24px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)] backdrop-blur-md">
+          <Logo size="sm" />
+          {step > 0 && (
+            <div className="flex items-center gap-3">
+              <span className="text-[12px] text-text-tertiary hidden sm:block">
+                Step {step} of {TOTAL_STEPS}
+              </span>
+              <div className="w-28 h-1.5 bg-surface-secondary rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-brand-violet rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
+                />
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       {/* Step area */}

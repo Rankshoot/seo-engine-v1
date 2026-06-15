@@ -626,6 +626,46 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* ─── Workflow pipeline animations ─── */
+@keyframes flow-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+@keyframes flow-line {
+  0% { width: 0%; opacity: 0; }
+  60% { opacity: 1; }
+  100% { width: 100%; opacity: 0.6; }
+}
+@keyframes card-float-a {
+  0%, 100% { transform: translateY(0px) rotate(-1deg); }
+  50% { transform: translateY(-8px) rotate(-1deg); }
+}
+@keyframes card-float-b {
+  0%, 100% { transform: translateY(-4px) rotate(1deg); }
+  50% { transform: translateY(4px) rotate(1deg); }
+}
+@keyframes card-float-c {
+  0%, 100% { transform: translateY(0px) rotate(0.5deg); }
+  50% { transform: translateY(-6px) rotate(0.5deg); }
+}
+@keyframes ticker-flow {
+  0% { opacity: 0; transform: translateX(-6px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes step-fill {
+  from { width: 0; }
+  to { width: 100%; }
+}
+@keyframes ping-slow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.4; }
+}
+.animate-card-float-a { animation: card-float-a 5s ease-in-out infinite; }
+.animate-card-float-b { animation: card-float-b 6.5s ease-in-out infinite; }
+.animate-card-float-c { animation: card-float-c 4.5s ease-in-out infinite; }
+.animate-flow-pulse   { animation: flow-pulse 2.4s ease-in-out infinite; }
+.animate-ping-slow    { animation: ping-slow 2s ease-in-out infinite; }
+
 /* ─── Marquee (horizontal ticker) ─── */
 @keyframes marquee {
   from { transform: translateX(0); }

@@ -1,36 +1,33 @@
 "use client";
 
+import Image from "next/image";
 import { cn } from "@/lib/cn";
 import { BRAND } from "@/constants/brand";
 
 export type LogoSize = "xs" | "sm" | "md" | "lg" | "xl";
 
-const sizeMap: Record<LogoSize, { mark: string; text: string; gap: string }> = {
-  xs: { mark: "w-[28px] h-[28px]", text: "text-[14px]", gap: "gap-2" },
-  sm: { mark: "w-[32px] h-[32px]", text: "text-[15px]", gap: "gap-2" },
-  md: { mark: "w-[40px] h-[40px]", text: "text-[18px]", gap: "gap-" },
-  lg: { mark: "w-[46px] h-[46px]", text: "text-[20px]", gap: "gap-" },
-  xl: { mark: "w-[56px] h-[56px]", text: "text-[24px]", gap: "gap-" },
+const sizeMap: Record<LogoSize, { px: number; mark: string; text: string; gap: string }> = {
+  xs: { px: 28, mark: "w-[28px] h-[28px]", text: "text-[14px]", gap: "gap-2" },
+  sm: { px: 32, mark: "w-[32px] h-[32px]", text: "text-[15px]", gap: "gap-2" },
+  md: { px: 40, mark: "w-[40px] h-[40px]", text: "text-[18px]", gap: "gap-2" },
+  lg: { px: 46, mark: "w-[46px] h-[46px]", text: "text-[20px]", gap: "gap-2.5" },
+  xl: { px: 56, mark: "w-[56px] h-[56px]", text: "text-[24px]", gap: "gap-3" },
 };
 
 interface LogoProps {
-  /** Hide the wordmark and only render the glyph. */
   markOnly?: boolean;
-  /** Size token controlling glyph + text. */
   size?: LogoSize;
-  /** Apply the Rankshoot gradient to the wordmark. */
   gradient?: boolean;
   className?: string;
+  priority?: boolean;
 }
 
-/**
- * Rankshoot logo. Renders the logo-mark PNG and a text-based wordmark.
- */
 export function Logo({
   markOnly = false,
   size = "md",
   gradient = false,
   className,
+  priority = false,
 }: LogoProps) {
   const dim = sizeMap[size];
   return (
@@ -44,15 +41,18 @@ export function Logo({
     >
       <span
         className={cn(
-          "relative inline-flex items-center justify-center shrink-0",
+          "relative inline-block shrink-0 overflow-hidden",
           dim.mark,
         )}
         aria-hidden
       >
-        <img
+        <Image
           src="/logo.png"
-          alt="Rankshoot Symbol"
-          className="w-full h-full  object-contain select-none"
+          alt=""
+          fill
+          sizes={`${dim.px * 2}px`}
+          className="object-contain select-none"
+          priority={priority}
         />
       </span>
       {!markOnly && (
@@ -62,11 +62,9 @@ export function Logo({
             dim.text,
           )}
         >
-          {/* RANK in bold brand-violet */}
           <span className={cn("font-extrabold", gradient ? "gradient-text" : "text-brand-violet")}>
             RANK
           </span>
-          {/* SHOOT in normal text-primary */}
           <span className={cn("font-normal ml-[0.02em]", gradient ? "gradient-text" : "text-text-primary")}>
             SHOOT
           </span>

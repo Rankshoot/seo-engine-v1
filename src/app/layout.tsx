@@ -62,7 +62,14 @@ export default async function RootLayout({
 }>) {
   const content = (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${jetbrainsMono.variable}`}>
-      <head />
+      <head>
+        {/* Preconnect for Google Fonts (Inter) */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* Preconnect for Clerk auth (reduces redirect latency) */}
+        <link rel="preconnect" href="https://clerk.accounts.dev" />
+        <link rel="dns-prefetch" href="https://clerk.accounts.dev" />
+      </head>
       <body className="min-h-screen antialiased bg-surface-primary text-text-primary">
         <ThemeProvider
           attribute="class"

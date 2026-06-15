@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.env*
+Dockerfile
+.dockerignore
+README.md
+DESIGN.md
+cohere/
+migrations/
+supabase-migration-*.sql
+supabase-schema.sql
+supabase-fix-*.sql

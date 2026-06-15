@@ -3,16 +3,6 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { adminPanelPathFromProjectsAdmin } from "@/lib/projects/reserved-project-slugs";
 
-// Sanitize Clerk key at module-load time — GCP Cloud Run env vars often carry
-// invisible trailing whitespace / newlines from the console UI.
-if (process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
-  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY =
-    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.trim();
-}
-if (process.env.CLERK_SECRET_KEY) {
-  process.env.CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY.trim();
-}
-
 // Edge-native in-memory rate limit cache
 const rateLimitCache = new Map<string, number[]>();
 
@@ -70,9 +60,7 @@ async function fetchApprovalStatus(userId: string): Promise<"approved" | "pendin
   return "pending";
 }
 
-const clerkEnabled = /^pk_(test|live)_/.test(
-  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || ""
-);
+const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 const isPublicRoute = createRouteMatcher([
   "/",

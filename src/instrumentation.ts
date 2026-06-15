@@ -1,14 +1,4 @@
 export function register() {
-  // Sanitize Clerk keys early — GCP Cloud Run env vars may carry
-  // invisible trailing whitespace / newlines from the console UI.
-  if (process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
-    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY =
-      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.trim();
-  }
-  if (process.env.CLERK_SECRET_KEY) {
-    process.env.CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY.trim();
-  }
-
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async function (input, init) {

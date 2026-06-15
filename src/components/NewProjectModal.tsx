@@ -16,6 +16,7 @@ import {
   Select,
   Spinner,
 } from "@/components/common";
+import { useUserQuota } from "@/hooks/useUserQuota";
 
 interface NewProjectModalProps {
   open: boolean;
@@ -51,17 +52,19 @@ function AiFillLabelButton({
   busy,
   disabled,
   onClick,
+  hasAiCredits = true,
 }: {
   busy: boolean;
   disabled?: boolean;
   onClick: () => void;
+  hasAiCredits?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled || busy}
-      title="Fill with AI using company, domain, and description"
+      disabled={disabled || busy || !hasAiCredits}
+      title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : "Fill with AI using company, domain, and description"}
       className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-brand-action/40 bg-brand-action/12 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-brand-action transition-all duration-(--duration-fast) ease-out hover:border-brand-action/65 hover:bg-brand-action/20 disabled:pointer-events-none disabled:opacity-40"
     >
       {busy ? (
@@ -91,6 +94,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
   const formId = useRef(`project-form-${Math.random().toString(36).slice(2)}`).current;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const { hasAiCredits } = useUserQuota();
   const [niche, setNiche] = useState(editProject?.niche ?? "");
   const [targetAudience, setTargetAudience] = useState(editProject?.target_audience ?? "");
   const [brandVoice, setBrandVoice] = useState(editProject?.brand_voice ?? "");
@@ -280,6 +284,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                   busy={aiLoading === "niche"}
                   disabled={loading}
                   onClick={() => void runTargetingAiFill("niche")}
+                  hasAiCredits={hasAiCredits}
                 />
               </div>
               <Input
@@ -303,6 +308,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                   busy={aiLoading === "target_audience"}
                   disabled={loading}
                   onClick={() => void runTargetingAiFill("target_audience")}
+                  hasAiCredits={hasAiCredits}
                 />
               </div>
               <Input
@@ -391,6 +397,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                   busy={aiLoading === "brand_voice"}
                   disabled={loading}
                   onClick={() => void runTargetingAiFill("brand_voice")}
+                  hasAiCredits={hasAiCredits}
                 />
               </div>
               <Input
@@ -414,6 +421,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                   busy={aiLoading === "brand_values"}
                   disabled={loading}
                   onClick={() => void runTargetingAiFill("brand_values")}
+                  hasAiCredits={hasAiCredits}
                 />
               </div>
               <Input
@@ -437,6 +445,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                   busy={aiLoading === "brand_description"}
                   disabled={loading}
                   onClick={() => void runTargetingAiFill("brand_description")}
+                  hasAiCredits={hasAiCredits}
                 />
               </div>
               <Textarea

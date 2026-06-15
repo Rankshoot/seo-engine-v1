@@ -33,6 +33,12 @@ interface QuotaState {
   override_projects: string;
   override_keywords_fetched: string;
   override_keywords_explored: string;
+  // Granular per-content-type overrides
+  override_blogs: string;
+  override_ebooks: string;
+  override_whitepapers: string;
+  override_linkedin: string;
+  // Legacy (kept for backwards compat)
   override_standard_content: string;
   override_premium_content: string;
   override_ai_credits: string;
@@ -87,6 +93,10 @@ export function AdminUserModal({
     override_projects: "",
     override_keywords_fetched: "",
     override_keywords_explored: "",
+    override_blogs: "",
+    override_ebooks: "",
+    override_whitepapers: "",
+    override_linkedin: "",
     override_standard_content: "",
     override_premium_content: "",
     override_ai_credits: "",
@@ -127,10 +137,18 @@ export function AdminUserModal({
             userQuota.keywords_fetched.override !== null ? String(userQuota.keywords_fetched.override) : "",
           override_keywords_explored:
             userQuota.keywords_explored.override !== null ? String(userQuota.keywords_explored.override) : "",
+          override_blogs:
+            userQuota.blogs?.override !== null && userQuota.blogs?.override !== undefined ? String(userQuota.blogs.override) : "",
+          override_ebooks:
+            userQuota.ebooks?.override !== null && userQuota.ebooks?.override !== undefined ? String(userQuota.ebooks.override) : "",
+          override_whitepapers:
+            userQuota.whitepapers?.override !== null && userQuota.whitepapers?.override !== undefined ? String(userQuota.whitepapers.override) : "",
+          override_linkedin:
+            userQuota.linkedin?.override !== null && userQuota.linkedin?.override !== undefined ? String(userQuota.linkedin.override) : "",
           override_standard_content:
-            userQuota.standard_content.override !== null ? String(userQuota.standard_content.override) : "",
+            userQuota.standard_content?.override !== null && userQuota.standard_content?.override !== undefined ? String(userQuota.standard_content.override) : "",
           override_premium_content:
-            userQuota.premium_content.override !== null ? String(userQuota.premium_content.override) : "",
+            userQuota.premium_content?.override !== null && userQuota.premium_content?.override !== undefined ? String(userQuota.premium_content.override) : "",
           override_ai_credits:
             userQuota.ai_credits.override !== null ? String(userQuota.ai_credits.override) : "",
         });
@@ -195,6 +213,10 @@ export function AdminUserModal({
           override_projects: parseOverride(form.override_projects),
           override_keywords_fetched: parseOverride(form.override_keywords_fetched),
           override_keywords_explored: parseOverride(form.override_keywords_explored),
+          override_blogs: parseOverride(form.override_blogs),
+          override_ebooks: parseOverride(form.override_ebooks),
+          override_whitepapers: parseOverride(form.override_whitepapers),
+          override_linkedin: parseOverride(form.override_linkedin),
           override_standard_content: parseOverride(form.override_standard_content),
           override_premium_content: parseOverride(form.override_premium_content),
           override_ai_credits: parseOverride(form.override_ai_credits),
@@ -295,33 +317,44 @@ export function AdminUserModal({
                 <span className="text-xs text-text-tertiary">Blank = plan limits</span>
               </div>
 
-              <div className="space-y-3.5">
-                {/* Limits mapping */}
+              <div className="space-y-0">
+                {/* Section: Access */}
                 {[
-                  { key: "override_projects", label: "Projects Limit", quotaKey: "projects" },
-                  { key: "override_keywords_fetched", label: "Keywords Fetched", quotaKey: "keywords_fetched" },
-                  { key: "override_keywords_explored", label: "Keywords Explored", quotaKey: "keywords_explored" },
-                  { key: "override_ai_credits", label: "AI Helper Credits", quotaKey: "ai_credits" },
-                  { key: "override_standard_content", label: "Standard Blogs", quotaKey: "standard_content" },
-                  { key: "override_premium_content", label: "Premium Content", quotaKey: "premium_content" },
-                ].map((item) => {
-                  const quota = quotaStatus[item.quotaKey];
+                  { key: "override_projects", label: "Projects", quotaKey: "projects", section: "Access" },
+                  { key: "override_keywords_fetched", label: "Keywords Fetched", quotaKey: "keywords_fetched", section: null },
+                  { key: "override_keywords_explored", label: "Keywords Explored (AI)", quotaKey: "keywords_explored", section: null },
+                  { key: "override_ai_credits", label: "AI Helper Credits", quotaKey: "ai_credits", section: "AI" },
+                  { key: "override_blogs", label: "Blog Articles", quotaKey: "blogs", section: "Content" },
+                  { key: "override_linkedin", label: "LinkedIn Posts", quotaKey: "linkedin", section: null },
+                  { key: "override_ebooks", label: "Ebooks", quotaKey: "ebooks", section: null },
+                  { key: "override_whitepapers", label: "Whitepapers", quotaKey: "whitepapers", section: null },
+                ].map((item, idx, arr) => {
+                  const quota = quotaStatus?.[item.quotaKey];
+                  if (!quota) return null;
+                  const showSection = item.section !== null;
                   return (
-                    <div key={item.key} className="flex items-center justify-between gap-4 py-1.5 border-b border-border-subtle/50 last:border-0">
-                      <div className="min-w-0 flex-1">
-                        <span className="font-semibold text-text-primary block">{item.label}</span>
-                        <span className="text-[11px] text-text-tertiary">
-                          Plan: {formatAdminInt(quota.limit)} &middot; Used: {formatAdminInt(quota.used)} &middot; Effective: {formatAdminInt(quota.effectiveLimit)}
-                        </span>
+                    <div key={item.key}>
+                      {showSection && (
+                        <div className={`text-[9.5px] font-bold uppercase tracking-[0.12em] text-text-tertiary pb-1 pt-3 ${idx > 0 ? "border-t border-border-subtle/40" : ""}`}>
+                          {item.section}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-4 py-1.5">
+                        <div className="min-w-0 flex-1">
+                          <span className="font-semibold text-text-primary block">{item.label}</span>
+                          <span className="text-[10.5px] text-text-tertiary">
+                            Plan: {formatAdminInt(quota.limit)} &middot; Used: {formatAdminInt(quota.used)} &middot; Effective: {formatAdminInt(quota.effectiveLimit)}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder={String(quota.limit)}
+                          value={form[item.key as keyof QuotaState]}
+                          onChange={(e) => setForm((prev) => ({ ...prev, [item.key]: e.target.value }))}
+                          className="w-20 h-8 px-2 text-right rounded-md border border-border-subtle bg-surface-elevated font-mono text-xs focus:outline-none focus:ring-1 focus:ring-brand-action transition-all"
+                        />
                       </div>
-                      <input
-                        type="number"
-                        min={0}
-                        placeholder={String(quota.limit)}
-                        value={form[item.key as keyof QuotaState]}
-                        onChange={(e) => setForm((prev) => ({ ...prev, [item.key]: e.target.value }))}
-                        className="w-24 h-8 px-2 text-right rounded-md border border-border-subtle bg-surface-elevated font-mono text-xs focus:outline-none focus:ring-1 focus:ring-brand-action transition-all"
-                      />
                     </div>
                   );
                 })}

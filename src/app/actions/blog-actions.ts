@@ -991,6 +991,19 @@ export async function fixBlogSeoIssue(blogId: string, issueKey: BlogSeoIssueKey)
     .single();
   if (pErr || !project) return { success: false, error: 'Not authorized', data: null };
 
+  if (issueKey !== 'keyword_density') {
+    try {
+      const { QuotaService } = await import("@/services/quota");
+      await QuotaService.deductQuota(user.id, "ai_credits", 1);
+    } catch (e: any) {
+      return {
+        success: false,
+        error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more.",
+        data: null,
+      };
+    }
+  }
+
   if (issueKey === 'keyword_density') {
     const fixedContent = fixLowKeywordDensity(blog.content, blog.target_keyword ?? '');
     if (!fixedContent) {
@@ -1215,6 +1228,17 @@ export async function editBlogParagraph(
     .single();
   if (!project) return { success: false, error: 'Not authorized', data: null };
 
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more.",
+      data: null,
+    };
+  }
+
   const paragraphs = splitParagraphs(blog.content as string);
   const idx = paragraphIndex - 1;
   if (idx >= paragraphs.length) {
@@ -1290,6 +1314,17 @@ export async function editBlogSection(
     .single();
   if (!project) return { success: false, error: 'Not authorized', data: null };
 
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more.",
+      data: null,
+    };
+  }
+
   const sections = splitIntoH2Sections(blog.content as string);
   const needle = headingMatch.toLowerCase().trim();
   const target = sections.find(
@@ -1362,6 +1397,18 @@ export async function addInternalLinksToBlog(
     .eq('user_id', user.id)
     .single();
   if (!project) return { success: false, error: 'Not authorized', data: null, added: 0 };
+
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more.",
+      data: null,
+      added: 0,
+    };
+  }
 
   // Grab the brief's internal_link_candidates pool.
   const { data: briefRow } = await supabaseAdmin
@@ -1437,6 +1484,18 @@ export async function addCitationsToBlog(
     .single();
   if (!project) return { success: false, error: 'Not authorized', data: null, added: 0 };
 
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more.",
+      data: null,
+      added: 0,
+    };
+  }
+
   const sources = preferredSources?.length
     ? preferredSources.join(', ')
     : 'McKinsey, Gartner, Deloitte, SHRM, LinkedIn Talent Blog, Statista, World Economic Forum, Accenture, EY, government or peer-reviewed sources';
@@ -1497,6 +1556,17 @@ export async function applyBlogInstruction(
     .eq('user_id', user.id)
     .single();
   if (!project) return { success: false, error: 'Not authorized', data: null };
+
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more.",
+      data: null,
+    };
+  }
 
   const prompt = `You are an editor making a SMALL targeted change to an existing blog post. Apply the user's instruction MINIMALLY — only modify the parts the instruction asks about. Preserve all other content, headings, links, FAQ, and meta exactly.
 
@@ -1640,6 +1710,17 @@ export async function rewriteBlogEditorSelection(
     .eq('user_id', user.id)
     .single();
   if (!project?.domain) return { success: false, error: 'Not authorized' };
+
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more.",
+      trace: [{ label: '(quota)', ok: false, detail: 'AI credits exhausted' }],
+    };
+  }
 
   const detectedLinks = enrichSelectionLinks(
     meta.links && meta.links.length > 0 ? meta.links : extractInlineMarkdownLinks(sel),
@@ -2407,6 +2488,13 @@ export async function analyzeBlogContent(
     .single();
 
   if (pErr || !project) return { success: false, error: "Unauthorized" };
+
+  try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return { success: false, error: e?.message || "You have exhausted your AI helper credits. Please upgrade your plan for more." };
+  }
 
   const contentPreview = (blog.content ?? "").slice(0, 12_000);
 

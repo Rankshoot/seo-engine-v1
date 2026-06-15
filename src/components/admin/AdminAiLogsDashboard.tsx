@@ -57,6 +57,35 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+function PromptSummaryCell({ promptSummary }: { promptSummary: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!promptSummary) return <span>—</span>;
+
+  const isLong = promptSummary.length > 200;
+  const displayText = expanded || !isLong
+    ? promptSummary
+    : `${promptSummary.slice(0, 200)}...`;
+
+  return (
+    <div className="text-[12px] text-text-secondary max-w-[340px]">
+      <p className="whitespace-pre-wrap break-words">{displayText}</p>
+      {isLong && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(!expanded);
+          }}
+          className="mt-1 text-[11px] font-semibold text-brand-action hover:underline focus:outline-none block"
+        >
+          {expanded ? "Show less" : "Show prompt"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function AdminAiLogsDashboard() {
   const { params, setParams } = useAdminListUrlState("created", "desc");
   const { data, isLoading, isError, error, refetch } = useAdminAiLogs(params);
@@ -95,8 +124,29 @@ export function AdminAiLogsDashboard() {
     </div>
   );
 
+  const callTypeFilter = (
+    <div className="w-full lg:w-44">
+      <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-tertiary mb-1.5">
+        Type
+      </label>
+      <select
+        value={params.action ?? ""}
+        onChange={(e) => setParams({ action: e.target.value })}
+        className={cn(
+          "w-full h-9 rounded-md border border-border-subtle bg-surface-elevated px-3 text-[13px] text-text-primary",
+          "focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-action/40"
+        )}
+      >
+        <option value="">All types</option>
+        <option value="content_generation">Content Generation</option>
+        <option value="helper">AI Helper (Credits)</option>
+      </select>
+    </div>
+  );
+
   const logExtras = (
     <>
+      {callTypeFilter}
       {modelFilter}
       <AdminStatusFilter
         value={params.status ?? ""}
@@ -138,11 +188,7 @@ export function AdminAiLogsDashboard() {
       {
         id: "prompt",
         header: "Prompt summary",
-        cell: (row) => (
-          <p className="text-[12px] text-text-secondary line-clamp-2 max-w-[280px]">
-            {row.promptSummary || "—"}
-          </p>
-        ),
+        cell: (row) => <PromptSummaryCell promptSummary={row.promptSummary} />,
       },
       {
         id: "tokens",

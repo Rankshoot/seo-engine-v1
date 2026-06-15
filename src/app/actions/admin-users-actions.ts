@@ -286,6 +286,12 @@ export async function updateAdminUserQuota(
     override_projects: number | null;
     override_keywords_fetched: number | null;
     override_keywords_explored: number | null;
+    // Granular per-content-type overrides
+    override_blogs?: number | null;
+    override_ebooks?: number | null;
+    override_whitepapers?: number | null;
+    override_linkedin?: number | null;
+    // Legacy aliases
     override_standard_content: number | null;
     override_premium_content: number | null;
     override_ai_credits: number | null;
@@ -326,25 +332,37 @@ export async function updateAdminUserQuota(
     throw new Error(`Failed to fetch limits for plan ${updates.planId}`);
   }
 
+  // Build quota update payload with new granular fields
+  const quotaUpdate: Record<string, unknown> = {
+    limit_projects: plan.limit_projects,
+    limit_keywords_fetched: plan.limit_keywords_fetched,
+    limit_keywords_explored: plan.limit_keywords_explored,
+    limit_standard_content: plan.limit_standard_content,
+    limit_premium_content: plan.limit_premium_content,
+    limit_blogs: (plan as any).limit_blogs ?? plan.limit_standard_content ?? 5,
+    limit_ebooks: (plan as any).limit_ebooks ?? plan.limit_premium_content ?? 0,
+    limit_whitepapers: (plan as any).limit_whitepapers ?? 0,
+    limit_linkedin: (plan as any).limit_linkedin ?? plan.limit_standard_content ?? 5,
+    limit_ai_credits: plan.limit_ai_credits,
+
+    override_projects: updates.override_projects,
+    override_keywords_fetched: updates.override_keywords_fetched,
+    override_keywords_explored: updates.override_keywords_explored,
+    override_standard_content: updates.override_standard_content,
+    override_premium_content: updates.override_premium_content,
+    override_ai_credits: updates.override_ai_credits,
+    // New granular overrides
+    override_blogs: updates.override_blogs ?? null,
+    override_ebooks: updates.override_ebooks ?? null,
+    override_whitepapers: updates.override_whitepapers ?? null,
+    override_linkedin: updates.override_linkedin ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
   // Sync quotas with overrides
   const { error: quotaErr } = await db
     .from("user_quotas")
-    .update({
-      limit_projects: plan.limit_projects,
-      limit_keywords_fetched: plan.limit_keywords_fetched,
-      limit_keywords_explored: plan.limit_keywords_explored,
-      limit_standard_content: plan.limit_standard_content,
-      limit_premium_content: plan.limit_premium_content,
-      limit_ai_credits: plan.limit_ai_credits,
-
-      override_projects: updates.override_projects,
-      override_keywords_fetched: updates.override_keywords_fetched,
-      override_keywords_explored: updates.override_keywords_explored,
-      override_standard_content: updates.override_standard_content,
-      override_premium_content: updates.override_premium_content,
-      override_ai_credits: updates.override_ai_credits,
-      updated_at: new Date().toISOString(),
-    })
+    .update(quotaUpdate)
     .eq("user_id", userId);
 
   if (quotaErr) {

@@ -30,6 +30,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ blogId:
   const project = blog.projects as { niche: string; target_audience: string; company: string };
 
   try {
+    const { QuotaService } = await import("@/services/quota");
+    await QuotaService.deductQuota(user.id, "ai_credits", 1);
+  } catch (e: any) {
+    return new Response(JSON.stringify({ success: false, error: e?.message || "AI credits exhausted. Please upgrade your plan." }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  try {
     const image = await generateContextualBlogImage({
       title: blog.title,
       targetKeyword: blog.target_keyword,

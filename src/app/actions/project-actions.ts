@@ -15,6 +15,7 @@ import { normalizeDomain } from '@/lib/keyword-discovery';
 import { Project } from '@/lib/types';
 import { getBlogAudits } from '@/app/actions/audit-actions';
 import { geminiGenerate } from '@/lib/gemini';
+import { QuotaService, QuotaExhaustedError } from '@/services/quota';
 
 export type ProjectTargetingSuggestField = 'niche' | 'target_audience' | 'brand_voice' | 'brand_values' | 'brand_description';
 
@@ -57,6 +58,18 @@ export async function suggestProjectTargetingField(input: {
   if (!user) {
     trace.push({ step: 'auth', ok: false, detail: 'not signed in' });
     return { success: false, error: 'Not authenticated', trace };
+  }
+
+  // Deduct 1 AI helper credit for this call
+  try {
+    await QuotaService.deductQuota(user.id, 'ai_credits', 1);
+  } catch (e) {
+    trace.push({ step: 'quota', ok: false, detail: 'AI credits exhausted' });
+    return {
+      success: false,
+      error: 'You have exhausted your AI helper credits. Please upgrade your plan for more.',
+      trace,
+    };
   }
 
   const company = input.company.trim();

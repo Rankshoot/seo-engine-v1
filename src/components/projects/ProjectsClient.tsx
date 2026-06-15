@@ -9,6 +9,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { formatRelativeTime } from "@/utils/format";
 import { BRAND } from "@/constants/brand";
 import { ArrowRight, FolderPlus, Search, Sparkles } from "lucide-react";
+import { useUserQuota } from "@/hooks/useUserQuota";
 
 export default function ProjectsClient({
   projects,
@@ -38,6 +39,8 @@ export default function ProjectsClient({
 
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebounce(query, 150);
+
+  const { canCreateProject } = useUserQuota();
 
   const filtered = useMemo(() => {
     const q = debouncedQuery.trim().toLowerCase();
@@ -79,6 +82,8 @@ export default function ProjectsClient({
             shape="pill"
             className="shrink-0"
             iconLeft={<FolderPlus className="h-3.5 w-3.5" />}
+            disabled={!canCreateProject}
+            title={!canCreateProject ? "You've reached your project limit. Upgrade your plan to create more." : undefined}
           >
             New project
           </Button>
@@ -119,7 +124,7 @@ export default function ProjectsClient({
             <NoSearchResults query={debouncedQuery} onClear={() => setQuery("")} />
           )
         ) : (
-          <EmptyState onCreate={openModal} />
+          <EmptyState onCreate={openModal} canCreateProject={canCreateProject} />
         )}
       </div>
 
@@ -162,7 +167,7 @@ function ResumeBanner({ project }: { project: Project }) {
   );
 }
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+function EmptyState({ onCreate, canCreateProject }: { onCreate: () => void; canCreateProject: boolean }) {
   return (
     <div className="relative overflow-hidden rounded-card border border-border-subtle bg-surface-elevated p-16 text-center">
       <div
@@ -180,7 +185,15 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
           A project holds everything for one SEO campaign — your brief, keyword set, 30-day calendar, AI-generated content, and Content Health audits. You can spin up as many as you need.
         </p>
         <div className="mt-7 flex items-center justify-center gap-3">
-          <Button onClick={onCreate} variant="primary" size="lg" shape="pill" iconRight={<ArrowRight className="h-3.5 w-3.5" />}>
+          <Button
+            onClick={onCreate}
+            variant="primary"
+            size="lg"
+            shape="pill"
+            iconRight={<ArrowRight className="h-3.5 w-3.5" />}
+            disabled={!canCreateProject}
+            title={!canCreateProject ? "You've reached your project limit. Upgrade your plan to create more." : undefined}
+          >
             Create project
           </Button>
         </div>

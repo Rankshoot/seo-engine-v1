@@ -2,6 +2,7 @@
 
 import { currentUser } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { QuotaService, QuotaExhaustedError } from '@/services/quota';
 import {
   generateEbook,
   generateWhitepaper,
@@ -191,6 +192,17 @@ export async function suggestContentTopicAction(
   if (!projRes.ok) return { success: false, error: projRes.error };
   const { project, brief } = projRes;
 
+  // Deduct 1 AI helper credit for this call
+  try {
+    await QuotaService.deductQuota(user.id, 'ai_credits', 1);
+  } catch (e) {
+    if (e instanceof QuotaExhaustedError) {
+      return { success: false, error: 'QUOTA_EXCEEDED:ai_credits — You have used all your AI helper credits. Upgrade your plan to use Ask AI.' };
+    }
+    // Non-quota errors: continue without blocking (soft fail)
+    console.warn('[suggestContentTopicAction] ai_credits deduction failed (soft fail):', e);
+  }
+
   if (payload.contentType === 'linkedin') {
     try {
       const suggestion = await suggestLinkedInInputsWithFlash({
@@ -280,6 +292,17 @@ export async function generateEbookAction(
   if (!user) {
     mark('auth', 'not signed in');
     return { success: false, error: 'Not authenticated', trace };
+  }
+
+  // ── Quota check: ebooks ─────────────────────────────────────────────────
+  try {
+    await QuotaService.checkQuota(user.id, 'ebooks');
+  } catch (e) {
+    if (e instanceof QuotaExhaustedError) {
+      mark('quota', 'ebook limit reached');
+      return { success: false, error: 'QUOTA_EXCEEDED:ebooks — You have reached your ebook generation limit. Upgrade your plan to generate more ebooks.', trace };
+    }
+    throw e;
   }
 
   if (!payload.topic?.trim()) {
@@ -431,6 +454,17 @@ export async function generateWhitepaperAction(
     return { success: false, error: 'Not authenticated', trace };
   }
 
+  // ── Quota check: whitepapers ─────────────────────────────────────────
+  try {
+    await QuotaService.checkQuota(user.id, 'whitepapers');
+  } catch (e) {
+    if (e instanceof QuotaExhaustedError) {
+      mark('quota', 'whitepaper limit reached');
+      return { success: false, error: 'QUOTA_EXCEEDED:whitepapers — You have reached your whitepaper generation limit. Upgrade your plan to generate more whitepapers.', trace };
+    }
+    throw e;
+  }
+
   if (!payload.topic?.trim()) {
     return { success: false, error: 'Topic is required', trace };
   }
@@ -570,6 +604,17 @@ export async function generateLinkedInPostAction(
 
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', trace };
+
+  // ── Quota check: linkedin ────────────────────────────────────────────────
+  try {
+    await QuotaService.checkQuota(user.id, 'linkedin');
+  } catch (e) {
+    if (e instanceof QuotaExhaustedError) {
+      mark('quota', 'linkedin limit reached');
+      return { success: false, error: 'QUOTA_EXCEEDED:linkedin — You have reached your LinkedIn post generation limit. Upgrade your plan to generate more posts.', trace };
+    }
+    throw e;
+  }
 
   if (!payload.topic?.trim()) return { success: false, error: 'Topic is required', trace };
   if (!payload.primaryKeyword?.trim()) return { success: false, error: 'Primary keyword is required', trace };

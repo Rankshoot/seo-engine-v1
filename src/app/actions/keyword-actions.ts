@@ -2217,14 +2217,16 @@ export async function scheduleKeyword(
       keywordText = existing.keyword;
       secondaryKeywords = existing.secondary_keywords ?? [];
     } else {
-      try {
-        const { QuotaService } = await import("@/services/quota");
-        await QuotaService.checkQuota(user.id, "keywords_fetched");
-      } catch (qErr: any) {
-        return {
-          success: false,
-          error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
-        };
+      if (reqSource !== 'competitor') {
+        try {
+          const { QuotaService } = await import("@/services/quota");
+          await QuotaService.checkQuota(user.id, "keywords_fetched");
+        } catch (qErr: any) {
+          return {
+            success: false,
+            error: "You have reached your keyword limit. Please upgrade your plan or contact the administrator to fetch more keywords.",
+          };
+        }
       }
 
       const { data: project, error: pErr } = await supabaseAdmin

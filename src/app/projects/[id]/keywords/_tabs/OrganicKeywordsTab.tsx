@@ -33,6 +33,7 @@ import { Tooltip } from "@/components/Tooltip";
 import { toast } from "react-hot-toast";
 import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
+import { useUserQuota } from "@/hooks/useUserQuota";
 
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
@@ -323,6 +324,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
   const router = useRouter();
+  const { canFetchMoreKeywords } = useUserQuota();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
 
@@ -1150,7 +1152,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                   <button
                     type="button"
                     onClick={handleDiscover}
-                    className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
+                    disabled={discovering || !canFetchMoreKeywords}
+                    title={!canFetchMoreKeywords ? "Upgrade your plan to discover more keywords" : undefined}
+                    className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Discover keywords
                   </button>
@@ -1188,9 +1192,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                 return (
                   <button
                     type="button"
-                    disabled={loadingMoreAhrefs}
+                    disabled={loadingMoreAhrefs || !canFetchMoreKeywords}
                     onClick={handleLoadMoreFromAhrefs}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-brand-action/30 bg-brand-action/10 px-4 py-1.5 text-[12px] font-semibold text-brand-action transition-all hover:bg-brand-action/20 disabled:opacity-50"
+                    title={!canFetchMoreKeywords ? "Upgrade your plan to load more keywords" : undefined}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-brand-action/30 bg-brand-action/10 px-4 py-1.5 text-[12px] font-semibold text-brand-action transition-all hover:bg-brand-action/20 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {loadingMoreAhrefs ? (
                       <>
@@ -1199,7 +1204,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                       </>
                     ) : (
                       <>
-                        Load more
+                        {!canFetchMoreKeywords ? "Upgrade to load more" : "Load more"}
                         <svg className="h-3.5 w-3.5 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
                           <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                         </svg>

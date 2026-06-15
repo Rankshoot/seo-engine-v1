@@ -87,6 +87,7 @@ export async function listAdminAiLogs(
     if (params.projectId) query = query.eq("project_id", params.projectId);
     if (params.status) query = query.eq("status", params.status);
     if (params.provider) query = query.eq("model", params.provider);
+    if (params.action) query = query.eq("metadata->>call_type", params.action);
 
     query = applyAdminDateRange(query, params);
 

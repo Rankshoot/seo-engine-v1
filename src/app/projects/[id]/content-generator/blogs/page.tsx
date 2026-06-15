@@ -36,6 +36,7 @@ import {
 } from "@/app/actions/content-actions";
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
+import { useUserQuota } from "@/hooks/useUserQuota";
 
 const TONES = [
   { id: "premium-educational", label: "Premium · educational" },
@@ -82,6 +83,7 @@ export default function BlogGeneratorPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const { canGenerateBlog, quota, hasAiCredits } = useUserQuota();
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
 
@@ -343,6 +345,11 @@ export default function BlogGeneratorPage() {
           <div className="min-w-0 max-w-3xl">
             <PageTitle>{heroTitle}</PageTitle>
             <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
+            {!canGenerateBlog && quota && (
+              <div className="mt-3 text-[14px] text-rose-400 font-medium">
+                Blog limit reached ({quota.blogs.used}/{quota.blogs.effectiveLimit}). Upgrade your plan to generate more blogs.
+              </div>
+            )}
           </div>
           {phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
@@ -351,18 +358,25 @@ export default function BlogGeneratorPage() {
                 shape="pill"
                 size="lg"
                 onClick={() => void askAi()}
-                disabled={askLoading}
+                disabled={askLoading || !hasAiCredits}
                 iconLeft={askLoading ? <Spinner size={14} /> : null}
+                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
               >
                 {askLoading ? "Thinking…" : "Ask AI for a topic"}
               </Button>
               <button
                 onClick={goReview}
-                disabled={!isFormValid}
-                title={!isFormValid ? `Required: ${emptyRequiredFields.join(", ")}` : undefined}
+                disabled={!isFormValid || !canGenerateBlog}
+                title={
+                  !canGenerateBlog
+                    ? `Blog limit reached (${quota?.blogs.used}/${quota?.blogs.effectiveLimit}). Upgrade your plan to generate more.`
+                    : !isFormValid
+                    ? `Required: ${emptyRequiredFields.join(", ")}`
+                    : undefined
+                }
                 className={
                   "inline-flex h-10 items-center justify-center rounded-full px-5 text-[14px] font-semibold transition-all " +
-                  (isFormValid
+                  (isFormValid && canGenerateBlog
                     ? "bg-brand-action text-white hover:opacity-90 cursor-pointer"
                     : "bg-text-primary/15 text-text-tertiary cursor-not-allowed opacity-60")
                 }
@@ -375,7 +389,18 @@ export default function BlogGeneratorPage() {
               <Button variant="secondary" shape="pill" size="lg" onClick={() => setPhase("form")}>
                 Back to details
               </Button>
-              <Button variant="primary" shape="pill" size="lg" onClick={() => void runGeneration()}>
+              <Button
+                variant="primary"
+                shape="pill"
+                size="lg"
+                onClick={() => void runGeneration()}
+                disabled={!canGenerateBlog}
+                title={
+                  !canGenerateBlog
+                    ? `Blog limit reached (${quota?.blogs.used}/${quota?.blogs.effectiveLimit}). Upgrade your plan to generate more.`
+                    : undefined
+                }
+              >
                 Generate blog
               </Button>
             </div>

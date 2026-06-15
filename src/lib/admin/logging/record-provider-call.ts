@@ -171,6 +171,9 @@ export function recordGeminiCall(input: RecordGeminiCallInput): void {
     ),
     status: input.ok ? "success" : "error",
     errorMessage: input.errorMessage,
+    metadata: {
+      call_type: "helper",
+    },
   });
 }
 
@@ -243,6 +246,7 @@ export interface RecordAiCallInput {
 export function recordAiCall(input: RecordAiCallInput): void {
   if (!isServer) return;
   const ctx = mergeUsageLogContext({});
+  const callType = input.provider === "claude" ? "content_generation" : "helper";
   queueAiUsage({
     userId: ctx.userId,
     projectId: ctx.projectId,
@@ -261,6 +265,7 @@ export function recordAiCall(input: RecordAiCallInput): void {
     metadata: {
       ...input.metadata,
       latencyMs: input.latencyMs,
+      call_type: callType,
     },
   });
 }

@@ -11,6 +11,12 @@ export interface PlanUpdateInput {
   limit_projects: number;
   limit_keywords_fetched: number;
   limit_keywords_explored: number;
+  // Per-content-type granular limits
+  limit_blogs: number;
+  limit_ebooks: number;
+  limit_whitepapers: number;
+  limit_linkedin: number;
+  // Legacy aliases (kept for backwards compat — mapped to granular in DB)
   limit_standard_content: number;
   limit_premium_content: number;
   limit_ai_credits: number;
@@ -66,8 +72,14 @@ export async function updateSubscriptionPlan(
       limit_projects: updates.limit_projects,
       limit_keywords_fetched: updates.limit_keywords_fetched,
       limit_keywords_explored: updates.limit_keywords_explored,
-      limit_standard_content: updates.limit_standard_content,
-      limit_premium_content: updates.limit_premium_content,
+      // Per-content-type granular limits
+      limit_blogs: updates.limit_blogs,
+      limit_ebooks: updates.limit_ebooks,
+      limit_whitepapers: updates.limit_whitepapers,
+      limit_linkedin: updates.limit_linkedin,
+      // Legacy aliases (sync to granular values for backwards compat)
+      limit_standard_content: updates.limit_blogs + updates.limit_linkedin,
+      limit_premium_content: updates.limit_ebooks + updates.limit_whitepapers,
       limit_ai_credits: updates.limit_ai_credits,
       // Ahrefs API controls
       enable_ahrefs_matching_terms: updates.enable_ahrefs_matching_terms ?? true,
@@ -113,8 +125,14 @@ export async function createSubscriptionPlan(
       limit_projects: planData.limit_projects,
       limit_keywords_fetched: planData.limit_keywords_fetched,
       limit_keywords_explored: planData.limit_keywords_explored,
-      limit_standard_content: planData.limit_standard_content,
-      limit_premium_content: planData.limit_premium_content,
+      // Per-content-type granular limits
+      limit_blogs: planData.limit_blogs,
+      limit_ebooks: planData.limit_ebooks,
+      limit_whitepapers: planData.limit_whitepapers,
+      limit_linkedin: planData.limit_linkedin,
+      // Legacy aliases
+      limit_standard_content: planData.limit_blogs + planData.limit_linkedin,
+      limit_premium_content: planData.limit_ebooks + planData.limit_whitepapers,
       limit_ai_credits: planData.limit_ai_credits,
       // Ahrefs API controls (defaults)
       enable_ahrefs_matching_terms: planData.enable_ahrefs_matching_terms ?? true,
@@ -135,4 +153,3 @@ export async function createSubscriptionPlan(
 
   return { success: true };
 }
-

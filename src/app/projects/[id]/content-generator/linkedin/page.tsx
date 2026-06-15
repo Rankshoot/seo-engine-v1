@@ -36,6 +36,7 @@ import {
   generateLinkedInPostAction,
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
+import { useUserQuota } from "@/hooks/useUserQuota";
 import {
   LINKEDIN_STYLE_OPTIONS,
   LINKEDIN_VOICE_OPTIONS,
@@ -49,6 +50,7 @@ export default function LinkedInGeneratorPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const { canGenerateLinkedIn, quota, hasAiCredits } = useUserQuota();
   const studioBase = `/projects/${projectId}/content-generator`;
 
   const [mounted, setMounted] = useState(false);
@@ -200,6 +202,11 @@ export default function LinkedInGeneratorPage() {
           <div className="min-w-0 max-w-3xl">
             <PageTitle>{heroTitle}</PageTitle>
             <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
+            {!canGenerateLinkedIn && quota && (
+              <div className="mt-3 text-[14px] text-rose-400 font-medium">
+                LinkedIn post limit reached ({quota.linkedin.used}/{quota.linkedin.effectiveLimit}). Upgrade your plan to generate more LinkedIn posts.
+              </div>
+            )}
           </div>
           {phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
@@ -208,18 +215,25 @@ export default function LinkedInGeneratorPage() {
                 shape="pill"
                 size="lg"
                 onClick={() => void askAi()}
-                disabled={askLoading}
+                disabled={askLoading || !hasAiCredits}
                 iconLeft={askLoading ? <Spinner size={14} /> : null}
+                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
               >
                 {askLoading ? "Thinking…" : "Ask AI for a hook"}
               </Button>
               <button
                 onClick={goReview}
-                disabled={!isFormValid}
-                title={!isFormValid ? `Required: ${emptyRequiredFields.join(", ")}` : undefined}
+                disabled={!isFormValid || !canGenerateLinkedIn}
+                title={
+                  !canGenerateLinkedIn
+                    ? `LinkedIn post limit reached (${quota?.linkedin.used}/${quota?.linkedin.effectiveLimit}). Upgrade your plan to generate more.`
+                    : !isFormValid
+                    ? `Required: ${emptyRequiredFields.join(", ")}`
+                    : undefined
+                }
                 className={
                   "inline-flex h-10 items-center justify-center rounded-full px-5 text-[14px] font-semibold transition-all " +
-                  (isFormValid
+                  (isFormValid && canGenerateLinkedIn
                     ? "bg-brand-action text-white hover:opacity-90 cursor-pointer"
                     : "bg-text-primary/15 text-text-tertiary cursor-not-allowed opacity-60")
                 }
@@ -232,7 +246,18 @@ export default function LinkedInGeneratorPage() {
               <Button variant="secondary" shape="pill" size="lg" onClick={() => setPhase("form")}>
                 Back
               </Button>
-              <Button variant="primary" shape="pill" size="lg" onClick={() => void runGeneration()}>
+              <Button
+                variant="primary"
+                shape="pill"
+                size="lg"
+                onClick={() => void runGeneration()}
+                disabled={!canGenerateLinkedIn}
+                title={
+                  !canGenerateLinkedIn
+                    ? `LinkedIn post limit reached (${quota?.linkedin.used}/${quota?.linkedin.effectiveLimit}). Upgrade your plan to generate more.`
+                    : undefined
+                }
+              >
                 Generate post
               </Button>
             </div>

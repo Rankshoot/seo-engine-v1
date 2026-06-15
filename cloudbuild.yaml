@@ -5,7 +5,7 @@ steps:
       - '--network=cloudbuild'
       - '--no-cache'
       - '-t'
-      - 'us-central1-docker.pkg.dev/rankshoot/rankshoot-repo/app:v1'
+      - '$_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/app:$_IMAGE_TAG'
       - '--build-arg'
       - 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$_NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY'
       - '--build-arg'
@@ -24,5 +24,24 @@ steps:
       - 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=$_NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY'
       - '.'
 
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '$_SERVICE_NAME'
+      - '--image'
+      - '$_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/app:$_IMAGE_TAG'
+      - '--region'
+      - '$_DEPLOY_REGION'
+
 images:
-  - 'us-central1-docker.pkg.dev/rankshoot/rankshoot-repo/app:v1'
+  - '$_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/app:$_IMAGE_TAG'
+
+substitutions:
+  _AR_HOSTNAME: 'us-central1-docker.pkg.dev'
+  _AR_PROJECT_ID: 'rankshoot'
+  _AR_REPOSITORY: 'rankshoot-repo'
+  _IMAGE_TAG: 'v1'
+  _SERVICE_NAME: 'rankshoot-web'
+  _DEPLOY_REGION: 'us-central1'

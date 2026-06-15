@@ -53,16 +53,7 @@ Write-Host "Using command: gcloud builds submit --config=cloudbuild.yaml --subst
 & gcloud builds submit --config=cloudbuild.yaml --substitutions=$substitutions .
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Cloud Build failed!"
-    exit 1
-}
-
-# 6. Deploy to Cloud Run
-Write-Host "Deploying new image to Cloud Run service 'rankshoot-web' in us-central1..." -ForegroundColor Green
-& gcloud run deploy rankshoot-web --image=us-central1-docker.pkg.dev/rankshoot/rankshoot-repo/app:v1 --region=us-central1
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Cloud Run deployment failed!"
+    Write-Error "Cloud Build and Deployment failed!"
     exit 1
 }
 

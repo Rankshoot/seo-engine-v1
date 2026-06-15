@@ -1653,6 +1653,67 @@ async function assertRewrittenMarkdownHrefsReachable(
 }
 
 /**
+ * Truncate the surrounding context around the selection to avoid prompt length limits.
+ */
+function getTruncatedSurroundingContext(
+  context: string,
+  selectedText: string,
+  selectedMarkdown: string,
+  maxSurroundingChars = 1500
+): string {
+  if (!context) return '';
+  if (context.length <= maxSurroundingChars * 2) {
+    return context;
+  }
+
+  const findIndex = (needle: string): number => {
+    if (!needle) return -1;
+    return context.indexOf(needle);
+  };
+
+  let idx = -1;
+  // Try searching for the exact selected markdown first
+  if (selectedMarkdown && selectedMarkdown.trim()) {
+    idx = findIndex(selectedMarkdown.trim());
+  }
+
+  // If not found, try searching for the exact plain text
+  if (idx === -1 && selectedText && selectedText.trim()) {
+    idx = findIndex(selectedText.trim());
+  }
+
+  // If not found, try searching for the first 50 characters of plain text
+  if (idx === -1 && selectedText && selectedText.trim().length > 10) {
+    const startSnippet = selectedText.trim().slice(0, 50);
+    idx = findIndex(startSnippet);
+  }
+
+  // If not found, try searching for the first 50 characters of markdown
+  if (idx === -1 && selectedMarkdown && selectedMarkdown.trim().length > 10) {
+    const startSnippet = selectedMarkdown.trim().slice(0, 50);
+    idx = findIndex(startSnippet);
+  }
+
+  if (idx !== -1) {
+    const start = Math.max(0, idx - maxSurroundingChars);
+    const selLen = Math.max(selectedMarkdown.length, selectedText.length);
+    const end = Math.min(context.length, idx + selLen + maxSurroundingChars);
+    
+    let prefix = context.slice(start, idx);
+    let suffix = context.slice(idx + selLen, end);
+
+    if (start > 0) prefix = `... [truncated] ...\n${prefix}`;
+    if (end < context.length) suffix = `${suffix}\n... [truncated] ...`;
+
+    return `${prefix}${context.slice(idx, idx + selLen)}${suffix}`;
+  }
+
+  // Fallback: if we really couldn't find the selection, return the first 1500 and the last 1500 chars of the blog
+  const half = Math.floor(maxSurroundingChars);
+  return `${context.slice(0, half)}\n\n... [truncated for length] ...\n\n${context.slice(-half)}`;
+}
+
+/**
  * Rewrite text the user selected in the visual blog editor (contentEditable).
  * Does not persist — the client replaces the selection and the user saves when ready.
  */
@@ -1948,8 +2009,11 @@ Do not invent URLs.
 
   const typeContext = meta.contentType ? `Content type: ${meta.contentType}` : 'Content type: Blog post';
   const partContext = meta.contentPart ? `Section/Part being edited: ${meta.contentPart}` : '';
-  const contextBlock = meta.surroundingContext
-    ? `\nSurrounding text / context of this selection:\n"""\n${meta.surroundingContext}\n"""\n`
+  const truncatedContext = meta.surroundingContext
+    ? getTruncatedSurroundingContext(meta.surroundingContext, plain, sel)
+    : '';
+  const contextBlock = truncatedContext
+    ? `\nSurrounding text / context of this selection:\n"""\n${truncatedContext}\n"""\n`
     : '';
 
   const prompt = `You are rewriting a short excerpt from an existing document.

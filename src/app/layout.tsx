@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/components/query-provider";
 import { ReduxProvider } from "@/components/redux-provider";
 import { AppToastContainer } from "@/components/app-toast-container";
+import { ClerkThemedProvider } from "@/components/clerk-themed-provider";
 import { TooltipProvider } from "@/components/ui/Tooltip";
 
 const inter = Inter({
@@ -55,12 +56,28 @@ export const metadata: Metadata = {
   },
 };
 
+function AppProviders({ children }: { children: React.ReactNode }) {
+  return (
+    <ReduxProvider>
+      <QueryProvider>
+        <TooltipProvider delayDuration={250} skipDelayDuration={150}>
+          <AppToastContainer />
+          {children}
+          <SpeedInsights />
+        </TooltipProvider>
+      </QueryProvider>
+    </ReduxProvider>
+  );
+}
+
 export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const content = (
+  const appContent = <AppProviders>{children}</AppProviders>;
+
+  return (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <head>
         {/* Preconnect for Google Fonts (Inter) */}
@@ -73,50 +90,17 @@ export default async function RootLayout({
       <body className="min-h-screen antialiased bg-surface-primary text-text-primary">
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
+          defaultTheme="light"
           enableSystem
           disableTransitionOnChange
         >
-          <ReduxProvider>
-            <QueryProvider>
-              <TooltipProvider delayDuration={250} skipDelayDuration={150}>
-                <AppToastContainer />
-                {children}
-                <SpeedInsights />
-              </TooltipProvider>
-            </QueryProvider>
-          </ReduxProvider>
+          {isClerkConfigured ? (
+            <ClerkThemedProvider>{appContent}</ClerkThemedProvider>
+          ) : (
+            appContent
+          )}
         </ThemeProvider>
       </body>
     </html>
   );
-
-  if (isClerkConfigured) {
-    // Dynamically import Clerk to avoid errors when keys aren't set
-    const { ClerkProvider } = await import("@clerk/nextjs");
-    const { dark } = await import("@clerk/themes");
-
-    return (
-      <ClerkProvider
-        appearance={{
-          baseTheme: dark,
-          variables: {
-            colorPrimary: "#7c7eff",
-            colorBackground: "#0d0e15",
-            colorInputBackground: "#16171f",
-            colorInputText: "#f4f4f7",
-            colorText: "#f4f4f7",
-            colorTextSecondary: "#7c7d8e",
-            borderRadius: "0.75rem",
-            fontFamily: "'Inter', sans-serif",
-          },
-        }}
-      >
-        {content}
-      </ClerkProvider>
-    );
-  }
-
-  // Fallback when Clerk isn't configured — app still works for landing page
-  return content;
 }

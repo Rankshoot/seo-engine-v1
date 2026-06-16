@@ -69,7 +69,7 @@ function getGeneratorSlug(articleType: string): string {
   const t = (articleType || "").toLowerCase();
   if (t === "ebook") return "ebooks";
   if (t === "whitepaper") return "whitepapers";
-  if (t === "linkedin") return "linkedin";
+  if (t.startsWith("linkedin")) return "linkedin";
   return "blogs";
 }
 

@@ -105,10 +105,10 @@ export default function EbookGeneratorPage() {
 
   useEffect(() => {
     if (scheduledEntry) {
-      if (scheduledEntry.focus_keyword) setPrimaryKeyword(scheduledEntry.focus_keyword);
-      if (scheduledEntry.title || scheduledEntry.blog_title) {
-        const t = scheduledEntry.title || scheduledEntry.blog_title;
-        setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
+      if (scheduledEntry.focus_keyword && !keywordParam) setPrimaryKeyword(scheduledEntry.focus_keyword);
+      const realTitle = scheduledEntry.blog_title?.trim();
+      if (realTitle) {
+        setTopic(realTitle.replace(/^\[Draft\]\s*/, ""));
       }
       if (scheduledEntry.secondary_keywords?.length) {
         setSecondaryKeywords(scheduledEntry.secondary_keywords);

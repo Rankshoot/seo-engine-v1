@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ARTICLE_TYPES } from "@/lib/types";
-import { Dialog, Button, Field, Input, Select, Textarea } from "@/components/common";
+import { Dialog, Button, Field, Input, Select } from "@/components/common";
 
 function fmtDate(iso: string): string {
   return new Date(iso + "T12:00:00").toLocaleDateString("en-US", {
@@ -13,7 +12,12 @@ function fmtDate(iso: string): string {
   });
 }
 
-const BLOG_ARTICLE_TYPES = (ARTICLE_TYPES as readonly string[]).filter(t => t !== "Repair");
+const SUPPORTED_ARTICLE_TYPES = [
+  { value: "Blog Post", label: "Blog article" },
+  { value: "Ebook", label: "Ebook" },
+  { value: "Whitepaper", label: "Whitepaper" },
+  { value: "LinkedIn Post", label: "LinkedIn Post" },
+] as const;
 
 export interface AddCustomKeywordModalProps {
   open: boolean;
@@ -38,9 +42,7 @@ export function AddCustomKeywordModal({
   busy = false,
 }: AddCustomKeywordModalProps) {
   const [keyword, setKeyword] = useState("");
-  const [title, setTitle] = useState("");
   const [articleType, setArticleType] = useState("Blog Post");
-  const [writerNotes, setWriterNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const keywordRef = useRef<HTMLInputElement>(null);
 
@@ -48,9 +50,7 @@ export function AddCustomKeywordModal({
     if (!open) return;
     const timer = window.setTimeout(() => {
       setKeyword("");
-      setTitle("");
       setArticleType("Blog Post");
-      setWriterNotes("");
       setError(null);
       keywordRef.current?.focus();
     }, 60);
@@ -66,9 +66,9 @@ export function AddCustomKeywordModal({
     setError(null);
     const res = await onSubmit({
       keyword: keyword.trim(),
-      title: title.trim(),
+      title: "",
       articleType,
-      writerNotes: writerNotes.trim(),
+      writerNotes: "",
       targetDate: preselectedDate ?? undefined,
     });
     if (!res.success) setError(res.error ?? "Something went wrong");
@@ -119,55 +119,14 @@ export function AddCustomKeywordModal({
           />
         </Field>
 
-        <Field
-          label={
-            <>
-              Blog title{" "}
-              <span className="font-normal normal-case tracking-normal text-text-tertiary/70">
-                (optional — defaults to keyword)
-              </span>
-            </>
-          }
-          htmlFor="ack-title"
-        >
-          <Input
-            id="ack-title"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            placeholder="e.g. 7 Best CRM Tools for Small Businesses in 2026"
-          />
-        </Field>
-
         <Field label="Article type" htmlFor="ack-type">
           <Select id="ack-type" value={articleType} onChange={e => setArticleType(e.target.value)}>
-            <option value="Blog Post">Blog Post</option>
-            {BLOG_ARTICLE_TYPES.filter(t => t !== "Blog Post" && t !== "Repair").map(t => (
-              <option key={t} value={t}>
-                {t}
+            {SUPPORTED_ARTICLE_TYPES.map(t => (
+              <option key={t.value} value={t.value}>
+                {t.label}
               </option>
             ))}
           </Select>
-        </Field>
-
-        <Field
-          label={
-            <>
-              Writer notes{" "}
-              <span className="font-normal normal-case tracking-normal text-text-tertiary/70">
-                (brief, tone, extra instructions for the AI)
-              </span>
-            </>
-          }
-          htmlFor="ack-notes"
-        >
-          <Textarea
-            id="ack-notes"
-            value={writerNotes}
-            onChange={e => setWriterNotes(e.target.value)}
-            placeholder="e.g. Target audience: founders. Focus on integrations with Slack and HubSpot. Keep tone conversational."
-            rows={3}
-            className="resize-none"
-          />
         </Field>
 
         {error && (

@@ -102,12 +102,12 @@ export default function LinkedInGeneratorPage() {
 
   useEffect(() => {
     if (scheduledEntry) {
-      if (scheduledEntry.focus_keyword) {
+      if (scheduledEntry.focus_keyword && !keywordParam) {
         setPrimaryKeyword(scheduledEntry.focus_keyword);
       }
-      if (scheduledEntry.title || scheduledEntry.blog_title) {
-        const t = scheduledEntry.title || scheduledEntry.blog_title;
-        setTopic(t ? t.replace(/^\[Draft\]\s*/, "") : "");
+      const realTitle = scheduledEntry.blog_title?.trim();
+      if (realTitle) {
+        setTopic(realTitle.replace(/^\[Draft\]\s*/, ""));
       }
     }
   }, [scheduledEntry]);

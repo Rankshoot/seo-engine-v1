@@ -2073,6 +2073,11 @@ Critical URL rules:
 5. If the user pasted a URL, use that exact string in newHref and rewrittenMarkdown.
 6. rewrittenMarkdown must be GitHub-flavored Markdown for this excerpt only. No # headings or fenced code blocks unless already in the excerpt style.
 
+Boundary rule (CRITICAL — always apply):
+- The rewritten text MUST begin with the exact same first non-whitespace token as the selected text and MUST end with the exact same last non-whitespace token as the selected text.
+- These boundary tokens may be partial words (e.g. "cruitment" or "stan") — do NOT complete or alter them. Preserve them verbatim.
+- Do not add any word before the first boundary token or after the last boundary token.
+
 Other rules:
 - When keeping the same URL, preserve href exactly unless the instruction changes it.
 - Match a professional business blog tone.

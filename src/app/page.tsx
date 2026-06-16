@@ -271,7 +271,8 @@ const integrationLogos = [
     bg: "rgba(234,67,53,0.10)",
   },
 ];
-const marqueItems = [...integrationLogos, ...integrationLogos];
+/* Quadruple for wide screens; each item uses mx-[28px] so spacing = 56px on each side = perfect seamless loop */
+const marqueItems = [...integrationLogos, ...integrationLogos, ...integrationLogos, ...integrationLogos];
 
 /* ─────────────────────── Page shell ─────────────────────── */
 
@@ -606,11 +607,11 @@ function PoweredBy() {
       <div className="relative flex overflow-hidden">
         <div className="pointer-events-none absolute inset-y-0 left-0 w-24 z-10 bg-gradient-to-r from-surface-secondary/80 to-transparent" />
         <div className="pointer-events-none absolute inset-y-0 right-0 w-24 z-10 bg-gradient-to-l from-surface-secondary/80 to-transparent" />
-        <div className="animate-marquee gap-10 items-center">
+        <div className="animate-marquee items-center">
           {marqueItems.map((item, i) => (
             <span
               key={`${item.name}-${i}`}
-              className="shrink-0 flex items-center gap-2.5"
+              className="shrink-0 mx-7 flex items-center gap-2.5"
             >
               <IntegrationLogo item={item} />
               <span className="text-[13.5px] font-semibold text-text-secondary whitespace-nowrap">

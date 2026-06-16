@@ -667,9 +667,10 @@
 .animate-ping-slow    { animation: ping-slow 2s ease-in-out infinite; }
 
 /* ─── Marquee (horizontal ticker) ─── */
+/* Items array is quadrupled; each item uses symmetric mx so spacing is seamless at wrap point */
 @keyframes marquee {
   from { transform: translateX(0); }
-  to   { transform: translateX(-50%); }
+  to   { transform: translateX(-25%); }
 }
 .animate-marquee {
   animation: marquee 34s linear infinite;

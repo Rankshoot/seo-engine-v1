@@ -235,11 +235,41 @@ const faqs = [
 
 /* Integration color marks */
 const integrationLogos = [
-  { name: "Ahrefs", abbr: "Ah", color: "#F97316", bg: "rgba(249,115,22,0.12)" },
-  { name: "DataForSEO", abbr: "DS", color: "#3B82F6", bg: "rgba(59,130,246,0.12)" },
-  { name: "Serper", abbr: "Se", color: "#10B981", bg: "rgba(16,185,129,0.12)" },
-  { name: "Jina Reader", abbr: "Ji", color: "#8B5CF6", bg: "rgba(139,92,246,0.12)" },
-  { name: "Google KP", abbr: "GK", color: "#EA4335", bg: "rgba(234,67,53,0.12)" },
+  {
+    name: "Ahrefs",
+    logoUrl: "https://logo.clearbit.com/ahrefs.com",
+    abbr: "Ah",
+    color: "#F97316",
+    bg: "rgba(249,115,22,0.10)",
+  },
+  {
+    name: "DataForSEO",
+    logoUrl: "https://logo.clearbit.com/dataforseo.com",
+    abbr: "DS",
+    color: "#3B82F6",
+    bg: "rgba(59,130,246,0.10)",
+  },
+  {
+    name: "Serper",
+    logoUrl: "https://logo.clearbit.com/serper.dev",
+    abbr: "Se",
+    color: "#10B981",
+    bg: "rgba(16,185,129,0.10)",
+  },
+  {
+    name: "Jina Reader",
+    logoUrl: "https://logo.clearbit.com/jina.ai",
+    abbr: "Ji",
+    color: "#8B5CF6",
+    bg: "rgba(139,92,246,0.10)",
+  },
+  {
+    name: "Google KP",
+    logoUrl: "https://www.google.com/s2/favicons?domain=google.com&sz=64",
+    abbr: "G",
+    color: "#EA4335",
+    bg: "rgba(234,67,53,0.10)",
+  },
 ];
 const marqueItems = [...integrationLogos, ...integrationLogos];
 
@@ -307,10 +337,10 @@ function Nav({
     <nav className="fixed inset-x-0 top-0 z-50">
       {/* ── Inner container morphs from full-width to floating pill ── */}
       <div
-        className={`mx-auto flex items-center justify-between transition-all duration-500 ease-out ${
+        className={`mx-auto flex items-center backdrop-blur-md justify-between transition-all duration-500 ease-out ${
           scrolled
             ? "mt-3 max-w-[1100px] rounded-full bg-glass border border-border-subtle px-5 py-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
-            : "max-w-[1240px] px-6 py-4"
+            : "max-w-[1240px] border-none px-6 py-4"
         }`}
       >
         {/* Logo */}
@@ -533,10 +563,44 @@ function Hero() {
 
 /* ─────────────────────── PoweredBy marquee ─────────────────────── */
 
+function IntegrationLogo({
+  item,
+}: {
+  item: typeof integrationLogos[number];
+}) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border border-border-subtle overflow-hidden shadow-[var(--shadow-xs)]"
+      style={{ backgroundColor: failed ? item.bg : "white" }}
+    >
+      {!failed ? (
+        <img
+          src={item.logoUrl}
+          alt={item.name}
+          width={22}
+          height={22}
+          loading="lazy"
+          decoding="async"
+          className="h-[22px] w-[22px] object-contain"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span
+          className="text-[11px] font-bold"
+          style={{ color: item.color }}
+        >
+          {item.abbr}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function PoweredBy() {
   return (
     <section className="border-y border-border-subtle/70 bg-surface-secondary/40 py-5 overflow-hidden">
-      <div className="mb-3 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-text-tertiary">
+      <div className="mb-4 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-text-tertiary">
         Powered by the same data sources top-ranking teams rely on
       </div>
       <div className="relative flex overflow-hidden">
@@ -548,14 +612,8 @@ function PoweredBy() {
               key={`${item.name}-${i}`}
               className="shrink-0 flex items-center gap-2.5"
             >
-              {/* Color badge */}
-              <span
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold"
-                style={{ backgroundColor: item.bg, color: item.color }}
-              >
-                {item.abbr}
-              </span>
-              <span className="text-[13px] font-semibold text-text-secondary whitespace-nowrap">
+              <IntegrationLogo item={item} />
+              <span className="text-[13.5px] font-semibold text-text-secondary whitespace-nowrap">
                 {item.name}
               </span>
             </span>

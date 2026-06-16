@@ -40,6 +40,7 @@ export default function ProjectsPageClient({
           projects={projects}
           newProjectModalOpen={newProjectModalOpen}
           onNewProjectModalOpenChange={setNewProjectModalOpen}
+          userName={userName}
         />
       </main>
     </div>

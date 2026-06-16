@@ -247,12 +247,33 @@ export default function ProjectSidebar({
   /* ── Derived plan info ── */
   const userName = user?.firstName ?? user?.username ?? "You";
   const planName = quota?.planName ?? "Free";
-  const blogsLeft = quota?.blogs?.remaining ?? null;
-  const blogsLimit = quota?.blogs?.effectiveLimit ?? null;
+
+  // Aggregate content quotas (blogs + ebooks + whitepapers + linkedin)
+  const contentQuotas = {
+    blogs: quota?.blogs,
+    ebooks: quota?.ebooks,
+    whitepapers: quota?.whitepapers,
+    linkedin: quota?.linkedin,
+  };
+
+  const contentLeft = quota
+    ? (quota.blogs?.remaining ?? 0) +
+      (quota.ebooks?.remaining ?? 0) +
+      (quota.whitepapers?.remaining ?? 0) +
+      (quota.linkedin?.remaining ?? 0)
+    : null;
+
+  const contentLimit = quota
+    ? (quota.blogs?.effectiveLimit ?? 0) +
+      (quota.ebooks?.effectiveLimit ?? 0) +
+      (quota.whitepapers?.effectiveLimit ?? 0) +
+      (quota.linkedin?.effectiveLimit ?? 0)
+    : null;
+
   const aiLeft = quota?.ai_credits?.remaining ?? null;
   const aiLimit = quota?.ai_credits?.effectiveLimit ?? null;
 
-  const showLimits = blogsLeft !== null && blogsLimit !== null;
+  const showLimits = contentLeft !== null && contentLimit !== null && contentLimit > 0;
 
   return (
     <aside
@@ -508,7 +529,7 @@ export default function ProjectSidebar({
 
       {/* ── User & Plan footer ── */}
       <div className="relative z-10 border-t border-border-subtle/40 p-3">
-        <div className={`rounded-[10px] bg-surface-elevated border border-border-subtle/60 overflow-hidden transition-all duration-300 ${
+        <div className={`rounded-[10px] bg-surface-elevated border border-border-subtle/60 transition-all duration-300 ${
           isCollapsed ? "p-2" : "p-3"
         }`}>
           {isCollapsed ? (
@@ -538,10 +559,11 @@ export default function ProjectSidebar({
               {showLimits && (
                 <div className="space-y-1.5 pt-2 border-t border-border-subtle/40">
                   <LimitBar
-                    label="Blogs"
-                    used={(blogsLimit ?? 0) - (blogsLeft ?? 0)}
-                    total={blogsLimit ?? 0}
-                    remaining={blogsLeft ?? 0}
+                    label="Content"
+                    used={(contentLimit ?? 0) - (contentLeft ?? 0)}
+                    total={contentLimit ?? 0}
+                    remaining={contentLeft ?? 0}
+                    breakdown={contentQuotas}
                   />
                   {aiLeft !== null && aiLimit !== null && (
                     <LimitBar
@@ -561,11 +583,40 @@ export default function ProjectSidebar({
   );
 }
 
-function LimitBar({ label, used, total, remaining }: { label: string; used: number; total: number; remaining: number }) {
+interface QuotaItem {
+  limit: number;
+  used: number;
+  override: number | null;
+  effectiveLimit: number;
+  remaining: number;
+}
+
+function LimitBar({
+  label,
+  used,
+  total,
+  remaining,
+  breakdown,
+}: {
+  label: string;
+  used: number;
+  total: number;
+  remaining: number;
+  breakdown?: Record<string, QuotaItem | undefined>;
+}) {
   const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
   const isLow = remaining < total * 0.2;
+  const hasBreakdown = breakdown && Object.values(breakdown).some((q) => q && q.effectiveLimit > 0);
+
+  const contentLabels: Record<string, string> = {
+    blogs: "Blog articles",
+    ebooks: "Ebooks",
+    whitepapers: "Whitepapers",
+    linkedin: "LinkedIn posts",
+  };
+
   return (
-    <div className="space-y-0.5">
+    <div className={`space-y-0.5 ${hasBreakdown ? "group relative" : ""}`}>
       <div className="flex items-center justify-between">
         <span className="text-[10.5px] text-text-tertiary">{label}</span>
         <span className={`text-[10.5px] font-medium tabular-nums ${isLow ? "text-status-warning" : "text-text-secondary"}`}>
@@ -578,6 +629,27 @@ function LimitBar({ label, used, total, remaining }: { label: string; used: numb
           style={{ width: `${pct}%` }}
         />
       </div>
+
+      {/* Hover tooltip with breakdown - positioned above */}
+      {hasBreakdown && (
+        <div className="absolute left-0 right-0 bottom-[calc(100%+6px)] px-2.5 py-2 bg-surface-elevated border border-border-subtle rounded-[8px] shadow-[0_4px_16px_rgba(0,0,0,0.12)] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none" style={{ zIndex: 9999 }}>
+          <p className="text-[10px] font-semibold text-text-secondary mb-1.5">Content breakdown</p>
+          <div className="space-y-1">
+            {Object.entries(breakdown)
+              .filter(([, q]) => q && q.effectiveLimit > 0)
+              .map(([key, q]) => (
+                <div key={key} className="flex items-center justify-between text-[10.5px]">
+                  <span className="text-text-tertiary">{contentLabels[key] ?? key}</span>
+                  <span className="font-medium tabular-nums text-text-secondary">{q?.remaining} left</span>
+                </div>
+              ))}
+          </div>
+          {/* Arrow pointing down */}
+          <div className="absolute top-full left-1/2 -translate-x-1/2">
+            <div className="w-2 h-2 bg-surface-elevated border-r border-b border-border-subtle rotate-45 -mt-[3px]" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

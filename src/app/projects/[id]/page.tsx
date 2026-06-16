@@ -326,7 +326,7 @@ export default function ProjectOverviewPage() {
                 bg: "bg-emerald-500/10",
               },
               {
-                href: `/projects/${id}/content-history`,
+                href: `/projects/${id}/content-generator/history`,
                 icon: <FileText className="h-4 w-4" />,
                 label: "Library",
                 sub: `${formatCompactNumber(stats?.blogsGenerated ?? 0)} created`,
@@ -394,7 +394,7 @@ function StatStrip({
     {
       label: "In library",
       value: stats?.articlesInLibrary,
-      href: `/projects/${projectId}/content-history`,
+      href: `/projects/${projectId}/content-generator/history`,
       icon: <BookOpen className="h-3.5 w-3.5" />,
       accentColor: "text-brand-violet",
     },
@@ -408,7 +408,7 @@ function StatStrip({
     {
       label: "Generated",
       value: stats?.blogsGenerated,
-      href: `/projects/${projectId}/content-history`,
+      href: `/projects/${projectId}/content-generator/history`,
       icon: <TrendingUp className="h-3.5 w-3.5" />,
       accentColor: "text-emerald-500",
     },

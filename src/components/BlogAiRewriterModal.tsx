@@ -124,8 +124,28 @@ export function BlogAiRewriterModal({
     ? (primaryLink.type ?? classifySelectionLinkType(primaryLink.href, projectDomain))
     : null;
 
-  /* Truncated selection preview */
-  const truncated = markdown.length > 380 ? `${markdown.slice(0, 380).trim()}…` : markdown;
+  /* Extract boundary tokens from the raw markdown (first/last non-whitespace chunk) */
+  function extractBoundaryTokens(text: string): { first: string; last: string } | null {
+    const chunks = text.match(/\S+/g);
+    if (!chunks || chunks.length === 0) return null;
+    return { first: chunks[0]!, last: chunks[chunks.length - 1]! };
+  }
+
+  /* Minimal boundary fix — only prepend/append if the rewritten text diverges */
+  function enforceBoundaries(original: string, rewritten: string): string {
+    const bounds = extractBoundaryTokens(original);
+    if (!bounds) return rewritten;
+    const rwChunks = rewritten.match(/\S+/g);
+    if (!rwChunks || rwChunks.length === 0) return rewritten;
+    let result = rewritten;
+    if (!rewritten.trimStart().startsWith(bounds.first)) {
+      result = bounds.first + " " + result.trimStart();
+    }
+    if (!result.trimEnd().endsWith(bounds.last)) {
+      result = result.trimEnd() + " " + bounds.last;
+    }
+    return result;
+  }
 
   /* ── Core rewrite call ─────────────────────────────────────────────── */
   const runRewrite = useCallback(
@@ -157,9 +177,10 @@ export function BlogAiRewriterModal({
 
         if (res.success && res.rewritten) {
           const parsed = parseAIRewriteResponse(res.rewritten);
-          const display =
+          const raw =
             parsed?.displayText.trim() || extractDisplayTextFromRewriteResponse(res.rewritten).trim();
-          if (!display) { setError("Could not read the AI response. Try again."); return; }
+          if (!raw) { setError("Could not read the AI response. Try again."); return; }
+          const display = enforceBoundaries(selectionForApi.markdown, raw);
           setRewriteBase(display);
           /* If AI returned link resolutions, seed pending map */
           if (res.linkResolutions?.length) {
@@ -295,12 +316,12 @@ export function BlogAiRewriterModal({
                   borderLeft: hasPreview ? "3px solid var(--border-default)" : "1px solid var(--border-subtle)",
                   color: hasPreview ? "var(--text-tertiary)" : "var(--text-secondary)",
                   opacity: hasPreview ? 0.7 : 1,
-                  maxHeight: hasPreview ? 140 : 200,
+                  maxHeight: hasPreview ? 160 : 240,
                   overflowY: "auto",
                 }}
               >
-                <div className="[&_p]:my-0 [&_p+p]:mt-1.5 [&_strong]:font-semibold [&_em]:italic [&_a]:underline [&_a]:decoration-dotted [&_a]:underline-offset-2">
-                  {renderMarkdownSnippet(truncated)}
+                <div className="[&_p]:my-0 [&_p+p]:mt-1.5 [&_strong]:font-semibold [&_em]:italic [&_a]:underline [&_a]:decoration-dotted [&_a]:underline-offset-2 whitespace-pre-wrap">
+                  {renderMarkdownSnippet(markdown)}
                 </div>
               </div>
             </div>

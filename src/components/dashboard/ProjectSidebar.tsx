@@ -297,36 +297,44 @@ export default function ProjectSidebar({
       <div className={`relative z-10 flex items-center border-b border-border-subtle/40 transition-all duration-300 ease-in-out ${
         isCollapsed ? "justify-center px-2 h-14" : "justify-between px-4 h-14"
       }`}>
-        <Link
-          href="/"
-          className={`flex items-center transition-all duration-300 ease-in-out ${isCollapsed ? "opacity-0 pointer-events-none scale-90" : "opacity-100 scale-100"}`}
-        >
-          <Logo size="sm" />
-        </Link>
-
         {isCollapsed ? (
-          <button
-            onClick={() => setIsCollapsed(false)}
-            className="flex items-center justify-center w-8 h-8 rounded-[8px] border border-border-subtle bg-surface-elevated text-text-secondary hover:text-brand-violet hover:border-brand-violet/30 transition-all shadow-sm"
-            title="Expand sidebar"
-            aria-label="Expand sidebar"
-          >
-            {Icon.chevronRight}
-          </button>
+          /* Collapsed: show logo mark, expand button appears on hover */
+          <div className="group relative flex items-center justify-center">
+            <Link
+              href="/"
+              className="flex items-center justify-center w-9 h-9 rounded-[10px] bg-brand-violet/10 transition-all group-hover:opacity-0 group-hover:scale-90 group-hover:pointer-events-none"
+              tabIndex={-1}
+            >
+              <Logo size="xs" markOnly />
+            </Link>
+            <button
+              onClick={() => setIsCollapsed(false)}
+              className="absolute inset-0 flex items-center justify-center w-9 h-9 rounded-[10px] border border-border-subtle bg-surface-elevated text-text-secondary hover:text-brand-violet hover:border-brand-violet/30 transition-all shadow-sm opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100"
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+            >
+              {Icon.chevronRight}
+            </button>
+          </div>
         ) : (
-          <button
-            onClick={() => setIsCollapsed(true)}
-            className="flex items-center justify-center w-7 h-7 rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-all"
-            title="Collapse sidebar"
-            aria-label="Collapse sidebar"
-          >
-            {Icon.chevronLeft}
-          </button>
+          <>
+            <Link href="/" className="flex items-center">
+              <Logo size="sm" />
+            </Link>
+            <button
+              onClick={() => setIsCollapsed(true)}
+              className="flex items-center justify-center w-7 h-7 rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-all"
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+            >
+              {Icon.chevronLeft}
+            </button>
+          </>
         )}
       </div>
 
       {/* ── Project switcher ── */}
-      <div className={`relative z-10 transition-all duration-300 ease-in-out ${isCollapsed ? "px-2 py-2" : "px-3 py-3"}`} ref={dropdownRef}>
+      <div className={`relative z-[60] transition-all duration-300 ease-in-out ${isCollapsed ? "px-2 py-2" : "px-3 py-3"}`} ref={dropdownRef}>
         <button
           onClick={() => setIsDropdownOpen(!isDropdownOpen)}
           aria-expanded={isDropdownOpen}
@@ -367,7 +375,7 @@ export default function ProjectSidebar({
 
         {/* Dropdown */}
         {isDropdownOpen && (
-          <div className={`absolute top-full bg-surface-elevated border border-border-subtle rounded-[12px] shadow-[0_8px_32px_rgba(0,0,0,0.12)] overflow-hidden z-50 py-1.5 ${
+          <div className={`absolute top-full bg-surface-elevated border border-border-subtle rounded-[12px] shadow-[0_8px_32px_rgba(0,0,0,0.12)] overflow-hidden z-[100] py-1.5 ${
             isCollapsed ? "w-[220px] left-full ml-2 top-2 mt-0" : "w-full left-3 right-3"
           }`}>
             <div className="px-3 py-2 border-b border-border-subtle mb-1">

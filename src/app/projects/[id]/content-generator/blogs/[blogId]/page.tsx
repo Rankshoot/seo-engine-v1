@@ -657,7 +657,7 @@ export default function BlogViewerPage() {
   const isRepair         = blog.article_type === "Repair";
 
   const historyParentHref = isInstantArticle
-    ? `/projects/${projectId}/content-generator/history`
+    ? `/projects/${projectId}/content-history`
     : (isImport || isRepair)
     ? `/projects/${projectId}/audit/import`
     : `/projects/${projectId}/content-generator/blogs`;

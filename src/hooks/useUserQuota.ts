@@ -31,5 +31,9 @@ export function useUserQuota() {
     canGenerateLinkedIn: data ? data.linkedin.remaining > 0 : true,
     hasAiCredits: data ? data.ai_credits.remaining > 0 : true,
     canFetchMoreKeywords: data ? data.keywords_fetched.remaining > 0 : true,
+    // Premium blog feature credits
+    hasAhrefsH2sCredits: data ? data.ahrefs_h2s.remaining > 0 : false,
+    hasAhrefsFaqsCredits: data ? data.ahrefs_faqs.remaining > 0 : false,
+    hasDeepAnalysisCredits: data ? data.deep_analysis.remaining > 0 : false,
   };
 }

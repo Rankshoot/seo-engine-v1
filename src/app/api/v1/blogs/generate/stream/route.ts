@@ -6,24 +6,21 @@ import { buildBlogPrompt } from "@/lib/prompts/blog-prompt";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-// Lazy initialization to avoid auth error when ANTHROPIC_API_KEY is not set
 function getAnthropicClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEY is not configured");
-  }
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
   return new Anthropic({ apiKey });
 }
 
 /**
  * SSE streaming endpoint for blog generation with real Claude thinking tokens.
  *
- * Event types (newline-delimited JSON with "data: " prefix):
- *   { event: "stage",         stage: "context"|"research"|"outline"|"draft"|"polish", detail?: string }
- *   { event: "thinking",      chunk: string }   ← live Claude thinking token chunks
- *   { event: "thinking_done"                 }  ← thinking phase complete
- *   { event: "done",          blogId: string }
- *   { event: "error",         message: string }
+ * Event types:
+ *   { event: "stage",        stage: string, detail?: string }
+ *   { event: "thinking",     chunk: string }
+ *   { event: "thinking_done"              }
+ *   { event: "done",         blogId: string }
+ *   { event: "error",        message: string }
  */
 export async function POST(req: Request) {
   const user = await currentUser();
@@ -46,7 +43,16 @@ export async function POST(req: Request) {
     secondaryKeywords?: string[];
     wordCount?: number;
     writerNotes?: string;
+    // Advanced options
+    brandPersona?: string;
+    useAhrefsData?: boolean;
+    ahrefsH2s?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+    ahrefsFaqs?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+    useDeepAnalysis?: boolean;
+    deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
+    customInstructions?: string;
   };
+
   if (!body.entryId && (!body.projectId || !body.keyword)) {
     return new Response(
       `data: ${JSON.stringify({ event: "error", message: "Expected entryId OR { projectId, keyword }" })}\n\n`,
@@ -93,7 +99,6 @@ export async function POST(req: Request) {
         } else {
           projectId = body.projectId!;
           const kw = body.keyword!;
-          // Build a synthetic entry object for direct generation
           entry = {
             focus_keyword: kw,
             title: body.topic || kw,
@@ -140,6 +145,64 @@ export async function POST(req: Request) {
           existingBlogs = blogs ?? [];
         } catch { /* optional */ }
 
+        // ── Deep analysis stages (if requested) ──────────────────────────
+        let deepAnalysisSummary: string | undefined;
+
+        if (body.useDeepAnalysis && body.deepAnalysisPages && body.deepAnalysisPages.length > 0) {
+          const { QuotaService } = await import("@/services/quota");
+
+          // Check credit before doing work
+          const quotaStatus = await QuotaService.getUserQuotaStatus(user.id);
+          if (quotaStatus.deep_analysis.remaining <= 0) {
+            emit({ event: "error", message: "No Deep Analysis credits remaining." });
+            controller.close();
+            return;
+          }
+
+          // Scrape stage
+          emit({ event: "stage", stage: "deep_scrape", detail: "Scraping competitor pages…" });
+
+          const { readUrlViaJinaReader } = await import("@/lib/jina");
+          const scrapedPages: Array<{ title: string; url: string; content: string }> = [];
+
+          for (const page of body.deepAnalysisPages) {
+            emit({ event: "stage", stage: "deep_scrape", detail: `Scraping ${page.domain}…` });
+            try {
+              const result = await readUrlViaJinaReader(page.url);
+              scrapedPages.push({ title: page.title, url: page.url, content: result.markdown.slice(0, 4000) });
+            } catch {
+              scrapedPages.push({ title: page.title, url: page.url, content: "(failed to scrape)" });
+            }
+          }
+
+          // Analyse stage
+          emit({ event: "stage", stage: "deep_analyze", detail: "Analysing content gaps across competitors…" });
+
+          const analysisPrompt = `You are an expert SEO strategist. Below are excerpts from the top ${scrapedPages.length} ranking pages for the keyword "${entry.focus_keyword}".
+
+Your task: Identify what these pages cover well, what they miss, and what a new blog post must include to outrank them. Be specific — name exact topics, questions, angles, and depth gaps.
+
+${scrapedPages.map((p, i) => `--- Page ${i + 1}: ${p.title} (${p.url}) ---\n${p.content}`).join("\n\n")}
+
+Respond with a concise but rich analysis (300–500 words) structured as:
+1. What they all cover (the baseline)
+2. Key gaps and missed angles
+3. Unique depth opportunities
+4. Specific topics/questions to cover that will give a new blog a ranking edge`;
+
+          const anthropic = getAnthropicClient();
+          const analysisRes = await anthropic.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1024,
+            messages: [{ role: "user", content: analysisPrompt }],
+          });
+
+          deepAnalysisSummary = (analysisRes.content[0] as any).text ?? "";
+
+          // Deduct the credit
+          await QuotaService.deductQuota(user.id, "deep_analysis", 1);
+        }
+
         // ── Stage 3: Outline ──────────────────────────────────────────────
         emit({ event: "stage", stage: "outline", detail: "Building SEO structure and topical outline…" });
 
@@ -157,7 +220,7 @@ export async function POST(req: Request) {
           }
         }
 
-        // Pre-validate the internal link candidates
+        // Validate internal link candidates
         const { validateExternalUrl } = await import("@/lib/blog-content");
         const allCandidates = [
           ...(brief?.internal_link_candidates ?? []).filter((l: any) => l.url?.startsWith("http"))
@@ -175,66 +238,45 @@ export async function POST(req: Request) {
           ? {
               ...brief,
               internal_link_candidates: brief.internal_link_candidates.filter((c: any) =>
-                validatedLinks.some((vl: any) => vl.type === 'site' && vl.url === c.url)
-              )
+                validatedLinks.some((vl: any) => vl.type === "site" && vl.url === c.url)
+              ),
             }
           : null;
 
-        const filteredExistingBlogs = existingBlogs
-          ? existingBlogs.filter((b: any) =>
-              validatedLinks.some((vl: any) => vl.type === 'generated' && vl.url === `https://${project.domain}/${b.slug}`)
-            )
-          : [];
+        const filteredExistingBlogs = (existingBlogs ?? []).filter((b: any) =>
+          validatedLinks.some((vl: any) => vl.type === "generated" && vl.url === `https://${project.domain}/${b.slug}`)
+        );
 
-        // Pre-validate external research sources (Serper topArticles)
-        if (research && research.topArticles && research.topArticles.length > 0) {
+        // Validate external research sources
+        if (research?.topArticles?.length) {
           const articlesToValidate = research.topArticles.slice(0, 8);
-          const validatedResearchResults = await Promise.allSettled(
-            articlesToValidate.map(async (art: any) => {
-              const ok = await validateExternalUrl(art.url, 4000);
-              return { art, ok };
-            })
+          const validatedResearch = await Promise.allSettled(
+            articlesToValidate.map(async (art: any) => ({ art, ok: await validateExternalUrl(art.url, 4000) }))
           );
-
-          const verifiedArticles = validatedResearchResults
-            .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled' && r.value.ok)
-            .map(r => r.value.art);
-
+          const verified = validatedResearch
+            .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled" && r.value.ok)
+            .map((r) => r.value.art);
           research.topArticles = research.topArticles.filter((art: any) =>
-            verifiedArticles.some((va: any) => va.url === art.url)
+            verified.some((va: any) => va.url === art.url)
           );
         }
 
-        // Fetch blog-specific Ahrefs context (secondary keywords for headings, FAQ keywords)
+        // Build the Ahrefs context from pre-fetched frontend data (if provided)
         let ahrefsContext: any = undefined;
-        try {
-          const { fetchBlogAhrefsContext } = await import("@/lib/blog-ahrefs-context");
-          const blogAhrefsCtx = await fetchBlogAhrefsContext(
-            entry.focus_keyword,
-            project.target_region,
-            user.id
-          );
-          console.log('[blog stream] Blog Ahrefs context:', {
-            fromAhrefs: blogAhrefsCtx.fromAhrefs,
-            secondaryKeywords: blogAhrefsCtx.secondaryKeywords.length,
-            faqKeywords: blogAhrefsCtx.faqKeywords.length,
-            secondaryKeywordsData: blogAhrefsCtx.secondaryKeywords,
-            faqKeywordsData: blogAhrefsCtx.faqKeywords,
-          });
-          if (blogAhrefsCtx.fromAhrefs) {
-            ahrefsContext = {
-              matchingTerms: blogAhrefsCtx.secondaryKeywords,
-              questions: blogAhrefsCtx.faqKeywords,
-              ideas: [],
-              serp: [],
-              secondaryKeywords: blogAhrefsCtx.secondaryKeywords,
-              faqKeywords: blogAhrefsCtx.faqKeywords,
-            };
-          } else {
-            console.warn('[blog stream] ⚠️ Plan gate blocked Ahrefs blog APIs for user:', user.id);
-          }
-        } catch (e) {
-          console.warn('[blog stream] Failed to fetch blog Ahrefs context, continuing without:', e);
+        if (body.useAhrefsData && (body.ahrefsH2s?.length || body.ahrefsFaqs?.length)) {
+          ahrefsContext = {
+            matchingTerms: [],
+            questions: [],
+            ideas: [],
+            serp: [],
+            secondaryKeywords: body.ahrefsH2s ?? [],
+            faqKeywords: body.ahrefsFaqs ?? [],
+          };
+
+          // Deduct credits for the data that was used
+          const { QuotaService } = await import("@/services/quota");
+          if (body.ahrefsH2s?.length) await QuotaService.deductQuota(user.id, "ahrefs_h2s", 1);
+          if (body.ahrefsFaqs?.length) await QuotaService.deductQuota(user.id, "ahrefs_faqs", 1);
         }
 
         // Build the blog prompt
@@ -242,7 +284,7 @@ export async function POST(req: Request) {
           entry: {
             focus_keyword: entry.focus_keyword,
             title: entry.title,
-            article_type: entry.article_type || 'Blog Post',
+            article_type: entry.article_type || "Blog Post",
             secondary_keywords: entry.secondary_keywords,
           },
           project,
@@ -252,32 +294,24 @@ export async function POST(req: Request) {
           brief: filteredBrief,
           ahrefsContext,
           writerNotes: mergedWriterNotes || undefined,
+          brandPersona: body.brandPersona,
+          customInstructions: body.customInstructions,
+          deepAnalysisSummary,
         });
 
-        // Log the full prompt for debugging
-        console.log('[blog stream] ===== FULL PROMPT BEING SENT TO CLAUDE =====');
-        console.log(blogPrompt);
-        console.log('[blog stream] ===== END PROMPT =====');
-
         // ── Stage 4: Draft with streaming thinking ────────────────────────
-        emit({ event: "stage", stage: "draft", detail: "Claude Sonnet is thinking and drafting your blog post…" });
+        emit({ event: "stage", stage: "draft", detail: "Claude is thinking and drafting your blog post…" });
 
-        // Determine model from routing settings
         const { getProviderForRoute } = await import("@/services/ai/providers");
         const { model: routedModel } = await getProviderForRoute("blog");
-        // Use Claude for thinking — fallback to claude-sonnet-4-6 if Gemini was selected
         const claudeModel = routedModel.startsWith("claude") ? routedModel : "claude-sonnet-4-6";
 
-        // Stream with extended thinking enabled
-        let fullThinking = "";
         let fullContent = "";
         let thinkingEmitted = false;
 
         const abortController = new AbortController();
         if (req.signal) {
-          req.signal.addEventListener("abort", () => {
-            abortController.abort();
-          });
+          req.signal.addEventListener("abort", () => abortController.abort());
         }
 
         wasStalled = false;
@@ -293,26 +327,20 @@ export async function POST(req: Request) {
         resetStallTimeout();
 
         const anthropic = getAnthropicClient();
-        const claudeStream = await anthropic.messages.stream({
+        const claudeStream = anthropic.messages.stream({
           model: claudeModel,
           max_tokens: 16000,
           thinking: { type: "enabled", budget_tokens: 8000 },
           messages: [{ role: "user", content: blogPrompt }],
           system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
-        }, {
-          signal: abortController.signal,
-        });
+        }, { signal: abortController.signal });
 
         for await (const event of claudeStream) {
           resetStallTimeout();
           if (event.type === "content_block_start") {
-            if (event.content_block.type === "thinking") {
-              thinkingEmitted = true;
-            }
+            if (event.content_block.type === "thinking") thinkingEmitted = true;
           } else if (event.type === "content_block_delta") {
             if (event.delta.type === "thinking_delta") {
-              fullThinking += event.delta.thinking;
-              // Stream thinking in larger chunks (min 40 chars) to avoid flooding
               if (event.delta.thinking.length >= 10) {
                 emit({ event: "thinking", chunk: event.delta.thinking });
               }
@@ -323,16 +351,11 @@ export async function POST(req: Request) {
         }
 
         if (stallTimeoutId) clearTimeout(stallTimeoutId);
-
-        // Signal thinking complete
-        if (thinkingEmitted) {
-          emit({ event: "thinking_done" });
-        }
+        if (thinkingEmitted) emit({ event: "thinking_done" });
 
         // ── Stage 5: Polish ───────────────────────────────────────────────
         emit({ event: "stage", stage: "polish", detail: "Generating images and running SEO polish…" });
 
-        // Parse the JSON from Claude's text response
         const { parseGeneratedBlogJson } = await import("@/lib/gemini");
         const blogData = parseGeneratedBlogJson(fullContent, entry, project, research);
 
@@ -404,7 +427,7 @@ export async function POST(req: Request) {
         emit({ event: "done", blogId });
       } catch (err: any) {
         let message = err instanceof Error ? err.message : "Generation failed";
-        if (wasStalled || (err && (err.name === "AbortError" || err.name === "APIConnectionTimeoutError" || err.message?.includes("aborted")))) {
+        if (wasStalled || err?.name === "AbortError" || err?.name === "APIConnectionTimeoutError" || err?.message?.includes("aborted")) {
           message = "Gateway Timeout";
         }
         console.error("[blog stream] Error:", message);
@@ -430,8 +453,6 @@ export async function POST(req: Request) {
     },
   });
 }
-
-
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function countWords(markdown: string): number {

@@ -17,6 +17,9 @@ export interface BlogPromptContext {
   brief?: BusinessBrief | null;
   ahrefsContext?: any;
   writerNotes?: string;
+  brandPersona?: string;
+  customInstructions?: string;
+  deepAnalysisSummary?: string;
 }
 
 function formatAhrefsContextForPrompt(ahrefs: any): string {
@@ -86,7 +89,7 @@ ${serp || '(none)'}
 }
 
 export function buildBlogPrompt(ctx: BlogPromptContext): string {
-  const { entry, project, wordCount, research, existingBlogs, brief, ahrefsContext, writerNotes } = ctx;
+  const { entry, project, wordCount, research, existingBlogs, brief, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary } = ctx;
 
   // 1. Internal link pool block
   const allInternalCandidates = [
@@ -138,8 +141,20 @@ export function buildBlogPrompt(ctx: BlogPromptContext): string {
       ? `\nWRITER / EDITOR NOTES (user-supplied — follow closely; resolve conflicts in favour of these notes when they do not break factual accuracy or the structural rules below):\n${writerNotes.slice(0, writerCap)}\n`
       : "";
 
-  const brandPersonaBlock = (project.brand_voice || project.brand_values || project.brand_description)
-    ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
+  // If caller passes an explicit brandPersona string (from Advanced Options), use that.
+  // Otherwise fall back to project fields.
+  const brandPersonaBlock = brandPersona
+    ? `\nBRAND PERSONA (user-supplied for this blog — follow closely):\n${brandPersona}\n`
+    : (project.brand_voice || project.brand_values || project.brand_description)
+      ? `\nBRAND PERSONA:\n${project.brand_voice ? `- Brand Voice/Tone: ${project.brand_voice}\n` : ""}${project.brand_values ? `- Core Values/Messaging: ${project.brand_values}\n` : ""}${project.brand_description ? `- Brand Personality/Description: ${project.brand_description}\n` : ""}`
+      : "";
+
+  const customInstructionsBlock = customInstructions
+    ? `\nCUSTOM INSTRUCTIONS (user-supplied — follow exactly; these take priority over general style guidance):\n${customInstructions}\n`
+    : "";
+
+  const deepAnalysisSummaryBlock = deepAnalysisSummary
+    ? `\nCOMPETITOR CONTENT GAP ANALYSIS (derived from scraping the top 5 ranking pages — use this to ensure your blog outranks them by covering what they miss):\n${deepAnalysisSummary}\n`
     : "";
 
   const briefBlock = brief
@@ -229,7 +244,7 @@ ${faqSeeds}
 
 ${researchBlock}
 ${ahrefsBlock}
-${verifiedExternalSourcesBlock}
+${verifiedExternalSourcesBlock}${deepAnalysisSummaryBlock}${customInstructionsBlock}
 
 ════════════════════════════════════════
 SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:

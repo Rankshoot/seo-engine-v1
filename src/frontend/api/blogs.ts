@@ -36,8 +36,15 @@ export const blogsApi = {
     entryId: string;
     wordCount?: number;
     writerNotes?: string;
+    brandPersona?: string;
+    useAhrefsData?: boolean;
+    ahrefsH2s?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+    ahrefsFaqs?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+    useDeepAnalysis?: boolean;
+    deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
+    customInstructions?: string;
   }): AsyncGenerator<
-    | { event: "stage"; stage: "context" | "research" | "outline" | "draft" | "polish"; detail?: string }
+    | { event: "stage"; stage: string; detail?: string }
     | { event: "thinking"; chunk: string }
     | { event: "thinking_done" }
     | { event: "done"; blogId: string }
@@ -98,8 +105,15 @@ export const blogsApi = {
     ctaObjective: string;
     secondaryKeywords: string[];
     wordCount: number;
+    brandPersona?: string;
+    useAhrefsData?: boolean;
+    ahrefsH2s?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+    ahrefsFaqs?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+    useDeepAnalysis?: boolean;
+    deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
+    customInstructions?: string;
   }): AsyncGenerator<
-    | { event: "stage"; stage: "context" | "research" | "outline" | "draft" | "polish"; detail?: string }
+    | { event: "stage"; stage: string; detail?: string }
     | { event: "thinking"; chunk: string }
     | { event: "thinking_done" }
     | { event: "done"; blogId: string }

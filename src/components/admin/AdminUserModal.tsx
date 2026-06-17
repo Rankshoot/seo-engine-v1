@@ -42,6 +42,10 @@ interface QuotaState {
   override_standard_content: string;
   override_premium_content: string;
   override_ai_credits: string;
+  // Premium blog feature credits (admin-granted)
+  override_ahrefs_h2s: string;
+  override_ahrefs_faqs: string;
+  override_deep_analysis: string;
 }
 
 interface CostingSummary {
@@ -100,6 +104,9 @@ export function AdminUserModal({
     override_standard_content: "",
     override_premium_content: "",
     override_ai_credits: "",
+    override_ahrefs_h2s: "",
+    override_ahrefs_faqs: "",
+    override_deep_analysis: "",
   });
 
   // Date filters
@@ -151,6 +158,12 @@ export function AdminUserModal({
             userQuota.premium_content?.override !== null && userQuota.premium_content?.override !== undefined ? String(userQuota.premium_content.override) : "",
           override_ai_credits:
             userQuota.ai_credits.override !== null ? String(userQuota.ai_credits.override) : "",
+          override_ahrefs_h2s:
+            userQuota.ahrefs_h2s?.override !== null && userQuota.ahrefs_h2s?.override !== undefined ? String(userQuota.ahrefs_h2s.override) : "",
+          override_ahrefs_faqs:
+            userQuota.ahrefs_faqs?.override !== null && userQuota.ahrefs_faqs?.override !== undefined ? String(userQuota.ahrefs_faqs.override) : "",
+          override_deep_analysis:
+            userQuota.deep_analysis?.override !== null && userQuota.deep_analysis?.override !== undefined ? String(userQuota.deep_analysis.override) : "",
         });
 
         // Initialize date preset ranges
@@ -220,6 +233,9 @@ export function AdminUserModal({
           override_standard_content: parseOverride(form.override_standard_content),
           override_premium_content: parseOverride(form.override_premium_content),
           override_ai_credits: parseOverride(form.override_ai_credits),
+          override_ahrefs_h2s: parseOverride(form.override_ahrefs_h2s),
+          override_ahrefs_faqs: parseOverride(form.override_ahrefs_faqs),
+          override_deep_analysis: parseOverride(form.override_deep_analysis),
         };
 
         const res = await updateAdminUserQuota(userId, updates);
@@ -328,6 +344,9 @@ export function AdminUserModal({
                   { key: "override_linkedin", label: "LinkedIn Posts", quotaKey: "linkedin", section: null },
                   { key: "override_ebooks", label: "Ebooks", quotaKey: "ebooks", section: null },
                   { key: "override_whitepapers", label: "Whitepapers", quotaKey: "whitepapers", section: null },
+                  { key: "override_ahrefs_h2s", label: "Ahrefs H2 Credits", quotaKey: "ahrefs_h2s", section: "Premium Blog Features" },
+                  { key: "override_ahrefs_faqs", label: "Ahrefs FAQ Credits", quotaKey: "ahrefs_faqs", section: null },
+                  { key: "override_deep_analysis", label: "Deep Analysis Credits", quotaKey: "deep_analysis", section: null },
                 ].map((item, idx, arr) => {
                   const quota = quotaStatus?.[item.quotaKey];
                   if (!quota) return null;

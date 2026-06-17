@@ -295,6 +295,10 @@ export async function updateAdminUserQuota(
     override_standard_content: number | null;
     override_premium_content: number | null;
     override_ai_credits: number | null;
+    // Premium blog feature credits
+    override_ahrefs_h2s?: number | null;
+    override_ahrefs_faqs?: number | null;
+    override_deep_analysis?: number | null;
   }
 ) {
   const adminCheck = await requireAdmin({ minRole: "admin" });
@@ -356,6 +360,10 @@ export async function updateAdminUserQuota(
     override_ebooks: updates.override_ebooks ?? null,
     override_whitepapers: updates.override_whitepapers ?? null,
     override_linkedin: updates.override_linkedin ?? null,
+    // Premium blog feature credits
+    override_ahrefs_h2s: updates.override_ahrefs_h2s ?? null,
+    override_ahrefs_faqs: updates.override_ahrefs_faqs ?? null,
+    override_deep_analysis: updates.override_deep_analysis ?? null,
     updated_at: new Date().toISOString(),
   };
 

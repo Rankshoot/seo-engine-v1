@@ -30,6 +30,10 @@ export interface UserQuotaStatus {
   whitepapers: QuotaItem;
   linkedin: QuotaItem;
   ai_credits: QuotaItem;
+  // Premium blog feature credits (per-user, admin-granted)
+  ahrefs_h2s: QuotaItem;
+  ahrefs_faqs: QuotaItem;
+  deep_analysis: QuotaItem;
   // Legacy aliases (computed from granular)
   standard_content: QuotaItem;
   premium_content: QuotaItem;
@@ -45,6 +49,9 @@ export type QuotaKey =
   | "whitepapers"
   | "linkedin"
   | "ai_credits"
+  | "ahrefs_h2s"
+  | "ahrefs_faqs"
+  | "deep_analysis"
   // Legacy aliases kept for backwards-compat with existing call-sites
   | "standard_content"
   | "premium_content";
@@ -61,6 +68,9 @@ export interface ClientQuotaStatus {
   whitepapers: QuotaItem;
   linkedin: QuotaItem;
   ai_credits: QuotaItem;
+  ahrefs_h2s: QuotaItem;
+  ahrefs_faqs: QuotaItem;
+  deep_analysis: QuotaItem;
 }
 
 export class QuotaService {
@@ -292,6 +302,22 @@ export class QuotaService {
       whitepapers: whitepaperItem,
       linkedin: linkedinItem,
       ai_credits: mapQuota(quotas.limit_ai_credits, quotas.used_ai_credits, quotas.override_ai_credits),
+      // Premium blog feature credits (admin-granted per user)
+      ahrefs_h2s: mapQuota(
+        (quotas as any).limit_ahrefs_h2s ?? 0,
+        (quotas as any).used_ahrefs_h2s ?? 0,
+        (quotas as any).override_ahrefs_h2s ?? null
+      ),
+      ahrefs_faqs: mapQuota(
+        (quotas as any).limit_ahrefs_faqs ?? 0,
+        (quotas as any).used_ahrefs_faqs ?? 0,
+        (quotas as any).override_ahrefs_faqs ?? null
+      ),
+      deep_analysis: mapQuota(
+        (quotas as any).limit_deep_analysis ?? 0,
+        (quotas as any).used_deep_analysis ?? 0,
+        (quotas as any).override_deep_analysis ?? null
+      ),
       // Legacy aliases for backwards compat
       standard_content: mapQuota(
         quotas.limit_standard_content ?? limBlogs,
@@ -322,6 +348,9 @@ export class QuotaService {
       whitepapers: status.whitepapers,
       linkedin: status.linkedin,
       ai_credits: status.ai_credits,
+      ahrefs_h2s: status.ahrefs_h2s,
+      ahrefs_faqs: status.ahrefs_faqs,
+      deep_analysis: status.deep_analysis,
     };
   }
 
@@ -369,6 +398,25 @@ export class QuotaService {
     const realTimeCounted: QuotaKey[] = ["blogs", "ebooks", "whitepapers", "linkedin", "standard_content", "premium_content"];
     if (realTimeCounted.includes(key)) {
       return; // No counter to decrement — count is live from blogs table
+    }
+
+    // Premium blog feature credits are tracked via direct DB increment (not RPC)
+    const premiumBlogFeatures: QuotaKey[] = ["ahrefs_h2s", "ahrefs_faqs", "deep_analysis"];
+    if (premiumBlogFeatures.includes(key)) {
+      const columnMap: Record<string, string> = {
+        ahrefs_h2s: "used_ahrefs_h2s",
+        ahrefs_faqs: "used_ahrefs_faqs",
+        deep_analysis: "used_deep_analysis",
+      };
+      const col = columnMap[key];
+      const { data: current } = await db.from("user_quotas").select(col).eq("user_id", userId).single();
+      const currentVal = (current as any)?.[col] ?? 0;
+      const { error: incErr } = await db
+        .from("user_quotas")
+        .update({ [col]: currentVal + amount, updated_at: new Date().toISOString() })
+        .eq("user_id", userId);
+      if (incErr) throw new Error(`Failed to deduct ${key} credit: ${incErr.message}`);
+      return;
     }
 
     // For keywords_explored and ai_credits, use the RPC deduction

@@ -543,7 +543,7 @@ export default function BlogViewerPage() {
       if (res.success) {
         toast.success("Unscheduled successfully");
         setBlog(b => {
-          const nextVal = b ? { ...b, entry_id: undefined } : b;
+          const nextVal = b ? { ...b, entry_id: null } : b;
           if (nextVal) queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
           return nextVal;
         });

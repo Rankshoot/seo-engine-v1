@@ -14,7 +14,7 @@ import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
 import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
-import { normalizeMarkdownImages } from "@/services/openAiImages";
+import { normalizeMarkdownImages, BLOG_IMAGE_PLACEHOLDER_URL } from "@/services/openAiImages";
 import {
   exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload,
 } from "@/lib/export";
@@ -22,8 +22,8 @@ import type { Blog, BlogSeoIssueKey, BlogStatus, ExportFormat, CalendarEntry } f
 import type { Project } from "@/lib/types";
 import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
 
+import { PageTitle } from "@/components/common/typography/Typography";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
-import { PageTitle } from "@/components/common";
 import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
 import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
@@ -31,7 +31,6 @@ import {
   PreviewerScheduler,
   PreviewShell,
   StudioBreadcrumb,
-  ContentTypeBadge,
   MetricPill,
 } from "@/components/content-generator/shared";
 
@@ -44,6 +43,7 @@ const BlogContentAnalysisModal = lazy(() =>
 import { BlogEditAiFixOverlay, BlogImageEditOverlay } from "@/components/blog/BlogEditOverlays";
 import { MemoizedVisualBlogEditors } from "@/components/blog/BlogEditorComponents";
 import { EditorialPreview, ArticleMetaRow } from "@/components/blog/BlogArticlePreview";
+import { unscheduleContentAction } from "@/app/actions/content-actions";
 import {
   SpinIcon, ExternalLinkIcon, DownloadIcon, RepairBanner,
 } from "@/components/blog/BlogViewerHelpers";
@@ -300,6 +300,12 @@ export default function BlogViewerPage() {
     [calendarEntries]
   );
 
+  const scheduledDate = useMemo(() => {
+    if (!blog?.entry_id) return null;
+    const hit = calendarEntries.find(e => e.id === blog.entry_id);
+    return hit ? String(hit.scheduled_date).slice(0, 10) : null;
+  }, [blog?.entry_id, calendarEntries]);
+
   const nextVacantDate = useMemo(() => {
     const taken = new Set(calendarEntries.map(e => String(e.scheduled_date).slice(0, 10)));
     const today = new Date();
@@ -354,6 +360,65 @@ export default function BlogViewerPage() {
   const handleImageRemove = (img: HTMLImageElement) => {
     tiptapBodyRef.current?.deleteImageAtDom?.(img);
   };
+
+  // Uploads a user-chosen image file to replace a placeholder, saves to DB, updates local state.
+  const handleUploadPlaceholderImage = useCallback(async (imageAlt: string, dataUrl: string): Promise<boolean> => {
+    if (!displayBlog) return false;
+    try {
+      const escapedAlt = imageAlt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedPlaceholder = BLOG_IMAGE_PLACEHOLDER_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const newContent = displayBlog.content.replace(
+        new RegExp(`!\\[${escapedAlt}\\]\\(${escapedPlaceholder}\\)`),
+        `![${imageAlt}](${dataUrl})`
+      );
+      const saveRes = await blogsApi.updateContent(displayBlog.id, {
+        content: newContent,
+        title: displayBlog.title,
+        metaDescription: displayBlog.meta_description,
+      });
+      if (saveRes.success && saveRes.data) {
+        updateDisplayBlog(saveRes.data);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [displayBlog, updateDisplayBlog]);
+
+  // Generates an image for a placeholder in the view-mode blog content.
+  // Replaces the placeholder markdown, saves to DB, and updates local state.
+  const handleGeneratePlaceholderImage = useCallback(async (imageAlt: string): Promise<boolean> => {
+    if (!displayBlog) return false;
+    try {
+      const res = await blogsApi.regenerateImage(displayBlog.id, {
+        imageAlt,
+        contextBefore: "",
+        contextAfter: "",
+      });
+      if (!res.success || !res.data) return false;
+
+      const escapedAlt = imageAlt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedPlaceholder = BLOG_IMAGE_PLACEHOLDER_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const newContent = displayBlog.content.replace(
+        new RegExp(`!\\[${escapedAlt}\\]\\(${escapedPlaceholder}\\)`),
+        `![${imageAlt}](${res.data.url})`
+      );
+
+      const saveRes = await blogsApi.updateContent(displayBlog.id, {
+        content: newContent,
+        title: displayBlog.title,
+        metaDescription: displayBlog.meta_description,
+      });
+      if (saveRes.success && saveRes.data) {
+        updateDisplayBlog(saveRes.data);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [displayBlog, updateDisplayBlog]);
 
   const getEditRoots = useCallback(
     () => [titleEditorRef.current, descEditorRef.current, editorRef.current],
@@ -468,6 +533,32 @@ export default function BlogViewerPage() {
   const handleDirectSchedule = async () => {
     if (!nextVacantDate) { toast.error("No free calendar dates found"); return; }
     await handleScheduleBlog(nextVacantDate);
+  };
+
+  const handleUnscheduleBlog = async () => {
+    if (!blog?.entry_id) return;
+    setScheduling(true);
+    try {
+      const res = await unscheduleContentAction(projectId, blog.id, blog.entry_id);
+      if (res.success) {
+        toast.success("Unscheduled successfully");
+        setBlog(b => {
+          const nextVal = b ? { ...b, entry_id: undefined } : b;
+          if (nextVal) queryClient.setQueryData(qk.blog(blogId), { success: true, data: nextVal });
+          return nextVal;
+        });
+        setScheduleVersion(v => v + 1);
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+      } else {
+        toast.error(res.error || "Could not unschedule");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not unschedule");
+    } finally {
+      setScheduling(false);
+    }
   };
 
   // ── Export handler ─────────────────────────────────────────────────────
@@ -671,21 +762,9 @@ export default function BlogViewerPage() {
   const breadcrumb = (
     <div className="shrink-0 space-y-2">
       <StudioBreadcrumb parentHref={historyParentHref} parentLabel={historyParentLabel} current={blog.title} />
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 max-w-3xl">
-          <PageTitle>Blog Post</PageTitle>
-          <p className="mt-2 text-[13px] leading-relaxed text-text-tertiary">
-            Search engine optimized article — high-quality layout, metadata, formatting, SEO scores, and exports.
-          </p>
-        </div>
-      </div>
+      <PageTitle>Blog Post</PageTitle>
       <div className="flex flex-wrap items-center gap-2">
-        <ContentTypeBadge type="Blog Post" />
-        {blog.target_keyword ? <MetricPill label="primary keyword" value={blog.target_keyword} /> : null}
-        <MetricPill label="words" value={blog.word_count.toLocaleString()} />
         {researchSources > 0 ? <MetricPill tone="action" label="live sources" value={researchSources} /> : null}
-        {externalLinks.length > 0 ? <MetricPill tone="action" label="citations" value={externalLinks.length} /> : null}
-        {internalLinks.length > 0 ? <MetricPill tone="coral" label="internal links" value={internalLinks.length} /> : null}
       </div>
       {blog.source_url && blog.article_type === "Repair" && (
         <RepairBanner sourceUrl={blog.source_url} repairNotes={blog.repair_notes ?? []} projectId={projectId} />
@@ -702,13 +781,7 @@ export default function BlogViewerPage() {
   );
 
   // ── Render: toolbar ────────────────────────────────────────────────────
-  const toolbarLeft = (
-    <div className="flex items-center gap-3">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary px-2 py-0.5 rounded border border-border-subtle bg-surface-secondary">
-        Blog Post
-      </span>
-    </div>
-  );
+  const toolbarLeft = null;
 
   const toolbarRight = (
     <div className="flex items-center gap-2">
@@ -1042,7 +1115,14 @@ export default function BlogViewerPage() {
           {/* Blog content */}
           {editMode ? (
             <div>
-              <ArticleMetaRow blog={currentBlog} />
+              <ArticleMetaRow
+                blog={currentBlog}
+                scheduledDate={scheduledDate}
+                scheduledDatesSet={scheduledDatesSet}
+                onReschedule={handleScheduleBlog}
+                onUnschedule={blog.entry_id ? handleUnscheduleBlog : undefined}
+                schedulingBusy={scheduling}
+              />
               <article className="mx-auto max-w-[860px] px-8 py-12">
                 <MemoizedVisualBlogEditors
                   key={`${currentBlog.id}-${editSessionKey}`}
@@ -1068,7 +1148,16 @@ export default function BlogViewerPage() {
               </p>
             </div>
           ) : (
-            <EditorialPreview blog={currentBlog} ownSiteHost={ownSiteHost} />
+            <EditorialPreview
+              blog={currentBlog}
+              ownSiteHost={ownSiteHost}
+              imageGenOptions={{ onGenerate: handleGeneratePlaceholderImage, onUpload: handleUploadPlaceholderImage }}
+              scheduledDate={scheduledDate}
+              scheduledDatesSet={scheduledDatesSet}
+              onReschedule={handleScheduleBlog}
+              onUnschedule={blog.entry_id ? handleUnscheduleBlog : undefined}
+              schedulingBusy={scheduling}
+            />
           )}
         </div>
       </PreviewShell>

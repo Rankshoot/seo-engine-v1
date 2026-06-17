@@ -69,6 +69,10 @@ export const V1Routes = {
   blogDeepAnalysis: (blogId: string) => `/blogs/${blogId}/deep-analysis`,
   blogEnhance: (projectId: string, blogId: string) => `/projects/${projectId}/blogs/${blogId}/enhance`,
 
+  // ── Brand Intelligence ────────────────────────────────────────────────────
+  projectBrand: (projectId: string) => `/projects/${projectId}/brand`,
+  projectBrandRefresh: (projectId: string) => `/projects/${projectId}/brand/refresh`,
+
   // ── Admin (platform) ─────────────────────────────────────────────────────
   adminMe: "/admin/me",
   adminOverview: "/admin/overview",

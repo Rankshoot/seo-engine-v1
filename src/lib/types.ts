@@ -14,6 +14,16 @@ export interface Project {
   brand_voice?: string;
   brand_values?: string;
   brand_description?: string;
+  // Brand Intelligence — populated automatically at project creation, cached permanently
+  brand_primary_color?: string | null;
+  brand_secondary_color?: string | null;
+  brand_accent_color?: string | null;
+  brand_logo_url?: string | null;
+  brand_visual_style?: string | null;
+  brand_design_personality?: string | null;
+  brand_image_style?: string | null;
+  brand_palette_json?: string[] | null;
+  brand_extracted_at?: string | null;
   created_at: string;
   updated_at: string;
   project_competitors?: ProjectCompetitor[];

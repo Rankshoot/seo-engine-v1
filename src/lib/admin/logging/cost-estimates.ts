@@ -11,7 +11,7 @@ const API_CALL_USD_ESTIMATES: Partial<Record<ApiUsageProvider, number>> = {
   ahrefs: 0.02,
 };
 
-/** USD per 1M input / output tokens (approximate, 2026). */
+/** USD per 1M input / output tokens for Gemini text generation (approximate, 2026). */
 const GEMINI_INPUT_USD_PER_1M: Record<string, number> = {
   "gemini-2.5-flash": 0.15,
   "gemini-2.5-pro": 1.25,
@@ -30,6 +30,27 @@ const GEMINI_OUTPUT_USD_PER_1M: Record<string, number> = {
 
 const DEFAULT_GEMINI_INPUT = 0.15;
 const DEFAULT_GEMINI_OUTPUT = 0.6;
+
+/**
+ * Per-image USD for image generation models.
+ * Gemini native image models (generateContent endpoint): ~$0.039/image (estimated).
+ * Imagen 4 models (predict endpoint): Google published rates.
+ * Mark in logs as "estimated" — actual billing may differ.
+ */
+const IMAGE_GEN_USD_PER_IMAGE: Record<string, number> = {
+  // Gemini native image models
+  "gemini-2.5-flash-image":     0.039,
+  "gemini-3.1-flash-image":     0.039,
+  "gemini-3-pro-image":         0.080,
+  "gemini-3-pro-image-preview": 0.080,
+  // Imagen 4 stack
+  "imagen-4.0-fast-generate-001":  0.025,
+  "imagen-4.0-generate-001":       0.040,
+  "imagen-4.0-ultra-generate-001": 0.080,
+  // Legacy Imagen 3 (kept for historical logs)
+  "imagen-3.0-fast-generate-001": 0.020,
+  "imagen-3.0-generate-002":      0.040,
+};
 
 export function estimateDataForSeoCostUsd(credits: number | null | undefined): number | null {
   if (credits == null || !Number.isFinite(credits)) return null;
@@ -71,6 +92,21 @@ export function estimateGeminiCostUsd(
 
   const usd = (input / 1_000_000) * inRate + (output / 1_000_000) * outRate;
   return roundUsd(usd);
+}
+
+/**
+ * Returns estimated USD cost for a single image generation call.
+ * Returns null if the model is unrecognised (cost unknown).
+ */
+export function estimateImageGenerationCostUsd(model: string): number | null {
+  const key = model.toLowerCase();
+  const direct = IMAGE_GEN_USD_PER_IMAGE[key];
+  if (direct != null) return roundUsd(direct);
+  // Partial match (e.g. "imagen-4.0-generate" → imagen-4.0-generate-001)
+  const fuzzy = Object.entries(IMAGE_GEN_USD_PER_IMAGE).find(
+    ([k]) => key.includes(k) || k.includes(key)
+  );
+  return fuzzy != null ? roundUsd(fuzzy[1]) : null;
 }
 
 function roundUsd(value: number): number {

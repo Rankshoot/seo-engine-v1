@@ -85,4 +85,24 @@ export const projectsApi = {
   refreshOverview(projectId: string): Promise<SiteExplorerApiResponse> {
     return apiPost(V1Routes.projectOverviewRefresh(projectId));
   },
+
+  saveBrand(
+    projectId: string,
+    payload: {
+      brand_primary_color?: string | null;
+      brand_secondary_color?: string | null;
+      brand_accent_color?: string | null;
+      brand_logo_url?: string | null;
+      brand_visual_style?: string | null;
+      brand_design_personality?: string | null;
+      brand_image_style?: string | null;
+      brand_palette_json?: string[] | null;
+    }
+  ): Promise<{ success: boolean; error?: string }> {
+    return apiPatch(V1Routes.projectBrand(projectId), payload);
+  },
+
+  refreshBrand(projectId: string): Promise<{ success: boolean; error?: string; data?: Record<string, unknown> }> {
+    return apiPost(V1Routes.projectBrandRefresh(projectId));
+  },
 };

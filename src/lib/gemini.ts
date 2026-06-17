@@ -1124,7 +1124,7 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Immediately under the H1, write one "answer-first" paragraph in ≤80 words that states the direct takeaway (optimized for AI Overviews / featured snippets).
 - Use clear modular H2/H3 hierarchy (RAG-friendly). Merge redundant headings; fix weak single-sentence sections.
 - Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and long-tail phrasing.
-- Include **at least 3 and at most 8** credible external citations as markdown links in the body. Use Google Search for REAL, specific, deep-linked sources (reports, standards docs, regulator pages, vendor docs). No Wikipedia. No bare root domains.
+- Include **at least 3 and at most 8** credible external citations as markdown links in the body. Use Google Search to find the PRIMARY SOURCE of each claim — the actual research report, government dataset, academic paper, or official standards page, NOT a blog post or news article summarising it. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
 - Use **at least 2** INTERNAL LINK POOL URLs verbatim in contextually relevant sentences.
 - Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
 - If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
@@ -1139,7 +1139,7 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
 - Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
-- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. You MUST use Google Search to find REAL, specific, deep-linked URLs for your citations. Do NOT link to root domains like "https://www.gartner.com". Link to the exact report or article. No Wikipedia.
+- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. Use Google Search to find the PRIMARY SOURCE of each citation — the actual research report, government dataset, or academic paper, NOT a blog or news article summarising it. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains (e.g. "https://www.gartner.com") or competitor blogs. No Wikipedia.
 - Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.`;
 
   const titleMetaBlock = `- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".

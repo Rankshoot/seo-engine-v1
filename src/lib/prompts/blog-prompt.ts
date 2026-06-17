@@ -124,12 +124,12 @@ export function buildBlogPrompt(ctx: BlogPromptContext): string {
     internalLinksBlock = `\nINTERNAL LINKING (pick 2–4 total, split across the two pools, placed where they genuinely help the reader):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
   }
 
-  // 2. External research sources
-  let verifiedExternalSourcesBlock = '';
+  // 2. External research context (competitor articles — for topic reference only, NOT for citation links)
+  let researchContextBlock = '';
   if (research && research.topArticles && research.topArticles.length > 0) {
     const articles = research.topArticles.slice(0, 8);
     if (articles.length > 0) {
-      verifiedExternalSourcesBlock = `\nVERIFIED EXTERNAL SOURCES (you may ONLY use these verified URLs for external links. Do NOT invent URLs or root-level-only domains):\n${articles
+      researchContextBlock = `\nTOPIC RESEARCH CONTEXT (these are top-ranking competitor articles — use them to understand what angles to cover, but DO NOT link to them as citations):\n${articles
         .map(art => `- ${art.title} → ${art.url}`)
         .join('\n')}\n`;
     }
@@ -244,7 +244,7 @@ ${faqSeeds}
 
 ${researchBlock}
 ${ahrefsBlock}
-${verifiedExternalSourcesBlock}${deepAnalysisSummaryBlock}${customInstructionsBlock}
+${researchContextBlock}${deepAnalysisSummaryBlock}${customInstructionsBlock}
 
 ════════════════════════════════════════
 SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
@@ -256,7 +256,7 @@ SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 5. H2 HEADINGS: At least 5 × ## headings in the contentMarkdown (the scorer requires >= 3).
 6. H3 SUB-HEADINGS: At least 2 × ### headings inside long H2 body sections to organize sub-topics.
 7. FAQ SECTION: MUST have a heading that reads exactly "## FAQs" (or "## Frequently Asked Questions"). Include exactly 7 to 10 Q&A pairs, each question as a ### heading.
-8. EXTERNAL LINKS: Include at least 5 credible external links (at least 3 are required). Format: [anchor text](https://...). Use ONLY the provided verified external sources.
+8. EXTERNAL LINKS: Include at least 5 credible external citations (at least 3 are required). Format: [anchor text](https://...). RULES: (a) Link to the PRIMARY SOURCE of every claim — the actual research report, dataset, government page, or academic paper — not a blog post summarising it. (b) Preferred domains: .gov, .edu, WHO, CDC, PubMed, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista (direct report pages), SHRM, LinkedIn official research, peer-reviewed journals. (c) Never link to root domains alone (e.g. "https://www.gartner.com") — always deep-link to the specific report or article page. (d) Never link to competitor blogs or any landing page that is primarily selling a product. (e) Use Google Search to find the exact URL of the cited source before inserting it.
 9. INTERNAL LINKS: Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or absolute URL.
 10. META DESCRIPTION: Exactly 150–160 characters long and MUST contain "${entry.focus_keyword}".
 11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer").
@@ -294,7 +294,11 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
      > **Also Read:** [Anchor text / Title of the related blog](https://domain/slug)
 
 6. CITATIONS & EXTERNAL LINKING:
-   - Do NOT link to external blogs. Instead, use external links from verified, credible reports only. Preferred source types are reports from LinkedIn, SHRM, Gartner, Accenture, Deloitte, EY, PwC, or McKinsey.
+   - Every external citation must point to the PRIMARY SOURCE of the claim — the actual study, report, dataset, or official page — not a blog post or article that summarises it.
+   - Use Google Search to find the specific, deep-linked URL for each citation before inserting it. For example, if you cite a McKinsey statistic, link to the exact McKinsey report page, not a news article about that report.
+   - Preferred authoritative domains: .gov, .edu, WHO, CDC, PubMed / NCBI, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista (report pages), SHRM, LinkedIn Talent Solutions research, IEEE, ISO, peer-reviewed journals.
+   - Never link to competitor blogs, vendor landing/product pages, or any URL that is primarily promotional.
+   - Never link to root domains (e.g. "https://gartner.com"). Always link to the specific report, article, or data page.
 
 7. AUTHORITY-BUILDING SECTIONS & GROUNDING:
    - Weave in 2-4 headings representing authority-building angles based on ${project.company}'s niche and the focus keyword "${entry.focus_keyword}".

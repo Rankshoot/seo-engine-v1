@@ -26,6 +26,15 @@ type SortDir = "asc" | "desc";
 type GapAiEvalData = NonNullable<KeywordGap["ai_eval_data"]>;
 
 // ─── CONSTANTS & HELPERS ────────────────────────────────────────────────────
+function normalizeDomain(raw: string): string {
+  return (raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '');
+}
+
 function compactUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -280,7 +289,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
-  const [compWarnDismissed, setCompWarnDismissed] = useState(false);
   const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_competitor", ["top_competitor_url"]);
 
   const { data: projectsListRes } = useProjects();
@@ -330,19 +338,16 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const hasBenchmark = competitors.length > 0;
 
   const configuredDomains = useMemo(
-    () => project?.project_competitors?.map(c => c.domain).sort() ?? null,
+    () => project?.project_competitors?.map(c => normalizeDomain(c.domain)).sort() ?? null,
     [project]
   );
-  const benchmarkedDomains = useMemo(
-    () => competitors.map(c => c.domain).sort(),
-    [competitors]
-  );
   const compHasMismatch = useMemo(() => {
-    if (!project || !state || compWarnDismissed) return false;
-    if (configuredDomains === null) return false;
-    if (configuredDomains.length === 0 && benchmarkedDomains.length === 0) return false;
-    return configuredDomains.join("|") !== benchmarkedDomains.join("|");
-  }, [project, state, configuredDomains, benchmarkedDomains, compWarnDismissed]);
+    if (!project || !state) return false;
+    if (configuredDomains === null || configuredDomains.length === 0) return false;
+    const currentSnapshot = configuredDomains.join("|");
+    const lastSnapshot = project.last_benchmarked_competitor_snapshot ?? null;
+    return currentSnapshot !== lastSnapshot;
+  }, [project, state, configuredDomains]);
 
   const compareFn = useCallback((a: KeywordGap, b: KeywordGap, col: string, dir: "asc" | "desc") => {
     return compareGaps(a, b, col as GapSortColumn, dir);
@@ -397,6 +402,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         { id: "benchmark-summary", duration: 5000 }
       );
       await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
+      await queryClient.invalidateQueries({ queryKey: qk.projects });
     }
     setRunning(false);
   }, [projectId, queryClient, COMPETITORS_KEY]);
@@ -893,21 +899,11 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
           <div className="flex shrink-0 items-center gap-2 ml-2">
             <button
               type="button"
-              onClick={() => { setCompWarnDismissed(true); void handleRun(); }}
+              onClick={() => { void handleRun(); }}
               disabled={running}
               className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3.5 py-1.5 text-[12px] font-semibold text-amber-400 transition-colors hover:bg-amber-500/25 disabled:opacity-50 disabled:pointer-events-none"
             >
               {running ? "Benchmarking…" : "Re-benchmark"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCompWarnDismissed(true)}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-secondary"
-              aria-label="Dismiss"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-              </svg>
             </button>
           </div>
         </div>

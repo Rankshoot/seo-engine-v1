@@ -10,6 +10,7 @@ export interface Project {
   target_language: string;
   description: string;
   ahrefs_rank_tracker_project_id?: number | null;
+  last_benchmarked_competitor_snapshot?: string | null;
   brand_voice?: string;
   brand_values?: string;
   brand_description?: string;

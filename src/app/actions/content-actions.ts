@@ -10,7 +10,6 @@ import {
   suggestContentTopicWithFlash,
   suggestLinkedInInputsWithFlash,
 } from '@/lib/content-studio';
-import { generateLandingPage } from '@/lib/landing-page-studio';
 import { researchKeyword } from '@/lib/research';
 import { sanitizeBlogContent } from '@/lib/blog-content';
 import type { BusinessBrief } from '@/lib/business-brief';
@@ -22,7 +21,6 @@ import type {
   LinkedInContentData,
   LinkedInPostStyle,
   WhitepaperContentData,
-  LandingPageType,
 } from '@/lib/types';
 import type { ResearchContext } from '@/lib/research';
 
@@ -244,7 +242,6 @@ export async function suggestContentTopicAction(
     ebook: 'ebook',
     whitepaper: 'whitepaper',
     linkedin: 'LinkedIn post',
-    landing_page: 'landing page',
   };
 
   try {
@@ -733,7 +730,7 @@ export async function listContentStudioHistory(
   | { success: false; error: string; data: ContentStudioHistoryRow[]; total: number; hasMore: boolean; counts: Record<ContentType, number> }
 > {
   const user = await currentUser();
-  const emptyCounts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing_page: 0 };
+  const emptyCounts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
   if (!user) return { success: false, error: 'Not authenticated', data: [], total: 0, hasMore: false, counts: emptyCounts };
 
   const { data: project, error: pErr } = await supabaseAdmin
@@ -846,7 +843,7 @@ export async function listContentStudioHistory(
   }
 
   // Load counts for type badges on the server
-  const counts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing_page: 0 };
+  const counts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
   let countDataResult: Array<{ content_type?: string; article_type?: string }> = [];
 
   const countRes = await supabaseAdmin
@@ -923,134 +920,4 @@ export async function unscheduleContentAction(
   if (cErr) return { success: false, error: cErr.message };
 
   return { success: true };
-}
-
-// ─── Landing Page ──────────────────────────────────────────────────────────────
-
-export async function generateLandingPageAction(
-  projectId: string,
-  payload: {
-    primaryKeyword: string;
-    secondaryKeywords?: string[];
-    pageType: LandingPageType;
-    audience?: string;
-    tone?: string;
-    primaryCta: string;
-    productOrService?: string;
-    locationFocus?: string;
-    uniqueValueProp?: string;
-    region?: string;
-    language?: string;
-    entryId?: string | null;
-  }
-): Promise<
-  | { success: true; data: Blog; trace: ContentGenerationTraceEntry[] }
-  | { success: false; error: string; trace: ContentGenerationTraceEntry[] }
-> {
-  const trace: ContentGenerationTraceEntry[] = [];
-  const mark = (step: string, detail?: string, ms?: number) => trace.push({ step, detail, ms });
-
-  const user = await currentUser();
-  if (!user) {
-    mark('auth', 'not signed in');
-    return { success: false, error: 'Not authenticated', trace };
-  }
-
-  // Landing pages share the blogs quota (same AI cost profile)
-  try {
-    await QuotaService.checkQuota(user.id, 'blogs');
-  } catch (e) {
-    if (e instanceof QuotaExhaustedError) {
-      mark('quota', 'blogs limit reached');
-      return {
-        success: false,
-        error: 'QUOTA_EXCEEDED:blogs — You have reached your content generation limit. Upgrade your plan to generate more content.',
-        trace,
-      };
-    }
-    throw e;
-  }
-
-  if (!payload.primaryKeyword?.trim()) {
-    return { success: false, error: 'Primary keyword is required', trace };
-  }
-
-  const projRes = await loadProjectAndBrief(projectId, user.id);
-  if (!projRes.ok) {
-    mark('project', projRes.error);
-    return { success: false, error: projRes.error, trace };
-  }
-  const { project } = projRes;
-  mark('project', `${project.company} (${project.domain})`);
-
-  const t0 = Date.now();
-  let result;
-  try {
-    result = await generateLandingPage({
-      primaryKeyword: payload.primaryKeyword.trim(),
-      secondaryKeywords: payload.secondaryKeywords ?? [],
-      pageType: payload.pageType,
-      companyName: project.company,
-      companyDomain: project.domain,
-      niche: project.niche,
-      audience: payload.audience || project.target_audience,
-      tone: payload.tone || 'professional',
-      primaryCta: payload.primaryCta,
-      productOrService: payload.productOrService,
-      locationFocus: payload.locationFocus,
-      uniqueValueProp: payload.uniqueValueProp,
-      brandPrimaryColor: (project as any).brand_primary_color ?? null,
-      brandVisualStyle: (project as any).brand_visual_style ?? null,
-      brandPersonality: (project as any).brand_design_personality ?? null,
-      brandVoice: project.brand_voice,
-      brandValues: project.brand_values,
-      brandDescription: project.brand_description,
-    });
-    mark('ai', `${result.content_data.sections.length} sections generated`, Date.now() - t0);
-  } catch (e) {
-    mark('ai', `failed: ${e instanceof Error ? e.message : String(e)}`, Date.now() - t0);
-    return {
-      success: false,
-      error: e instanceof Error ? e.message : 'Landing page generation failed',
-      trace,
-    };
-  }
-
-  const { data: row, error: insErr } = await supabaseAdmin
-    .from('blogs')
-    .insert({
-      entry_id: payload.entryId || null,
-      project_id: projectId,
-      title: result.title,
-      content: '',               // Landing pages don't use markdown content
-      meta_description: result.meta_description,
-      slug: result.slug,
-      word_count: 0,
-      target_keyword: payload.primaryKeyword.trim(),
-      article_type: 'Landing Page',
-      status: 'generated',
-      research_sources: 0,
-      external_links: [],
-      internal_links: [],
-      content_type: 'landing_page' as const,
-      content_data: result.content_data,
-      updated_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
-
-  if (insErr || !row) {
-    mark('db', `insert failed: ${insErr?.message ?? 'unknown'}`);
-    return { success: false, error: insErr?.message ?? 'Could not save landing page', trace };
-  }
-
-  if (payload.entryId) {
-    await supabaseAdmin
-      .from('calendar_entries')
-      .update({ status: 'generated', title: result.title })
-      .eq('id', payload.entryId);
-  }
-
-  mark('db', `landing page id ${row.id}`);
-  return { success: true, data: row as Blog, trace };
 }

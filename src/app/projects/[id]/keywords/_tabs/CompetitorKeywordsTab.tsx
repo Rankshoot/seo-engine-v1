@@ -488,13 +488,12 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     const currentType = resolveContentType(keywordText, undefined, aiEvalData);
 
     const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
-    const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin", "landing_page"];
+    const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
     const labels: Record<ContentType, string> = {
       blog: "Blog article",
       ebook: "Ebook",
       whitepaper: "Whitepaper",
       linkedin: "LinkedIn post",
-      landing_page: "Landing page",
     };
 
     return (

@@ -141,7 +141,7 @@ CRITICAL RULES — every bullet is enforced:
 - No filler or AI clichés. Absolutely avoid: "in today's world", "in recent years", "navigating", "delving", "unlocking", "game-changer", "leveraging", "synergies", "cutting-edge", "best-in-class", "robust", "harnessing", "ever-evolving", "plethora", "tapestry", "realm", "comprehensive".
 - Every claim of fact gets a source, either inline or in References.
 - ${ctx.brandVoice ? `Strictly align the style and tone with the Brand Voice: ${ctx.brandVoice}.` : ctx.brief?.tone ? `Match the brand tone above.` : 'Use the requested tone (' + ctx.tone + ').'}
-- Use Google Search to find SPECIFIC, deep-linked URLs (reports, regulator pages, vendor docs). No bare root domains. No Wikipedia.
+- Use Google Search to find SPECIFIC, deep-linked URLs pointing to the PRIMARY SOURCE of every claim (the actual research report, government dataset, academic paper, or official standard page — not a blog post summarising it). Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains. Never link to competitor blogs or vendor landing pages. No Wikipedia.
 - Use at least 8 external Markdown links across the body, plus at least 2 internal links from the pool.
 - Cover the semantic keyword cluster across multiple chapters. Never bullet-dump them.
 - Keep paragraph length 3–4 lines. Sentences ≤ 22 words.

@@ -528,7 +528,7 @@ export interface LandingPageBenefitsSection {
   type: 'benefits';
   heading: string;
   subheading?: string;
-  items: Array<{ title: string; description: string }>;
+  items: Array<{ icon?: string; title: string; description: string }>;
 }
 
 export type LandingPageSection =

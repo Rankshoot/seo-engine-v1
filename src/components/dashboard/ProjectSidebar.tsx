@@ -231,6 +231,7 @@ export default function ProjectSidebar({
         { label: "Ebooks", href: `${base}/content-generator/ebooks` },
         { label: "Whitepapers", href: `${base}/content-generator/whitepapers` },
         { label: "LinkedIn posts", href: `${base}/content-generator/linkedin` },
+        { label: "Landing pages", href: `${base}/content-generator/landing-pages` },
       ],
     },
     {

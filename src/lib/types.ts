@@ -74,9 +74,9 @@ export type BlogStatus = 'generated' | 'approved' | 'published';
  * the same `blogs` table and reuse the same status / SEO scoring / preview
  * primitives — only the writer prompt and content-data payload differ.
  */
-export type ContentType = 'blog' | 'ebook' | 'whitepaper' | 'linkedin';
+export type ContentType = 'blog' | 'ebook' | 'whitepaper' | 'linkedin' | 'landing_page';
 
-export const CONTENT_TYPES: ContentType[] = ['blog', 'ebook', 'whitepaper', 'linkedin'];
+export const CONTENT_TYPES: ContentType[] = ['blog', 'ebook', 'whitepaper', 'linkedin', 'landing_page'];
 
 /** Display metadata used by sidebar nav, history filters, and preview chrome. */
 export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
@@ -84,6 +84,7 @@ export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
   ebook: 'Ebook',
   whitepaper: 'Whitepaper',
   linkedin: 'LinkedIn post',
+  landing_page: 'Landing Page',
 };
 
 export const CONTENT_TYPE_PLURAL: Record<ContentType, string> = {
@@ -91,6 +92,7 @@ export const CONTENT_TYPE_PLURAL: Record<ContentType, string> = {
   ebook: 'Ebooks',
   whitepaper: 'Whitepapers',
   linkedin: 'LinkedIn posts',
+  landing_page: 'Landing Pages',
 };
 
 /** Path segment for type-specific routes inside `/content-generator/`. */
@@ -99,6 +101,7 @@ export const CONTENT_TYPE_SLUG: Record<ContentType, string> = {
   ebook: 'ebooks',
   whitepaper: 'whitepapers',
   linkedin: 'linkedin',
+  landing_page: 'landing-pages',
 };
 
 export type BlogSeoIssueKey =
@@ -450,11 +453,115 @@ export interface LinkedInContentData {
   featured_image_url?: string;
 }
 
+// ─── Landing Page types ───────────────────────────────────────────────────────
+
+export type LandingPageType =
+  | 'service'
+  | 'product'
+  | 'location'
+  | 'feature'
+  | 'lead-capture'
+  | 'comparison'
+  | 'campaign';
+
+export const LANDING_PAGE_TYPE_LABELS: Record<LandingPageType, string> = {
+  service: 'Service Page',
+  product: 'Product Page',
+  location: 'Location Page',
+  feature: 'Feature/Use-case Page',
+  'lead-capture': 'Lead Capture Page',
+  comparison: 'Comparison Page',
+  campaign: 'Campaign Page',
+};
+
+export interface LandingPageHeroSection {
+  type: 'hero';
+  headline: string;
+  subheadline: string;
+  cta_primary: string;
+  cta_secondary?: string;
+  badge?: string;
+  trust_signals?: string[];
+}
+
+export interface LandingPageFeaturesSection {
+  type: 'features';
+  heading: string;
+  subheading?: string;
+  items: Array<{ icon: string; title: string; description: string }>;
+}
+
+export interface LandingPageStatsSection {
+  type: 'stats';
+  heading?: string;
+  items: Array<{ value: string; label: string }>;
+}
+
+export interface LandingPageHowItWorksSection {
+  type: 'how-it-works';
+  heading: string;
+  subheading?: string;
+  steps: Array<{ title: string; description: string }>;
+}
+
+export interface LandingPageTestimonialsSection {
+  type: 'testimonials';
+  heading: string;
+  items: Array<{ quote: string; author: string; role: string; company?: string }>;
+}
+
+export interface LandingPageFaqSection {
+  type: 'faq';
+  heading: string;
+  items: Array<{ question: string; answer: string }>;
+}
+
+export interface LandingPageCtaSection {
+  type: 'cta';
+  heading: string;
+  subheading?: string;
+  cta_primary: string;
+  cta_secondary?: string;
+}
+
+export interface LandingPageBenefitsSection {
+  type: 'benefits';
+  heading: string;
+  subheading?: string;
+  items: Array<{ title: string; description: string }>;
+}
+
+export type LandingPageSection =
+  | LandingPageHeroSection
+  | LandingPageFeaturesSection
+  | LandingPageStatsSection
+  | LandingPageHowItWorksSection
+  | LandingPageTestimonialsSection
+  | LandingPageFaqSection
+  | LandingPageCtaSection
+  | LandingPageBenefitsSection;
+
+export interface LandingPageContentData {
+  page_type: LandingPageType;
+  meta_title: string;
+  meta_description: string;
+  primary_keyword: string;
+  secondary_keywords: string[];
+  sections: LandingPageSection[];
+  audience: string;
+  tone: string;
+  primary_cta: string;
+  company_name: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export type ContentDataPayload =
   | Record<string, never>
   | EbookContentData
   | WhitepaperContentData
-  | LinkedInContentData;
+  | LinkedInContentData
+  | LandingPageContentData;
 
 /** Calendar row plus optional blog summary from `getCalendarWithBlogs`. */
 export type CalendarEntryWithBlog = CalendarEntry & {

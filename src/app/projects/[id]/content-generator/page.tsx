@@ -60,6 +60,18 @@ function ArtWhitepaper() {
   );
 }
 
+function ArtLandingPage() {
+  return (
+    <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
+      <rect x="10" y="6" width="100" height="60" rx="6" className="stroke-emerald-500/60 dark:stroke-emerald-400/60" strokeWidth="1.5" />
+      <rect x="10" y="6" width="100" height="18" rx="6" className="fill-emerald-500/15 dark:fill-emerald-400/15 stroke-emerald-500/60 dark:stroke-emerald-400/60" strokeWidth="1.5" />
+      <path d="M30 20h60M38 14h44" className="stroke-emerald-500/70 dark:stroke-emerald-400/70" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M20 36h80M20 44h60M20 52h40" className="stroke-emerald-500/35 dark:stroke-emerald-400/35" strokeWidth="1.5" strokeLinecap="round" />
+      <rect x="38" y="56" width="44" height="7" rx="3.5" className="fill-emerald-500/20 stroke-emerald-500/60 dark:fill-emerald-400/20 dark:stroke-emerald-400/60" strokeWidth="1" />
+    </svg>
+  );
+}
+
 function ArtLinkedIn() {
   return (
     <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
@@ -127,7 +139,7 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
   });
 
   const counts = useMemo(() => {
-    const map: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
+    const map: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing_page: 0 };
     if (data?.success) {
       for (const r of data.data) map[r.content_type] = (map[r.content_type] ?? 0) + 1;
     }
@@ -192,6 +204,20 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
       ],
       art: <ArtLinkedIn />,
       artBg: "bg-cyan-100/80 dark:bg-cyan-500/10",
+    },
+    {
+      id: "landing_page",
+      href: `${studioBase}/landing-pages`,
+      duration: "1–2 min",
+      title: "Landing pages",
+      subtitle: "SEO-focused landing pages built around your brand.",
+      bullets: [
+        "Hero, features, FAQ, CTA — all AI-structured",
+        "Brand colors + visual style injected automatically",
+        `${counts.landing_page} in this project`,
+      ],
+      art: <ArtLandingPage />,
+      artBg: "bg-emerald-100/80 dark:bg-emerald-500/10",
     },
   ];
 

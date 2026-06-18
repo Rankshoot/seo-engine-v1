@@ -30,6 +30,11 @@ export function getContentPreviewUrl(
     case "linkedin_post":
       return `/projects/${projectId}/content-generator/linkedin/${contentId}`;
 
+    case "landing_page":
+    case "landing page":
+    case "landing-page":
+      return `/projects/${projectId}/content-generator/landing-pages/${contentId}`;
+
     default:
       // Fallback path
       return `/projects/${projectId}/content-generator/blogs/${contentId}`;

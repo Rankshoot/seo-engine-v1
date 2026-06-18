@@ -22,13 +22,14 @@ import toast from "react-hot-toast";
 type SortKey = "updated" | "created" | "words" | "title";
 type TypeFilter = ContentType | "all";
 
-const TYPE_FILTERS: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
+const TYPE_FILTERS: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin", "landing_page"];
 const TYPE_FILTER_OPTIONS: { value: TypeFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "blog", label: "Blogs" },
   { value: "ebook", label: "Ebooks" },
   { value: "whitepaper", label: "Whitepapers" },
   { value: "linkedin", label: "LinkedIn posts" },
+  { value: "landing_page", label: "Landing Pages" },
 ];
 const PAGE_SIZE = 20;
 

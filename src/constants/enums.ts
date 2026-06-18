@@ -107,4 +107,5 @@ export const CONTENT_TYPE_ICON: Record<ContentType, string> = {
   ebook: "📘",
   whitepaper: "📄",
   linkedin: "💼",
+  landing_page: "🏷️",
 };

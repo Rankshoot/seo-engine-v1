@@ -38,6 +38,13 @@ export async function PATCH(
     "brand_design_personality",
     "brand_image_style",
     "brand_palette_json",
+    "brand_ref_landing_page_url",
+    "brand_theme",
+    "brand_screenshot_url",
+    "brand_font_family",
+    "brand_button_style",
+    "brand_cta_link",
+    "brand_landing_page_instruction",
   ] as const;
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };

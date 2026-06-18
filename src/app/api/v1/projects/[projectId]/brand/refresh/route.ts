@@ -16,7 +16,7 @@ export async function POST(
 
   const { data: project } = await supabaseAdmin
     .from("projects")
-    .select("id, domain, company, niche, description")
+    .select("id, domain, company, niche, description, brand_ref_landing_page_url")
     .eq("id", projectId)
     .eq("user_id", user.id)
     .maybeSingle();
@@ -29,6 +29,7 @@ export async function POST(
     company: project.company,
     niche: project.niche,
     description: project.description ?? "",
+    refLandingPageUrl: project.brand_ref_landing_page_url,
   });
 
   if (!profile) {

@@ -46,6 +46,19 @@ interface ProjectRow {
   brand_voice?: string;
   brand_values?: string;
   brand_description?: string;
+  brand_primary_color?: string | null;
+  brand_secondary_color?: string | null;
+  brand_accent_color?: string | null;
+  brand_logo_url?: string | null;
+  brand_visual_style?: string | null;
+  brand_design_personality?: string | null;
+  brand_palette_json?: string[] | null;
+  brand_ref_landing_page_url?: string | null;
+  brand_theme?: 'light' | 'dark' | null;
+  brand_screenshot_url?: string | null;
+  brand_font_family?: string | null;
+  brand_button_style?: string | null;
+  brand_cta_link?: string | null;
 }
 
 const LANG_LABEL: Record<string, string> = {
@@ -999,12 +1012,15 @@ export async function generateLandingPageAction(
       productOrService: payload.productOrService,
       locationFocus: payload.locationFocus,
       uniqueValueProp: payload.uniqueValueProp,
-      brandPrimaryColor: (project as any).brand_primary_color ?? null,
-      brandVisualStyle: (project as any).brand_visual_style ?? null,
-      brandPersonality: (project as any).brand_design_personality ?? null,
+      brandPrimaryColor: project.brand_primary_color ?? null,
+      brandVisualStyle: project.brand_visual_style ?? null,
+      brandPersonality: project.brand_design_personality ?? null,
       brandVoice: project.brand_voice,
       brandValues: project.brand_values,
       brandDescription: project.brand_description,
+      brandTheme: project.brand_theme ?? 'light',
+      brandFontFamily: project.brand_font_family ?? 'Inter, sans-serif',
+      brandButtonStyle: project.brand_button_style ?? 'rounded-full',
     });
     mark('ai', `${result.content_data.sections.length} sections generated`, Date.now() - t0);
   } catch (e) {

@@ -95,7 +95,7 @@ const benefitsSchema = z.object({
   })).min(3).max(8),
 });
 
-const sectionSchema = z.discriminatedUnion('type', [
+export const sectionSchema = z.discriminatedUnion('type', [
   heroSchema,
   featuresSchema,
   statsSchema,
@@ -139,6 +139,9 @@ export interface LandingPagePromptContext {
   brandPrimaryColor?: string | null;
   brandVisualStyle?: string | null;
   brandPersonality?: string | null;
+  brandTheme?: 'light' | 'dark' | null;
+  brandFontFamily?: string | null;
+  brandButtonStyle?: string | null;
   // Project context
   brandVoice?: string;
   brandValues?: string;
@@ -167,12 +170,23 @@ const PAGE_TYPE_GUIDANCE: Record<LandingPageType, string> = {
 function buildPrompt(ctx: LandingPagePromptContext): string {
   const kw = ctx.primaryKeyword.trim();
   const secKw = ctx.secondaryKeywords?.length ? ctx.secondaryKeywords.slice(0, 8).join(', ') : 'none';
-  const brandHint = ctx.brandPrimaryColor
-    ? `Brand primary color: ${ctx.brandPrimaryColor}. Visual style: ${ctx.brandVisualStyle ?? 'modern'}.`
-    : '';
+  const brandHint = [
+    ctx.brandPrimaryColor ? `Brand primary color: ${ctx.brandPrimaryColor}.` : '',
+    ctx.brandVisualStyle ? `Visual style: ${ctx.brandVisualStyle ?? 'modern'}.` : '',
+    ctx.brandTheme ? `Theme (light or dark layout): ${ctx.brandTheme}.` : '',
+    ctx.brandFontFamily ? `Font stack: ${ctx.brandFontFamily}.` : '',
+    ctx.brandButtonStyle ? `Button style: ${ctx.brandButtonStyle}.` : '',
+  ].filter(Boolean).join(' ');
   const voiceHint = [ctx.brandVoice, ctx.brandValues, ctx.brandDescription].filter(Boolean).join(' | ');
 
   return `You are an expert conversion copywriter and SEO specialist. Generate a high-converting, SEO-optimised landing page as structured JSON.
+
+## Design and Style Strategy
+Ensure the generated sections copy fits a page with the following design settings:
+- Colors: ${ctx.brandPrimaryColor || 'default'}
+- Theme: ${ctx.brandTheme || 'light'} theme layout
+- Buttons: ${ctx.brandButtonStyle || 'rounded-full'} shape
+- Font stack: ${ctx.brandFontFamily || 'Inter, sans-serif'}
 
 ## Page brief
 - Primary keyword: "${kw}"

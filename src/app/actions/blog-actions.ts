@@ -911,18 +911,19 @@ export async function updateBlogContent(
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: null };
 
-  const cleaned = sanitizeBlogMarkdown(content);
-  if (cleaned.length < 200) {
-    return { success: false, error: 'Blog content is too short to save.', data: null };
-  }
-
   const { data: blog, error: bErr } = await supabaseAdmin
     .from('blogs')
-    .select('id, project_id')
+    .select('id, project_id, content_type')
     .eq('id', blogId)
     .single();
 
   if (bErr || !blog) return { success: false, error: 'Blog not found', data: null };
+
+  const isLandingPage = blog.content_type === 'landing_page';
+  const cleaned = sanitizeBlogMarkdown(content);
+  if (!isLandingPage && cleaned.length < 200) {
+    return { success: false, error: 'Blog content is too short to save.', data: null };
+  }
 
   const { data: project, error: pErr } = await supabaseAdmin
     .from('projects')

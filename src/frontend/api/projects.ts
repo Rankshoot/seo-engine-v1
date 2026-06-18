@@ -97,6 +97,13 @@ export const projectsApi = {
       brand_design_personality?: string | null;
       brand_image_style?: string | null;
       brand_palette_json?: string[] | null;
+      brand_ref_landing_page_url?: string | null;
+      brand_theme?: string | null;
+      brand_screenshot_url?: string | null;
+      brand_font_family?: string | null;
+      brand_button_style?: string | null;
+      brand_cta_link?: string | null;
+      brand_landing_page_instruction?: string | null;
     }
   ): Promise<{ success: boolean; error?: string }> {
     return apiPatch(V1Routes.projectBrand(projectId), payload);

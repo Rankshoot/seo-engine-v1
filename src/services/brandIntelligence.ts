@@ -30,6 +30,12 @@ export interface BrandProfile {
   brand_image_style: string | null;
   brand_palette_json: string[] | null;
   brand_extracted_at: string;
+  brand_ref_landing_page_url?: string | null;
+  brand_theme?: 'light' | 'dark' | null;
+  brand_screenshot_url?: string | null;
+  brand_font_family?: string | null;
+  brand_button_style?: string | null;
+  brand_cta_link?: string | null;
 }
 
 interface RawExtraction {
@@ -37,23 +43,35 @@ interface RawExtraction {
   faviconUrl: string | null;
   cssColors: string[];       // hex codes from meta/CSS/inline
   fetchedOk: boolean;
+  scrapedContext?: string;
 }
 
 // ---------------------------------------------------------------------------
 // Phase 1 — HTML extraction
 // ---------------------------------------------------------------------------
 
-async function extractFromWebsite(domain: string): Promise<RawExtraction> {
-  const empty: RawExtraction = { logoUrl: null, faviconUrl: null, cssColors: [], fetchedOk: false };
+async function extractFromWebsite(targetUrl: string): Promise<RawExtraction> {
+  const empty: RawExtraction = { logoUrl: null, faviconUrl: null, cssColors: [], fetchedOk: false, scrapedContext: "" };
 
-  const hostname = domain.replace(/^https?:\/\//, "").replace(/\/.*/, "").trim();
-  if (!hostname) return empty;
+  let urlStr = targetUrl.trim();
+  if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) {
+    urlStr = `https://${urlStr}`;
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(urlStr);
+  } catch {
+    return empty;
+  }
+
+  const hostname = parsedUrl.hostname;
 
   let html = "";
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const res = await fetch(`https://${hostname}/`, {
+    const res = await fetch(urlStr, {
       signal: ctrl.signal,
       headers: { "User-Agent": "Mozilla/5.0 (compatible; SEO-Engine/1.0)" },
     }).finally(() => clearTimeout(timer));
@@ -126,13 +144,17 @@ async function extractFromWebsite(domain: string): Promise<RawExtraction> {
     });
   }
 
-  // Resolve relative URLs
+  // Resolve relative URLs relative to targetUrl!
   const resolve = (url: string | null): string | null => {
     if (!url) return null;
     if (url.startsWith("http")) return url;
     if (url.startsWith("//")) return `https:${url}`;
     if (url.startsWith("/")) return `https://${hostname}${url}`;
-    return `https://${hostname}/${url}`;
+    try {
+      return new URL(url, urlStr).toString();
+    } catch {
+      return `https://${hostname}/${url}`;
+    }
   };
 
   logoUrl    = resolve(logoUrl);
@@ -191,11 +213,22 @@ async function extractFromWebsite(domain: string): Promise<RawExtraction> {
   // Filter out near-white and near-black (boring/unusable for brand prompts)
   const interestingColors = [...colors].filter(c => !isNearWhiteOrBlack(c));
 
+  // Extract structured context
+  const pageTitle = $("title").text().trim();
+  const metaDesc = $('meta[name="description"]').attr("content") || "";
+  const headers: string[] = [];
+  $("h1, h2").slice(0, 5).each((_, el) => {
+    const txt = $(el).text().trim();
+    if (txt) headers.push(txt);
+  });
+  const scrapedContext = `Title: ${pageTitle}\nDescription: ${metaDesc}\nHeaders:\n- ${headers.join("\n- ")}`;
+
   return {
     logoUrl,
     faviconUrl,
     cssColors: interestingColors.slice(0, 6),
     fetchedOk: true,
+    scrapedContext,
   };
 }
 
@@ -278,6 +311,9 @@ const brandEnrichmentSchema = z.object({
   visual_style:         z.enum(["minimalist", "bold", "corporate", "modern", "classic", "playful", "elegant", "technical"]),
   design_personality:   z.enum(["professional", "playful", "luxury", "friendly", "authoritative", "innovative", "trustworthy", "energetic"]),
   image_style:          z.enum(["photorealistic", "flat-design", "illustrated", "abstract", "editorial", "data-visualization", "corporate-photography", "infographic"]),
+  theme:                z.enum(["light", "dark"]).describe("Determine the overall theme of the website/landing page (light or dark layout). Defaults to light if not clear."),
+  font_family:          z.string().describe("The primary font family or font stack to use for this brand (e.g. 'Inter, sans-serif', 'Outfit, sans-serif', 'Playfair Display, serif', etc.)"),
+  button_style:         z.enum(["rounded-full", "rounded-md", "rounded-none"]).describe("The shape of call-to-action buttons (rounded-full for capsule, rounded-md for slight curves, rounded-none for sharp corners)."),
 });
 
 type BrandEnrichmentResult = z.infer<typeof brandEnrichmentSchema>;
@@ -288,22 +324,30 @@ async function enrichWithAI(params: {
   description: string;
   cssColors: string[];
   logoColors: string[];
+  scrapedContext?: string;
 }): Promise<BrandEnrichmentResult | null> {
-  const { company, niche, description, cssColors, logoColors } = params;
+  const { company, niche, description, cssColors, logoColors, scrapedContext } = params;
 
   const allColors = [...new Set([...logoColors, ...cssColors])].slice(0, 6);
   const colorHint = allColors.length
     ? `Extracted colors from their website/logo: ${allColors.join(", ")}.`
     : "No colors were extractable from their website.";
 
-  const prompt = `You are a brand intelligence analyst. Analyze this company and produce a structured brand profile.
+  const prompt = `You are a brand intelligence analyst. Analyze this company and its reference page, and produce a structured brand profile.
 
 Company: ${company}
 Industry/Niche: ${niche}
 Description: ${description || "(none provided)"}
 ${colorHint}
 
-Produce a JSON brand profile. If extracted colors are available, use them as the palette. If not, infer a plausible brand palette from the company name and industry. Return valid JSON matching this schema exactly:
+${scrapedContext ? `Reference Landing Page Scraped Context:\n${scrapedContext}\n` : ''}
+
+Produce a JSON brand profile. If extracted colors are available, use them as the palette. If not, infer a plausible brand palette from the company name and industry.
+For the 'theme', determine if the reference landing page or company website uses a 'light' background (white/off-white) or 'dark' background (black/dark-gray).
+For the 'font_family', detect the dominant font if mentioned in css variables/fonts, or infer a modern, beautiful font family stack (e.g. 'Inter, sans-serif', 'Outfit, sans-serif', 'Plus Jakarta Sans, sans-serif', 'Montserrat, sans-serif', etc.) that perfectly matches the brand.
+For the 'button_style', decide whether the brand uses capsule buttons ('rounded-full'), standard soft rounded buttons ('rounded-md'), or sharp square buttons ('rounded-none').
+
+Return valid JSON matching this schema exactly:
 
 {
   "primary_color": "#hex6",
@@ -312,7 +356,10 @@ Produce a JSON brand profile. If extracted colors are available, use them as the
   "palette": ["#hex1", "#hex2", ...up to 6],
   "visual_style": one of: minimalist|bold|corporate|modern|classic|playful|elegant|technical,
   "design_personality": one of: professional|playful|luxury|friendly|authoritative|innovative|trustworthy|energetic,
-  "image_style": one of: photorealistic|flat-design|illustrated|abstract|editorial|data-visualization|corporate-photography|infographic
+  "image_style": one of: photorealistic|flat-design|illustrated|abstract|editorial|data-visualization|corporate-photography|infographic,
+  "theme": "light" or "dark",
+  "font_family": "e.g. 'Outfit, sans-serif'",
+  "button_style": "rounded-full" | "rounded-md" | "rounded-none"
 }`;
 
   try {
@@ -321,7 +368,7 @@ Produce a JSON brand profile. If extracted colors are available, use them as the
       "brand-intelligence",
       prompt,
       brandEnrichmentSchema,
-      { temperature: 0.3, maxOutputTokens: 400 }
+      { temperature: 0.3, maxOutputTokens: 500 }
     );
     return result;
   } catch {
@@ -333,21 +380,57 @@ Produce a JSON brand profile. If extracted colors are available, use them as the
 // Phase 4 — Persist to DB
 // ---------------------------------------------------------------------------
 
+async function getPageScreenshotUrl(url: string): Promise<string> {
+  try {
+    const res = await fetch(`https://api.microlink.io?url=${encodeURIComponent(url)}&screenshot=true`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success' && data.data?.screenshot?.url) {
+        return data.data.screenshot.url;
+      }
+    }
+  } catch (err) {
+    console.error("Failed to fetch screenshot URL from Microlink API:", err);
+  }
+  return `https://api.microlink.io/?url=${encodeURIComponent(url)}&screenshot=true&embed=screenshot.url`;
+}
+
 async function saveBrandProfile(projectId: string, profile: BrandProfile): Promise<void> {
+  const patch: Record<string, any> = {
+    brand_primary_color:    profile.brand_primary_color,
+    brand_secondary_color:  profile.brand_secondary_color,
+    brand_accent_color:     profile.brand_accent_color,
+    brand_logo_url:         profile.brand_logo_url,
+    brand_visual_style:     profile.brand_visual_style,
+    brand_design_personality: profile.brand_design_personality,
+    brand_image_style:      profile.brand_image_style,
+    brand_palette_json:     profile.brand_palette_json,
+    brand_extracted_at:     profile.brand_extracted_at,
+    updated_at:             new Date().toISOString(),
+  };
+
+  if (profile.brand_ref_landing_page_url !== undefined) {
+    patch.brand_ref_landing_page_url = profile.brand_ref_landing_page_url;
+  }
+  if (profile.brand_theme !== undefined) {
+    patch.brand_theme = profile.brand_theme;
+  }
+  if (profile.brand_screenshot_url !== undefined) {
+    patch.brand_screenshot_url = profile.brand_screenshot_url;
+  }
+  if (profile.brand_font_family !== undefined) {
+    patch.brand_font_family = profile.brand_font_family;
+  }
+  if (profile.brand_button_style !== undefined) {
+    patch.brand_button_style = profile.brand_button_style;
+  }
+  if (profile.brand_cta_link !== undefined) {
+    patch.brand_cta_link = profile.brand_cta_link;
+  }
+
   await supabaseAdmin
     .from("projects")
-    .update({
-      brand_primary_color:    profile.brand_primary_color,
-      brand_secondary_color:  profile.brand_secondary_color,
-      brand_accent_color:     profile.brand_accent_color,
-      brand_logo_url:         profile.brand_logo_url,
-      brand_visual_style:     profile.brand_visual_style,
-      brand_design_personality: profile.brand_design_personality,
-      brand_image_style:      profile.brand_image_style,
-      brand_palette_json:     profile.brand_palette_json,
-      brand_extracted_at:     profile.brand_extracted_at,
-      updated_at:             new Date().toISOString(),
-    })
+    .update(patch)
     .eq("id", projectId);
 }
 
@@ -365,12 +448,20 @@ export async function discoverBrand(params: {
   company: string;
   niche: string;
   description?: string;
+  refLandingPageUrl?: string | null;
 }): Promise<BrandProfile | null> {
-  const { projectId, domain, company, niche, description = "" } = params;
+  const { projectId, domain, company, niche, description = "", refLandingPageUrl = null } = params;
 
   try {
-    // Phase 1 — HTML extraction
-    const raw = await extractFromWebsite(domain);
+    // Phase 1 — HTML extraction (use refLandingPageUrl if available, otherwise domain)
+    const scrapeTarget = refLandingPageUrl || domain;
+    const raw = await extractFromWebsite(scrapeTarget);
+
+    // Fetch screenshot if a reference landing page exists
+    let screenshotUrl: string | null = null;
+    if (refLandingPageUrl) {
+      screenshotUrl = await getPageScreenshotUrl(refLandingPageUrl);
+    }
 
     // Phase 2 — Logo color extraction via Claude vision (best-effort)
     let logoColors: string[] = [];
@@ -386,6 +477,7 @@ export async function discoverBrand(params: {
       description,
       cssColors: raw.cssColors,
       logoColors,
+      scrapedContext: raw.scrapedContext,
     });
 
     // Build profile — prefer enriched over raw fallback
@@ -403,6 +495,11 @@ export async function discoverBrand(params: {
       brand_image_style:      enriched?.image_style ?? null,
       brand_palette_json:     allColors.length ? allColors : null,
       brand_extracted_at:     new Date().toISOString(),
+      brand_ref_landing_page_url: refLandingPageUrl,
+      brand_theme:            enriched?.theme ?? 'light',
+      brand_screenshot_url:   screenshotUrl,
+      brand_font_family:      enriched?.font_family ?? 'Inter, sans-serif',
+      brand_button_style:     enriched?.button_style ?? 'rounded-full',
     };
 
     // Phase 4 — Persist
@@ -421,7 +518,7 @@ export async function discoverBrand(params: {
 export async function getBrandProfile(projectId: string): Promise<BrandProfile | null> {
   const { data } = await supabaseAdmin
     .from("projects")
-    .select("brand_primary_color,brand_secondary_color,brand_accent_color,brand_logo_url,brand_visual_style,brand_design_personality,brand_image_style,brand_palette_json,brand_extracted_at")
+    .select("brand_primary_color,brand_secondary_color,brand_accent_color,brand_logo_url,brand_visual_style,brand_design_personality,brand_image_style,brand_palette_json,brand_extracted_at,brand_ref_landing_page_url,brand_theme,brand_screenshot_url,brand_font_family,brand_button_style,brand_cta_link")
     .eq("id", projectId)
     .maybeSingle();
 
@@ -437,6 +534,12 @@ export async function getBrandProfile(projectId: string): Promise<BrandProfile |
     brand_image_style:      data.brand_image_style ?? null,
     brand_palette_json:     (data.brand_palette_json as string[] | null) ?? null,
     brand_extracted_at:     data.brand_extracted_at,
+    brand_ref_landing_page_url: data.brand_ref_landing_page_url ?? null,
+    brand_theme:            (data.brand_theme as 'light' | 'dark' | null) ?? 'light',
+    brand_screenshot_url:   data.brand_screenshot_url ?? null,
+    brand_font_family:      data.brand_font_family ?? 'Inter, sans-serif',
+    brand_button_style:     data.brand_button_style ?? 'rounded-full',
+    brand_cta_link:         data.brand_cta_link ?? null,
   };
 }
 

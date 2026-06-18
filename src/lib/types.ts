@@ -24,6 +24,13 @@ export interface Project {
   brand_image_style?: string | null;
   brand_palette_json?: string[] | null;
   brand_extracted_at?: string | null;
+  brand_ref_landing_page_url?: string | null;
+  brand_theme?: 'light' | 'dark' | null;
+  brand_screenshot_url?: string | null;
+  brand_font_family?: string | null;
+  brand_button_style?: string | null;
+  brand_cta_link?: string | null;
+  brand_landing_page_instruction?: string | null;
   created_at: string;
   updated_at: string;
   project_competitors?: ProjectCompetitor[];
@@ -482,6 +489,7 @@ export interface LandingPageHeroSection {
   cta_secondary?: string;
   badge?: string;
   trust_signals?: string[];
+  image_url?: string;
 }
 
 export interface LandingPageFeaturesSection {
@@ -489,6 +497,7 @@ export interface LandingPageFeaturesSection {
   heading: string;
   subheading?: string;
   items: Array<{ icon: string; title: string; description: string }>;
+  image_url?: string;
 }
 
 export interface LandingPageStatsSection {
@@ -529,6 +538,7 @@ export interface LandingPageBenefitsSection {
   heading: string;
   subheading?: string;
   items: Array<{ icon?: string; title: string; description: string }>;
+  image_url?: string;
 }
 
 export type LandingPageSection =

@@ -274,6 +274,15 @@ export default function ProjectSettingsPage() {
   const [visualStyle, setVisualStyle] = useState("");
   const [designPersonality, setDesignPersonality] = useState("");
   const [imageStyle, setImageStyle] = useState("");
+  
+  // New fields
+  const [refLandingPageUrl, setRefLandingPageUrl] = useState("");
+  const [brandTheme, setBrandTheme] = useState("light");
+  const [screenshotUrl, setScreenshotUrl] = useState("");
+  const [fontFamily, setFontFamily] = useState("Inter, sans-serif");
+  const [brandButtonStyle, setBrandButtonStyle] = useState("rounded-full");
+  const [ctaLink, setCtaLink] = useState("");
+  const [landingPageInstruction, setLandingPageInstruction] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
@@ -289,6 +298,15 @@ export default function ProjectSettingsPage() {
     setVisualStyle(project.brand_visual_style ?? "");
     setDesignPersonality(project.brand_design_personality ?? "");
     setImageStyle(project.brand_image_style ?? "");
+    
+    // Bind new settings
+    setRefLandingPageUrl(project.brand_ref_landing_page_url ?? "");
+    setBrandTheme(project.brand_theme ?? "light");
+    setScreenshotUrl(project.brand_screenshot_url ?? "");
+    setFontFamily(project.brand_font_family ?? "Inter, sans-serif");
+    setBrandButtonStyle(project.brand_button_style ?? "rounded-full");
+    setCtaLink(project.brand_cta_link ?? "");
+    setLandingPageInstruction(project.brand_landing_page_instruction ?? "");
   }, [project]);
 
   const nullIfEmpty = (v: string) => v.trim() || null;
@@ -305,6 +323,14 @@ export default function ProjectSettingsPage() {
         brand_visual_style: nullIfEmpty(visualStyle),
         brand_design_personality: nullIfEmpty(designPersonality),
         brand_image_style: nullIfEmpty(imageStyle),
+        
+        // Save new settings
+        brand_ref_landing_page_url: nullIfEmpty(refLandingPageUrl),
+        brand_theme: brandTheme || "light",
+        brand_font_family: nullIfEmpty(fontFamily),
+        brand_button_style: brandButtonStyle || "rounded-full",
+        brand_cta_link: nullIfEmpty(ctaLink),
+        brand_landing_page_instruction: nullIfEmpty(landingPageInstruction),
       });
       if (result.success) {
         setSaveStatus("success");
@@ -318,7 +344,7 @@ export default function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [projectId, primaryColor, secondaryColor, accentColor, logoUrl, visualStyle, designPersonality, imageStyle, queryClient]);
+  }, [projectId, primaryColor, secondaryColor, accentColor, logoUrl, visualStyle, designPersonality, imageStyle, refLandingPageUrl, brandTheme, fontFamily, brandButtonStyle, ctaLink, landingPageInstruction, queryClient]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -415,6 +441,130 @@ export default function ProjectSettingsPage() {
           <SelectField label="Visual Style" value={visualStyle} options={VISUAL_STYLES} onChange={setVisualStyle} />
           <SelectField label="Brand Personality" value={designPersonality} options={DESIGN_PERSONALITIES} onChange={setDesignPersonality} />
           <SelectField label="Image Style" value={imageStyle} options={IMAGE_STYLES} onChange={setImageStyle} />
+        </div>
+
+        {/* Landing Page settings */}
+        <div className="px-5 py-5 border-t border-border-subtle bg-surface-secondary/20">
+          <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider mb-4">
+            Landing Page & Styling Strategy
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-5">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-text-secondary">Reference Landing Page URL</label>
+              <input
+                type="url"
+                value={refLandingPageUrl}
+                onChange={e => setRefLandingPageUrl(e.target.value)}
+                placeholder="e.g. https://taggd.in/jobs-reports"
+                className="h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+              />
+              <p className="text-[10px] text-text-tertiary">
+                Enter an existing landing page URL. Re-extracting will analyze its HTML styling/colors and fetch its screenshot.
+              </p>
+            </div>
+            
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-text-secondary">CTA Redirection Link</label>
+              <input
+                type="url"
+                value={ctaLink}
+                onChange={e => setCtaLink(e.target.value)}
+                placeholder="e.g. https://taggd.in/contact-us"
+                className="h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+              />
+              <p className="text-[10px] text-text-tertiary">
+                All CTA buttons in the preview and exported pages will automatically link to this URL.
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex flex-col gap-1.5 mb-5">
+            <label className="text-xs font-medium text-text-secondary">Custom Landing Page Instructions</label>
+            <textarea
+              value={landingPageInstruction}
+              onChange={e => setLandingPageInstruction(e.target.value)}
+              placeholder="e.g. Highlight dual-tone headlines, mention Tagged's candidate metric points, and structure into 2-column segments."
+              rows={3}
+              className="w-full p-2.5 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors resize-y"
+            />
+            <p className="text-[10px] text-text-tertiary">
+              Specific instructions to guide the AI conversion writer when generating or editing your landing pages.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-text-secondary">Brand Theme</label>
+              <select
+                value={brandTheme}
+                onChange={e => setBrandTheme(e.target.value)}
+                className="h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+              >
+                <option value="light">Light Theme (Recommended)</option>
+                <option value="dark">Dark Theme</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-text-secondary">Font Family Stack</label>
+              <select
+                value={fontFamily}
+                onChange={e => setFontFamily(e.target.value)}
+                className="h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+              >
+                <option value="Inter, sans-serif">Inter (Modern Sans)</option>
+                <option value="Outfit, sans-serif">Outfit (Premium Rounded)</option>
+                <option value="Plus Jakarta Sans, sans-serif">Plus Jakarta Sans (Sleek Geometric)</option>
+                <option value="Montserrat, sans-serif">Montserrat (Bold & Trendy)</option>
+                <option value="Playfair Display, serif">Playfair Display (Elegant Serif)</option>
+                <option value="custom">— Custom Font Stack —</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-text-secondary">Button Shape</label>
+              <select
+                value={brandButtonStyle}
+                onChange={e => setBrandButtonStyle(e.target.value)}
+                className="h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+              >
+                <option value="rounded-full">Capsule (rounded-full)</option>
+                <option value="rounded-md">Rounded (rounded-md)</option>
+                <option value="rounded-none">Sharp Corners (rounded-none)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Custom font input if selected */}
+          {fontFamily === "custom" || (!["Inter, sans-serif", "Outfit, sans-serif", "Plus Jakarta Sans, sans-serif", "Montserrat, sans-serif", "Playfair Display, serif"].includes(fontFamily)) ? (
+            <div className="flex flex-col gap-1.5 mb-5 max-w-sm">
+              <label className="text-xs font-medium text-text-secondary">Custom Font Family Stack</label>
+              <input
+                type="text"
+                value={fontFamily === "custom" ? "" : fontFamily}
+                onChange={e => setFontFamily(e.target.value || "custom")}
+                placeholder="e.g. 'Roboto', sans-serif"
+                className="h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+              />
+            </div>
+          ) : null}
+
+          {/* Reference Page Screenshot Display */}
+          {screenshotUrl && (
+            <div className="mt-4 border border-border-subtle rounded-xl p-4 bg-surface-primary max-w-lg">
+              <span className="text-[10px] font-bold text-text-tertiary uppercase tracking-wider block mb-2 font-mono">
+                Reference Page Screenshot Capture
+              </span>
+              <div className="relative aspect-[16/10] w-full rounded-lg overflow-hidden border border-border-subtle bg-slate-900 flex items-center justify-center">
+                <img
+                  src={screenshotUrl}
+                  alt="Reference page capture"
+                  className="w-full h-full object-cover object-top"
+                  loading="lazy"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Save footer */}

@@ -18,81 +18,80 @@ import type {
 
 const heroSchema = z.object({
   type: z.literal('hero'),
-  headline: z.string().max(200),
-  subheadline: z.string().max(500),
-  cta_primary: z.string().max(80),
-  cta_secondary: z.string().max(80).optional(),
-  badge: z.string().max(100).optional(),
-  trust_signals: z.array(z.string().max(120)).max(6).optional(),
+  headline: z.string().max(120),
+  subheadline: z.string().max(240),
+  cta_primary: z.string().max(50),
+  cta_secondary: z.string().max(50).optional(),
+  badge: z.string().max(50).optional(),
+  trust_signals: z.array(z.string().max(60)).max(4).optional(),
 });
 
 const featuresSchema = z.object({
   type: z.literal('features'),
-  heading: z.string().max(200),
-  subheading: z.string().max(400).optional(),
+  heading: z.string().max(100),
+  subheading: z.string().max(180).optional(),
   items: z.array(z.object({
-    icon: z.string().max(8),
-    title: z.string().max(150),
-    description: z.string().max(500),
-  })).min(3).max(8),
+    icon: z.string().max(4),        // emoji
+    title: z.string().max(70),
+    description: z.string().max(220),
+  })).min(3).max(6),
 });
 
 const statsSchema = z.object({
   type: z.literal('stats'),
-  heading: z.string().max(200).optional(),
+  heading: z.string().max(100).optional(),
   items: z.array(z.object({
-    value: z.string().max(50),
-    label: z.string().max(150),
-  })).min(2).max(8),
+    value: z.string().max(30),      // e.g. "10,000+" or "98%"
+    label: z.string().max(60),
+  })).min(3).max(6),
 });
 
 const howItWorksSchema = z.object({
   type: z.literal('how-it-works'),
-  heading: z.string().max(200),
-  subheading: z.string().max(400).optional(),
+  heading: z.string().max(100),
+  subheading: z.string().max(180).optional(),
   steps: z.array(z.object({
-    title: z.string().max(150),
-    description: z.string().max(500),
-  })).min(3).max(7),
+    title: z.string().max(70),
+    description: z.string().max(220),
+  })).min(3).max(5),
 });
 
 const testimonialsSchema = z.object({
   type: z.literal('testimonials'),
-  heading: z.string().max(200),
+  heading: z.string().max(100),
   items: z.array(z.object({
-    quote: z.string().max(600),
-    author: z.string().max(100),
-    role: z.string().max(150),
-    company: z.string().max(100).optional(),
-  })).min(2).max(5),
+    quote: z.string().max(300),
+    author: z.string().max(60),
+    role: z.string().max(80),
+    company: z.string().max(60).optional(),
+  })).min(2).max(4),
 });
 
 const faqSchema = z.object({
   type: z.literal('faq'),
-  heading: z.string().max(200),
+  heading: z.string().max(100),
   items: z.array(z.object({
-    question: z.string().max(300),
-    answer: z.string().max(800),
-  })).min(4).max(10),
+    question: z.string().max(150),
+    answer: z.string().max(400),
+  })).min(4).max(8),
 });
 
 const ctaSchema = z.object({
   type: z.literal('cta'),
-  heading: z.string().max(200),
-  subheading: z.string().max(400).optional(),
-  cta_primary: z.string().max(80),
-  cta_secondary: z.string().max(80).optional(),
+  heading: z.string().max(120),
+  subheading: z.string().max(200).optional(),
+  cta_primary: z.string().max(50),
+  cta_secondary: z.string().max(50).optional(),
 });
 
 const benefitsSchema = z.object({
   type: z.literal('benefits'),
-  heading: z.string().max(200),
-  subheading: z.string().max(400).optional(),
+  heading: z.string().max(100),
+  subheading: z.string().max(180).optional(),
   items: z.array(z.object({
-    icon: z.string().max(8).optional(),
-    title: z.string().max(150),
-    description: z.string().max(500),
-  })).min(3).max(8),
+    title: z.string().max(70),
+    description: z.string().max(220),
+  })).min(3).max(6),
 });
 
 const sectionSchema = z.discriminatedUnion('type', [
@@ -106,16 +105,10 @@ const sectionSchema = z.discriminatedUnion('type', [
   benefitsSchema,
 ]);
 
-// Pre-parse sections that arrive as JSON strings (Claude sometimes stringifies each element)
-const parsedSectionSchema = z.preprocess(
-  (val) => (typeof val === 'string' ? JSON.parse(val) : val),
-  sectionSchema,
-);
-
 const landingPageOutputSchema = z.object({
   meta_title: z.string().max(65),
-  meta_description: z.string().max(200), // relaxed — we trim before storing
-  sections: z.array(parsedSectionSchema).min(5).max(10),
+  meta_description: z.string().max(165),
+  sections: z.array(sectionSchema).min(5).max(9),
 });
 
 type LandingPageOutput = z.infer<typeof landingPageOutputSchema>;

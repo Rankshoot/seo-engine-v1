@@ -144,13 +144,9 @@ function BenefitsSection({ s }: { s: LandingPageBenefitsSection }) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {s.items.map((item, i) => (
             <div key={i} className="flex gap-4 p-5 rounded-xl border border-[var(--lp-primary)]/10 bg-[var(--lp-secondary)]/20">
-              {item.icon ? (
-                <span className="mt-0.5 shrink-0 text-xl">{item.icon}</span>
-              ) : (
-                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--lp-primary)] text-white text-xs font-bold">
-                  {i + 1}
-                </span>
-              )}
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--lp-primary)] text-white text-xs font-bold">
+                {i + 1}
+              </span>
               <div>
                 <h3 className="font-semibold text-gray-900 dark:text-white">{item.title}</h3>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{item.description}</p>

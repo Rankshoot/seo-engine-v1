@@ -136,7 +136,7 @@ Structure (use these heading levels exactly):
 
 CRITICAL RULES — every bullet is enforced:
 - EEAT first: every quantitative claim has a source, every recommendation is testable.
-- Use Google Search to find SPECIFIC, deep-linked URLs. Never link to root domains. Never cite Wikipedia.
+- Use Google Search to find SPECIFIC, deep-linked URLs pointing to the PRIMARY SOURCE of every claim (the actual research report, government dataset, academic paper, or official standard — not a blog summarising it). Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains. Never link to competitor blogs or vendor landing/product pages. Never cite Wikipedia.
 - Required citations: at least 10 across the body.
 - Required internal links: at least 2 internal links from the pool, used verbatim.
 - No filler or AI clichés ("in today's world", "in recent years", "navigating", "delving", "leverage", "unlock"). Absolutely avoid marketing adjectives/fluff ("best-in-class", "world-class", "industry-leading", "cutting-edge", "game-changer", "robust").

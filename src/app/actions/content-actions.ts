@@ -733,7 +733,7 @@ export async function listContentStudioHistory(
   | { success: false; error: string; data: ContentStudioHistoryRow[]; total: number; hasMore: boolean; counts: Record<ContentType, number> }
 > {
   const user = await currentUser();
-  const emptyCounts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing_page: 0 };
+  const emptyCounts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing-page: 0 };
   if (!user) return { success: false, error: 'Not authenticated', data: [], total: 0, hasMore: false, counts: emptyCounts };
 
   const { data: project, error: pErr } = await supabaseAdmin
@@ -846,7 +846,7 @@ export async function listContentStudioHistory(
   }
 
   // Load counts for type badges on the server
-  const counts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing_page: 0 };
+  const counts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing-page: 0 };
   let countDataResult: Array<{ content_type?: string; article_type?: string }> = [];
 
   const countRes = await supabaseAdmin
@@ -1032,7 +1032,7 @@ export async function generateLandingPageAction(
       research_sources: 0,
       external_links: [],
       internal_links: [],
-      content_type: 'landing_page' as const,
+      content_type: 'landing-page' as const,
       content_data: result.content_data,
       updated_at: new Date().toISOString(),
     })

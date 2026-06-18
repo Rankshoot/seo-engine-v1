@@ -264,23 +264,36 @@ SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 ════════════════════════════════════════
 EDITORIAL AND FORMATTING REQUIREMENTS:
 ════════════════════════════════════════
-1. INTRODUCTION:
-   - Start immediately with an answer-first paragraph that plainly outlines the key takeaway optimized for AI Overviews.
-   - Mention the primary keyword "${entry.focus_keyword}" naturally within the first 100 words.
-   - You MUST include exactly 1 verifiable data point or statistic about the primary keyword from a credible source in this introduction block. Do NOT invent stats.
+1. INTRODUCTION — HOOK FIRST:
+   - Do NOT open with a trend statement ("X is becoming...", "In the evolving world of...", "X is the backbone of..."). These are invisible to readers.
+   - Open with ONE of these instead: (a) a specific scenario that puts the reader inside a real problem ("A plant head calls at 6:40 a.m..."), (b) a contrarian statement that challenges a common assumption ("Most companies treat this role as a shopfloor vacancy. It is a business continuity position."), or (c) a hard, specific fact that reframes the problem immediately.
+   - Then within the first 100 words: state who this is for, what they'll get from reading it, and include the primary keyword "${entry.focus_keyword}" naturally.
+   - You MUST include exactly 1 verifiable data point or statistic from a credible source in the intro. Do NOT invent stats.
 
-2. ANSWER-FIRST SECTION DESIGN:
+2. VOICE — TAKE POSITIONS, NOT JUST DESCRIBE PROBLEMS:
+   - Write with a point of view. Make declarative statements. Say "That's backwards." not "This approach may have limitations."
+   - Call out common mistakes directly: "The most common hiring mistake is...", "Most JDs get this wrong by...", "If your process starts when someone resigns, you're already late."
+   - Opinionated subheadings outperform descriptive ones. "Your hiring model is probably too narrow" beats "Hiring Challenges". Use this style where it fits naturally.
+   - Avoid hedge words: "may", "could", "might", "in some cases", "it's worth noting". If a claim is true, state it. If uncertain, cite the source and move on.
+
+3. ANSWER-FIRST SECTION DESIGN:
    - Every major heading (H2/H3) should address the reader's intent quickly before expanding.
    - Strictly avoid generic GPT-style heading words: "navigating", "nuances", "at a glance", "delve", "unlock", "landscape", "realm", "ever-evolving".
    - **Snippet Answer Rule**: Immediately under every H2 heading, you MUST add a crisp, bold 40-50 word paragraph that directly answers that H2 topic (ideal for featured snippets). Then, continue with detailed explanation.
 
-3. CONTENT FORMATTING & READABILITY:
+4. CONTENT FORMATTING & READABILITY:
    - Use a healthy, balanced mix of: short paragraphs (3-4 lines max), bullet lists, and markdown tables where comparisons or data are present.
-   - Sentences should average 10-12 words to improve scanability and comprehension.
+   - Sentences MUST average 10-12 words. Count mentally — if a sentence runs past 20 words, break it. This is the single biggest readability lever.
    - Use simple language that breaks complexity into simple words. Use active voice throughout.
    - Use transition words naturally to improve reading flow (e.g. "because", "for example", "however", "therefore", "meanwhile", "as a result"). Do not overuse them.
 
-4. IMAGES AND INFOGRAPHICS:
+5. PRACTICAL TOOLKIT SECTIONS (include where the article type justifies it):
+   - For role guides, hiring guides, or "how to hire X" articles: include a job description template section with a sample JD the reader can adapt. Format it as a structured block under its own H2.
+   - For hiring or assessment guides: include an interview questions section with 4-6 questions AND a model answer or "what good looks like" note for each. This is the single most bookmarked section type in HR content.
+   - For comparison or strategy articles: include at least one Markdown comparison table that lets the reader make a decision.
+   - These sections are what convert readers into return visitors and earn backlinks. Do not skip them when the article type calls for them.
+
+6. IMAGES AND INFOGRAPHICS:
    - Include exactly 2-3 relevant image placeholder suggestions inside \`contentMarkdown\` exactly in this format:
      ![Suggested image: Description of a highly contextual image matching the paragraph](image-placeholder)
      (e.g., ![Suggested image: HR team reviewing recruitment dashboard](image-placeholder))
@@ -288,28 +301,29 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
      > Infographic suggestion: Description of the infographic flow/process here.
      (e.g., > Infographic suggestion: A 5-step RPO hiring workflow from requirement intake to onboarding.)
 
-5. NATURAL INTERLINKING & "ALSO READ" CALLOUTS:
+7. NATURAL INTERLINKING & "ALSO READ" CALLOUTS:
    - Maintain a high interlinking ratio. Use verified internal links only. Do NOT invent internal URLs.
    - If a validated internal link cannot be naturally woven into the prose of the paragraphs, you MUST include a clean callout block:
      > **Also Read:** [Anchor text / Title of the related blog](https://domain/slug)
 
-6. CITATIONS & EXTERNAL LINKING:
+8. CITATIONS & EXTERNAL LINKING:
    - Every external citation must point to the PRIMARY SOURCE of the claim — the actual study, report, dataset, or official page — not a blog post or article that summarises it.
    - Use Google Search to find the specific, deep-linked URL for each citation before inserting it. For example, if you cite a McKinsey statistic, link to the exact McKinsey report page, not a news article about that report.
    - Preferred authoritative domains: .gov, .edu, WHO, CDC, PubMed / NCBI, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista (report pages), SHRM, LinkedIn Talent Solutions research, IEEE, ISO, peer-reviewed journals.
    - Never link to competitor blogs, vendor landing/product pages, or any URL that is primarily promotional.
    - Never link to root domains (e.g. "https://gartner.com"). Always link to the specific report, article, or data page.
+   - Never use the same URL twice for two different sources. Each citation must be a distinct, unique URL.
 
-7. AUTHORITY-BUILDING SECTIONS & GROUNDING:
+9. AUTHORITY-BUILDING SECTIONS & GROUNDING:
    - Weave in 2-4 headings representing authority-building angles based on ${project.company}'s niche and the focus keyword "${entry.focus_keyword}".
    - Subtly highlight how professional solutions (e.g. RPO / recruitment partnership services) solve strategic hiring challenges, without sounding overly salesy.
 
-8. FAQ SECTION:
+10. FAQ SECTION:
    - Include exactly 7 to 10 FAQs. Seed 3-4 of them directly from the provided People Also Ask/Ahrefs questions.
    - Format each question as ### [Question Text].
    - Provide direct, helpful answers (around 50 words each) that are highly practical, concise, and non-repetitive (Google snippet-friendly).
 
-9. PERSONALIZATION FOR HEAD+ DECISION MAKERS:
+11. PERSONALIZATION FOR HEAD+ DECISION MAKERS:
    - Address Head+ designations in HR (such as CHROs, HR leaders, TA leaders, HR Heads, HRBPs, HR Managers) to appeal to thought-leadership style articles, focusing on emerging roles, recruitment transformations, and workforce changes.
 
 Return JSON only.`;

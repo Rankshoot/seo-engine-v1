@@ -846,7 +846,7 @@ export async function listContentStudioHistory(
   }
 
   // Load counts for type badges on the server
-  const counts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing-page: 0 };
+  const counts: Record<ContentType, number> = { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0, landing_page: 0 };
   let countDataResult: Array<{ content_type?: string; article_type?: string }> = [];
 
   const countRes = await supabaseAdmin

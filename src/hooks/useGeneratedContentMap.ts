@@ -34,6 +34,7 @@ export function normalizeContentType(s: string): string {
   if (t === "ebook" || t === "e-book" || t === "e book") return "ebook";
   if (t === "whitepaper" || t === "white paper") return "whitepaper";
   if (t === "linkedin" || t === "linkedin post") return "linkedin";
+  if (t === "landing page" || t === "landing_page") return "landing_page";
   return "blog";
 }
 

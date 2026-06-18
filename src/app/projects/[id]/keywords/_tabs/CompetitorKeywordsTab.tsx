@@ -18,6 +18,7 @@ import { KeywordTableSkeleton } from "@/components/Skeleton";
 import { ColumnDef, SharedKeywordTable } from "../_components/SharedKeywordTable";
 import { toast } from "react-hot-toast";
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
+import { useGeneratedContentMap, generatedContentKey, normalizeKeyword } from "@/hooks/useGeneratedContentMap";
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled" | "generated";
@@ -278,6 +279,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const COMPETITORS_KEY = qk.competitors(projectId);
 
   const workspaceTab = (prefs.competitorFilter as OpportunityWorkspaceTab) ?? "all";
+  const { generatedMap } = useGeneratedContentMap(projectId);
 
   const [running, setRunning] = useState(false);
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
@@ -358,7 +360,13 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     filter: workspaceTab,
     keyExtractor: g => g.id,
     checkScheduled: g => calendarMap.has(g.keyword.toLowerCase()),
-    checkGenerated: g => !!(calendarMap.get(g.keyword.toLowerCase())?.blog),
+    checkGenerated: g => {
+      const prefix = `${normalizeKeyword(g.keyword)}::`;
+      for (const key of generatedMap.keys()) {
+        if (key.startsWith(prefix)) return true;
+      }
+      return !!(calendarMap.get(g.keyword.toLowerCase())?.blog);
+    },
     getSearchString: g => g.keyword,
     compareFn,
     initialSortColumn: "volume",
@@ -469,7 +477,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         return articleTypeToContentType(entry.article_type);
       }
       const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
-      const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin"];
+      const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin", "landing_page"];
       if (recommended && supportedTypes.includes(recommended)) {
         return tableState.rowContentTypes[keywordText.toLowerCase()] ?? recommended;
       }
@@ -484,8 +492,9 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   ) => {
     const entry = calendarMap.get(keywordText.toLowerCase());
     const isSch = !!entry;
-    const isGenerated = !!entry?.blog;
     const currentType = resolveContentType(keywordText, undefined, aiEvalData);
+    const historyKey = generatedContentKey(keywordText, currentType);
+    const isGenerated = !!entry?.blog || generatedMap.has(historyKey);
 
     const recommended = aiEvalData ? articleTypeToContentType(aiEvalData.category) : undefined;
     const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin", "landing_page"];
@@ -514,11 +523,14 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         </select>
       </div>
     );
-  }, [calendarMap, resolveContentType, tableState, articleTypeToContentType]);
+  }, [calendarMap, resolveContentType, tableState, articleTypeToContentType, generatedMap]);
 
   const renderActionCell = useCallback((g: KeywordGap) => {
     const entry = calendarMap.get(g.keyword.toLowerCase());
     const selectedType = resolveContentType(g.keyword, undefined, g.ai_eval_data);
+    const historyKey = generatedContentKey(g.keyword, selectedType);
+    const historyEntry = generatedMap.get(historyKey);
+    const resolvedBlogId = entry?.blog?.id ?? historyEntry?.id;
     const intent = g.is_transactional
       ? "transactional"
       : g.is_commercial
@@ -537,7 +549,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
           sourceType="competitor_gap"
           contentType={selectedType}
           scheduledDate={entry?.scheduled_date}
-          blogId={entry?.blog?.id}
+          blogId={resolvedBlogId}
           volume={g.volume}
           kd={g.kd}
           intent={intent}
@@ -547,7 +559,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
         />
       </div>
     );
-  }, [calendarMap, resolveContentType, projectId]);
+  }, [calendarMap, resolveContentType, projectId, generatedMap]);
 
   const columns = useMemo<ColumnDef<KeywordGap>[]>(() => [
     {

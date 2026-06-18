@@ -899,6 +899,7 @@ function inferContentType(articleType: string): ContentType {
   if (t === 'ebook') return 'ebook';
   if (t === 'whitepaper') return 'whitepaper';
   if (t === 'linkedin') return 'linkedin';
+  if (t === 'landing page' || t === 'landing_page') return 'landing_page';
   return 'blog';
 }
 

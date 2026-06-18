@@ -22,7 +22,7 @@ import {
 } from "@/lib/redux/keyword-workspace-slice";
 import { keywordsApi } from "@/frontend/api/keywords";
 import { calendarApi } from "@/frontend/api/calendar";
-import { useGeneratedContentMap, generatedContentKey } from "@/hooks/useGeneratedContentMap";
+import { useGeneratedContentMap, generatedContentKey, normalizeKeyword } from "@/hooks/useGeneratedContentMap";
 import type { CompetitorKeywordsForSiteRow } from "@/lib/dataforseo";
 import type { DataForSEOTraceEntry } from "@/lib/dataforseo";
 import { ColumnDef, SharedKeywordTable } from "../_components/SharedKeywordTable";
@@ -358,6 +358,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       "Ebook": "ebook",
       "Whitepaper": "whitepaper",
       "LinkedIn post": "linkedin",
+      "Landing Page": "landing_page",
     };
     return typeMap[articleType] ?? "blog";
   };
@@ -368,7 +369,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       return articleTypeToContentType(entry.article_type);
     }
     const recommended = aiEvalData?.recommended_content_type as ContentType | undefined;
-    const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin"];
+    const supportedTypes = ["blog", "ebook", "whitepaper", "linkedin", "landing_page"];
     if (recommended && supportedTypes.includes(recommended)) {
       return (rowContentTypes && rowContentTypes[keywordText.toLowerCase()]) ?? recommended;
     }
@@ -563,7 +564,13 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     filter,
     keyExtractor: kw => kw.id,
     checkScheduled: kw => calendarMap.has(kw.id) || calendarMap.has(kw.keyword.toLowerCase()),
-    checkGenerated: kw => !!(calendarMap.get(kw.id)?.blog || calendarMap.get(kw.keyword.toLowerCase())?.blog),
+    checkGenerated: kw => {
+      const prefix = `${normalizeKeyword(kw.keyword)}::`;
+      for (const key of generatedMap.keys()) {
+        if (key.startsWith(prefix)) return true;
+      }
+      return !!(calendarMap.get(kw.id)?.blog || calendarMap.get(kw.keyword.toLowerCase())?.blog);
+    },
     getSearchString: kw => kw.keyword,
     externalSortColumn: tableSort.column,
     externalSortDirection: tableSort.dir,
@@ -642,8 +649,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   ) => {
     const entry = (keywordId ? calendarMap.get(keywordId) : null) || calendarMap.get(keywordText.toLowerCase());
     const isScheduled = !!entry;
-    const isGenerated = !!entry?.blog;
     const currentType = resolveContentType(keywordText, keywordId, aiEvalData, stateObj.rowContentTypes);
+    const historyKey = generatedContentKey(keywordText, currentType);
+    const isGenerated = !!entry?.blog || generatedMap.has(historyKey);
 
     const recommended = aiEvalData?.recommended_content_type;
     const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin", "landing_page"];
@@ -671,7 +679,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         </select>
       </div>
     );
-  }, [calendarMap, resolveContentType]);
+  }, [calendarMap, resolveContentType, generatedMap]);
 
   const renderActionCell = useCallback((
     keywordText: string,

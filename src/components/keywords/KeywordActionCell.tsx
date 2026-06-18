@@ -59,14 +59,7 @@ export function KeywordActionCell({
   const handleGenerate = () => {
     if (launching) return;
     setLaunching(true);
-    const slugMap: Record<string, string> = {
-      blog: "blogs",
-      ebook: "ebooks",
-      whitepaper: "whitepapers",
-      linkedin: "linkedin",
-      landing_page: "landing-pages",
-    };
-    const slug = slugMap[contentType] ?? `${contentType}s`;
+    const slug = contentType === "blog" ? "blogs" : contentType === "linkedin" ? "linkedin" : `${contentType}s`;
     const params = new URLSearchParams({ keyword, source: sourceType, shouldSchedule: "false" });
     const url = `/projects/${projectId}/content-generator/${slug}?${params.toString()}`;
     // Delay gives React one render cycle to paint the launching state (dots + overlay)

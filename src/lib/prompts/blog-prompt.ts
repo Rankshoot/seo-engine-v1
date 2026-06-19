@@ -121,7 +121,7 @@ export function buildBlogPrompt(ctx: BlogPromptContext): string {
           .map(b => `- "${b.title}" → ${b.url} (keyword: ${b.topic})`)
           .join('\n')}`
       : '';
-    internalLinksBlock = `\nINTERNAL LINKING (pick 2–4 total, split across the two pools, placed where they genuinely help the reader):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
+    internalLinksBlock = `\nINTERNAL LINKING (use 4–6 total where contextually relevant, split across the two pools, placed where they genuinely help the reader. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 4 validated internal links are available, use all available validated links instead of inventing links):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
   }
 
   // 2. External research context (competitor articles — for topic reference only, NOT for citation links)
@@ -256,10 +256,11 @@ SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 5. H2 HEADINGS: At least 5 × ## headings in the contentMarkdown (the scorer requires >= 3).
 6. H3 SUB-HEADINGS: At least 2 × ### headings inside long H2 body sections to organize sub-topics.
 7. FAQ SECTION: MUST have a heading that reads exactly "## FAQs" (or "## Frequently Asked Questions"). Include exactly 7 to 10 Q&A pairs, each question as a ### heading.
-8. EXTERNAL LINKS: Include at least 5 credible external citations (at least 3 are required). Format: [anchor text](https://...). RULES: (a) Link to the PRIMARY SOURCE of every claim — the actual research report, dataset, government page, or academic paper — not a blog post summarising it. (b) Preferred domains: .gov, .edu, WHO, CDC, PubMed, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista (direct report pages), SHRM, LinkedIn official research, peer-reviewed journals. (c) Never link to root domains alone (e.g. "https://www.gartner.com") — always deep-link to the specific report or article page. (d) Never link to competitor blogs or any landing page that is primarily selling a product. (e) Use Google Search to find the exact URL of the cited source before inserting it.
-9. INTERNAL LINKS: Include at least 2 internal links from the INTERNAL LINKING pool. Format: [anchor text](/slug) or absolute URL.
+8. EXTERNAL LINKS: Include 4–6 highly credible external citations. Format: [anchor text](https://...). Each external link must directly support the exact claim near the link. RULES: (a) Link to the PRIMARY SOURCE of every claim — the actual research report, dataset, government page, or academic paper — not a blog post summarising it. (b) Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista (direct report pages), SHRM, LinkedIn official research reports, IEEE, ISO, peer-reviewed journals. (c) Never link to root domains alone (e.g. "https://www.gartner.com") — always deep-link to the specific report or article page. (d) Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any URL that is primarily promotional. (e) Never invent fake report URLs — if a citation is uncertain, skip it instead of adding a weak link. (f) Never use the same URL twice. Each citation must be a distinct, unique deep-linked URL.
+9. INTERNAL LINKS: Include 4–6 internal links from the INTERNAL LINKING pool wherever contextually relevant. Format: [anchor text](/slug) or absolute URL. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 4 validated internal links are available, use all available validated links instead of inventing links.
 10. META DESCRIPTION: Exactly 150–160 characters long and MUST contain "${entry.focus_keyword}".
-11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer").
+11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer", "In today's rapidly evolving landscape", "unlock the power of", "delve into"). Use specific wording and practical examples instead of vague claims.
+12. HUMAN TONE: Write in a natural, human editorial tone with varied sentence rhythm, practical examples, small connective phrases, and smooth transitions. Avoid robotic, repetitive, overly polished AI-style phrasing. Keep paragraphs readable and natural.
 
 ════════════════════════════════════════
 EDITORIAL AND FORMATTING REQUIREMENTS:
@@ -302,17 +303,19 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
      (e.g., > Infographic suggestion: A 5-step RPO hiring workflow from requirement intake to onboarding.)
 
 7. NATURAL INTERLINKING & "ALSO READ" CALLOUTS:
-   - Maintain a high interlinking ratio. Use verified internal links only. Do NOT invent internal URLs.
+   - Target 4–6 internal links total. Use verified internal links only from the provided INTERNAL LINKING pool. Do NOT invent internal URLs, slugs, or pages.
+   - If fewer than 4 validated internal links are available, use all available ones — never invent additional links to hit the count.
    - If a validated internal link cannot be naturally woven into the prose of the paragraphs, you MUST include a clean callout block:
      > **Also Read:** [Anchor text / Title of the related blog](https://domain/slug)
 
 8. CITATIONS & EXTERNAL LINKING:
+   - Target 4–6 external citations total. Every external citation must directly support the exact claim near the link.
    - Every external citation must point to the PRIMARY SOURCE of the claim — the actual study, report, dataset, or official page — not a blog post or article that summarises it.
-   - Use Google Search to find the specific, deep-linked URL for each citation before inserting it. For example, if you cite a McKinsey statistic, link to the exact McKinsey report page, not a news article about that report.
-   - Preferred authoritative domains: .gov, .edu, WHO, CDC, PubMed / NCBI, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista (report pages), SHRM, LinkedIn Talent Solutions research, IEEE, ISO, peer-reviewed journals.
-   - Never link to competitor blogs, vendor landing/product pages, or any URL that is primarily promotional.
-   - Never link to root domains (e.g. "https://gartner.com"). Always link to the specific report, article, or data page.
-   - Never use the same URL twice for two different sources. Each citation must be a distinct, unique URL.
+   - Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista (direct report pages), SHRM, LinkedIn official research reports, IEEE, ISO, peer-reviewed journals.
+   - Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any URL that is primarily promotional.
+   - Never link to root domains (e.g. "https://gartner.com"). Always deep-link to the specific report, article, or data page.
+   - Never invent fake report URLs. If a citation is uncertain, skip it — do not add a weak link just to reach the count.
+   - Never use the same URL twice. Each citation must be a distinct, unique deep-linked URL.
 
 9. AUTHORITY-BUILDING SECTIONS & GROUNDING:
    - Weave in 2-4 headings representing authority-building angles based on ${project.company}'s niche and the focus keyword "${entry.focus_keyword}".

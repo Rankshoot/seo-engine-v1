@@ -840,9 +840,12 @@ REPAIR INSTRUCTIONS:
   3. At least one H2 heading
   4. The conclusion section
   5. The meta description (must be exactly 150-160 characters long).
-- Ensure a FAQ section exists under "## FAQs" with 4-6 FAQs, each question formatted as "###".
+- Ensure a FAQ section exists under "## FAQs" with 7-10 FAQs, each question formatted as "###".
 - Maintain keyword density strictly between 0.5% and 3%. Do not keyword stuff!
 - Do not invent any new external/internal links. Use only the verified ones present in the original post.
+- Internal links: the repaired post should retain 4–6 internal links from the original. Do not drop existing internal links unless they are broken.
+- External links: the repaired post should retain 4–6 credible external citations from the original. Do not replace or invent new external URLs — only use what was already in the original post.
+- Preserve the human, editorial tone of the original. Do not introduce robotic or filler phrases.
 - Return a strict JSON response only matching this exact format:
 {
   "title": "[Fixed H1 Title]",

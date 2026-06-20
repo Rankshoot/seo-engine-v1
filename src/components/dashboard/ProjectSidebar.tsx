@@ -257,7 +257,12 @@ export default function ProjectSidebar({
       prefetchLabel: "Settings",
       exact: true,
     },
-
+    {
+      icon: Icon.settings,
+      label: "Settings",
+      href: `${base}/settings`,
+      prefetchLabel: "Settings",
+    },
   ], [base, auditBase, navCountsReady, liveStats]);
 
   /* ── Derived plan info ── */

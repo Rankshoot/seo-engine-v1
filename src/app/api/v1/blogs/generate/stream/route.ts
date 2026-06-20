@@ -329,7 +329,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
         const anthropic = getAnthropicClient();
         const claudeStream = anthropic.messages.stream({
           model: claudeModel,
-          max_tokens: 16000,
+          max_tokens: 32000,
           thinking: { type: "enabled", budget_tokens: 8000 },
           messages: [{ role: "user", content: blogPrompt }],
           system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,

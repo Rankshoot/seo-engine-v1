@@ -646,13 +646,12 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     const currentType = resolveContentType(keywordText, keywordId, aiEvalData, stateObj.rowContentTypes);
 
     const recommended = aiEvalData?.recommended_content_type;
-    const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin", "landing_page"];
+    const options: ContentType[] = ["blog", "ebook", "whitepaper", "linkedin"];
     const labels: Record<ContentType, string> = {
       blog: "Blog article",
       ebook: "Ebook",
       whitepaper: "Whitepaper",
       linkedin: "LinkedIn post",
-      landing_page: "Landing page",
     };
 
     return (

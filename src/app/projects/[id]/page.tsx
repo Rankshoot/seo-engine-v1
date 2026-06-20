@@ -30,7 +30,9 @@ import {
   BookOpen,
   TrendingUp,
   Eye,
+  Activity,
 } from "lucide-react";
+import { auditsApi } from "@/frontend/api/audits";
 
 /* ─────────── helpers ─────────── */
 
@@ -351,27 +353,104 @@ export default function ProjectOverviewPage() {
           </div>
         </section>
 
-        {/* ── Content Health teaser ── */}
-        <section className="rounded-xl border border-dashed border-border-subtle/80 bg-surface-secondary/20 px-5 py-4">
+        {/* ── Content Health widget ── */}
+        <ContentHealthWidget projectId={id} />
+      </div>
+    </div>
+  );
+}
+
+/* ─────────── ContentHealthWidget ─────────── */
+
+function ContentHealthWidget({ projectId }: { projectId: string }) {
+  const { data: auditsRes, isLoading } = useQuery({
+    queryKey: ["audit-coverage", projectId],
+    queryFn: () => auditsApi.list(projectId, { limit: 0 }),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const coverage = auditsRes?.coverage;
+  const hasAudits = (coverage?.blogs_audited ?? 0) > 0;
+
+  if (isLoading) {
+    return <Skeleton className="h-24 w-full rounded-xl" />;
+  }
+
+  if (!hasAudits) {
+    return (
+      <section className="rounded-xl border border-border-subtle bg-surface-elevated px-5 py-4">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-elevated text-text-tertiary">
-              <AlertCircle className="h-3.5 w-3.5" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
+              <Activity className="h-4 w-4" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] font-semibold text-text-primary">Content Health Audit</span>
-                <span className="inline-flex items-center rounded-full border border-border-subtle bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold text-text-tertiary">
-                  Coming soon
-                </span>
-              </div>
+              <div className="text-[13px] font-semibold text-text-primary">Content Health</div>
               <p className="text-[11.5px] text-text-tertiary mt-0.5">
-                Track live URL performance, surface decaying pages, and queue fixes automatically.
+                Find pages losing traffic and fix them automatically.
               </p>
             </div>
           </div>
-        </section>
+          <ProjectNavLink
+            href={`/projects/${projectId}/audit`}
+            className="shrink-0 text-[12px] font-medium text-brand-violet hover:text-brand-action-hover transition-colors"
+          >
+            Run audit →
+          </ProjectNavLink>
+        </div>
+      </section>
+    );
+  }
+
+  const avgHealth = coverage?.avg_health ?? 0;
+  const healthColor =
+    avgHealth >= 70 ? "text-emerald-500" : avgHealth >= 50 ? "text-amber-500" : "text-red-500";
+  const highSeverity = coverage?.high_severity ?? 0;
+  const blogsAudited = coverage?.blogs_audited ?? 0;
+
+  return (
+    <section className="rounded-xl border border-border-subtle bg-surface-elevated overflow-hidden">
+      <div className="px-5 py-3.5 flex items-center justify-between border-b border-border-subtle/60">
+        <div className="flex items-center gap-2">
+          <Activity className="h-3.5 w-3.5 text-amber-500" />
+          <span className="text-[13px] font-semibold text-text-primary">Content Health</span>
+        </div>
+        <ProjectNavLink
+          href={`/projects/${projectId}/audit`}
+          className="text-[12px] font-medium text-brand-violet hover:text-brand-action-hover transition-colors"
+        >
+          View all →
+        </ProjectNavLink>
       </div>
-    </div>
+      <div className="grid grid-cols-3 divide-x divide-border-subtle/60">
+        <div className="px-4 py-3 text-center">
+          <div className={`text-[20px] font-semibold tabular-nums ${healthColor}`}>
+            {avgHealth > 0 ? avgHealth : "–"}
+          </div>
+          <div className="text-[10.5px] text-text-tertiary mt-0.5">Avg health</div>
+        </div>
+        <div className="px-4 py-3 text-center">
+          <div className="text-[20px] font-semibold tabular-nums text-red-500">{highSeverity}</div>
+          <div className="text-[10.5px] text-text-tertiary mt-0.5">Need fixes</div>
+        </div>
+        <div className="px-4 py-3 text-center">
+          <div className="text-[20px] font-semibold tabular-nums text-text-primary">{blogsAudited}</div>
+          <div className="text-[10.5px] text-text-tertiary mt-0.5">Audited</div>
+        </div>
+      </div>
+      {highSeverity > 0 && (
+        <div className="px-5 py-2.5 border-t border-border-subtle/60 bg-red-500/5">
+          <ProjectNavLink
+            href={`/projects/${projectId}/audit?filter=high`}
+            className="flex items-center gap-1.5 text-[12px] font-medium text-red-600 hover:text-red-700 transition-colors"
+          >
+            <AlertCircle className="h-3.5 w-3.5" />
+            {highSeverity} page{highSeverity !== 1 ? "s" : ""} need urgent attention
+            <ArrowRight className="h-3 w-3 ml-auto" />
+          </ProjectNavLink>
+        </div>
+      )}
+    </section>
   );
 }
 

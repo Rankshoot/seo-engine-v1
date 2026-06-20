@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, lazy, Suspense } from "react";
+import { useCallback, useMemo, useState, lazy, Suspense } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { auditsApi } from "@/frontend/api/audits";
@@ -21,7 +21,6 @@ const AuditDetailModal = lazy(() =>
 import { calendarApi } from "@/frontend/api/calendar";
 import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
 import {
-  CHPageShell,
   CHEmptyState,
   ScoreRing,
   ErrorBanner,
@@ -31,6 +30,7 @@ import {
 } from "../_shared/ch-ui";
 
 const MAX_SELECT = 5;
+const PAGE_SIZE = 50;
 
 const basePathKey = (projectId: string) => `seo-engine:discover-base-path:${projectId}`;
 
@@ -46,7 +46,6 @@ function saveBasePath(projectId: string, value: string) {
   } catch { /**/ }
 }
 
-/** Shorten a URL for display: host + /…/last-slug */
 function shortUrl(url: string): string {
   try {
     const u = new URL(url);
@@ -64,13 +63,15 @@ export default function DiscoverPagesPage() {
   const dispatch = useAppDispatch();
 
   const [basePath, setBasePath] = useState(() => loadBasePath(projectId ?? ""));
+  const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [auditing, setAuditing] = useState(false);
   const [actionError, setActionError] = useState("");
   const [actionOk, setActionOk] = useState("");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  // ── Audit detail modal (same component as Site audit) ─────────────────
+  // ── Audit detail modal ─────────────────────────────────────────────────
   const [modalOpen, setModalOpen] = useState(false);
   const [modalAudit, setModalAudit] = useState<PersistedBlogAudit | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
@@ -130,12 +131,22 @@ export default function DiscoverPagesPage() {
     staleTime: 60_000,
   });
 
-  const pages = data?.success ? data.pages : [];
+  const allPages = data?.success ? data.pages : [];
   const basePaths = data?.success ? data.basePaths : [];
   const totalSitemap = data?.success ? data.total : 0;
   const listError = (!data?.success && (data as { error?: string } | undefined)?.error)
     ? (data as { error?: string }).error ?? ""
     : error ? String(error) : "";
+
+  // Client-side search + pagination
+  const filteredPages = useMemo(() => {
+    if (!search.trim()) return allPages;
+    const q = search.toLowerCase();
+    return allPages.filter(p => p.url.toLowerCase().includes(q) || (p.primaryKeyword ?? "").toLowerCase().includes(q));
+  }, [allPages, search]);
+
+  const pages = filteredPages.slice(0, visibleCount);
+  const hasMore = filteredPages.length > visibleCount;
 
   const toggle = useCallback((url: string) => {
     setSelected(prev => {
@@ -165,6 +176,9 @@ export default function DiscoverPagesPage() {
     } catch (e) { setActionError(e instanceof Error ? e.message : "Audit failed."); }
     finally { setAuditing(false); }
   };
+
+  const auditedCount = allPages.filter(p => p.audited).length;
+  const pendingCount = allPages.length - auditedCount;
 
   // ── Column definitions ─────────────────────────────────────────────────
   const columns = useMemo<ColumnDef<SitemapPage>[]>(() => [
@@ -238,43 +252,28 @@ export default function DiscoverPagesPage() {
 
   return (
     <>
-      <CHPageShell
-        title="Discover pages"
-        subtitle={`Browse every URL in your live sitemap. Select up to ${MAX_SELECT} pages and run a full Content Health audit on demand — results appear on Site audit.`}
-      >
-        {/* ── alerts ──────────────────────────────────────────────────────── */}
-        {(listError || actionError) && <ErrorBanner message={listError || actionError} />}
-        {actionOk && <SuccessBanner message={actionOk} />}
+      <div className="relative space-y-6 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8">
+        {/* ── sticky header ─────────────────────────────────────────────── */}
+        <div className="sticky -top-6 lg:-top-8 z-20 -mx-4 border-b border-border-subtle bg-surface-primary/95 px-4 pb-6 pt-6 lg:pt-8 backdrop-blur-sm">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <ProjectNavLink href={`/projects/${projectId}/audit`} className="text-[12px] text-text-tertiary hover:text-text-primary transition-colors flex items-center gap-1">
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m15 18-6-6 6-6" /></svg>
+                  Content Health
+                </ProjectNavLink>
+              </div>
+              <h1 className="text-[26px] font-bold tracking-tight text-text-primary">Discover Pages</h1>
+              <p className="mt-1 text-[14px] text-text-tertiary">
+                {totalSitemap > 0
+                  ? <><span className="font-semibold text-text-secondary">{totalSitemap}</span> URLs · <span className="text-emerald-400 font-medium">{auditedCount} audited</span> · <span className="text-amber-400 font-medium">{pendingCount} pending</span></>
+                  : "Browse every URL in your live sitemap and queue targeted audits."}
+              </p>
+            </div>
 
-        {/* ── toolbar ─────────────────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="text-[12px] font-semibold uppercase tracking-wide text-text-tertiary">Path prefix</span>
-            <select
-              value={basePath}
-              onChange={e => { const v = e.target.value; setBasePath(v); saveBasePath(projectId, v); setSelected(new Set()); }}
-              className="rounded-[10px] border border-border-subtle bg-surface-elevated px-3 py-2 text-[13px] text-text-primary min-w-[180px] focus:outline-none focus:border-brand-action/50"
-            >
-              <option value="">All paths ({totalSitemap || pages.length} URLs)</option>
-              {basePaths.map(bp => (
-                <option key={bp} value={bp}>{bp}</option>
-              ))}
-            </select>
-          </div>
-
-          <span className="text-[12px] text-text-tertiary">
-            {pages.length} URL{pages.length === 1 ? "" : "s"}
-            {massSelectMode && selected.size > 0 && (
-              <> · <span className="text-brand-action font-medium">{selected.size} selected</span></>
-            )}
-            {massSelectMode && selected.size >= MAX_SELECT && (
-              <span className="text-amber-400"> (max {MAX_SELECT})</span>
-            )}
-          </span>
-
-          <div className="ml-auto flex items-center gap-2">
-            {pages.length > 0 && (
-              massSelectMode ? (
+            {/* Toolbar */}
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {massSelectMode ? (
                 <>
                   {selected.size > 0 && (
                     <button type="button" onClick={() => setSelected(new Set())}
@@ -290,86 +289,151 @@ export default function DiscoverPagesPage() {
                   >
                     {auditing
                       ? <><Spinner size={14} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Auditing…</>
-                      : <><svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" /></svg>Audit selected ({selected.size}/{MAX_SELECT})</>}
+                      : <>
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" /></svg>
+                          Audit selected ({selected.size}/{MAX_SELECT})
+                        </>}
                   </button>
                   <button type="button" onClick={exitMassSelect} disabled={auditing}
-                    className="inline-flex h-9 items-center rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-semibold text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors disabled:opacity-40">
+                    className="inline-flex h-9 items-center rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors disabled:opacity-40">
                     Cancel
                   </button>
                 </>
               ) : (
                 <button type="button" onClick={enterMassSelect}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 text-[11px] font-semibold uppercase tracking-wide text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors">
-                  <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.85} strokeLinecap="round" strokeLinejoin="round">
+                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[12px] font-semibold text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors">
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.85} strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
                     <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
                     <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
                     <path d="M14 17.5 16 19.5 21 13.5" />
                   </svg>
-                  Mass select
+                  Select & Audit
                 </button>
-              )
-            )}
+              )}
+            </div>
           </div>
+        </div>
+
+        {/* ── alerts ──────────────────────────────────────────────────────── */}
+        {(listError || actionError) && <ErrorBanner message={listError || actionError} />}
+        {actionOk && <SuccessBanner message={actionOk} />}
+
+        {/* ── filter bar ──────────────────────────────────────────────────── */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Search */}
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z"/></svg>
+            <input
+              type="search"
+              placeholder="Filter by URL or keyword…"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setVisibleCount(PAGE_SIZE); }}
+              className="w-full rounded-[10px] border border-border-subtle bg-surface-elevated pl-8 pr-3 py-2 text-[13px] text-text-primary placeholder:text-text-tertiary/60 focus:outline-none focus:border-brand-action/50"
+            />
+          </div>
+
+          {/* Path prefix */}
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] font-medium text-text-tertiary">Path:</span>
+            <select
+              value={basePath}
+              onChange={e => { const v = e.target.value; setBasePath(v); saveBasePath(projectId, v); setSelected(new Set()); setVisibleCount(PAGE_SIZE); }}
+              className="rounded-[10px] border border-border-subtle bg-surface-elevated px-3 py-2 text-[13px] text-text-primary min-w-[140px] focus:outline-none focus:border-brand-action/50"
+            >
+              <option value="">All ({totalSitemap})</option>
+              {basePaths.map(bp => (
+                <option key={bp} value={bp}>{bp}</option>
+              ))}
+            </select>
+          </div>
+
+          <span className="ml-auto text-[12px] text-text-tertiary">
+            {search ? `${filteredPages.length} of ${allPages.length}` : `${allPages.length}`} URL{allPages.length === 1 ? "" : "s"}
+            {massSelectMode && selected.size > 0 && (
+              <> · <span className="text-brand-action font-medium">{selected.size} selected</span></>
+            )}
+            {massSelectMode && selected.size >= MAX_SELECT && (
+              <span className="text-amber-400"> (max {MAX_SELECT})</span>
+            )}
+          </span>
         </div>
 
         {/* ── page list ───────────────────────────────────────────────────── */}
         {isLoading ? (
           <SkeletonRows count={8} />
-        ) : pages.length === 0 ? (
+        ) : allPages.length === 0 ? (
           <CHEmptyState
             icon={<svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2z" /></svg>}
             title="No URLs found"
             body="No URLs match this filter. Try selecting a different path prefix or check that your sitemap is reachable."
           />
+        ) : filteredPages.length === 0 ? (
+          <div className="py-12 text-center text-[14px] text-text-tertiary">
+            No URLs match &ldquo;{search}&rdquo;.{" "}
+            <button onClick={() => setSearch("")} className="text-brand-action hover:underline">Clear filter</button>
+          </div>
         ) : (
-          <DataTable<SitemapPage>
-            data={pages}
-            columns={columns}
-            keyExtractor={p => p.url}
-            massSelectMode={massSelectMode}
-            selectedIds={selected}
-            onToggleSelect={toggle}
-            isSelectable={p => massSelectMode ? (!selected.has(p.url) ? selected.size < MAX_SELECT : true) : true}
-            onRowClick={p => {
-              if (!massSelectMode && p.audited) void openModal(p.url);
-            }}
-
-            rowClassName={p => {
-              const isSel = selected.has(p.url);
-              const clickable = massSelectMode ? true : p.audited;
-              return [
-                "transition-colors duration-150",
-                isSel ? "bg-brand-action/5" : "",
-                clickable ? "cursor-pointer hover:bg-surface-hover/90" : "cursor-default",
-              ].join(" ");
-            }}
-            minWidth="640px"
-            footer={
-              <div className="border-t border-border-subtle bg-surface-secondary px-4 py-2.5 flex items-center justify-between gap-4">
-                <p className="text-[11px] text-text-tertiary">
-                  Showing {pages.length} of {totalSitemap} URLs
-                  {massSelectMode && selected.size > 0 && ` · ${selected.size} selected`}
-                </p>
-                {!massSelectMode && (
-                  <p className="text-[10px] text-text-tertiary/50">
-                    Mass select to queue audits
+          <>
+            <DataTable<SitemapPage>
+              data={pages}
+              columns={columns}
+              keyExtractor={p => p.url}
+              massSelectMode={massSelectMode}
+              selectedIds={selected}
+              onToggleSelect={toggle}
+              isSelectable={p => massSelectMode ? (!selected.has(p.url) ? selected.size < MAX_SELECT : true) : true}
+              onRowClick={p => {
+                if (!massSelectMode && p.audited) void openModal(p.url);
+              }}
+              rowClassName={p => {
+                const isSel = selected.has(p.url);
+                const clickable = massSelectMode ? true : p.audited;
+                return [
+                  "transition-colors duration-150",
+                  isSel ? "bg-brand-action/5" : "",
+                  clickable ? "cursor-pointer hover:bg-surface-hover/90" : "cursor-default",
+                ].join(" ");
+              }}
+              minWidth="640px"
+              footer={
+                <div className="border-t border-border-subtle bg-surface-secondary px-4 py-2.5 flex items-center justify-between gap-4">
+                  <p className="text-[11px] text-text-tertiary">
+                    Showing {pages.length} of {filteredPages.length} URLs
+                    {massSelectMode && selected.size > 0 && ` · ${selected.size} selected`}
                   </p>
-                )}
+                  {!massSelectMode && (
+                    <p className="text-[10px] text-text-tertiary/50">Click an audited row to view diagnosis</p>
+                  )}
+                </div>
+              }
+            />
+
+            {/* Load more pagination */}
+            {hasMore && (
+              <div className="flex justify-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount(c => c + PAGE_SIZE)}
+                  className="inline-flex h-9 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-5 text-[13px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-all"
+                >
+                  Show {Math.min(PAGE_SIZE, filteredPages.length - visibleCount)} more
+                  <span className="text-[11px] text-text-tertiary">({filteredPages.length - visibleCount} remaining)</span>
+                </button>
               </div>
-            }
-          />
-        )}
+            )}
 
-        {massSelectMode && (
-          <p className="text-[12px] text-text-tertiary leading-relaxed">
-            Select up to {MAX_SELECT} URLs and click <strong className="text-text-secondary">Audit selected</strong>. Results save to{" "}
-            <ProjectNavLink href={`/projects/${projectId}/audit`} className="underline underline-offset-2 hover:text-text-primary transition-colors">Site audit</ProjectNavLink> instantly.
-          </p>
+            {massSelectMode && (
+              <p className="text-[12px] text-text-tertiary leading-relaxed">
+                Select up to {MAX_SELECT} URLs and click <strong className="text-text-secondary">Audit selected</strong>. Results save to{" "}
+                <ProjectNavLink href={`/projects/${projectId}/audit`} className="underline underline-offset-2 hover:text-text-primary transition-colors">Content Health</ProjectNavLink> instantly.
+              </p>
+            )}
+          </>
         )}
-      </CHPageShell>
+      </div>
 
-      {/* ── Exact same modal as Site audit ───────────────────────────────── */}
+      {/* ── Audit detail modal ────────────────────────────────────────────── */}
       <Suspense fallback={null}>
         <AuditDetailModal
           open={modalOpen}

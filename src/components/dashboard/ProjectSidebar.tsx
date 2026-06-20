@@ -244,6 +244,18 @@ export default function ProjectSidebar({
       label: "Content Health",
       href: auditBase,
       prefetchLabel: "Content Health",
+      exact: true,
+      children: [
+        { label: "Content Analyser", href: `${auditBase}/import`, exact: true },
+        { label: "Discover Pages", href: `${auditBase}/discover-pages`, exact: true },
+      ],
+    },
+    {
+      icon: Icon.settings,
+      label: "Settings",
+      href: `${base}/settings`,
+      prefetchLabel: "Settings",
+      exact: true,
     },
     {
       icon: Icon.settings,

@@ -964,11 +964,12 @@ Return ONLY the JSON object.`;
       temperature: 0.2,
       userId: null,
       projectId,
+      timeoutMs: 120_000,
     });
     return coerceAnalysis(result, sitePeerUrls);
   } catch (e) {
     return emptyAnalysis(
-      `LLM diagnosis failed: \${e instanceof Error ? e.message : String(e)}`
+      `LLM diagnosis failed: ${e instanceof Error ? e.message : String(e)}`
     );
   }
 }

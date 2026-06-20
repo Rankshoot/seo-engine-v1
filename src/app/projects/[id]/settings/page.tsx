@@ -610,20 +610,6 @@ export default function ProjectSettingsPage() {
           </div>
         </div>
 
-        {/* Coming soon */}
-        <div className="grid gap-3 sm:grid-cols-2">
-          {[
-            { name: "Ahrefs", desc: "Import backlink and keyword ranking data." },
-            { name: "Semrush", desc: "Pull keyword difficulty and traffic estimates." },
-          ].map(it => (
-            <div key={it.name} className="rounded-[14px] border border-border-subtle bg-surface-elevated/50 px-4 py-3 opacity-60">
-              <div className="text-[13px] font-semibold text-text-secondary">
-                {it.name} <span className="text-[11px] font-normal text-text-tertiary ml-1">coming soon</span>
-              </div>
-              <div className="text-[12px] text-text-tertiary mt-0.5">{it.desc}</div>
-            </div>
-          ))}
-        </div>
       </section>
     </div>
   );

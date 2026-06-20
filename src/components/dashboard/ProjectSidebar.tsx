@@ -243,10 +243,7 @@ export default function ProjectSidebar({
       icon: Icon.audit,
       label: "Content Health",
       href: auditBase,
-      badge: "Soon",
-      badgeColor: "bg-surface-tertiary/50 text-text-tertiary border-border-subtle opacity-50",
       prefetchLabel: "Content Health",
-      disabled: true,
     },
     {
       icon: Icon.settings,

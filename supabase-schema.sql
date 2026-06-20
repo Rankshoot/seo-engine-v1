@@ -16,9 +16,6 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT DEFAULT '',
   ahrefs_rank_tracker_project_id BIGINT DEFAULT NULL,
   last_benchmarked_competitor_snapshot TEXT DEFAULT NULL,
-  -- Strapi CMS integration (per-project credentials). See supabase-migration-strapi.sql.
-  strapi_base_url  TEXT DEFAULT NULL,
-  strapi_api_token TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -218,11 +215,6 @@ CREATE TABLE IF NOT EXISTS blogs (
   content_type TEXT NOT NULL DEFAULT 'blog'
     CHECK (content_type IN ('blog', 'ebook', 'whitepaper', 'linkedin')),
   content_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  -- Strapi CMS sync state. See supabase-migration-strapi.sql.
-  strapi_document_id TEXT        DEFAULT NULL,
-  strapi_sync_status TEXT        DEFAULT NULL,
-  strapi_sync_error  TEXT        DEFAULT NULL,
-  strapi_synced_at   TIMESTAMPTZ DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

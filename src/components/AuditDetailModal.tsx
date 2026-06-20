@@ -147,6 +147,7 @@ export function AuditDetailModal({
   const focus = extractCalendarFocusKeyword(row);
 
   function handleGenerateEnhanced() {
+    if (!row) return;
     const topIssues = flatNumberedIssues
       .slice(0, 5)
       .map(({ n, issue }) => `${n}. [${issue.severity.toUpperCase()}] ${issue.label}${issue.fix ? ` — Fix: ${issue.fix}` : ""}`)

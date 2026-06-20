@@ -283,6 +283,7 @@ export async function updateAdminUserQuota(
   updates: {
     planId: string;
     subscriptionStatus: string;
+    image_model?: string | null;
     override_projects: number | null;
     override_keywords_fetched: number | null;
     override_keywords_explored: number | null;
@@ -364,6 +365,8 @@ export async function updateAdminUserQuota(
     override_ahrefs_h2s: updates.override_ahrefs_h2s ?? null,
     override_ahrefs_faqs: updates.override_ahrefs_faqs ?? null,
     override_deep_analysis: updates.override_deep_analysis ?? null,
+    // Image model override
+    image_model: updates.image_model ?? null,
     updated_at: new Date().toISOString(),
   };
 

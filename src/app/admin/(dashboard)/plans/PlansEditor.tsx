@@ -4,6 +4,19 @@ import { useState, useTransition } from "react";
 import { updateSubscriptionPlan, createSubscriptionPlan, type PlanUpdateInput } from "@/app/actions/admin-plans-actions";
 import { toast } from "react-hot-toast";
 
+const IMAGE_MODEL_OPTIONS = [
+  { id: "", label: "Platform default (Gemini 2.5 Flash)" },
+  // Gemini native image models
+  { id: "gemini-2.5-flash-image", label: "Gemini 2.5 Flash Image — Stable, ultra low-latency" },
+  { id: "gemini-3.1-flash-image", label: "Gemini 3.1 Flash Image — Stable, high efficiency" },
+  { id: "gemini-3-pro-image", label: "Gemini 3 Pro Image — Stable, advanced quality" },
+  { id: "gemini-3-pro-image-preview", label: "Gemini 3 Pro Image Preview — Early access" },
+  // Imagen 4 standalone text-to-image
+  { id: "imagen-4.0-fast-generate-001", label: "Imagen 4 Fast — High-speed, low-cost" },
+  { id: "imagen-4.0-generate-001", label: "Imagen 4 Standard — General purpose" },
+  { id: "imagen-4.0-ultra-generate-001", label: "Imagen 4 Ultra — Premium photorealistic" },
+];
+
 interface Plan {
   id: string;
   name: string;
@@ -21,6 +34,7 @@ interface Plan {
   limit_standard_content: number;
   limit_premium_content: number;
   limit_ai_credits: number;
+  default_image_model?: string | null;
 }
 
 interface PlansEditorProps {
@@ -210,6 +224,7 @@ export function PlansEditor({ initialPlans }: PlansEditorProps) {
           limit_standard_content: (Number(activePlan.limit_blogs) || 0) + (Number(activePlan.limit_linkedin) || 0),
           limit_premium_content: (Number(activePlan.limit_ebooks) || 0) + (Number(activePlan.limit_whitepapers) || 0),
           limit_ai_credits: Number(activePlan.limit_ai_credits) || 0,
+          default_image_model: (activePlan as any).default_image_model || null,
         };
 
         const res = await updateSubscriptionPlan(activePlan.id, updateData);
@@ -372,6 +387,24 @@ export function PlansEditor({ initialPlans }: PlansEditorProps) {
           </div>
 
           <QuotaForm data={activePlan} onChange={handleInputChange} />
+
+          {/* Image model for this plan */}
+          <div className="border-t border-border-subtle pt-5">
+            <h4 className="text-[10.5px] font-bold text-text-tertiary uppercase tracking-[0.1em] mb-3">AI Image Generation</h4>
+            <div className="flex flex-col gap-1.5 max-w-sm">
+              <label className="text-[11px] font-semibold text-text-secondary">Default Image Model</label>
+              <select
+                value={(activePlan as any).default_image_model ?? ""}
+                onChange={(e) => setPlans((prev) => prev.map((p) => p.id === activePlanId ? { ...p, default_image_model: e.target.value || null } : p))}
+                className="h-9 rounded-md border border-border-subtle bg-surface-elevated px-3 text-[13px] text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-action transition-all"
+              >
+                {IMAGE_MODEL_OPTIONS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+              <span className="text-[10px] text-text-tertiary">Default image model for users on this plan (overridable per-user)</span>
+            </div>
+          </div>
 
           <div className="border-t border-border-subtle pt-5 flex justify-end">
             <button

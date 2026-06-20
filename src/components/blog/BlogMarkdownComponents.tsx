@@ -7,13 +7,16 @@
 import {
   type ComponentType,
   type AnchorHTMLAttributes,
+  type ChangeEvent,
   type HTMLAttributes,
   type ImgHTMLAttributes,
   type ReactNode,
   type ReactElement,
   isValidElement,
   Children,
+  useState,
 } from "react";
+import { BLOG_IMAGE_PLACEHOLDER_URL } from "@/services/openAiImages";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -70,6 +73,133 @@ export function extractYouTubeId(url: string): string | null {
   return null;
 }
 
+// ─── Placeholder image card (interactive, requires hooks) ─────────────────
+
+export interface ImageGenOptions {
+  onGenerate: (alt: string) => Promise<boolean>;
+  onUpload?: (alt: string, dataUrl: string) => Promise<boolean>;
+}
+
+function PlaceholderImageCard({
+  alt,
+  onGenerate,
+  onUpload,
+}: {
+  alt: string;
+  onGenerate: (alt: string) => Promise<boolean>;
+  onUpload?: (alt: string, dataUrl: string) => Promise<boolean>;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [action, setAction] = useState<"generate" | "upload" | null>(null);
+  const [error, setError] = useState("");
+
+  const handleGenerate = async () => {
+    setLoading(true);
+    setAction("generate");
+    setError("");
+    const ok = await onGenerate(alt);
+    setLoading(false);
+    setAction(null);
+    if (!ok) setError("Generation failed. Try again.");
+  };
+
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !onUpload) return;
+    setLoading(true);
+    setAction("upload");
+    setError("");
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const dataUrl = ev.target?.result as string;
+      if (!dataUrl) { setLoading(false); setAction(null); setError("Could not read file."); return; }
+      const ok = await onUpload(alt, dataUrl);
+      setLoading(false);
+      setAction(null);
+      if (!ok) setError("Upload failed. Try again.");
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  return (
+    <span className="my-8 block overflow-hidden rounded-[16px] border-2 border-dashed border-border-subtle">
+      <span className="flex aspect-video flex-col items-center justify-center gap-4 bg-surface-secondary px-6">
+        <svg className="h-10 w-10 text-text-tertiary opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.2}>
+          <rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="8.5" cy="8.5" r="1.5" strokeLinecap="round" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="m21 15-5-5L5 21" />
+        </svg>
+        <span className="text-[13px] text-text-tertiary">Image placeholder</span>
+        <span className="flex items-center gap-2">
+          {/* Generate with AI */}
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-full px-5 py-2 text-[13px] font-semibold transition-all disabled:opacity-50"
+            style={{ background: "var(--brand-action)", color: "#fff" }}
+          >
+            {loading && action === "generate" ? (
+              <>
+                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                Generating…
+              </>
+            ) : (
+              <>
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                Generate Image
+              </>
+            )}
+          </button>
+
+          {/* Upload from device */}
+          {onUpload && (
+            <label
+              className={[
+                "inline-flex cursor-pointer items-center gap-2 rounded-full border border-border-subtle bg-surface-primary px-5 py-2 text-[13px] font-semibold transition-all",
+                loading ? "pointer-events-none opacity-50" : "hover:border-border-default hover:bg-surface-hover",
+              ].join(" ")}
+              style={{ color: "var(--text-secondary)" }}
+            >
+              {loading && action === "upload" ? (
+                <>
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Uploading…
+                </>
+              ) : (
+                <>
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                  </svg>
+                  Upload Image
+                </>
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileChange}
+                disabled={loading}
+              />
+            </label>
+          )}
+        </span>
+        {error && (
+          <span className="text-[11px] text-rose-500">{error}</span>
+        )}
+      </span>
+      {alt && (
+        <span className="block px-4 py-2 text-[12px] text-text-tertiary border-t border-border-subtle">
+          {alt}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ─── Markdown component builder ────────────────────────────────────────────
 
 function linkHostName(href: string): string | null {
@@ -82,7 +212,8 @@ function linkHostName(href: string): string | null {
 
 export function buildMarkdownComponents(
   internalSet: Set<string>,
-  ownSiteHost: string | null = null
+  ownSiteHost: string | null = null,
+  imageGenOptions?: ImageGenOptions
 ): Components {
   const MarkdownLink: ComponentType<AnchorHTMLAttributes<HTMLAnchorElement>> = ({
     href = "",
@@ -245,12 +376,46 @@ export function buildMarkdownComponents(
   const TH: ComponentType<HTMLAttributes<HTMLTableCellElement>> = ({ children, ...r }) => (
     <th className="px-4 py-2.5 align-top" {...r}>{children}</th>
   );
-  const Img: ComponentType<ImgHTMLAttributes<HTMLImageElement>> = ({ alt = "", src, ...r }) => {
-    const safeSrc = typeof src === "string" ? markdownUrlTransform(src) : "";
+  const Img: ComponentType<ImgHTMLAttributes<HTMLImageElement>> = ({ alt = "", src }) => {
+    const rawSrc = typeof src === "string" ? src : "";
+
+    // Show interactive placeholder card when image is a placeholder and handler is available
+    if (rawSrc === BLOG_IMAGE_PLACEHOLDER_URL && imageGenOptions) {
+      return (
+        <PlaceholderImageCard
+          alt={alt}
+          onGenerate={imageGenOptions.onGenerate}
+          onUpload={imageGenOptions.onUpload}
+        />
+      );
+    }
+
+    // Static placeholder (no handler — e.g. in edit mode or static rendering)
+    if (rawSrc === BLOG_IMAGE_PLACEHOLDER_URL) {
+      return (
+        <span className="my-8 block overflow-hidden rounded-[16px] border-2 border-dashed border-border-subtle">
+          <span className="flex aspect-video flex-col items-center justify-center gap-3 bg-surface-secondary">
+            <svg className="h-8 w-8 text-text-tertiary opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.2}>
+              <rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="8.5" cy="8.5" r="1.5" strokeLinecap="round" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="m21 15-5-5L5 21" />
+            </svg>
+            <span className="text-[12px] text-text-tertiary">Image not generated</span>
+          </span>
+          {alt && (
+            <span className="block px-4 py-2 text-[12px] text-text-tertiary border-t border-border-subtle">
+              {alt}
+            </span>
+          )}
+        </span>
+      );
+    }
+
+    const safeSrc = markdownUrlTransform(rawSrc);
     if (!safeSrc) return null;
     return (
       <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle">
-        <img alt={alt} src={safeSrc} loading="lazy" className="aspect-video w-full object-cover" {...r} />
+        <img alt={alt} src={safeSrc} loading="lazy" className="aspect-video w-full object-cover" />
         {alt && (
           <span className="block px-4 py-2 text-[12px] text-text-tertiary border-t border-border-subtle">
             {alt}

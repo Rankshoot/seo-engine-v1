@@ -25,6 +25,8 @@ export interface PlanUpdateInput {
   enable_ahrefs_organic_competitors?: boolean;
   enable_ahrefs_blog_headings?: boolean;
   enable_ahrefs_blog_faqs?: boolean;
+  // Image generation
+  default_image_model?: string | null;
 }
 
 /**
@@ -86,6 +88,8 @@ export async function updateSubscriptionPlan(
       enable_ahrefs_organic_competitors: updates.enable_ahrefs_organic_competitors ?? true,
       enable_ahrefs_blog_headings: updates.enable_ahrefs_blog_headings ?? false,
       enable_ahrefs_blog_faqs: updates.enable_ahrefs_blog_faqs ?? false,
+      // Image generation model
+      default_image_model: updates.default_image_model ?? null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", planId);

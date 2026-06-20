@@ -6,7 +6,7 @@ import { generateBlogPost, geminiGenerate, repairBlogPost } from '@/lib/gemini';
 import { researchKeyword } from '@/lib/research';
 import { ArticleLibraryEntry, Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWithBlog } from '@/lib/types';
 import type { BusinessBrief } from '@/lib/business-brief';
-import { generateBlogImages, insertBlogImages } from '@/services/openAiImages';
+import { insertBlogImagePlaceholders } from '@/services/openAiImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
 import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan } from '@/lib/content-health-calendar';
 import { hybridReadUrl } from '@/services/hybridScraper';
@@ -140,16 +140,11 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
         : (analysis.summary || repaired.meta_description);
       const repairNotes = normalizeRepairNotesFromModel(repaired.repair_notes, analysis);
 
-      const images = await generateBlogImages({
+      const contentWithImages = sanitizeBlogMarkdown(insertBlogImagePlaceholders(rawMarkdown, {
         title: finalTitle,
         targetKeyword: entry.focus_keyword,
-        articleType: entry.article_type,
-        niche: project.niche,
-        audience: project.target_audience,
-        company: project.company,
         wordCount: countWords(rawMarkdown),
-      });
-      const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(rawMarkdown, images));
+      }));
       const sanitized = await sanitizeBlogContent(contentWithImages, {
         ownDomain: project.domain ?? '',
       });
@@ -308,16 +303,11 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       ahrefsContext,
       mergedWriterNotes || undefined,
     );
-    const images = await generateBlogImages({
+    const contentWithImages = sanitizeBlogMarkdown(insertBlogImagePlaceholders(blogData.content, {
       title: blogData.title,
       targetKeyword: entry.focus_keyword,
-      articleType: entry.article_type,
-      niche: project.niche,
-      audience: project.target_audience,
-      company: project.company,
       wordCount: blogData.word_count,
-    });
-    const contentWithImages = sanitizeBlogMarkdown(insertBlogImages(blogData.content, images));
+    }));
 
     const sanitized = await sanitizeBlogContent(contentWithImages, {
       ownDomain: project.domain ?? '',

@@ -450,6 +450,12 @@ export async function runCompetitorBenchmark(projectId: string): Promise<RunBenc
     recommendations: [],
   };
 
+  const benchmarkedSnapshot = userSuppliedHosts.slice().sort().join('|');
+  await supabaseAdmin
+    .from('projects')
+    .update({ last_benchmarked_competitor_snapshot: benchmarkedSnapshot })
+    .eq('id', projectId);
+
   console.log(
     `[benchmark] done project=${projectId} via=${String(benchmarkSource)} competitors=${persistedCompetitors.length} keywords=${dedupedOpportunities.length} gaps=${topGapRows.length}`
   );

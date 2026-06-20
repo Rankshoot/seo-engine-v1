@@ -66,6 +66,7 @@ async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIE
     })),
   };
 
+  const startMs = Date.now();
   const res = await fetch(EMBED_URL, {
     method: 'POST',
     headers: {
@@ -75,11 +76,60 @@ async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIE
     body: JSON.stringify(body),
   });
 
+  const latencyMs = Date.now() - startMs;
+
   if (!res.ok) {
-    throw new Error(`Gemini embed ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const errText = (await res.text()).slice(0, 200);
+    void import("@/lib/admin/logging/record-provider-call").then(({ recordAiCall }) => {
+      recordAiCall({
+        provider: "gemini",
+        model: "text-embedding-004",
+        prompt: `[embedding batch of ${texts.length} texts, taskType=${taskType}]`,
+        ok: false,
+        latencyMs,
+        errorMessage: `HTTP ${res.status}: ${errText}`,
+        featureSuffix: "keyword_embedding",
+        metadata: { texts_count: texts.length, taskType },
+      });
+    });
+    throw new Error(`Gemini embed ${res.status}: ${errText}`);
   }
+
   const json = (await res.json()) as EmbedResponse;
-  if (json.error?.message) throw new Error(`Gemini embed error: ${json.error.message}`);
+  if (json.error?.message) {
+    void import("@/lib/admin/logging/record-provider-call").then(({ recordAiCall }) => {
+      recordAiCall({
+        provider: "gemini",
+        model: "text-embedding-004",
+        prompt: `[embedding batch of ${texts.length} texts]`,
+        ok: false,
+        latencyMs,
+        errorMessage: json.error!.message,
+        featureSuffix: "keyword_embedding",
+        metadata: { texts_count: texts.length, taskType },
+      });
+    });
+    throw new Error(`Gemini embed error: ${json.error.message}`);
+  }
+
+  // text-embedding-004 is free-tier (up to 10M tokens/month); log with $0 cost so usage is visible
+  void import("@/lib/admin/logging/record-provider-call").then(({ recordAiCall }) => {
+    recordAiCall({
+      provider: "gemini",
+      model: "text-embedding-004",
+      prompt: `[embedding batch of ${texts.length} texts, taskType=${taskType}]`,
+      estimatedCostUsd: 0, // free tier
+      ok: true,
+      latencyMs,
+      featureSuffix: "keyword_embedding",
+      metadata: {
+        texts_count: texts.length,
+        taskType,
+        pricing_note: "free_tier_10M_tokens_per_month",
+      },
+    });
+  });
+
   const rows = json.embeddings ?? [];
   return rows.map(r => r.values ?? []);
 }

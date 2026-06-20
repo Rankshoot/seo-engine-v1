@@ -212,6 +212,18 @@ export async function createProject(data: {
 
   // Fetch the full project with competitors populated before returning
   const fullProject = await getProject(project.id);
+
+  // Fire-and-forget brand intelligence extraction (non-blocking)
+  void import("@/services/brandIntelligence").then(({ discoverBrand }) => {
+    discoverBrand({
+      projectId: project.id,
+      domain: data.domain,
+      company: data.company,
+      niche: data.niche,
+      description: data.description,
+    }).catch(() => { /* silent — brand extraction is best-effort */ });
+  });
+
   if (fullProject.success && fullProject.data) {
     return { success: true, data: fullProject.data };
   }

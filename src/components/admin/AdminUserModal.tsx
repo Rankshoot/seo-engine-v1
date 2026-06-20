@@ -27,9 +27,23 @@ interface PlanOption {
   name: string;
 }
 
+const IMAGE_MODEL_OPTIONS = [
+  { id: "", label: "Platform default (Gemini 2.5 Flash)" },
+  // Gemini native image models
+  { id: "gemini-2.5-flash-image", label: "Gemini 2.5 Flash Image — Stable, ultra low-latency" },
+  { id: "gemini-3.1-flash-image", label: "Gemini 3.1 Flash Image — Stable, high efficiency" },
+  { id: "gemini-3-pro-image", label: "Gemini 3 Pro Image — Stable, advanced quality" },
+  { id: "gemini-3-pro-image-preview", label: "Gemini 3 Pro Image Preview — Early access" },
+  // Imagen 4 standalone text-to-image
+  { id: "imagen-4.0-fast-generate-001", label: "Imagen 4 Fast — High-speed, low-cost" },
+  { id: "imagen-4.0-generate-001", label: "Imagen 4 Standard — General purpose" },
+  { id: "imagen-4.0-ultra-generate-001", label: "Imagen 4 Ultra — Premium photorealistic" },
+];
+
 interface QuotaState {
   planId: string;
   subscriptionStatus: string;
+  image_model: string;
   override_projects: string;
   override_keywords_fetched: string;
   override_keywords_explored: string;
@@ -94,6 +108,7 @@ export function AdminUserModal({
   const [form, setForm] = useState<QuotaState>({
     planId: "free",
     subscriptionStatus: "inactive",
+    image_model: "",
     override_projects: "",
     override_keywords_fetched: "",
     override_keywords_explored: "",
@@ -139,6 +154,7 @@ export function AdminUserModal({
         setForm({
           planId: userQuota.planId,
           subscriptionStatus: userQuota.subscriptionStatus,
+          image_model: (userQuota as any).image_model ?? "",
           override_projects: userQuota.projects.override !== null ? String(userQuota.projects.override) : "",
           override_keywords_fetched:
             userQuota.keywords_fetched.override !== null ? String(userQuota.keywords_fetched.override) : "",
@@ -223,6 +239,7 @@ export function AdminUserModal({
         const updates = {
           planId: form.planId,
           subscriptionStatus: form.subscriptionStatus,
+          image_model: form.image_model.trim() || null,
           override_projects: parseOverride(form.override_projects),
           override_keywords_fetched: parseOverride(form.override_keywords_fetched),
           override_keywords_explored: parseOverride(form.override_keywords_explored),
@@ -324,6 +341,24 @@ export function AdminUserModal({
                   <option value="canceled">Canceled</option>
                 </select>
               </div>
+            </div>
+
+            {/* Image model override */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-text-secondary flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-brand-primary" />
+                Image Generation Model
+              </label>
+              <select
+                value={form.image_model}
+                onChange={(e) => setForm((prev) => ({ ...prev, image_model: e.target.value }))}
+                className="h-9 rounded-md border border-border-subtle bg-surface-elevated px-3 text-text-primary focus:outline-none focus:ring-1 focus:ring-brand-action transition-all"
+              >
+                {IMAGE_MODEL_OPTIONS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+              <span className="text-[10px] text-text-tertiary">Per-user override for blog image generation model</span>
             </div>
 
             {/* Resource Limit Editor */}

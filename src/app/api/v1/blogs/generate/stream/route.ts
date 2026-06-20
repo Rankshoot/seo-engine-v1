@@ -359,20 +359,14 @@ Respond with a concise but rich analysis (300–500 words) structured as:
         const { parseGeneratedBlogJson } = await import("@/lib/gemini");
         const blogData = parseGeneratedBlogJson(fullContent, entry, project, research);
 
-        const { generateBlogImages, insertBlogImages } = await import("@/services/openAiImages");
+        const { insertBlogImagePlaceholders } = await import("@/services/openAiImages");
         const { sanitizeBlogContent } = await import("@/lib/blog-content");
 
-        const images = await generateBlogImages({
+        const rawContent = insertBlogImagePlaceholders(blogData.content, {
           title: blogData.title,
           targetKeyword: entry.focus_keyword,
-          articleType: entry.article_type,
-          niche: project.niche,
-          audience: body.audience || project.target_audience || "",
-          company: project.company,
           wordCount: blogData.word_count,
         });
-
-        const rawContent = insertBlogImages(blogData.content, images);
         const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
         const finalContent = sanitizeBlogMarkdown(sanitized.content);
         const finalWordCount = countWords(finalContent);

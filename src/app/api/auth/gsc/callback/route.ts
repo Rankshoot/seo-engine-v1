@@ -116,7 +116,7 @@ export async function GET(request: Request) {
       );
     }
 
-    return NextResponse.redirect(`${origin}/projects/${projectId}?gsc=connected`);
+    return NextResponse.redirect(`${origin}/projects/${projectId}/settings?gsc=connected`);
   } catch (err) {
     console.error('[GSC callback] unexpected error', err);
     return NextResponse.redirect(

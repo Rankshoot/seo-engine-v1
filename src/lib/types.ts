@@ -27,6 +27,8 @@ export interface Project {
   created_at: string;
   updated_at: string;
   project_competitors?: ProjectCompetitor[];
+  strapi_base_url?: string | null;
+  strapi_api_token?: string | null;
 }
 
 export interface ProjectCompetitor {
@@ -378,6 +380,10 @@ export interface Blog {
    * lets the previewer render rich type-specific UI without re-parsing markdown.
    */
   content_data?: ContentDataPayload;
+  strapi_document_id?: string | null;
+  strapi_sync_status?: 'ok' | 'error' | null;
+  strapi_sync_error?: string | null;
+  strapi_synced_at?: string | null;
   created_at: string;
   updated_at: string;
 }

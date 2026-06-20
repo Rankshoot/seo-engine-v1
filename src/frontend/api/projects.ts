@@ -105,4 +105,14 @@ export const projectsApi = {
   refreshBrand(projectId: string): Promise<{ success: boolean; error?: string; data?: Record<string, unknown> }> {
     return apiPost(V1Routes.projectBrandRefresh(projectId));
   },
+
+  saveStrapi(
+    projectId: string,
+    payload: {
+      strapi_base_url: string | null;
+      strapi_api_token?: string | null;
+    }
+  ): Promise<{ success: boolean; error?: string }> {
+    return apiPatch(V1Routes.projectStrapi(projectId), payload);
+  },
 };

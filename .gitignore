@@ -43,3 +43,6 @@ next-env.d.ts
 # graphify
 graphify-out/
 
+# Strapi CMS (separate project — run independently, not part of this repo)
+strapi-cms/
+

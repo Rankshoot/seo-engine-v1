@@ -2609,3 +2609,157 @@ Rules — read carefully:
     return { success: false, error: e instanceof Error ? e.message : "Analysis failed" };
   }
 }
+
+// ─── Strapi CMS ───────────────────────────────────────────────────────────────
+
+/**
+ * Push a blog / ebook / whitepaper to the connected Strapi instance as a draft.
+ * LinkedIn posts are not supported and will return an error.
+ *
+ * On success the blog row is updated with strapi_document_id + sync metadata.
+ * On failure the sync_status / sync_error fields are written so the UI can show
+ * the last error without re-fetching.
+ */
+export async function publishToStrapi(
+  blogId: string,
+): Promise<{ success: boolean; error?: string; strapiUrl?: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const { data: blog, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('*')
+    .eq('id', blogId)
+    .single();
+
+  if (bErr || !blog) return { success: false, error: 'Blog not found' };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('*')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Project not found or unauthorized' };
+
+  if (!project.strapi_base_url || !project.strapi_api_token) {
+    return {
+      success: false,
+      error: 'Strapi is not configured for this project. Add credentials in Project Settings.',
+    };
+  }
+
+  const contentType = blog.content_type ?? 'blog';
+  if (!['blog', 'ebook', 'whitepaper'].includes(contentType)) {
+    return { success: false, error: `Content type "${contentType}" cannot be published to Strapi.` };
+  }
+
+  const { validateStrapiBaseUrl, upsertToStrapi } = await import('@/lib/strapi');
+
+  let safeBase: string;
+  try {
+    safeBase = validateStrapiBaseUrl(project.strapi_base_url);
+  } catch (e) {
+    return { success: false, error: `Invalid Strapi URL: ${String(e)}` };
+  }
+
+  const payload = {
+    title: blog.title,
+    slug: blog.slug,
+    content: blog.content,
+    meta_description: blog.meta_description ?? '',
+    target_keyword: blog.target_keyword ?? '',
+    article_type: contentType,
+    word_count: blog.word_count ?? 0,
+    seo_engine_blog_id: blog.id,
+    seo_engine_project_id: blog.project_id,
+  };
+
+  try {
+    const { documentId } = await upsertToStrapi(
+      safeBase,
+      project.strapi_api_token,
+      payload,
+      blog.strapi_document_id ?? null,
+    );
+
+    await supabaseAdmin
+      .from('blogs')
+      .update({
+        strapi_document_id: documentId,
+        strapi_sync_status: 'ok',
+        strapi_sync_error: null,
+        strapi_synced_at: new Date().toISOString(),
+      })
+      .eq('id', blogId);
+
+    return {
+      success: true,
+      strapiUrl: `${safeBase}/admin/content-manager/collection-types/api::article.article/${documentId}`,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+
+    await supabaseAdmin
+      .from('blogs')
+      .update({
+        strapi_sync_status: 'error',
+        strapi_sync_error: msg,
+        strapi_synced_at: new Date().toISOString(),
+      })
+      .eq('id', blogId);
+
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Test the Strapi connection for a project.
+ *
+ * If `inlineUrl` and `inlineToken` are supplied they are used directly
+ * (pre-save test from the settings form). Otherwise the saved DB values are
+ * used. The token is never returned to the client.
+ */
+export async function testStrapiConnection(
+  projectId: string,
+  inlineUrl?: string,
+  inlineToken?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await currentUser();
+  if (!user) return { ok: false, error: 'Not authenticated' };
+
+  let baseUrl: string;
+  let token: string;
+
+  if (inlineUrl && inlineToken) {
+    baseUrl = inlineUrl.trim();
+    token = inlineToken.trim();
+  } else {
+    const { data: project, error: pErr } = await supabaseAdmin
+      .from('projects')
+      .select('strapi_base_url, strapi_api_token')
+      .eq('id', projectId)
+      .eq('user_id', user.id)
+      .single();
+
+    if (pErr || !project) return { ok: false, error: 'Project not found or unauthorized' };
+
+    if (!project.strapi_base_url || !project.strapi_api_token) {
+      return { ok: false, error: 'Strapi credentials are not configured. Save your settings first, then test.' };
+    }
+
+    baseUrl = project.strapi_base_url;
+    token = project.strapi_api_token;
+  }
+
+  const { validateStrapiBaseUrl, testStrapiConnection: pingStrapi } = await import('@/lib/strapi');
+
+  try {
+    validateStrapiBaseUrl(baseUrl);
+  } catch (e) {
+    return { ok: false, error: `Invalid Strapi URL: ${String(e)}` };
+  }
+
+  return pingStrapi(baseUrl, token);
+}

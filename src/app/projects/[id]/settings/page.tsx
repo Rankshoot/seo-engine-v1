@@ -7,7 +7,8 @@ import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { projectsApi } from "@/frontend/api/projects";
 import { PageTitle } from "@/components/common";
 import type { Project } from "@/lib/types";
-import { RefreshCw, Check, AlertCircle, Palette, Upload, Wand2, X } from "lucide-react";
+import { RefreshCw, Check, AlertCircle, Palette, Upload, Wand2, X, Globe, Loader2, Plug } from "lucide-react";
+import { testStrapiConnection } from "@/app/actions/blog-actions";
 
 // ─── option lists ────────────────────────────────────────────────────────────
 
@@ -280,6 +281,14 @@ export default function ProjectSettingsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState<"idle" | "success" | "error">("idle");
 
+  const [strapiBaseUrl, setStrapiBaseUrl] = useState("");
+  const [strapiToken, setStrapiToken] = useState("");
+  const [strapiTokenPlaceholder, setStrapiTokenPlaceholder] = useState(false);
+  const [strapiSaving, setStrapiSaving] = useState(false);
+  const [strapiSaveStatus, setStrapiSaveStatus] = useState<"idle" | "success" | "error">("idle");
+  const [strapiTesting, setStrapiTesting] = useState(false);
+  const [strapiTestResult, setStrapiTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+
   useEffect(() => {
     if (!project) return;
     setPrimaryColor(project.brand_primary_color ?? "");
@@ -289,6 +298,9 @@ export default function ProjectSettingsPage() {
     setVisualStyle(project.brand_visual_style ?? "");
     setDesignPersonality(project.brand_design_personality ?? "");
     setImageStyle(project.brand_image_style ?? "");
+    setStrapiBaseUrl(project.strapi_base_url ?? "");
+    setStrapiTokenPlaceholder(Boolean(project.strapi_api_token));
+    setStrapiToken("");
   }, [project]);
 
   const nullIfEmpty = (v: string) => v.trim() || null;
@@ -319,6 +331,51 @@ export default function ProjectSettingsPage() {
       setSaving(false);
     }
   }, [projectId, primaryColor, secondaryColor, accentColor, logoUrl, visualStyle, designPersonality, imageStyle, queryClient]);
+
+  const handleStrapiSave = useCallback(async () => {
+    setStrapiSaving(true);
+    setStrapiSaveStatus("idle");
+    setStrapiTestResult(null);
+    try {
+      const payload: { strapi_base_url: string | null; strapi_api_token?: string | null } = {
+        strapi_base_url: strapiBaseUrl.trim() || null,
+      };
+      if (strapiToken.trim()) {
+        payload.strapi_api_token = strapiToken.trim();
+      }
+      const result = await projectsApi.saveStrapi(projectId, payload);
+      if (result.success) {
+        setStrapiSaveStatus("success");
+        if (strapiToken.trim()) setStrapiTokenPlaceholder(true);
+        setStrapiToken("");
+        queryClient.invalidateQueries({ queryKey: qk.project(projectId) });
+        setTimeout(() => setStrapiSaveStatus("idle"), 2500);
+      } else {
+        setStrapiSaveStatus("error");
+      }
+    } catch {
+      setStrapiSaveStatus("error");
+    } finally {
+      setStrapiSaving(false);
+    }
+  }, [projectId, strapiBaseUrl, strapiToken, queryClient]);
+
+  const handleStrapiTest = useCallback(async () => {
+    setStrapiTesting(true);
+    setStrapiTestResult(null);
+    try {
+      const result = await testStrapiConnection(
+        projectId,
+        strapiBaseUrl.trim() || undefined,
+        strapiToken.trim() || undefined,
+      );
+      setStrapiTestResult(result);
+    } catch (e) {
+      setStrapiTestResult({ ok: false, error: e instanceof Error ? e.message : "Unknown error" });
+    } finally {
+      setStrapiTesting(false);
+    }
+  }, [projectId, strapiBaseUrl, strapiToken]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -435,6 +492,98 @@ export default function ProjectSettingsPage() {
               <><Wand2 className="w-4 h-4 animate-pulse" /> Saving…</>
             ) : (
               "Save Changes"
+            )}
+          </button>
+        </div>
+      </section>
+
+      {/* ── Strapi CMS ─────────────────────────────────────────── */}
+      <section className="rounded-[12px] border border-border-subtle bg-surface-elevated divide-y divide-border-subtle overflow-hidden">
+        <div className="px-5 py-4 flex items-center gap-2.5">
+          <Plug className="w-4 h-4 text-brand-violet shrink-0" />
+          <div>
+            <h2 className="text-sm font-semibold text-text-primary">Strapi CMS</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">
+              Connect a Strapi instance to publish generated content as drafts. Leave blank to disable.
+            </p>
+          </div>
+        </div>
+
+        <div className="px-5 py-5 space-y-4">
+          {/* Base URL */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-text-secondary">Strapi Base URL</label>
+            <div className="relative">
+              <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary pointer-events-none" />
+              <input
+                type="url"
+                value={strapiBaseUrl}
+                onChange={e => { setStrapiBaseUrl(e.target.value); setStrapiTestResult(null); }}
+                placeholder="https://your-strapi.com"
+                className="w-full h-9 pl-8 pr-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* API Token */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-text-secondary">API Token</label>
+            <input
+              type="password"
+              value={strapiToken}
+              onChange={e => { setStrapiToken(e.target.value); setStrapiTestResult(null); }}
+              placeholder={strapiTokenPlaceholder ? "••••••••  (saved — re-enter to change)" : "Paste your Strapi API token"}
+              autoComplete="new-password"
+              className="w-full h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand-violet/50 transition-colors"
+            />
+            <p className="text-xs text-text-tertiary">
+              Create a <strong>Custom</strong> token in Strapi → Settings → API Tokens with{" "}
+              <code className="font-mono">create</code>,{" "}
+              <code className="font-mono">find</code>,{" "}
+              <code className="font-mono">findOne</code>, and{" "}
+              <code className="font-mono">update</code> permissions on the <code className="font-mono">Article</code> content type only.
+            </p>
+          </div>
+
+          {/* Test connection result */}
+          {strapiTestResult && (
+            <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-[8px] border ${
+              strapiTestResult.ok
+                ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600"
+                : "border-brand-coral/30 bg-brand-coral/5 text-brand-coral"
+            }`}>
+              {strapiTestResult.ok
+                ? <Check className="w-3.5 h-3.5 shrink-0" />
+                : <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+              <span>{strapiTestResult.ok ? "Connection successful" : (strapiTestResult.error ?? "Connection failed")}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-4 flex items-center justify-between gap-3 bg-surface-secondary/50">
+          <button
+            onClick={handleStrapiTest}
+            disabled={strapiTesting || !strapiBaseUrl.trim() || (!strapiToken.trim() && !strapiTokenPlaceholder)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] border border-border-subtle text-xs font-medium text-text-secondary hover:text-text-primary hover:border-brand-violet/40 hover:bg-surface-hover transition-all disabled:opacity-50"
+          >
+            {strapiTesting
+              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Testing…</>
+              : <><Plug className="w-3.5 h-3.5" /> Test Connection</>}
+          </button>
+
+          <button
+            onClick={handleStrapiSave}
+            disabled={strapiSaving}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-[8px] bg-brand-violet text-white text-sm font-medium hover:bg-brand-violet/90 active:scale-[0.97] transition-all disabled:opacity-50"
+          >
+            {strapiSaveStatus === "success" ? (
+              <><Check className="w-4 h-4" /> Saved</>
+            ) : strapiSaveStatus === "error" ? (
+              <><AlertCircle className="w-4 h-4" /> Error</>
+            ) : strapiSaving ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+            ) : (
+              "Save Strapi Settings"
             )}
           </button>
         </div>

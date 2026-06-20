@@ -13,7 +13,7 @@ import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
-import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
+import { analyzeBlogContent, publishToStrapi, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { normalizeMarkdownImages, BLOG_IMAGE_PLACEHOLDER_URL } from "@/services/openAiImages";
 import {
   exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload,
@@ -154,6 +154,7 @@ export default function BlogViewerPage() {
   const [fixError,        setFixError]        = useState("");
   const [editError,       setEditError]       = useState("");
   const [editSessionKey,  setEditSessionKey]  = useState(0);
+  const [strapiPushing,   setStrapiPushing]   = useState(false);
 
   // ── Refs ───────────────────────────────────────────────────────────────
   const titleEditorRef     = useRef<HTMLHeadingElement | null>(null);
@@ -699,6 +700,37 @@ export default function BlogViewerPage() {
     setSavingStatus(false);
   };
 
+  // ── Strapi publish handler ───────────────────────────────────────────────
+  const handlePublishToStrapi = async () => {
+    if (!blog) return;
+    setStrapiPushing(true);
+    try {
+      const res = await publishToStrapi(blog.id);
+      if (res.success) {
+        setBlog(prev => prev ? {
+          ...prev,
+          strapi_document_id: prev.strapi_document_id ?? "synced",
+          strapi_sync_status: "ok" as const,
+          strapi_synced_at: new Date().toISOString(),
+        } : prev);
+        toast.success(
+          res.strapiUrl
+            ? `Published to Strapi as draft ↗`
+            : "Published to Strapi as draft",
+          res.strapiUrl ? { duration: 5000 } : undefined
+        );
+        if (res.strapiUrl) window.open(res.strapiUrl, "_blank", "noopener");
+      } else {
+        setBlog(prev => prev ? { ...prev, strapi_sync_status: "error" as const } : prev);
+        toast.error(res.error ?? "Strapi push failed");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Strapi push failed");
+    } finally {
+      setStrapiPushing(false);
+    }
+  };
+
   const handleSeoFix = async (key: BlogSeoIssueKey) => {
     if (!displayBlog || fixingIssue || editMode) return;
     setFixingIssue(key); setFixError(""); setScoreRefreshing(true);
@@ -1063,6 +1095,44 @@ export default function BlogViewerPage() {
           ))}
         </div>
       </div>
+
+      {/* Strapi CMS */}
+      {project?.strapi_base_url && ['blog', 'ebook', 'whitepaper'].includes(currentBlog.content_type ?? 'blog') && (
+        <>
+          <Divider />
+          <div className="px-4 py-3.5">
+            <SLabel>Strapi CMS</SLabel>
+            <button
+              onClick={handlePublishToStrapi}
+              disabled={strapiPushing || editMode}
+              className={`w-full flex items-center justify-center gap-1.5 rounded-[6px] px-3 py-2 text-[11px] font-medium transition-all border disabled:opacity-50 ${
+                blog.strapi_sync_status === 'error'
+                  ? 'border-brand-coral/40 bg-brand-coral/5 text-brand-coral hover:bg-brand-coral/10'
+                  : 'border-border-subtle bg-surface-tertiary text-text-tertiary hover:text-text-primary hover:border-border-default'
+              }`}
+            >
+              {strapiPushing ? (
+                <><SpinIcon className="w-3 h-3" />&nbsp;Pushing…</>
+              ) : blog.strapi_sync_status === 'error' ? (
+                'Retry Strapi push'
+              ) : blog.strapi_document_id ? (
+                'Update in Strapi'
+              ) : (
+                'Publish to Strapi'
+              )}
+            </button>
+            {blog.strapi_synced_at && (
+              <p className="mt-1.5 text-[9px] text-text-tertiary" style={MONO}>
+                {blog.strapi_sync_status === 'error' ? 'Failed: ' : 'Synced: '}
+                {new Date(blog.strapi_synced_at).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+              </p>
+            )}
+            {blog.strapi_sync_status === 'error' && blog.strapi_sync_error && (
+              <p className="mt-1 text-[9px] text-brand-coral leading-relaxed">{blog.strapi_sync_error}</p>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Generate (calendar-based) */}
       {!isImport && !isRepair && (

@@ -585,7 +585,7 @@ const AuditAnalysisSchema = z.object({
     recommended_word_count: z.number(),
     schema_types: z.array(z.string()),
     faq_questions: z.array(z.string()),
-  }),
+  }).optional(),
 });
 
 async function runAiAnalysis(
@@ -763,11 +763,15 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   let vitals: KeywordVitals | undefined;
   let primaryKeywordForSearch = '';
   try {
-    // Quick extraction of likely primary keyword from title for early SERP lookup
-    const titleWords = signals.title.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
-    // Use first 4 meaningful words as seed keyword
-    const stopWords = new Set(['the', 'a', 'an', 'in', 'on', 'of', 'for', 'and', 'to', 'is', 'are', 'how', 'what', 'why']);
-    primaryKeywordForSearch = titleWords.filter(w => !stopWords.has(w)).slice(0, 4).join(' ');
+    // Extract keyword from URL slug (e.g. /ai-specialist/ → "ai specialist")
+    const urlPath = new URL(url).pathname;
+    const slug = urlPath.split('/').filter(Boolean).pop() ?? '';
+    primaryKeywordForSearch = slug
+      .replace(/\.[a-z0-9]{2,5}$/i, '') // strip extension
+      .replace(/[-_]/g, ' ')
+      .replace(/[^a-z0-9\s]/gi, '')
+      .trim()
+      .toLowerCase();
   } catch { /* no keyword */ }
 
   let vitalsMap = new Map<string, KeywordVitals>();
@@ -896,7 +900,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
     scores,
     issues,
     competitor_insights: competitorInsights,
-    revamp_brief: aiResult.revamp_brief,
+    revamp_brief: aiResult.revamp_brief ?? emptyRevamp(),
     quality_rubric: qualityRubric,
     keyword_data: keywordData,
     page_status: 'ok',

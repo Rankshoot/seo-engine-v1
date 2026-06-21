@@ -433,7 +433,7 @@ function zodToJsonSchema(schema: any): any {
   } else if (typeName === "ZodBoolean" || schema instanceof z.ZodBoolean) {
     return { type: "boolean" };
   } else if (typeName === "ZodEnum" || schema instanceof z.ZodEnum) {
-    return { type: "string", enum: schema._def?.values || schema.check || [] };
+    return { type: "string", enum: schema.options || schema._def?.values || [] };
   } else if (typeName === "ZodOptional" || schema instanceof z.ZodOptional) {
     return zodToJsonSchema(schema._def?.innerType || schema.unwrap?.());
   } else if (typeName === "ZodNullable" || schema instanceof z.ZodNullable) {

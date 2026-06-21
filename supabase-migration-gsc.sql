@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS gsc_url_metrics (
   UNIQUE(project_id, url)
 );
 
+
 -- Project-level GSC aggregate (totals for overview)
 CREATE TABLE IF NOT EXISTS gsc_site_metrics (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

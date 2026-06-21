@@ -13,6 +13,7 @@ export interface ContentAuditHistoryItem {
   updated_at: string;
   version: number;
   plain_language_verdict: string;
+  report: ContentAuditReport | null;
 }
 
 export interface AnalyzeResponse {

@@ -1,9 +1,14 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/content-audit";
+import { calendarApi } from "@/frontend/api/calendar";
+import { apiPost } from "@/frontend/api/http";
+import { V1Routes } from "@/frontend/api/routes";
 import type { ContentAuditReport, ContentAuditScores } from "@/lib/content-audit-studio";
+import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
+import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import {
   ScoreRing, ScoreCard, SeverityChip, CategoryBadge, RubricStatus,
   StepIndicator, EmptyState, Spinner, KeywordVerdictChip, scoreGrade, scoreColor,
@@ -106,6 +111,15 @@ export default function ContentAuditStudioPage() {
   const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors" | "brief">("issues");
   const [expandedBrief, setExpandedBrief] = useState(false);
 
+  // Generate / schedule state
+  const [generating, setGenerating] = useState(false);
+  const [generatedBlogId, setGeneratedBlogId] = useState<string | null>(null);
+  const [generateError, setGenerateError] = useState("");
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduledDate, setScheduledDate] = useState<string | null>(null);
+  const [scheduledEntryId, setScheduledEntryId] = useState<string | null>(null);
+
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -143,6 +157,10 @@ export default function ContentAuditStudioPage() {
 
     setError("");
     setReport(null);
+    setGeneratedBlogId(null);
+    setGenerateError("");
+    setScheduledDate(null);
+    setScheduledEntryId(null);
     setAnalyzing(true);
     startStepAnimation();
 
@@ -163,8 +181,133 @@ export default function ContentAuditStudioPage() {
     }
   };
 
+  const buildSnapshot = (r: ContentAuditReport): ContentHealthAuditSnapshot => ({
+    version: 2,
+    capturedAt: r.analyzed_at,
+    url: r.url,
+    title: r.title,
+    health_score: r.scores.overall,
+    primary_keyword: r.primary_keyword,
+    word_count: r.word_count,
+    // Map ContentAuditReport → BlogAuditAnalysis shape expected by repair pipeline
+    analysis: {
+      page_status: r.page_status,
+      primary_keyword: r.primary_keyword,
+      secondary_keywords: r.secondary_keywords,
+      summary: r.summary,
+      plain_language_verdict: r.plain_language_verdict,
+      issues: r.issues.map(i => ({
+        severity: i.severity,
+        category: i.category,
+        label: i.title,
+        detail: i.detail,
+        fix: i.fix,
+      })),
+      quality_rubric: r.quality_rubric.map(row => ({
+        label: row.label,
+        status: row.status,
+        detail: row.detail,
+      })),
+      content_gaps: r.revamp_brief?.missing_topics ?? [],
+      internal_link_opportunities: [],
+      keyword_demand: r.keyword_data
+        ? { keyword: r.keyword_data.keyword, verdict: r.keyword_data.verdict, monthly_volume: r.keyword_data.volume }
+        : undefined,
+      llm_quality_score: r.scores.content_quality,
+      publish_date_estimate: r.publish_date_detected ?? undefined,
+      analyze_page_meta: { sourced_from_analyze_page: true },
+    } as unknown as import("@/lib/content-audit").BlogAuditAnalysis,
+    generation_mode: "repair",
+    scheduled_from: "analyze_content",
+  });
+
+  const handleGenerate = async () => {
+    if (!report) return;
+    setGenerating(true);
+    setGenerateError("");
+    try {
+      const snapshot = buildSnapshot(report);
+      // Create calendar entry with audit snapshot (no date → picks next vacant slot)
+      const calRes = await calendarApi.addContentHealth(projectId, {
+        focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword,
+        auditUrl: report.url,
+        contentHealthAudit: snapshot as unknown as Record<string, unknown>,
+      });
+      if (!calRes.success || !calRes.data) {
+        setGenerateError((calRes as { error?: string }).error ?? "Could not create calendar entry.");
+        return;
+      }
+      const entryId = calRes.data.id;
+      // Trigger generation
+      const genRes = await apiPost<{ success: boolean; error?: string; blogId?: string; blog?: { id: string } }>(
+        V1Routes.blogsGenerate,
+        { entryId, wordCount: report.revamp_brief?.recommended_word_count ?? 2500 }
+      );
+      if (!genRes.success) {
+        setGenerateError(genRes.error ?? "Generation failed. Try again.");
+        return;
+      }
+      const blogId = genRes.blogId ?? genRes.blog?.id ?? null;
+      setGeneratedBlogId(blogId);
+      void loadHistory();
+    } catch (e) {
+      setGenerateError(e instanceof Error ? e.message : "Unexpected error during generation.");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleSchedule = async (date: string) => {
+    if (!report) return;
+    setScheduleSaving(true);
+    try {
+      const snapshot = buildSnapshot(report);
+      const res = await calendarApi.addContentHealth(projectId, {
+        focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword,
+        auditUrl: report.url,
+        contentHealthAudit: snapshot as unknown as Record<string, unknown>,
+      });
+      if (!res.success || !res.data) {
+        return;
+      }
+      setScheduledEntryId(res.data.id);
+      // Reschedule to chosen date if needed
+      if (date) {
+        await calendarApi.rescheduleEntry(projectId, { entryId: res.data.id, date });
+      }
+      setScheduledDate(date);
+      setScheduleOpen(false);
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
+  const handleReschedule = async (date: string) => {
+    if (!scheduledEntryId) return;
+    setScheduleSaving(true);
+    try {
+      await calendarApi.rescheduleEntry(projectId, { entryId: scheduledEntryId, date });
+      setScheduledDate(date);
+      setScheduleOpen(false);
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
+  const openHistoryItem = (item: ContentAuditHistoryItem) => {
+    if (!item.report) { void handleAnalyze(item.url); return; }
+    setUrl(item.url);
+    setReport(item.report as unknown as ContentAuditReport);
+    setGeneratedBlogId(null);
+    setGenerateError("");
+    setScheduledDate(null);
+    setScheduledEntryId(null);
+    setActiveTab("issues");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   return (
-    <div className="relative space-y-6 pb-20 pl-4 pr-4 -mt-6 lg:-mt-8">
+    <div className="relative mx-auto max-w-5xl space-y-6 pb-20 px-4 -mt-6 lg:-mt-8">
 
       {/* ── Header ── */}
       <div className="sticky -top-6 lg:-top-8 z-20 -mx-4 border-b border-border-subtle bg-surface-primary/95 px-4 pb-6 pt-6 lg:pt-8 backdrop-blur-sm">
@@ -219,7 +362,6 @@ export default function ContentAuditStudioPage() {
             </div>
           )}
 
-          {/* Step progress */}
           {analyzing && (
             <div className="mt-4 pt-4 border-t border-border-subtle">
               <p className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wide mb-3">Analyzing your content…</p>
@@ -231,54 +373,74 @@ export default function ContentAuditStudioPage() {
       </div>
 
       {/* ── Results ── */}
-      {report && <AuditResults report={report} activeTab={activeTab} setActiveTab={setActiveTab} expandedBrief={expandedBrief} setExpandedBrief={setExpandedBrief} />}
-
-      {/* ── History ── */}
-      {!analyzing && !report && (
-        <AuditHistory
-          items={history}
-          loading={historyLoading}
-          onRerun={u => { setUrl(u); void handleAnalyze(u); }}
+      {report && (
+        <AuditResults
+          report={report}
+          projectId={projectId}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          expandedBrief={expandedBrief}
+          setExpandedBrief={setExpandedBrief}
+          generating={generating}
+          generatedBlogId={generatedBlogId}
+          generateError={generateError}
+          onGenerate={handleGenerate}
+          scheduleOpen={scheduleOpen}
+          setScheduleOpen={setScheduleOpen}
+          scheduleSaving={scheduleSaving}
+          scheduledDate={scheduledDate}
+          onSchedule={handleSchedule}
+          onReschedule={handleReschedule}
         />
       )}
 
-      {/* History below results too */}
-      {report && history.length > 0 && (
-        <div className="max-w-4xl">
-          <AuditHistory
-            items={history}
-            loading={false}
-            onRerun={u => { setUrl(u); void handleAnalyze(u); }}
-            compact
-          />
-        </div>
-      )}
+      {/* ── History ── */}
+      <AuditHistory
+        items={history}
+        loading={historyLoading}
+        onRerun={u => { setUrl(u); void handleAnalyze(u); }}
+        onOpen={openHistoryItem}
+        hidden={analyzing}
+      />
     </div>
   );
 }
 
-// ─── Audit Results ─────────────────────────────────────────────────────────
+// ─── Audit Results ────────────────────────────────────────────────────────────
 
 function AuditResults({
-  report, activeTab, setActiveTab, expandedBrief, setExpandedBrief,
+  report, projectId, activeTab, setActiveTab, expandedBrief, setExpandedBrief,
+  generating, generatedBlogId, generateError, onGenerate,
+  scheduleOpen, setScheduleOpen, scheduleSaving, scheduledDate, onSchedule, onReschedule,
 }: {
   report: ContentAuditReport;
+  projectId: string;
   activeTab: "issues" | "rubric" | "competitors" | "brief";
   setActiveTab: (t: "issues" | "rubric" | "competitors" | "brief") => void;
   expandedBrief: boolean;
   setExpandedBrief: (v: boolean) => void;
+  generating: boolean;
+  generatedBlogId: string | null;
+  generateError: string;
+  onGenerate: () => void;
+  scheduleOpen: boolean;
+  setScheduleOpen: (v: boolean) => void;
+  scheduleSaving: boolean;
+  scheduledDate: string | null;
+  onSchedule: (date: string) => void;
+  onReschedule: (date: string) => void;
 }) {
   const overall = report.scores.overall;
   const grade = scoreGrade(overall);
   const color = scoreColor(overall);
+  const router = useRouter();
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="space-y-6">
 
       {/* ── Overall score hero ── */}
       <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-6 items-start">
-          {/* Big score ring */}
           <div className="flex items-center gap-5 shrink-0">
             <ScoreRing score={overall} size={96} strokeWidth={7} />
             <div>
@@ -297,7 +459,6 @@ function AuditResults({
             </div>
           </div>
 
-          {/* Verdict */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               {report.primary_keyword && (
@@ -320,6 +481,75 @@ function AuditResults({
             </div>
             <p className="text-[14px] text-text-primary leading-relaxed font-medium">{report.plain_language_verdict}</p>
           </div>
+        </div>
+
+        {/* ── Action bar ── */}
+        <div className="mt-5 pt-5 border-t border-border-subtle flex flex-wrap items-center gap-3">
+          {/* Generate Enhanced Blog */}
+          {!generatedBlogId ? (
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={generating}
+              className="h-9 px-4 rounded-[10px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all flex items-center gap-2"
+            >
+              {generating ? (
+                <><Spinner size={13} /> Generating enhanced blog…</>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                  </svg>
+                  Generate Enhanced Blog
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => router.push(`/projects/${projectId}/content-generator/blogs/${generatedBlogId}`)}
+              className="h-9 px-4 rounded-[10px] bg-emerald-600 text-white text-[13px] font-semibold hover:bg-emerald-600/90 transition-all flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+              </svg>
+              View Blog
+            </button>
+          )}
+
+          {/* Schedule button */}
+          {!scheduledDate ? (
+            <CalendarDatePicker
+              open={scheduleOpen}
+              onOpenChange={setScheduleOpen}
+              onConfirm={onSchedule}
+              saving={scheduleSaving}
+              variant="pick"
+              label="Schedule to Calendar"
+              className="h-9 px-4 rounded-[10px] border border-border-subtle bg-surface-secondary text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-2"
+            />
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-[10px] bg-emerald-500/10 border border-emerald-500/20 text-[12px] font-medium text-emerald-400">
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+              </svg>
+              Scheduled for {new Date(scheduledDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              <CalendarDatePicker
+                open={scheduleOpen}
+                onOpenChange={setScheduleOpen}
+                currentDate={scheduledDate}
+                onConfirm={onReschedule}
+                saving={scheduleSaving}
+                variant="change"
+                iconOnly
+              />
+            </div>
+          )}
+
+          {generateError && (
+            <span className="text-[12px] text-rose-400">{generateError}</span>
+          )}
         </div>
       </div>
 
@@ -364,7 +594,6 @@ function AuditResults({
         </nav>
       </div>
 
-      {/* ── Tab content ── */}
       {activeTab === "issues" && <IssuesPanel issues={report.issues} />}
       {activeTab === "rubric" && <RubricPanel rows={report.quality_rubric} />}
       {activeTab === "competitors" && <CompetitorsPanel insights={report.competitor_insights} />}
@@ -461,10 +690,7 @@ function RubricPanel({ rows }: { rows: ContentAuditReport["quality_rubric"] }) {
       <div className="flex items-center gap-3 mb-2">
         <span className="text-[13px] text-text-secondary font-medium">{pass}/{rows.length} checks passing</span>
         <div className="flex-1 h-2 rounded-full bg-surface-tertiary overflow-hidden">
-          <div
-            className="h-full rounded-full transition-all"
-            style={{ width: `${pct}%`, background: scoreColor(pct) }}
-          />
+          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: scoreColor(pct) }} />
         </div>
         <span className="text-[13px] font-bold tabular-nums" style={{ color: scoreColor(pct) }}>{pct}%</span>
       </div>
@@ -517,14 +743,8 @@ function CompetitorsPanel({ insights }: { insights: ContentAuditReport["competit
             </div>
           </div>
           <div className="flex flex-wrap gap-3 text-[11px] text-text-tertiary mb-3">
-            <span className="flex items-center gap-1">
-              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25" /></svg>
-              {c.word_count.toLocaleString()} words
-            </span>
-            <span className="flex items-center gap-1">
-              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path d="M4 6h16M4 12h8M4 18h4" strokeLinecap="round" /></svg>
-              {c.h2_count} H2 sections
-            </span>
+            <span>{c.word_count.toLocaleString()} words</span>
+            <span>{c.h2_count} H2 sections</span>
             {c.has_faq && <span className="text-emerald-400">✓ FAQ section</span>}
             {c.has_schema && <span className="text-emerald-400">✓ Schema markup</span>}
           </div>
@@ -554,6 +774,10 @@ function RevampBriefPanel({
   expanded: boolean;
   setExpanded: (v: boolean) => void;
 }) {
+  if (!brief) return (
+    <EmptyState title="No revamp brief" body="The AI did not generate a revamp brief for this audit." />
+  );
+
   return (
     <div className="space-y-4">
       <div className="rounded-[14px] border border-brand-violet/20 bg-brand-violet/5 p-4">
@@ -563,9 +787,7 @@ function RevampBriefPanel({
           </svg>
           <div>
             <p className="text-[14px] font-semibold text-text-primary">Content Revamp Brief</p>
-            <p className="text-[12px] text-text-tertiary mt-0.5">
-              A complete brief for regenerating this blog with AI. Copy this to your content generator.
-            </p>
+            <p className="text-[12px] text-text-tertiary mt-0.5">A complete brief for regenerating this blog with AI. Use the Generate button above to apply all fixes.</p>
           </div>
         </div>
 
@@ -618,21 +840,11 @@ function BriefField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BriefListField({
-  label, items, color, numbered,
-}: {
-  label: string;
-  items: string[];
-  color: string;
-  numbered?: boolean;
-}) {
+function BriefListField({ label, items, color, numbered }: { label: string; items: string[]; color: string; numbered?: boolean }) {
   if (!items.length) return null;
   const colorCls: Record<string, string> = {
-    blue: "text-blue-400",
-    violet: "text-violet-400",
-    amber: "text-amber-400",
-    rose: "text-rose-400",
-    emerald: "text-emerald-400",
+    blue: "text-blue-400", violet: "text-violet-400", amber: "text-amber-400",
+    rose: "text-rose-400", emerald: "text-emerald-400",
   };
   return (
     <div>
@@ -651,14 +863,39 @@ function BriefListField({
 
 // ─── Audit History ────────────────────────────────────────────────────────────
 
+const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
+
 function AuditHistory({
-  items, loading, onRerun, compact,
+  items, loading, onRerun, onOpen, hidden,
 }: {
   items: ContentAuditHistoryItem[];
   loading: boolean;
   onRerun: (url: string) => void;
-  compact?: boolean;
+  onOpen: (item: ContentAuditHistoryItem) => void;
+  hidden?: boolean;
 }) {
+  const [search, setSearch] = useState("");
+  const [severityFilter, setSeverityFilter] = useState<string>("all");
+  const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    let list = items;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(i =>
+        i.url.toLowerCase().includes(q) ||
+        i.title?.toLowerCase().includes(q) ||
+        i.primary_keyword?.toLowerCase().includes(q)
+      );
+    }
+    if (severityFilter !== "all") {
+      list = list.filter(i => i.severity === severityFilter);
+    }
+    return list;
+  }, [items, search, severityFilter]);
+
+  if (hidden) return null;
+
   if (loading) {
     return (
       <div className="max-w-3xl space-y-2">
@@ -670,14 +907,10 @@ function AuditHistory({
   }
 
   if (!items.length) {
-    return compact ? null : (
+    return (
       <div className="max-w-3xl">
         <EmptyState
-          icon={
-            <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-            </svg>
-          }
+          icon={<svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" /></svg>}
           title="No audits yet"
           body="Enter a blog URL above to run your first content audit. Results are saved here for quick reference."
         />
@@ -687,48 +920,120 @@ function AuditHistory({
 
   return (
     <div className="max-w-3xl">
-      <h2 className="text-[14px] font-semibold text-text-secondary mb-3 flex items-center gap-2">
-        <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-        </svg>
-        Recent audits
-      </h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-[14px] font-semibold text-text-secondary flex items-center gap-2">
+          <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+          </svg>
+          Audit History ({items.length})
+        </h2>
+      </div>
+
+      {/* Search + filter bar */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <div className="relative flex-1 min-w-[160px]">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by URL or keyword…"
+            className="w-full h-8 pl-8 pr-3 rounded-[8px] border border-border-subtle bg-surface-elevated text-[12px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/40 transition-all"
+          />
+        </div>
+        <div className="flex gap-1">
+          {SEVERITY_OPTS.map(s => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setSeverityFilter(s)}
+              className={`h-8 px-3 rounded-[8px] text-[11px] font-medium transition-all ${
+                severityFilter === s
+                  ? "bg-brand-violet text-white"
+                  : "border border-border-subtle bg-surface-elevated text-text-tertiary hover:text-text-primary"
+              }`}
+            >
+              {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0 && (
+        <p className="text-[13px] text-text-tertiary py-4 text-center">No results match your filters.</p>
+      )}
+
       <div className="space-y-2">
-        {items.slice(0, compact ? 5 : 10).map(item => {
+        {filtered.slice(0, 20).map(item => {
           const score = item.overall_score || item.health_score;
           const color = scoreColor(score);
+          const isExpanded = expandedUrl === item.url;
+
           return (
-            <div key={item.url} className="flex items-center gap-3 rounded-[12px] border border-border-subtle bg-surface-elevated px-4 py-3 hover:border-border-strong transition-all">
-              <div className="shrink-0">
-                <span
-                  className="text-[16px] font-bold tabular-nums"
-                  style={{ color }}
-                >
-                  {score}
-                </span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[13px] font-semibold text-text-primary leading-snug truncate">{item.title || item.url}</p>
-                <p className="text-[11px] text-text-tertiary truncate">{item.url}</p>
-                {item.primary_keyword && (
-                  <p className="text-[10px] text-text-tertiary/60 mt-0.5">Keyword: {item.primary_keyword}</p>
-                )}
-              </div>
-              <div className="shrink-0 flex items-center gap-2">
-                <span className="text-[10px] text-text-tertiary">
-                  {new Date(item.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onRerun(item.url)}
-                  className="inline-flex items-center gap-1 h-7 px-2.5 rounded-[8px] border border-border-subtle bg-surface-secondary text-[11px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all"
-                >
-                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+            <div key={item.url} className="rounded-[12px] border border-border-subtle bg-surface-elevated overflow-hidden transition-all">
+              {/* Row header */}
+              <div
+                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-hover transition-colors"
+                onClick={() => setExpandedUrl(isExpanded ? null : item.url)}
+              >
+                <div className="shrink-0">
+                  <span className="text-[16px] font-bold tabular-nums" style={{ color }}>{score}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-semibold text-text-primary leading-snug truncate">{item.title || item.url}</p>
+                  <p className="text-[11px] text-text-tertiary truncate">{item.url}</p>
+                  {item.primary_keyword && (
+                    <p className="text-[10px] text-text-tertiary/60 mt-0.5">Keyword: {item.primary_keyword}</p>
+                  )}
+                </div>
+                <div className="shrink-0 flex items-center gap-2">
+                  {item.severity && item.severity !== "none" && (
+                    <SeverityChip severity={item.severity} />
+                  )}
+                  <span className="text-[10px] text-text-tertiary">
+                    {new Date(item.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </span>
+                  <svg
+                    className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                    viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
                   </svg>
-                  Re-audit
-                </button>
+                </div>
               </div>
+
+              {/* Expanded preview */}
+              {isExpanded && (
+                <div className="px-4 pb-4 border-t border-border-subtle/50">
+                  {item.plain_language_verdict && (
+                    <p className="text-[13px] text-text-secondary leading-relaxed mt-3 mb-3">{item.plain_language_verdict}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpen(item)}
+                      className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5" />
+                      </svg>
+                      {item.report ? "View full audit" : "Re-audit"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRerun(item.url)}
+                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                      </svg>
+                      Re-audit
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
@@ -736,4 +1041,3 @@ function AuditHistory({
     </div>
   );
 }
-

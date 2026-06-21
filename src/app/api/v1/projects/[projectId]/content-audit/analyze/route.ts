@@ -9,7 +9,7 @@ export const maxDuration = 300;
 async function ensureOwner(projectId: string, userId: string) {
   const { data, error } = await supabaseAdmin
     .from('projects')
-    .select('id, domain, target_region, language')
+    .select('id, domain, target_region, target_language')
     .eq('id', projectId)
     .eq('user_id', userId)
     .single();
@@ -66,7 +66,7 @@ export async function POST(
     projectId,
     projectDomain: project.domain,
     region: (project.target_region as string) ?? 'us',
-    language: (project.language as string) ?? 'en',
+    language: (project.target_language as string) ?? 'en',
   });
 
   const dbError = await upsertAudit(projectId, record);

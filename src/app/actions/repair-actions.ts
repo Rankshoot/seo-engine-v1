@@ -184,6 +184,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
       brief,
       project,
       wordCount: 2200,
+      pdfCtaUrl: fresh.pdfDownloadUrl ?? null,
     });
 
     // Guardrail: repair should not rename the page unless the audit explicitly
@@ -350,6 +351,9 @@ export async function repairBlogFromContent(
       brief,
       project,
       wordCount: Math.min(4000, Math.max(1500, wc + 400)),
+      pdfCtaUrl: /^https?:\/\//i.test(candidateLive)
+        ? ((await jinaReadUrl(candidateLive, { timeoutMs: 5_000 }).catch(() => null))?.pdfDownloadUrl ?? null)
+        : null,
       contentAnalysisBundle: {
         summary: analysis.summary,
         plain_language_verdict: analysis.plain_language_verdict,

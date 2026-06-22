@@ -7,6 +7,7 @@ import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { projectsApi } from "@/frontend/api/projects";
 import type { Project } from "@/lib/types";
 import { RefreshCw, Check, AlertCircle, Palette, Upload, Wand2, X } from "lucide-react";
+import { StrapiIntegrationSection } from "@/components/settings/StrapiIntegrationSection";
 import { getGSCConnection, disconnectGSC, syncGSCMetrics } from "@/app/actions/gsc-actions";
 
 // ─── option lists ────────────────────────────────────────────────────────────
@@ -609,6 +610,9 @@ export default function ProjectSettingsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      <StrapiIntegrationSection />
 
       </section>
     </div>

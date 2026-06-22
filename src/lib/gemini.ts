@@ -518,9 +518,8 @@ function repairTruncatedBlogJson(raw: string): GeminiBlogJson | null {
   }
 
   // Last resort: extract individual fields with regex
-  const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/s.exec(text)?.[1];
-  const meta = /"metaDescription"\s*:\s*"((?:[^"\\]|\\.)*)"/s.exec(text)?.[1];
-  // For contentMarkdown, grab everything from the key to the point where we run out
+  const title = /"title"\s*:\s*"((?:[^"\\]|\\(?:[\s\S]))*)"/.exec(text)?.[1];
+  const meta = /"metaDescription"\s*:\s*"((?:[^"\\]|\\(?:[\s\S]))*)"/.exec(text)?.[1]; // For contentMarkdown, grab everything from the key to the point where we run out
   const cmMatch = /"contentMarkdown"\s*:\s*"([\s\S]*)/.exec(text);
   let contentMarkdown = "";
   if (cmMatch) {

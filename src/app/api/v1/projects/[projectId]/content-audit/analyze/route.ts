@@ -17,7 +17,7 @@ async function ensureOwner(projectId: string, userId: string) {
   return data;
 }
 
-async function upsertAudit(projectId: string, record: PersistedContentAudit) {
+async function upsertAudit(projectId: string, record: PersistedContentAudit, source: 'url' | 'upload' = 'url') {
   const { error } = await supabaseAdmin
     .from('blog_audits')
     .upsert(
@@ -29,7 +29,7 @@ async function upsertAudit(projectId: string, record: PersistedContentAudit) {
         word_count: record.word_count,
         health_score: record.health_score,
         severity: record.severity,
-        analysis: record.analysis as unknown as Record<string, unknown>,
+        analysis: { ...(record.analysis as unknown as Record<string, unknown>), _source: source },
         scraped_markdown: record.scraped_markdown ?? null,
         updated_at: new Date().toISOString(),
       },
@@ -50,14 +50,22 @@ export async function POST(
   if (!project) return apiJson({ success: false, error: 'Project not found' }, { status: 404 });
 
   let url: string;
+  let uploadedContent: string | undefined;
+  let uploadedTitle: string | undefined;
   try {
-    const body = await req.json() as { url?: unknown };
+    const body = await req.json() as { url?: unknown; uploadedContent?: unknown; uploadedTitle?: unknown };
     url = typeof body.url === 'string' ? body.url.trim() : '';
+    uploadedContent = typeof body.uploadedContent === 'string' ? body.uploadedContent.trim() : undefined;
+    uploadedTitle = typeof body.uploadedTitle === 'string' ? body.uploadedTitle.trim() : undefined;
   } catch {
     return apiJson({ success: false, error: 'Invalid request body' }, { status: 400 });
   }
 
-  if (!url || !/^https?:\/\//i.test(url)) {
+  if (!url) {
+    return apiJson({ success: false, error: 'Please provide a URL or upload content' }, { status: 400 });
+  }
+  // For uploaded content, URL can be a synthetic identifier; for URL-based audits, validate format
+  if (!uploadedContent && !/^https?:\/\//i.test(url)) {
     return apiJson({ success: false, error: 'Please provide a valid URL starting with http:// or https://' }, { status: 400 });
   }
 
@@ -67,9 +75,11 @@ export async function POST(
     projectDomain: project.domain,
     region: (project.target_region as string) ?? 'us',
     language: (project.target_language as string) ?? 'en',
+    uploadedContent,
+    uploadedTitle,
   });
 
-  const dbError = await upsertAudit(projectId, record);
+  const dbError = await upsertAudit(projectId, record, uploadedContent ? 'upload' : 'url');
   if (dbError) {
     console.error('[content-audit] Failed to save audit:', dbError);
   }

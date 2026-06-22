@@ -130,6 +130,10 @@ export interface AuditStudioInput {
   projectDomain?: string;
   region?: string;
   language?: string;
+  /** Pre-supplied content (from file upload). Skips scraping when provided. */
+  uploadedContent?: string;
+  /** Display title when content is uploaded rather than scraped */
+  uploadedTitle?: string;
 }
 
 export interface AuditStudioResult {
@@ -726,36 +730,50 @@ Return ONLY this JSON (no prose, no markdown fences):
 
 export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStudioResult> {
   const trace: { step: string; ok: boolean; detail?: string; ms?: number }[] = [];
-  const { url, projectId, projectDomain, region = 'us', language = 'en' } = input;
+  const { url, projectId, projectDomain, region = 'us', language = 'en', uploadedContent, uploadedTitle } = input;
 
-  // 1. Preflight
-  const t0 = Date.now();
-  const pre = await preflight(url);
-  trace.push({ step: 'preflight', ok: pre.status !== 'broken', detail: pre.status, ms: Date.now() - t0 });
+  let pageMarkdown: string;
+  let rawHtml: RawHtmlSignals;
 
-  if (pre.status === 'broken') {
-    return { record: brokenRecord(url, (pre as { status: 'broken'; reason: string }).reason), trace };
-  }
-  if (pre.status === 'redirected') {
-    const redir = pre as { status: 'redirected'; finalUrl: string };
-    return { record: redirectedRecord(url, redir.finalUrl), trace };
-  }
+  if (uploadedContent && uploadedContent.trim().length >= 160) {
+    // Uploaded content — skip preflight and scraping
+    trace.push({ step: 'preflight', ok: true, detail: 'skipped (uploaded content)', ms: 0 });
+    pageMarkdown = uploadedContent;
+    rawHtml = { title: uploadedTitle ?? null, metaDescription: null, hasSchema: false, schemaTypes: [], publishDate: null };
+    trace.push({ step: 'scrape', ok: true, detail: `${pageMarkdown.length} chars (uploaded)`, ms: 0 });
+  } else {
+    // 1. Preflight
+    const t0 = Date.now();
+    const pre = await preflight(url);
+    trace.push({ step: 'preflight', ok: pre.status !== 'broken', detail: pre.status, ms: Date.now() - t0 });
 
-  // 2. Scrape (Jina + raw HTML in parallel)
-  const t1 = Date.now();
-  const [page, rawHtml] = await Promise.all([
-    hybridReadUrl(url, { timeoutMs: 25_000 }),
-    fetchRawHtmlSignals(url),
-  ]);
-  trace.push({ step: 'scrape', ok: page.ok, detail: page.ok ? `${page.markdown.length} chars` : page.error, ms: Date.now() - t1 });
+    if (pre.status === 'broken') {
+      return { record: brokenRecord(url, (pre as { status: 'broken'; reason: string }).reason), trace };
+    }
+    if (pre.status === 'redirected') {
+      const redir = pre as { status: 'redirected'; finalUrl: string };
+      return { record: redirectedRecord(url, redir.finalUrl), trace };
+    }
 
-  if (!page.ok || page.markdown.trim().length < 160) {
-    return { record: emptyRecord(url, page.error ?? 'Could not read page content'), trace };
+    // 2. Scrape (Jina + raw HTML in parallel)
+    const t1 = Date.now();
+    const [page, rawHtmlResult] = await Promise.all([
+      hybridReadUrl(url, { timeoutMs: 25_000 }),
+      fetchRawHtmlSignals(url),
+    ]);
+    rawHtml = rawHtmlResult;
+    trace.push({ step: 'scrape', ok: page.ok, detail: page.ok ? `${page.markdown.length} chars` : page.error, ms: Date.now() - t1 });
+
+    if (!page.ok || page.markdown.trim().length < 160) {
+      return { record: emptyRecord(url, page.error ?? 'Could not read page content'), trace };
+    }
+    pageMarkdown = page.markdown;
   }
 
   // 3. Extract structural signals
-  const signals = extractSignals(page.markdown, url, rawHtml);
+  const signals = extractSignals(pageMarkdown, url, rawHtml);
   if (rawHtml.title && !signals.title) signals.title = rawHtml.title;
+  if (uploadedTitle && !signals.title) signals.title = uploadedTitle;
 
   // 4. Keyword vitals lookup
   const locationCode = locationCodeFromTargetRegion(region);
@@ -800,7 +818,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   const t4 = Date.now();
   let aiResult: z.infer<typeof AuditAnalysisSchema>;
   try {
-    aiResult = await runAiAnalysis(url, page.markdown, signals, rawHtml, competitors, vitals, projectId);
+    aiResult = await runAiAnalysis(url, pageMarkdown, signals, rawHtml, competitors, vitals, projectId);
     trace.push({ step: 'ai_analysis', ok: true, ms: Date.now() - t4 });
   } catch (e) {
     trace.push({ step: 'ai_analysis', ok: false, detail: String(e), ms: Date.now() - t4 });
@@ -920,7 +938,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
       health_score: overall,
       severity,
       analysis: report,
-      scraped_markdown: page.markdown.length > 50_000 ? page.markdown.slice(0, 50_000) : page.markdown,
+      scraped_markdown: pageMarkdown.length > 50_000 ? pageMarkdown.slice(0, 50_000) : pageMarkdown,
     },
     trace,
   };

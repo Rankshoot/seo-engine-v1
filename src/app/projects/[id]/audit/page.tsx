@@ -4,10 +4,10 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import { calendarApi } from "@/frontend/api/calendar";
-import { apiPost } from "@/frontend/api/http";
-import { V1Routes } from "@/frontend/api/routes";
+import { blogsApi } from "@/frontend/api/blogs";
 import type { ContentAuditReport, ContentAuditScores } from "@/lib/content-audit-studio";
 import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
+import type { BlogAuditAnalysis } from "@/lib/content-audit";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import {
   ScoreRing, ScoreCard, SeverityChip, CategoryBadge, RubricStatus,
@@ -17,7 +17,7 @@ import {
 // ─── Analysis steps ───────────────────────────────────────────────────────────
 
 const STEPS = [
-  { label: "Scraping page" },
+  { label: "Reading content" },
   { label: "Analyzing keyword" },
   { label: "Checking competitors" },
   { label: "Scoring with AI" },
@@ -96,32 +96,43 @@ const SCORE_DIMS: ScoreDim[] = [
   },
 ];
 
+const MAX_UPLOAD_CHARS = 200_000;
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ContentAuditStudioPage() {
   const { id: projectId } = useParams<{ id: string }>();
 
+  const [inputMode, setInputMode] = useState<"url" | "upload">("url");
   const [url, setUrl] = useState("");
+  const [uploadedContent, setUploadedContent] = useState("");
+  const [uploadedName, setUploadedName] = useState("");
+
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(-1);
   const [error, setError] = useState("");
   const [report, setReport] = useState<ContentAuditReport | null>(null);
+  const [reportSource, setReportSource] = useState<"url" | "upload">("url");
   const [history, setHistory] = useState<ContentAuditHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors" | "brief">("issues");
-  const [expandedBrief, setExpandedBrief] = useState(false);
+  const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors">("issues");
 
-  // Generate / schedule state
+  // Shared calendar entry between Generate + Schedule (avoids duplicate entries)
+  const [entryId, setEntryId] = useState<string | null>(null);
+  const [scheduledDate, setScheduledDate] = useState<string | null>(null);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduledDates, setScheduledDates] = useState<Set<string>>(new Set());
+
+  // Generation
   const [generating, setGenerating] = useState(false);
+  const [genStage, setGenStage] = useState("");
   const [generatedBlogId, setGeneratedBlogId] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState("");
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [scheduleSaving, setScheduleSaving] = useState(false);
-  const [scheduledDate, setScheduledDate] = useState<string | null>(null);
-  const [scheduledEntryId, setScheduledEntryId] = useState<string | null>(null);
 
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const loadHistory = useCallback(async () => {
     if (!projectId) return;
@@ -134,7 +145,15 @@ export default function ContentAuditStudioPage() {
     }
   }, [projectId]);
 
-  useEffect(() => { void loadHistory(); }, [loadHistory]);
+  const loadScheduledDates = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const res = await calendarApi.withBlogs(projectId);
+      if (res.success) setScheduledDates(new Set(res.data.map(e => String(e.scheduled_date).slice(0, 10))));
+    } catch { /* non-fatal */ }
+  }, [projectId]);
+
+  useEffect(() => { void loadHistory(); void loadScheduledDates(); }, [loadHistory, loadScheduledDates]);
 
   const startStepAnimation = () => {
     setAnalysisStep(0);
@@ -144,33 +163,65 @@ export default function ContentAuditStudioPage() {
       setAnalysisStep(step);
     }, 8000);
   };
-
   const stopStepAnimation = () => {
     if (stepTimerRef.current) { clearInterval(stepTimerRef.current); stepTimerRef.current = null; }
     setAnalysisStep(-1);
   };
 
+  const resetPostAuditState = () => {
+    setGeneratedBlogId(null);
+    setGenerateError("");
+    setGenStage("");
+    setEntryId(null);
+    setScheduledDate(null);
+  };
+
   const handleAnalyze = async (targetUrl?: string) => {
+    resetPostAuditState();
+
+    if (inputMode === "upload") {
+      if (uploadedContent.trim().length < 160) {
+        setError("Uploaded content is too short to audit (need ~160+ characters).");
+        return;
+      }
+      setError("");
+      setReport(null);
+      setAnalyzing(true);
+      startStepAnimation();
+      // Synthetic stable URL so re-auditing the same file updates the same row
+      const syntheticUrl = `upload://${projectId}/${uploadedName || "pasted-content"}`;
+      try {
+        const res = await contentAuditApi.analyze(projectId, syntheticUrl, {
+          uploadedContent: uploadedContent.trim(),
+          uploadedTitle: uploadedName || undefined,
+        });
+        if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
+        setReport(res.report);
+        setReportSource("upload");
+        setActiveTab("issues");
+        void loadHistory();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Unexpected error. Please try again.");
+      } finally {
+        setAnalyzing(false);
+        stopStepAnimation();
+      }
+      return;
+    }
+
     const auditUrl = (targetUrl ?? url).trim();
     if (!auditUrl) { setError("Please enter a URL to audit."); inputRef.current?.focus(); return; }
     if (!/^https?:\/\//i.test(auditUrl)) { setError("Please include https:// in the URL."); return; }
 
     setError("");
     setReport(null);
-    setGeneratedBlogId(null);
-    setGenerateError("");
-    setScheduledDate(null);
-    setScheduledEntryId(null);
     setAnalyzing(true);
     startStepAnimation();
-
     try {
       const res = await contentAuditApi.analyze(projectId, auditUrl);
-      if (!res.success || !res.report) {
-        setError(res.error ?? "Analysis failed. Please try again.");
-        return;
-      }
+      if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
       setReport(res.report);
+      setReportSource("url");
       setActiveTab("issues");
       void loadHistory();
     } catch (e) {
@@ -181,6 +232,19 @@ export default function ContentAuditStudioPage() {
     }
   };
 
+  const handleFile = async (file: File) => {
+    if (file.size > 5 * 1024 * 1024) { setError("File is too large (max 5 MB)."); return; }
+    try {
+      const text = await file.text();
+      setUploadedContent(text.slice(0, MAX_UPLOAD_CHARS));
+      setUploadedName(file.name);
+      setError("");
+    } catch {
+      setError("Could not read that file. Try a .txt, .md, or .html file, or paste the content.");
+    }
+  };
+
+  // Map audit report → snapshot used by the repair pipeline
   const buildSnapshot = (r: ContentAuditReport): ContentHealthAuditSnapshot => ({
     version: 2,
     capturedAt: r.analyzed_at,
@@ -189,7 +253,6 @@ export default function ContentAuditStudioPage() {
     health_score: r.scores.overall,
     primary_keyword: r.primary_keyword,
     word_count: r.word_count,
-    // Map ContentAuditReport → BlogAuditAnalysis shape expected by repair pipeline
     analysis: {
       page_status: r.page_status,
       primary_keyword: r.primary_keyword,
@@ -197,17 +260,10 @@ export default function ContentAuditStudioPage() {
       summary: r.summary,
       plain_language_verdict: r.plain_language_verdict,
       issues: r.issues.map(i => ({
-        severity: i.severity,
-        category: i.category,
-        label: i.title,
-        detail: i.detail,
-        fix: i.fix,
+        severity: i.severity, category: i.category, label: i.title,
+        detail: i.detail, fix: i.fix, why_it_matters: i.impact,
       })),
-      quality_rubric: r.quality_rubric.map(row => ({
-        label: row.label,
-        status: row.status,
-        detail: row.detail,
-      })),
+      quality_rubric: r.quality_rubric.map(row => ({ label: row.label, status: row.status, detail: row.detail })),
       content_gaps: r.revamp_brief?.missing_topics ?? [],
       internal_link_opportunities: [],
       keyword_demand: r.keyword_data
@@ -216,142 +272,216 @@ export default function ContentAuditStudioPage() {
       llm_quality_score: r.scores.content_quality,
       publish_date_estimate: r.publish_date_detected ?? undefined,
       analyze_page_meta: { sourced_from_analyze_page: true },
-    } as unknown as import("@/lib/content-audit").BlogAuditAnalysis,
+    } as unknown as BlogAuditAnalysis,
     generation_mode: "repair",
     scheduled_from: "analyze_content",
   });
+
+  // Create (once) the calendar entry that both Generate and Schedule reuse.
+  const ensureEntry = useCallback(async (): Promise<{ id: string; date: string } | { error: string }> => {
+    if (entryId) return { id: entryId, date: scheduledDate ?? "" };
+    if (!report) return { error: "No audit to schedule." };
+    const res = await calendarApi.addContentHealth(projectId, {
+      focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword || report.title,
+      auditUrl: report.url,
+      contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+    });
+    if (!res.success || !res.data) {
+      return { error: (res as { error?: string }).error ?? "Could not add to calendar." };
+    }
+    const date = (res as { scheduled_date?: string }).scheduled_date ?? String(res.data.scheduled_date).slice(0, 10);
+    setEntryId(res.data.id);
+    void loadScheduledDates();
+    return { id: res.data.id, date };
+  }, [entryId, scheduledDate, report, projectId, loadScheduledDates]);
 
   const handleGenerate = async () => {
     if (!report) return;
     setGenerating(true);
     setGenerateError("");
+    setGenStage("Adding to calendar…");
     try {
-      const snapshot = buildSnapshot(report);
-      // Create calendar entry with audit snapshot (no date → picks next vacant slot)
-      const calRes = await calendarApi.addContentHealth(projectId, {
-        focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword,
-        auditUrl: report.url,
-        contentHealthAudit: snapshot as unknown as Record<string, unknown>,
-      });
-      if (!calRes.success || !calRes.data) {
-        setGenerateError((calRes as { error?: string }).error ?? "Could not create calendar entry.");
-        return;
+      const ensured = await ensureEntry();
+      if ("error" in ensured) { setGenerateError(ensured.error); return; }
+
+      setGenStage("Starting generation…");
+      let blogId: string | null = null;
+      for await (const ev of blogsApi.generateStream({
+        entryId: ensured.id,
+        wordCount: report.revamp_brief?.recommended_word_count ?? 2500,
+      })) {
+        if (ev.event === "stage") setGenStage(ev.detail ?? ev.stage);
+        else if (ev.event === "done") { blogId = ev.blogId; }
+        else if (ev.event === "error") { setGenerateError(ev.message || "Generation failed."); return; }
       }
-      const entryId = calRes.data.id;
-      // Trigger generation
-      const genRes = await apiPost<{ success: boolean; error?: string; blogId?: string; blog?: { id: string } }>(
-        V1Routes.blogsGenerate,
-        { entryId, wordCount: report.revamp_brief?.recommended_word_count ?? 2500 }
-      );
-      if (!genRes.success) {
-        setGenerateError(genRes.error ?? "Generation failed. Try again.");
-        return;
+      if (blogId) {
+        setGeneratedBlogId(blogId);
+        void loadHistory();
+      } else {
+        setGenerateError("Generation finished without returning a blog. Check Content History.");
       }
-      const blogId = genRes.blogId ?? genRes.blog?.id ?? null;
-      setGeneratedBlogId(blogId);
-      void loadHistory();
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : "Unexpected error during generation.");
     } finally {
       setGenerating(false);
+      setGenStage("");
     }
   };
 
-  const handleSchedule = async (date: string) => {
+  const handleSchedule = async () => {
     if (!report) return;
     setScheduleSaving(true);
     try {
-      const snapshot = buildSnapshot(report);
-      const res = await calendarApi.addContentHealth(projectId, {
-        focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword,
-        auditUrl: report.url,
-        contentHealthAudit: snapshot as unknown as Record<string, unknown>,
-      });
-      if (!res.success || !res.data) {
-        return;
-      }
-      setScheduledEntryId(res.data.id);
-      // Reschedule to chosen date if needed
-      if (date) {
-        await calendarApi.rescheduleEntry(projectId, { entryId: res.data.id, date });
-      }
-      setScheduledDate(date);
-      setScheduleOpen(false);
+      const ensured = await ensureEntry();
+      if ("error" in ensured) { setGenerateError(ensured.error); return; }
+      setScheduledDate(ensured.date);
     } finally {
       setScheduleSaving(false);
     }
   };
 
   const handleReschedule = async (date: string) => {
-    if (!scheduledEntryId) return;
+    if (!entryId) return;
     setScheduleSaving(true);
     try {
-      await calendarApi.rescheduleEntry(projectId, { entryId: scheduledEntryId, date });
-      setScheduledDate(date);
-      setScheduleOpen(false);
+      const res = await calendarApi.rescheduleEntry(projectId, { entryId, date });
+      if (res.success) { setScheduledDate(date); void loadScheduledDates(); }
     } finally {
       setScheduleSaving(false);
+      setScheduleOpen(false);
     }
   };
 
   const openHistoryItem = (item: ContentAuditHistoryItem) => {
-    if (!item.report) { void handleAnalyze(item.url); return; }
+    if (!item.report) { setUrl(item.url); setInputMode("url"); void handleAnalyze(item.url); return; }
+    resetPostAuditState();
     setUrl(item.url);
     setReport(item.report as unknown as ContentAuditReport);
-    setGeneratedBlogId(null);
-    setGenerateError("");
-    setScheduledDate(null);
-    setScheduledEntryId(null);
+    setReportSource(item.source ?? "url");
     setActiveTab("issues");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   return (
-    <div className="relative mx-auto max-w-5xl space-y-6 pb-20 px-4 -mt-6 lg:-mt-8">
+    <div className="relative space-y-6 pb-20 -mt-6 lg:-mt-8">
 
-      {/* ── Header ── */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-4 border-b border-border-subtle bg-surface-primary/95 px-4 pb-6 pt-6 lg:pt-8 backdrop-blur-sm">
-        <div className="max-w-3xl">
+      {/* ── Sticky header (matches Content Studio header) ── */}
+      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
+        <div className="mx-auto max-w-4xl">
           <h1 className="text-[26px] font-bold tracking-tight text-text-primary">Content Audit Studio</h1>
           <p className="mt-1 text-[14px] text-text-tertiary leading-relaxed">
-            Enter any blog URL to get a full AI-powered audit — SEO, GEO, AEO scores, competitor insights, and a complete revamp brief.
+            Audit any blog by URL or uploaded content — SEO, GEO, AEO scores, competitor insights, and one-click enhanced regeneration.
           </p>
         </div>
       </div>
 
-      {/* ── URL Input ── */}
-      <div className="max-w-3xl">
+      {/* All content shares one max-width so blocks line up */}
+      <div className="mx-auto max-w-4xl space-y-6">
+
+        {/* ── Input card ── */}
         <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
-          <label className="block text-[13px] font-semibold text-text-secondary mb-3">
-            Blog or article URL to audit
-          </label>
-          <div className="flex gap-3">
-            <div className="relative flex-1">
-              <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none">
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
-                </svg>
-              </div>
-              <input
-                ref={inputRef}
-                type="url"
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !analyzing) void handleAnalyze(); }}
-                placeholder="https://yoursite.com/blog/your-post"
-                disabled={analyzing}
-                className="w-full h-11 pl-10 pr-4 rounded-[12px] border border-border-subtle bg-surface-primary text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.08)] disabled:opacity-50 transition-all"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleAnalyze()}
-              disabled={analyzing || !url.trim()}
-              className="h-11 px-6 rounded-[12px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all shrink-0 flex items-center gap-2"
-            >
-              {analyzing ? <><Spinner size={14} /> Analyzing…</> : "Audit this page"}
-            </button>
+          {/* Mode toggle */}
+          <div className="mb-4 inline-flex rounded-[10px] border border-border-subtle bg-surface-secondary p-0.5">
+            {(["url", "upload"] as const).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setInputMode(m); setError(""); }}
+                className={`h-8 px-4 rounded-[8px] text-[12px] font-semibold transition-all ${
+                  inputMode === m ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-primary"
+                }`}
+              >
+                {m === "url" ? "Audit a URL" : "Upload content"}
+              </button>
+            ))}
           </div>
+
+          {inputMode === "url" ? (
+            <>
+              <label className="block text-[13px] font-semibold text-text-secondary mb-3">Blog or article URL to audit</label>
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
+                    </svg>
+                  </div>
+                  <input
+                    ref={inputRef}
+                    type="url"
+                    value={url}
+                    onChange={e => setUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && !analyzing) void handleAnalyze(); }}
+                    placeholder="https://yoursite.com/blog/your-post"
+                    disabled={analyzing}
+                    className="w-full h-11 pl-10 pr-4 rounded-[12px] border border-border-subtle bg-surface-primary text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.08)] disabled:opacity-50 transition-all"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleAnalyze()}
+                  disabled={analyzing || !url.trim()}
+                  className="h-11 px-6 rounded-[12px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all shrink-0 flex items-center gap-2"
+                >
+                  {analyzing ? <><Spinner size={14} /> Analyzing…</> : "Audit this page"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <label className="block text-[13px] font-semibold text-text-secondary mb-3">Upload or paste your content</label>
+              {!uploadedContent ? (
+                <div
+                  onClick={() => fileRef.current?.click()}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) void handleFile(f); }}
+                  className="cursor-pointer rounded-[12px] border-2 border-dashed border-border-strong bg-surface-secondary/40 px-6 py-10 text-center hover:border-brand-violet/50 transition-colors"
+                >
+                  <svg className="mx-auto mb-3 w-8 h-8 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                  </svg>
+                  <p className="text-[13px] font-medium text-text-primary">Drop a file or click to upload</p>
+                  <p className="mt-1 text-[11px] text-text-tertiary">Supports .txt, .md, .html, .markdown — or paste below</p>
+                </div>
+              ) : (
+                <div className="rounded-[12px] border border-border-subtle bg-surface-secondary/40 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <svg className="w-4 h-4 text-brand-violet shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9z" />
+                      </svg>
+                      <span className="text-[12px] font-medium text-text-primary truncate">{uploadedName || "Pasted content"}</span>
+                      <span className="text-[11px] text-text-tertiary shrink-0">· {uploadedContent.length.toLocaleString()} chars</span>
+                    </div>
+                    <button type="button" onClick={() => { setUploadedContent(""); setUploadedName(""); }} className="text-[11px] text-text-tertiary hover:text-rose-400 transition-colors shrink-0">Clear</button>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-[11px] text-text-tertiary leading-relaxed">{uploadedContent.slice(0, 240)}</p>
+                </div>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".txt,.md,.markdown,.html,.htm,text/plain,text/markdown,text/html"
+                className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) void handleFile(f); }}
+              />
+              <textarea
+                value={uploadedContent}
+                onChange={e => setUploadedContent(e.target.value.slice(0, MAX_UPLOAD_CHARS))}
+                placeholder="…or paste your blog content / markdown here"
+                rows={4}
+                className="mt-3 w-full rounded-[12px] border border-border-subtle bg-surface-primary px-3 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 transition-all resize-y"
+              />
+              <button
+                type="button"
+                onClick={() => void handleAnalyze()}
+                disabled={analyzing || uploadedContent.trim().length < 160}
+                className="mt-3 h-11 px-6 rounded-[12px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all flex items-center gap-2"
+              >
+                {analyzing ? <><Spinner size={14} /> Analyzing…</> : "Audit this content"}
+              </button>
+            </>
+          )}
 
           {error && (
             <div className="mt-3 flex items-start gap-2 text-[13px] text-rose-400 bg-rose-500/8 border border-rose-500/20 rounded-[10px] px-3 py-2.5">
@@ -366,42 +496,43 @@ export default function ContentAuditStudioPage() {
             <div className="mt-4 pt-4 border-t border-border-subtle">
               <p className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wide mb-3">Analyzing your content…</p>
               <StepIndicator steps={STEPS} currentStep={analysisStep} />
-              <p className="mt-3 text-[12px] text-text-tertiary">This takes 30–90 seconds. Please wait while we scrape the page, check competitors, and run AI analysis.</p>
+              <p className="mt-3 text-[12px] text-text-tertiary">This takes 30–90 seconds while we read the content, check competitors, and run AI analysis.</p>
             </div>
           )}
         </div>
+
+        {/* ── Results ── */}
+        {report && (
+          <AuditResults
+            report={report}
+            reportSource={reportSource}
+            projectId={projectId}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            generating={generating}
+            genStage={genStage}
+            generatedBlogId={generatedBlogId}
+            generateError={generateError}
+            onGenerate={handleGenerate}
+            scheduleSaving={scheduleSaving}
+            scheduledDate={scheduledDate}
+            onSchedule={handleSchedule}
+            scheduleOpen={scheduleOpen}
+            setScheduleOpen={setScheduleOpen}
+            onReschedule={handleReschedule}
+            scheduledDates={scheduledDates}
+          />
+        )}
+
+        {/* ── History ── */}
+        {!analyzing && (
+          <AuditHistory
+            items={history}
+            loading={historyLoading}
+            onOpen={openHistoryItem}
+          />
+        )}
       </div>
-
-      {/* ── Results ── */}
-      {report && (
-        <AuditResults
-          report={report}
-          projectId={projectId}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          expandedBrief={expandedBrief}
-          setExpandedBrief={setExpandedBrief}
-          generating={generating}
-          generatedBlogId={generatedBlogId}
-          generateError={generateError}
-          onGenerate={handleGenerate}
-          scheduleOpen={scheduleOpen}
-          setScheduleOpen={setScheduleOpen}
-          scheduleSaving={scheduleSaving}
-          scheduledDate={scheduledDate}
-          onSchedule={handleSchedule}
-          onReschedule={handleReschedule}
-        />
-      )}
-
-      {/* ── History ── */}
-      <AuditHistory
-        items={history}
-        loading={historyLoading}
-        onRerun={u => { setUrl(u); void handleAnalyze(u); }}
-        onOpen={openHistoryItem}
-        hidden={analyzing}
-      />
     </div>
   );
 }
@@ -409,31 +540,64 @@ export default function ContentAuditStudioPage() {
 // ─── Audit Results ────────────────────────────────────────────────────────────
 
 function AuditResults({
-  report, projectId, activeTab, setActiveTab, expandedBrief, setExpandedBrief,
-  generating, generatedBlogId, generateError, onGenerate,
-  scheduleOpen, setScheduleOpen, scheduleSaving, scheduledDate, onSchedule, onReschedule,
+  report, reportSource, projectId, activeTab, setActiveTab,
+  generating, genStage, generatedBlogId, generateError, onGenerate,
+  scheduleSaving, scheduledDate, onSchedule, scheduleOpen, setScheduleOpen, onReschedule, scheduledDates,
 }: {
   report: ContentAuditReport;
+  reportSource: "url" | "upload";
   projectId: string;
-  activeTab: "issues" | "rubric" | "competitors" | "brief";
-  setActiveTab: (t: "issues" | "rubric" | "competitors" | "brief") => void;
-  expandedBrief: boolean;
-  setExpandedBrief: (v: boolean) => void;
+  activeTab: "issues" | "rubric" | "competitors";
+  setActiveTab: (t: "issues" | "rubric" | "competitors") => void;
   generating: boolean;
+  genStage: string;
   generatedBlogId: string | null;
   generateError: string;
   onGenerate: () => void;
-  scheduleOpen: boolean;
-  setScheduleOpen: (v: boolean) => void;
   scheduleSaving: boolean;
   scheduledDate: string | null;
-  onSchedule: (date: string) => void;
+  onSchedule: () => void;
+  scheduleOpen: boolean;
+  setScheduleOpen: (v: boolean) => void;
   onReschedule: (date: string) => void;
+  scheduledDates: Set<string>;
 }) {
   const overall = report.scores.overall;
   const grade = scoreGrade(overall);
   const color = scoreColor(overall);
   const router = useRouter();
+
+  const tooltipFor = (key: ScoreDim["key"]) => {
+    if (key === "keyword_relevance" && report.keyword_data) {
+      const k = report.keyword_data;
+      return (
+        <div className="space-y-1.5">
+          <p className="text-[12px] font-semibold text-text-primary">{k.keyword}</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+            <span className="text-text-tertiary">Volume</span>
+            <span className="text-text-primary text-right tabular-nums">{k.volume ? `${k.volume.toLocaleString()}/mo` : "—"}</span>
+            <span className="text-text-tertiary">Trend</span>
+            <span className={`text-right tabular-nums ${k.trend_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{k.trend_pct >= 0 ? "+" : ""}{k.trend_pct}%</span>
+            <span className="text-text-tertiary">Demand</span>
+            <span className="text-text-primary text-right capitalize">{k.verdict}</span>
+          </div>
+          {k.monthly_searches?.length > 1 && (
+            <p className="text-[10px] text-text-tertiary pt-1">12-month search trend from DataForSEO.</p>
+          )}
+        </div>
+      );
+    }
+    if (key === "freshness") {
+      return (
+        <div className="space-y-1 text-[11px]">
+          <p className="text-[12px] font-semibold text-text-primary">Freshness signals</p>
+          <p className="text-text-tertiary">Detected publish date: <span className="text-text-primary">{report.publish_date_detected || "not found"}</span></p>
+          <p className="text-text-tertiary">Word count: <span className="text-text-primary">{report.word_count.toLocaleString()}</span></p>
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <div className="space-y-6">
@@ -449,13 +613,16 @@ function AuditResults({
                 <span className="text-[13px] text-text-tertiary font-medium">Grade</span>
               </div>
               <p className="text-[13px] font-semibold text-text-secondary">Overall Audit Score</p>
-              <a
-                href={report.url}
-                target="_blank" rel="noopener noreferrer"
-                className="mt-1 block text-[12px] text-text-tertiary hover:text-brand-violet transition-colors truncate max-w-[260px]"
-              >
-                {report.url}
-              </a>
+              {reportSource === "upload" ? (
+                <span className="mt-1 inline-flex items-center gap-1 text-[12px] text-text-tertiary">
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 7.5 12 3m0 0L7.5 7.5M12 3v13.5" /></svg>
+                  Uploaded content
+                </span>
+              ) : (
+                <a href={report.url} target="_blank" rel="noopener noreferrer" className="mt-1 block text-[12px] text-text-tertiary hover:text-brand-violet transition-colors truncate max-w-[260px]">
+                  {report.url}
+                </a>
+              )}
             </div>
           </div>
 
@@ -469,15 +636,9 @@ function AuditResults({
                   {report.primary_keyword}
                 </span>
               )}
-              {report.keyword_data && (
-                <KeywordVerdictChip verdict={report.keyword_data.verdict} volume={report.keyword_data.volume} />
-              )}
-              {report.word_count > 0 && (
-                <span className="text-[11px] text-text-tertiary">{report.word_count.toLocaleString()} words</span>
-              )}
-              {report.publish_date_detected && (
-                <span className="text-[11px] text-text-tertiary">Published ~{report.publish_date_detected}</span>
-              )}
+              {report.keyword_data && <KeywordVerdictChip verdict={report.keyword_data.verdict} volume={report.keyword_data.volume} />}
+              {report.word_count > 0 && <span className="text-[11px] text-text-tertiary">{report.word_count.toLocaleString()} words</span>}
+              {report.publish_date_detected && <span className="text-[11px] text-text-tertiary">Published ~{report.publish_date_detected}</span>}
             </div>
             <p className="text-[14px] text-text-primary leading-relaxed font-medium">{report.plain_language_verdict}</p>
           </div>
@@ -485,17 +646,14 @@ function AuditResults({
 
         {/* ── Action bar ── */}
         <div className="mt-5 pt-5 border-t border-border-subtle flex flex-wrap items-center gap-3">
-          {/* Generate Enhanced Blog */}
           {!generatedBlogId ? (
             <button
               type="button"
               onClick={onGenerate}
               disabled={generating}
-              className="h-9 px-4 rounded-[10px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all flex items-center gap-2"
+              className="h-9 px-4 rounded-[10px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-60 transition-all flex items-center gap-2"
             >
-              {generating ? (
-                <><Spinner size={13} /> Generating enhanced blog…</>
-              ) : (
+              {generating ? <><Spinner size={13} /> {genStage || "Generating…"}</> : (
                 <>
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
@@ -518,19 +676,22 @@ function AuditResults({
             </button>
           )}
 
-          {/* Schedule button */}
           {!scheduledDate ? (
-            <CalendarDatePicker
-              open={scheduleOpen}
-              onOpenChange={setScheduleOpen}
-              onConfirm={onSchedule}
-              saving={scheduleSaving}
-              variant="pick"
-              label="Schedule to Calendar"
-              className="h-9 px-4 rounded-[10px] border border-border-subtle bg-surface-secondary text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-2"
-            />
+            <button
+              type="button"
+              onClick={onSchedule}
+              disabled={scheduleSaving || generating}
+              className="h-9 px-4 rounded-[10px] border border-border-subtle bg-surface-secondary text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong disabled:opacity-50 transition-all flex items-center gap-2"
+            >
+              {scheduleSaving ? <Spinner size={13} /> : (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                </svg>
+              )}
+              Schedule to Calendar
+            </button>
           ) : (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-[10px] bg-emerald-500/10 border border-emerald-500/20 text-[12px] font-medium text-emerald-400">
+            <div className="flex items-center gap-2 px-3 h-9 rounded-[10px] bg-emerald-500/10 border border-emerald-500/20 text-[12px] font-medium text-emerald-400">
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
               </svg>
@@ -541,15 +702,14 @@ function AuditResults({
                 currentDate={scheduledDate}
                 onConfirm={onReschedule}
                 saving={scheduleSaving}
+                scheduledDates={scheduledDates}
                 variant="change"
                 iconOnly
               />
             </div>
           )}
 
-          {generateError && (
-            <span className="text-[12px] text-rose-400">{generateError}</span>
-          )}
+          {generateError && <span className="text-[12px] text-rose-400">{generateError}</span>}
         </div>
       </div>
 
@@ -562,19 +722,19 @@ function AuditResults({
             score={report.scores[dim.key]}
             description={dim.description}
             icon={dim.icon}
+            tooltip={tooltipFor(dim.key)}
           />
         ))}
       </div>
 
-      {/* ── Tab navigation ── */}
+      {/* ── Tab navigation (Revamp Brief removed — used internally for generation) ── */}
       <div className="border-b border-border-subtle">
         <nav className="flex gap-1 -mb-px">
-          {(["issues", "rubric", "competitors", "brief"] as const).map(tab => {
+          {(["issues", "rubric", "competitors"] as const).map(tab => {
             const labels: Record<string, string> = {
               issues: `Issues (${report.issues.length})`,
-              rubric: `Quality Checklist`,
+              rubric: "Quality Checklist",
               competitors: `Competitors (${report.competitor_insights.length})`,
-              brief: "Revamp Brief",
             };
             return (
               <button
@@ -582,9 +742,7 @@ function AuditResults({
                 type="button"
                 onClick={() => setActiveTab(tab)}
                 className={`px-4 py-2.5 text-[13px] font-medium border-b-2 transition-all whitespace-nowrap ${
-                  activeTab === tab
-                    ? "border-brand-violet text-brand-violet"
-                    : "border-transparent text-text-tertiary hover:text-text-primary"
+                  activeTab === tab ? "border-brand-violet text-brand-violet" : "border-transparent text-text-tertiary hover:text-text-primary"
                 }`}
               >
                 {labels[tab]}
@@ -597,13 +755,6 @@ function AuditResults({
       {activeTab === "issues" && <IssuesPanel issues={report.issues} />}
       {activeTab === "rubric" && <RubricPanel rows={report.quality_rubric} />}
       {activeTab === "competitors" && <CompetitorsPanel insights={report.competitor_insights} />}
-      {activeTab === "brief" && (
-        <RevampBriefPanel
-          brief={report.revamp_brief}
-          expanded={expandedBrief}
-          setExpanded={setExpandedBrief}
-        />
-      )}
     </div>
   );
 }
@@ -613,10 +764,7 @@ function AuditResults({
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 function IssuesPanel({ issues }: { issues: ContentAuditReport["issues"] }) {
-  const sorted = [...issues].sort((a, b) =>
-    (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99)
-  );
-
+  const sorted = [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99));
   if (!sorted.length) {
     return (
       <EmptyState
@@ -626,12 +774,9 @@ function IssuesPanel({ issues }: { issues: ContentAuditReport["issues"] }) {
       />
     );
   }
-
   return (
     <div className="space-y-3">
-      {sorted.map((issue, i) => (
-        <IssueCard key={issue.id || i} issue={issue} />
-      ))}
+      {sorted.map((issue, i) => <IssueCard key={issue.id || i} issue={issue} />)}
     </div>
   );
 }
@@ -640,20 +785,13 @@ function IssueCard({ issue }: { issue: ContentAuditReport["issues"][0] }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-[14px] border border-border-subtle bg-surface-elevated overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        className="w-full flex items-start gap-3 p-4 text-left hover:bg-surface-hover transition-colors"
-      >
+      <button type="button" onClick={() => setOpen(v => !v)} className="w-full flex items-start gap-3 p-4 text-left hover:bg-surface-hover transition-colors">
         <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
           <SeverityChip severity={issue.severity} />
           <CategoryBadge category={issue.category} />
           <span className="text-[13px] font-semibold text-text-primary leading-snug">{issue.title}</span>
         </div>
-        <svg
-          className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform mt-0.5 ${open ? "rotate-180" : ""}`}
-          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}
-        >
+        <svg className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform mt-0.5 ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
         </svg>
       </button>
@@ -684,7 +822,6 @@ function IssueCard({ issue }: { issue: ContentAuditReport["issues"][0] }) {
 function RubricPanel({ rows }: { rows: ContentAuditReport["quality_rubric"] }) {
   const pass = rows.filter(r => r.status === "pass").length;
   const pct = rows.length > 0 ? Math.round((pass / rows.length) * 100) : 0;
-
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3 mb-2">
@@ -721,24 +858,17 @@ function CompetitorsPanel({ insights }: { insights: ContentAuditReport["competit
       />
     );
   }
-
   return (
     <div className="space-y-4">
-      <p className="text-[13px] text-text-tertiary">
-        These are the pages currently outranking you for your primary keyword. Here&apos;s what they&apos;re doing differently.
-      </p>
+      <p className="text-[13px] text-text-tertiary">These are the pages currently outranking you for your primary keyword. Here&apos;s what they&apos;re doing differently.</p>
       {insights.map((c, i) => (
         <div key={c.url} className="rounded-[14px] border border-border-subtle bg-surface-elevated p-4">
           <div className="flex items-start justify-between gap-3 mb-3">
             <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-surface-tertiary text-text-tertiary text-[11px] font-bold flex items-center justify-center shrink-0">
-                #{i + 1}
-              </span>
+              <span className="w-6 h-6 rounded-full bg-surface-tertiary text-text-tertiary text-[11px] font-bold flex items-center justify-center shrink-0">#{i + 1}</span>
               <div className="min-w-0">
                 <p className="text-[13px] font-semibold text-text-primary leading-snug line-clamp-1">{c.title}</p>
-                <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-text-tertiary hover:text-brand-violet transition-colors truncate block">
-                  {c.url}
-                </a>
+                <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-text-tertiary hover:text-brand-violet transition-colors truncate block">{c.url}</a>
               </div>
             </div>
           </div>
@@ -753,8 +883,7 @@ function CompetitorsPanel({ insights }: { insights: ContentAuditReport["competit
               <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary">What they do better:</p>
               {c.advantages.map((adv, j) => (
                 <div key={j} className="flex items-start gap-2 text-[12px] text-text-secondary">
-                  <span className="text-rose-400 shrink-0 mt-0.5">→</span>
-                  {adv}
+                  <span className="text-rose-400 shrink-0 mt-0.5">→</span>{adv}
                 </div>
               ))}
             </div>
@@ -765,114 +894,16 @@ function CompetitorsPanel({ insights }: { insights: ContentAuditReport["competit
   );
 }
 
-// ─── Revamp brief ─────────────────────────────────────────────────────────────
-
-function RevampBriefPanel({
-  brief, expanded, setExpanded,
-}: {
-  brief: ContentAuditReport["revamp_brief"];
-  expanded: boolean;
-  setExpanded: (v: boolean) => void;
-}) {
-  if (!brief) return (
-    <EmptyState title="No revamp brief" body="The AI did not generate a revamp brief for this audit." />
-  );
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-[14px] border border-brand-violet/20 bg-brand-violet/5 p-4">
-        <div className="flex items-start gap-3 mb-3">
-          <svg className="w-5 h-5 text-brand-violet shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
-          </svg>
-          <div>
-            <p className="text-[14px] font-semibold text-text-primary">Content Revamp Brief</p>
-            <p className="text-[12px] text-text-tertiary mt-0.5">A complete brief for regenerating this blog with AI. Use the Generate button above to apply all fixes.</p>
-          </div>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-3">
-            <BriefField label="Target keyword" value={brief.target_keyword} />
-            <BriefField label="Suggested title" value={brief.suggested_title} />
-            <BriefField label="Meta description" value={brief.suggested_meta} />
-            <BriefField label="Content angle" value={brief.content_angle} />
-            <BriefField label="Recommended length" value={`${brief.recommended_word_count.toLocaleString()}+ words`} />
-          </div>
-          <div className="space-y-3">
-            <BriefListField label="Schema types to add" items={brief.schema_types} color="blue" />
-            <BriefListField label="Key H2 sections" items={brief.key_sections} color="violet" />
-          </div>
-        </div>
-
-        {expanded && (
-          <div className="mt-4 pt-4 border-t border-brand-violet/15 grid gap-4 sm:grid-cols-2">
-            <BriefListField label="Missing topics to cover" items={brief.missing_topics} color="amber" />
-            <BriefListField label="Competitor gaps to fill" items={brief.competitor_gaps} color="rose" />
-            <div className="sm:col-span-2">
-              <BriefListField label="FAQ questions to answer" items={brief.faq_questions} color="emerald" numbered />
-            </div>
-          </div>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="mt-4 text-[12px] font-medium text-brand-violet hover:text-brand-violet/80 transition-colors flex items-center gap-1"
-        >
-          {expanded ? "Show less" : "Show full brief (gaps, FAQ questions)"}
-          <svg className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function BriefField({ label, value }: { label: string; value: string }) {
-  if (!value) return null;
-  return (
-    <div>
-      <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary mb-1">{label}</p>
-      <p className="text-[13px] text-text-primary leading-relaxed">{value}</p>
-    </div>
-  );
-}
-
-function BriefListField({ label, items, color, numbered }: { label: string; items: string[]; color: string; numbered?: boolean }) {
-  if (!items.length) return null;
-  const colorCls: Record<string, string> = {
-    blue: "text-blue-400", violet: "text-violet-400", amber: "text-amber-400",
-    rose: "text-rose-400", emerald: "text-emerald-400",
-  };
-  return (
-    <div>
-      <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary mb-1.5">{label}</p>
-      <ul className="space-y-1">
-        {items.map((item, i) => (
-          <li key={i} className="flex items-start gap-2 text-[12px] text-text-secondary">
-            <span className={`${colorCls[color] ?? "text-brand-violet"} shrink-0 font-semibold`}>{numbered ? `${i + 1}.` : "→"}</span>
-            {item}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 // ─── Audit History ────────────────────────────────────────────────────────────
 
 const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
 
 function AuditHistory({
-  items, loading, onRerun, onOpen, hidden,
+  items, loading, onOpen,
 }: {
   items: ContentAuditHistoryItem[];
   loading: boolean;
-  onRerun: (url: string) => void;
   onOpen: (item: ContentAuditHistoryItem) => void;
-  hidden?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
@@ -883,53 +914,40 @@ function AuditHistory({
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(i =>
-        i.url.toLowerCase().includes(q) ||
-        i.title?.toLowerCase().includes(q) ||
-        i.primary_keyword?.toLowerCase().includes(q)
+        i.url.toLowerCase().includes(q) || i.title?.toLowerCase().includes(q) || i.primary_keyword?.toLowerCase().includes(q)
       );
     }
-    if (severityFilter !== "all") {
-      list = list.filter(i => i.severity === severityFilter);
-    }
+    if (severityFilter !== "all") list = list.filter(i => i.severity === severityFilter);
     return list;
   }, [items, search, severityFilter]);
 
-  if (hidden) return null;
-
   if (loading) {
     return (
-      <div className="max-w-3xl space-y-2">
-        {[1, 2, 3].map(i => (
-          <div key={i} className="h-16 rounded-[12px] bg-surface-elevated border border-border-subtle animate-pulse" />
-        ))}
+      <div className="space-y-2">
+        {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-[12px] bg-surface-elevated border border-border-subtle animate-pulse" />)}
       </div>
     );
   }
 
   if (!items.length) {
     return (
-      <div className="max-w-3xl">
-        <EmptyState
-          icon={<svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" /></svg>}
-          title="No audits yet"
-          body="Enter a blog URL above to run your first content audit. Results are saved here for quick reference."
-        />
-      </div>
+      <EmptyState
+        icon={<svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" /></svg>}
+        title="No audits yet"
+        body="Enter a blog URL or upload content above to run your first audit. Results are saved here for quick reference."
+      />
     );
   }
 
   return (
-    <div className="max-w-3xl">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-[14px] font-semibold text-text-secondary flex items-center gap-2">
-          <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-          </svg>
-          Audit History ({items.length})
-        </h2>
-      </div>
+    <div>
+      <h2 className="text-[14px] font-semibold text-text-secondary flex items-center gap-2 mb-3">
+        <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+        </svg>
+        Audit History ({items.length})
+      </h2>
 
-      {/* Search + filter bar */}
       <div className="flex gap-2 mb-3 flex-wrap">
         <div className="relative flex-1 min-w-[160px]">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -950,9 +968,7 @@ function AuditHistory({
               type="button"
               onClick={() => setSeverityFilter(s)}
               className={`h-8 px-3 rounded-[8px] text-[11px] font-medium transition-all ${
-                severityFilter === s
-                  ? "bg-brand-violet text-white"
-                  : "border border-border-subtle bg-surface-elevated text-text-tertiary hover:text-text-primary"
+                severityFilter === s ? "bg-brand-violet text-white" : "border border-border-subtle bg-surface-elevated text-text-tertiary hover:text-text-primary"
               }`}
             >
               {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
@@ -961,77 +977,67 @@ function AuditHistory({
         </div>
       </div>
 
-      {filtered.length === 0 && (
-        <p className="text-[13px] text-text-tertiary py-4 text-center">No results match your filters.</p>
-      )}
+      {filtered.length === 0 && <p className="text-[13px] text-text-tertiary py-4 text-center">No results match your filters.</p>}
 
       <div className="space-y-2">
         {filtered.slice(0, 20).map(item => {
           const score = item.overall_score || item.health_score;
           const color = scoreColor(score);
           const isExpanded = expandedUrl === item.url;
-
           return (
             <div key={item.url} className="rounded-[12px] border border-border-subtle bg-surface-elevated overflow-hidden transition-all">
-              {/* Row header */}
-              <div
-                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-hover transition-colors"
-                onClick={() => setExpandedUrl(isExpanded ? null : item.url)}
-              >
-                <div className="shrink-0">
-                  <span className="text-[16px] font-bold tabular-nums" style={{ color }}>{score}</span>
-                </div>
+              <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-hover transition-colors" onClick={() => setExpandedUrl(isExpanded ? null : item.url)}>
+                <div className="shrink-0"><span className="text-[16px] font-bold tabular-nums" style={{ color }}>{score}</span></div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-semibold text-text-primary leading-snug truncate">{item.title || item.url}</p>
-                  <p className="text-[11px] text-text-tertiary truncate">{item.url}</p>
-                  {item.primary_keyword && (
-                    <p className="text-[10px] text-text-tertiary/60 mt-0.5">Keyword: {item.primary_keyword}</p>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${item.source === "upload" ? "text-violet-400" : "text-text-tertiary"}`}>
+                      {item.source === "upload" ? (
+                        <><svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 7.5 12 3m0 0L7.5 7.5M12 3v13.5" /></svg> Uploaded</>
+                      ) : (
+                        <><svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757" /></svg> Link</>
+                      )}
+                    </span>
+                    <p className="text-[11px] text-text-tertiary truncate">{item.source === "upload" ? "Uploaded content" : item.url}</p>
+                  </div>
                 </div>
                 <div className="shrink-0 flex items-center gap-2">
-                  {item.severity && item.severity !== "none" && (
-                    <SeverityChip severity={item.severity} />
-                  )}
-                  <span className="text-[10px] text-text-tertiary">
-                    {new Date(item.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                  </span>
-                  <svg
-                    className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                    viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}
-                  >
+                  {item.severity && item.severity !== "none" && <SeverityChip severity={item.severity} />}
+                  <span className="text-[10px] text-text-tertiary">{new Date(item.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                  <svg className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
                   </svg>
                 </div>
               </div>
 
-              {/* Expanded preview */}
               {isExpanded && (
                 <div className="px-4 pb-4 border-t border-border-subtle/50">
-                  {item.plain_language_verdict && (
-                    <p className="text-[13px] text-text-secondary leading-relaxed mt-3 mb-3">{item.plain_language_verdict}</p>
+                  {item.plain_language_verdict && <p className="text-[13px] text-text-secondary leading-relaxed mt-3 mb-3">{item.plain_language_verdict}</p>}
+                  {item.report && (
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
+                      {(["seo", "geo", "aeo", "content_quality", "keyword_relevance", "freshness"] as const).map(k => {
+                        const sc = (item.report!.scores as unknown as Record<string, number>)[k] ?? 0;
+                        const lbl: Record<string, string> = { seo: "SEO", geo: "GEO", aeo: "AEO", content_quality: "Quality", keyword_relevance: "Keyword", freshness: "Fresh" };
+                        return (
+                          <div key={k} className="rounded-[8px] border border-border-subtle bg-surface-secondary/40 px-2 py-1.5 text-center">
+                            <div className="text-[14px] font-bold tabular-nums" style={{ color: scoreColor(sc) }}>{sc}</div>
+                            <div className="text-[9px] text-text-tertiary uppercase tracking-wide">{lbl[k]}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
-                  <div className="flex items-center gap-2 mt-2">
-                    <button
-                      type="button"
-                      onClick={() => onOpen(item)}
-                      className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5" />
-                      </svg>
-                      {item.report ? "View full audit" : "Re-audit"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onRerun(item.url)}
-                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
-                    >
-                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                      </svg>
-                      Re-audit
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpen(item)}
+                    className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+                    </svg>
+                    View full audit
+                  </button>
                 </div>
               )}
             </div>

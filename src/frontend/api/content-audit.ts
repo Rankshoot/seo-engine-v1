@@ -14,6 +14,7 @@ export interface ContentAuditHistoryItem {
   version: number;
   plain_language_verdict: string;
   report: ContentAuditReport | null;
+  source?: 'url' | 'upload';
 }
 
 export interface AnalyzeResponse {
@@ -33,8 +34,8 @@ export interface AnalyzeResponse {
 }
 
 export const contentAuditApi = {
-  analyze(projectId: string, url: string): Promise<AnalyzeResponse> {
-    return apiPost(V1Routes.contentAuditAnalyze(projectId), { url });
+  analyze(projectId: string, url: string, opts?: { uploadedContent?: string; uploadedTitle?: string }): Promise<AnalyzeResponse> {
+    return apiPost(V1Routes.contentAuditAnalyze(projectId), { url, ...opts });
   },
 
   history(projectId: string): Promise<{ success: boolean; error?: string; items: ContentAuditHistoryItem[] }> {

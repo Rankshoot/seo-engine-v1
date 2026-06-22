@@ -44,6 +44,7 @@ import { BlogEditAiFixOverlay, BlogImageEditOverlay } from "@/components/blog/Bl
 import { MemoizedVisualBlogEditors } from "@/components/blog/BlogEditorComponents";
 import { EditorialPreview, ArticleMetaRow } from "@/components/blog/BlogArticlePreview";
 import { unscheduleContentAction } from "@/app/actions/content-actions";
+import { pushBlogToStrapi } from "@/app/actions/strapi-actions";
 import {
   SpinIcon, ExternalLinkIcon, DownloadIcon, RepairBanner,
 } from "@/components/blog/BlogViewerHelpers";
@@ -190,6 +191,11 @@ export default function BlogViewerPage() {
   const [calendarEntries,  setCalendarEntries]  = useState<CalendarEntry[]>([]);
   const [scheduling,       setScheduling]       = useState(false);
   const [scheduleVersion,  setScheduleVersion]  = useState(0);
+
+  // ── Strapi push ────────────────────────────────────────────────────────
+  const [strapiPushing,     setStrapiPushing]     = useState(false);
+  const [strapiPushResult,  setStrapiPushResult]  = useState<{ adminUrl: string; docId: string } | null>(null);
+  const [strapiPushError,   setStrapiPushError]   = useState("");
 
   // ── Before / After comparison ──────────────────────────────────────────
   const [enhancedBlog,      setEnhancedBlog]      = useState<Blog | null>(null);
@@ -558,6 +564,23 @@ export default function BlogViewerPage() {
       toast.error(e instanceof Error ? e.message : "Could not unschedule");
     } finally {
       setScheduling(false);
+    }
+  };
+
+  // ── Strapi push handler ────────────────────────────────────────────────
+  const handlePushToStrapi = async () => {
+    if (!blog) return;
+    setStrapiPushing(true);
+    setStrapiPushError("");
+    setStrapiPushResult(null);
+    const res = await pushBlogToStrapi(blog.id);
+    setStrapiPushing(false);
+    if (res.success && res.strapiAdminUrl && res.strapiDocumentId) {
+      setStrapiPushResult({ adminUrl: res.strapiAdminUrl, docId: res.strapiDocumentId });
+      setBlog(b => b ? { ...b, strapi_sync_status: 'synced', strapi_document_id: res.strapiDocumentId, strapi_synced_at: new Date().toISOString(), strapi_sync_error: null } : b);
+      toast.success("Pushed to Strapi as draft!");
+    } else {
+      setStrapiPushError(res.error ?? "Failed to push to Strapi");
     }
   };
 
@@ -1044,6 +1067,80 @@ export default function BlogViewerPage() {
           }}
         />
       </div>
+
+      {/* Strapi CMS push */}
+      {project?.strapi_base_url && (
+        <>
+          <Divider />
+          <div className="px-4 py-3.5">
+            <SLabel>Strapi CMS</SLabel>
+
+            {/* Sync status badge */}
+            {blog.strapi_sync_status === 'synced' && (
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] text-emerald-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
+                Synced
+                {blog.strapi_synced_at && (
+                  <span className="text-text-tertiary ml-1">
+                    {new Date(blog.strapi_synced_at).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+            )}
+            {blog.strapi_sync_status === 'error' && (
+              <div className="mb-2 flex items-start gap-1.5 text-[11px] text-rose-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-rose-400 shrink-0 mt-1" />
+                <span className="break-words">{blog.strapi_sync_error ?? 'Sync error'}</span>
+              </div>
+            )}
+            {!blog.strapi_sync_status && (
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] text-text-tertiary">
+                <span className="h-1.5 w-1.5 rounded-full bg-text-tertiary/50 shrink-0" />
+                Not synced
+              </div>
+            )}
+
+            {/* Strapi admin link after successful push */}
+            {(strapiPushResult || blog.strapi_document_id) && (
+              <a
+                href={strapiPushResult?.adminUrl ?? `${project.strapi_base_url}/admin/content-manager/collection-types/api::article.article/${blog.strapi_document_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-2.5 flex items-center gap-1.5 text-[11px] hover:underline truncate"
+                style={{ color: V.action }}
+              >
+                <ExternalLinkIcon className="w-3 h-3 shrink-0" />
+                View in Strapi admin
+              </a>
+            )}
+
+            {strapiPushError && (
+              <p className="mb-2 text-[11px] text-rose-400 break-words">{strapiPushError}</p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handlePushToStrapi()}
+              disabled={strapiPushing || editMode}
+              className="w-full rounded-[32px] py-2 text-[12px] font-semibold flex items-center justify-center gap-2 transition-all disabled:opacity-50 border border-[#4945FF]/30 bg-[#4945FF]/10 text-[#7B78FF] hover:bg-[#4945FF]/20"
+            >
+              {strapiPushing ? (
+                <><SpinIcon className="w-3.5 h-3.5" />&nbsp;Pushing…</>
+              ) : blog.strapi_sync_status === 'synced' ? (
+                <>
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+                  Re-push to Strapi
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" /></svg>
+                  Push to Strapi
+                </>
+              )}
+            </button>
+          </div>
+        </>
+      )}
 
       {/* Export */}
       <Divider />

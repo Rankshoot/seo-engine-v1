@@ -24,6 +24,9 @@ export interface Project {
   brand_image_style?: string | null;
   brand_palette_json?: string[] | null;
   brand_extracted_at?: string | null;
+  // Strapi CMS integration — per-project connection (see supabase-migration-strapi-connection.sql)
+  strapi_base_url?: string | null;
+  strapi_api_token?: string | null;
   created_at: string;
   updated_at: string;
   project_competitors?: ProjectCompetitor[];
@@ -378,6 +381,11 @@ export interface Blog {
    * lets the previewer render rich type-specific UI without re-parsing markdown.
    */
   content_data?: ContentDataPayload;
+  // Strapi sync state (from supabase-migration-blog-strapi-sync.sql already applied)
+  strapi_document_id?: string | null;
+  strapi_sync_status?: 'synced' | 'error' | null;
+  strapi_sync_error?: string | null;
+  strapi_synced_at?: string | null;
   created_at: string;
   updated_at: string;
 }

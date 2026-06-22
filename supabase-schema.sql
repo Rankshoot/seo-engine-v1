@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT DEFAULT '',
   ahrefs_rank_tracker_project_id BIGINT DEFAULT NULL,
   last_benchmarked_competitor_snapshot TEXT DEFAULT NULL,
+  -- Strapi CMS integration — per-project credentials (see supabase-migration-strapi-connection.sql)
+  strapi_base_url  TEXT DEFAULT NULL,
+  strapi_api_token TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

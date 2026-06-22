@@ -105,4 +105,23 @@ export const projectsApi = {
   refreshBrand(projectId: string): Promise<{ success: boolean; error?: string; data?: Record<string, unknown> }> {
     return apiPost(V1Routes.projectBrandRefresh(projectId));
   },
+
+  getStrapiConnection(projectId: string): Promise<{ success: boolean; connected: boolean; strapiBaseUrl?: string; error?: string }> {
+    return apiGet(V1Routes.projectStrapi(projectId));
+  },
+
+  saveStrapiConnection(
+    projectId: string,
+    payload: { strapiBaseUrl: string; strapiApiToken: string }
+  ): Promise<{ success: boolean; error?: string }> {
+    return apiPatch(V1Routes.projectStrapi(projectId), payload);
+  },
+
+  disconnectStrapi(projectId: string): Promise<{ success: boolean; error?: string }> {
+    return apiDelete(V1Routes.projectStrapi(projectId));
+  },
+
+  testStrapiConnection(projectId: string): Promise<{ ok: boolean; error?: string }> {
+    return apiPost(V1Routes.projectStrapiTest(projectId));
+  },
 };

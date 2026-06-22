@@ -442,7 +442,12 @@ function slugKey(s: string): string {
  */
 export async function addContentHealthKeywordToCalendar(
   projectId: string,
-  opts: { focusKeyword: string; auditUrl?: string; contentHealthAudit?: Record<string, unknown> | null }
+  opts: {
+    focusKeyword: string;
+    auditUrl?: string;
+    contentHealthAudit?: Record<string, unknown> | null;
+    targetDate?: string;
+  }
 ) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' as const };
@@ -520,7 +525,7 @@ export async function addContentHealthKeywordToCalendar(
     }
   }
 
-  const scheduledDate = await nextOpenCalendarDate(projectId);
+  const scheduledDate = opts.targetDate ? opts.targetDate.trim() : await nextOpenCalendarDate(projectId);
   if (!scheduledDate) return { success: false, error: 'No open calendar date found' as const };
 
   const auditPayload =

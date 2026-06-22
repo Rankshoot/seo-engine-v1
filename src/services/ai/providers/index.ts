@@ -283,7 +283,7 @@ export async function aiGenerate(
 
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
-  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
+  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 120000;
 
   let resultText: string;
   try {
@@ -369,7 +369,7 @@ export async function* aiStream(
 
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
-  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
+  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 120000;
 
   const controller = timeoutMs > 0 ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
@@ -474,7 +474,7 @@ export async function aiGenerateStructured<T>(
 
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
-  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 45000;
+  const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 120000;
 
   let resultData: T;
   try {

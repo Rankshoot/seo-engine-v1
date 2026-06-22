@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import type { PersistedBlogAudit } from "@/app/actions/audit-actions";
 import type { IssueCategory, QualityRubricRow } from "@/lib/content-audit";
@@ -71,6 +72,7 @@ export function AuditDetailModal({
   onCalendar,
 }: AuditDetailModalProps) {
   const [tab, setTab] = useState<Tab>("issues");
+  const router = useRouter();
 
   const grouped = useMemo(() => (row ? groupIssuesByCategory(row.analysis.issues) : {}), [row]);
 
@@ -144,6 +146,23 @@ export function AuditDetailModal({
   const crit = criticalityFromScore(row.health_score, a.page_status);
   const focus = extractCalendarFocusKeyword(row);
 
+  function handleGenerateEnhanced() {
+    if (!row) return;
+    const topIssues = flatNumberedIssues
+      .slice(0, 5)
+      .map(({ n, issue }) => `${n}. [${issue.severity.toUpperCase()}] ${issue.label}${issue.fix ? ` — Fix: ${issue.fix}` : ""}`)
+      .join("\n");
+    const params = new URLSearchParams({
+      auditUrl: row.url,
+      auditKeyword: focus,
+      auditTitle: row.title || "",
+      auditMode: "fix",
+      auditIssues: topIssues,
+    });
+    router.push(`/projects/${projectId}/content-generator/blogs?${params.toString()}`);
+    onClose();
+  }
+
   return (
     <Dialog open={open} onClose={onClose} size="xl" unstyled>
       <div
@@ -183,9 +202,9 @@ export function AuditDetailModal({
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {(a.plain_language_verdict || a.summary) && (
-            <div className="m-5 rounded-xl border border-border-subtle bg-surface-tertiary/40 p-4">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-text-tertiary mb-1">Summary</p>
-              <p className="text-sm text-text-primary leading-relaxed">
+            <div className="mx-5 mt-4 mb-3 rounded-lg border border-border-subtle bg-surface-tertiary/30 px-3 py-2 flex items-start gap-2">
+              <span className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-text-tertiary shrink-0">Verdict</span>
+              <p className="text-[12px] text-text-secondary leading-snug line-clamp-3">
                 {a.plain_language_verdict?.trim() || a.summary}
               </p>
             </div>
@@ -234,32 +253,24 @@ export function AuditDetailModal({
                         return (
                           <li
                             key={`${n}-${issue.label}`}
-                            className="grid grid-cols-[auto_1fr] gap-3 rounded-xl border border-border-subtle bg-surface-elevated/80 p-3 shadow-sm"
+                            className="flex items-start gap-2.5 rounded-lg border border-border-subtle bg-surface-elevated/80 px-3 py-2"
                           >
-                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-action/15 text-xs font-black text-brand-action">
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-brand-action/15 text-[10px] font-black text-brand-action mt-0.5">
                               {n}
                             </span>
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span
-                                  className={`rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase ${SEVERITY_COLORS[issue.severity]}`}
-                                >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                                <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase ${SEVERITY_COLORS[issue.severity]}`}>
                                   {issue.severity}
                                 </span>
-                                <span
-                                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase ${meta.color}`}
-                                >
+                                <span className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase ${meta.color}`}>
                                   {meta.icon} {meta.label}
                                 </span>
-                                <span className="text-xs font-bold text-text-primary">{issue.label}</span>
+                                <span className="text-[12px] font-semibold text-text-primary">{issue.label}</span>
                               </div>
-                              {issue.detail && (
-                                <p className="mt-1.5 text-[12px] text-text-secondary leading-relaxed">{issue.detail}</p>
-                              )}
                               {issue.fix && (
-                                <p className="mt-1.5 text-[12px] text-accent-400 leading-relaxed">
-                                  <span className="font-bold text-text-secondary">Fix · </span>
-                                  {issue.fix}
+                                <p className="text-[11px] text-accent-400 leading-snug">
+                                  <span className="font-bold text-text-tertiary">→ </span>{issue.fix}
                                 </p>
                               )}
                             </div>
@@ -372,34 +383,37 @@ export function AuditDetailModal({
           </div>
         </div>
 
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-surface-secondary/95 p-4 backdrop-blur">
-          <p className="text-[11px] text-text-tertiary max-w-md">
-            Scheduling places this audit (keyword + fixes) on the next open calendar day. Generation applies those fixes surgically — not a full rewrite unless the issues require it.
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={onClose}>
-              Close
+        <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border-subtle bg-surface-secondary/95 p-4 backdrop-blur">
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Close
+          </Button>
+          {onCalendar ? (
+            <ProjectNavLink
+              href={`/projects/${projectId}/calendar`}
+              className="inline-flex h-8 items-center justify-center rounded-md bg-emerald-500/20 px-3.5 text-[13px] font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/30"
+            >
+              Open calendar
+            </ProjectNavLink>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={scheduleBusy}
+              disabled={scheduleBusy}
+              onClick={() => void onScheduleToCalendar()}
+              className="min-w-[128px]"
+            >
+              {scheduleBusy ? "Scheduling…" : "Schedule repair"}
             </Button>
-            {onCalendar ? (
-              <ProjectNavLink
-                href={`/projects/${projectId}/calendar`}
-                className="inline-flex h-8 items-center justify-center rounded-md bg-emerald-500/20 px-3.5 text-[13px] font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/30"
-              >
-                Open calendar
-              </ProjectNavLink>
-            ) : (
-              <Button
-                variant="primary"
-                size="sm"
-                loading={scheduleBusy}
-                disabled={scheduleBusy}
-                onClick={() => void onScheduleToCalendar()}
-                className="min-w-[148px]"
-              >
-                {scheduleBusy ? "Scheduling…" : "Schedule repair"}
-              </Button>
-            )}
-          </div>
+          )}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleGenerateEnhanced}
+            className="min-w-[148px] bg-gradient-to-r from-brand-primary to-brand-action"
+          >
+            ✦ Generate enhanced
+          </Button>
         </footer>
       </div>
     </Dialog>

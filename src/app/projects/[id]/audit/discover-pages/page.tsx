@@ -67,6 +67,7 @@ export default function DiscoverPagesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [massSelectMode, setMassSelectMode] = useState(false);
   const [auditing, setAuditing] = useState(false);
+  const [auditingUrl, setAuditingUrl] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [actionOk, setActionOk] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -161,6 +162,23 @@ export default function DiscoverPagesPage() {
   function enterMassSelect() { setMassSelectMode(true); setSelected(new Set()); }
   function exitMassSelect() { setMassSelectMode(false); setSelected(new Set()); }
 
+  const auditSingleUrl = async (url: string) => {
+    if (!projectId || auditingUrl) return;
+    setAuditingUrl(url); setActionError(""); setActionOk("");
+    try {
+      const res = await auditsApi.auditSelected(projectId, [url]);
+      if (res.success) {
+        setActionOk(`Audited: ${url}`);
+        await queryClient.invalidateQueries({ queryKey: qk.audits(projectId) });
+        dispatch(contentHealthAuditMarkStale({ projectId }));
+        await refetch();
+        // Open audit modal to show results
+        await openModal(url);
+      } else { setActionError(res.error ?? "Audit failed."); }
+    } catch (e) { setActionError(e instanceof Error ? e.message : "Audit failed."); }
+    finally { setAuditingUrl(null); }
+  };
+
   const runSelected = async () => {
     if (!projectId || selected.size === 0) return;
     setAuditing(true); setActionError(""); setActionOk("");
@@ -247,8 +265,29 @@ export default function DiscoverPagesPage() {
         )
       ),
     },
+    {
+      id: "actions",
+      header: "",
+      align: "right",
+      cell: (p) => {
+        const isRunning = auditingUrl === p.url;
+        return (
+          <button
+            type="button"
+            disabled={!!auditingUrl || auditing}
+            onClick={e => { e.stopPropagation(); void auditSingleUrl(p.url); }}
+            className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 text-[11px] font-semibold text-text-secondary hover:border-brand-action/50 hover:text-brand-action transition-colors disabled:opacity-40"
+          >
+            {isRunning ? <Spinner size={10} /> : (
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" /></svg>
+            )}
+            {isRunning ? "Auditing…" : "Audit"}
+          </button>
+        );
+      },
+    },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [massSelectMode]);
+  ], [massSelectMode, auditingUrl, auditing]);
 
   return (
     <>
@@ -273,44 +312,14 @@ export default function DiscoverPagesPage() {
 
             {/* Toolbar */}
             <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {massSelectMode ? (
-                <>
-                  {selected.size > 0 && (
-                    <button type="button" onClick={() => setSelected(new Set())}
-                      className="text-[12px] text-text-tertiary hover:text-text-primary transition-colors">
-                      Clear
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    disabled={auditing || selected.size === 0}
-                    onClick={runSelected}
-                    className="inline-flex h-9 items-center gap-2 rounded-full bg-brand-primary px-5 text-[13px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-                  >
-                    {auditing
-                      ? <><Spinner size={14} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Auditing…</>
-                      : <>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" /></svg>
-                          Audit selected ({selected.size}/{MAX_SELECT})
-                        </>}
-                  </button>
-                  <button type="button" onClick={exitMassSelect} disabled={auditing}
-                    className="inline-flex h-9 items-center rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors disabled:opacity-40">
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button type="button" onClick={enterMassSelect}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[12px] font-semibold text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors">
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.85} strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                    <rect x="14" y="3" width="7" height="7" rx="1.25" opacity="0.65" />
-                    <rect x="3" y="14" width="7" height="7" rx="1.25" opacity="0.65" />
-                    <path d="M14 17.5 16 19.5 21 13.5" />
-                  </svg>
-                  Select & Audit
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => void refetch()}
+                className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[12px] font-semibold text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 0 0 4.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 0 1-15.357-2m15.357 2H15" /></svg>
+                Refresh sitemap
+              </button>
             </div>
           </div>
         </div>
@@ -348,15 +357,44 @@ export default function DiscoverPagesPage() {
             </select>
           </div>
 
-          <span className="ml-auto text-[12px] text-text-tertiary">
-            {search ? `${filteredPages.length} of ${allPages.length}` : `${allPages.length}`} URL{allPages.length === 1 ? "" : "s"}
-            {massSelectMode && selected.size > 0 && (
-              <> · <span className="text-brand-action font-medium">{selected.size} selected</span></>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-[12px] text-text-tertiary">
+              {search ? `${filteredPages.length} of ${allPages.length}` : `${allPages.length}`} URL{allPages.length === 1 ? "" : "s"}
+            </span>
+            {massSelectMode ? (
+              <>
+                {selected.size > 0 && (
+                  <button type="button" onClick={() => setSelected(new Set())}
+                    className="text-[12px] text-text-tertiary hover:text-text-primary transition-colors">
+                    Clear
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={auditing || selected.size === 0}
+                  onClick={runSelected}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-brand-primary px-4 text-[12px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  {auditing ? <><Spinner size={12} /> Auditing…</> : `Audit ${selected.size}/${MAX_SELECT}`}
+                </button>
+                <button type="button" onClick={exitMassSelect} disabled={auditing}
+                  className="inline-flex h-8 items-center rounded-full border border-border-subtle bg-surface-elevated px-3 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40">
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button type="button" onClick={enterMassSelect}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-elevated px-3 text-[12px] font-semibold text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors">
+                <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" aria-hidden fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="7" height="7" rx="1.25" />
+                  <rect x="14" y="3" width="7" height="7" rx="1.25" />
+                  <rect x="3" y="14" width="7" height="7" rx="1.25" />
+                  <path d="M14 17.5 16 19.5 21 13.5" />
+                </svg>
+                Select & audit
+              </button>
             )}
-            {massSelectMode && selected.size >= MAX_SELECT && (
-              <span className="text-amber-400"> (max {MAX_SELECT})</span>
-            )}
-          </span>
+          </div>
         </div>
 
         {/* ── page list ───────────────────────────────────────────────────── */}

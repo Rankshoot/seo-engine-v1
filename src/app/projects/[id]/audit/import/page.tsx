@@ -286,14 +286,13 @@ function AnalyzeAuditActions({
         </button>
       )}
 
-      {/* ── Enhance (primary) — skip-calendar repair+SEO pipeline ─────── */}
+      {/* ── Generate enhanced — navigate to generator with audit params ── */}
       {showEnhancedVersion && (
         <button type="button" disabled={enhanceBusy || scheduleBusy || generateBusy} onClick={onGenerateEnhanced}
-          title="Re-scrape the live article, fix every audit issue, produce an SEO-ready version."
-          className={`${btnBase} bg-brand-primary text-brand-on-primary hover:opacity-90`}>
-          {enhanceBusy
-            ? <><Spinner size={13} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Generating…</>
-            : <><svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" /></svg>Enhance</>}
+          title="Fix audit issues in the generator — surgical edits, not a full rewrite."
+          className={`${btnBase} bg-gradient-to-r from-brand-primary to-brand-action text-brand-on-primary hover:opacity-90`}>
+          <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" /></svg>
+          ✦ Generate enhanced
         </button>
       )}
 
@@ -426,15 +425,24 @@ function AnalysisPanel({
       {a.issues?.length ? (
         <div>
           <SectionLabel>Issues ({a.issues.length})</SectionLabel>
-          <ul className="mt-2 space-y-2">
+          <ul className="mt-2 space-y-1.5">
             {a.issues.map((issue, i) => {
               const sev = issue.severity;
-              const cls = sev === "high" ? "border-rose-500/20 bg-rose-500/5 text-rose-400" : sev === "medium" ? "border-amber-500/20 bg-amber-500/5 text-amber-400" : "border-border-subtle bg-surface-primary/60 text-text-tertiary";
+              const sevCls = sev === "high" ? "border-rose-500/30 bg-rose-500/10 text-rose-400" : sev === "medium" ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-400" : "border-accent-500/30 bg-accent-500/10 text-accent-400";
               return (
-                <li key={i} className={`rounded-[10px] border px-3.5 py-2.5 ${cls}`}>
-                  <p className="text-[13px] font-semibold text-text-primary">{issue.label}</p>
-                  {issue.detail && <p className="mt-0.5 text-[12px] opacity-80 leading-relaxed">{issue.detail}</p>}
-                  {issue.fix && <p className="mt-1 text-[12px] font-medium">Fix: {issue.fix}</p>}
+                <li key={i} className="flex items-start gap-2.5 rounded-lg border border-border-subtle bg-surface-elevated/80 px-3 py-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-brand-action/15 text-[10px] font-black text-brand-action mt-0.5">{i + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                      <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase ${sevCls}`}>{sev}</span>
+                      <span className="text-[12px] font-semibold text-text-primary">{issue.label}</span>
+                    </div>
+                    {issue.fix && (
+                      <p className="text-[11px] text-accent-400 leading-snug">
+                        <span className="font-bold text-text-tertiary">→ </span>{issue.fix}
+                      </p>
+                    )}
+                  </div>
                 </li>
               );
             })}
@@ -673,8 +681,7 @@ export default function AuditImportPage() {
   const [scheduleMessages, setScheduleMessages] = useState<Record<string, string>>({});
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(true);
-  const [enhancingUrl, setEnhancingUrl] = useState<string | null>(null);
-  const [repairBlogIdByAuditUrl, setRepairBlogIdByAuditUrl] = useState<Record<string, string>>({});
+  const [enhancingUrl] = useState<string | null>(null);
 
   const historyQuery = useQuery({
     queryKey: [...qk.audits(projectId!), "external-analyze-history"],
@@ -852,33 +859,21 @@ export default function AuditImportPage() {
     }
   }
 
-  async function generateEnhancedVersion(record: PersistedBlogAudit) {
+  function generateEnhancedVersion(record: PersistedBlogAudit) {
     if (!projectId) return;
-    const url = record.url;
-    setEnhancingUrl(url);
-    try {
-      const { repairBlogFromAudit } = await import("@/app/actions/repair-actions");
-      const res = await repairBlogFromAudit(projectId, url);
-      if (res.success && res.data.blogId) {
-        setRepairBlogIdByAuditUrl(m => ({ ...m, [url]: res.data.blogId }));
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: qk.analyzeCalendarLinks(projectId) }),
-          queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) }),
-          queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) }),
-          queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
-          refetchHistory(),
-        ]);
-        dispatch(contentHealthAuditMarkStale({ projectId }));
-        toast.success("Enhanced version ready — opening blog viewer.");
-        router.push(`/projects/${projectId}/content-generator/blogs/${res.data.blogId}${BLOG_QUERY_FROM_ANALYZE_CONTENT}`);
-      } else {
-        toast.error(!res.success ? res.error : "Could not generate enhanced version.");
-      }
-    } catch (ex) {
-      toast.error(ex instanceof Error ? ex.message : "Could not generate enhanced version.");
-    } finally {
-      setEnhancingUrl(null);
-    }
+    const focus = extractCalendarFocusKeyword(record);
+    const topIssues = (record.analysis.issues ?? [])
+      .slice(0, 5)
+      .map((issue, n) => `${n + 1}. [${issue.severity?.toUpperCase() ?? ""}] ${issue.label}${issue.fix ? ` — Fix: ${issue.fix}` : ""}`)
+      .join("\n");
+    const params = new URLSearchParams({
+      auditUrl: record.url,
+      auditKeyword: focus,
+      auditTitle: record.title || "",
+      auditMode: "fix",
+      auditIssues: topIssues,
+    });
+    router.push(`/projects/${projectId}/content-generator/blogs?${params.toString()}`);
   }
 
   const rescheduleAnalyzeEntry = useCallback(
@@ -1118,11 +1113,11 @@ export default function AuditImportPage() {
                     link={linksByUrl[row.url]}
                     scheduleBusy={schedulingUrl === row.url}
                     generateBusy={generatingUrl === row.url}
-                    enhanceBusy={enhancingUrl === row.url}
-                    repairSessionBlogId={repairBlogIdByAuditUrl[row.url]}
+                    enhanceBusy={false}
+                    repairSessionBlogId={null}
                     onSchedule={() => void scheduleKeyword(row)}
                     onGenerate={() => void generateFromAnalyze(row)}
-                    onGenerateEnhanced={() => void generateEnhancedVersion(row)}
+                    onGenerateEnhanced={() => generateEnhancedVersion(row)}
                     scheduleMsg={scheduleMessages[row.url]}
                     scheduledDatesSet={scheduledDatesSet}
                     datePickerOpen={pickingDateForAuditUrl === row.url}

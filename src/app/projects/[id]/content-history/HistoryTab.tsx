@@ -92,7 +92,7 @@ const HistoryRow = memo(function HistoryRow({
         {index}
       </td>
       <td className="px-4 py-2.5 align-middle">
-        <ContentTypeBadge type={CONTENT_TYPE_LABEL[row.content_type]} />
+        <ContentTypeBadge type={CONTENT_TYPE_LABEL[row.content_type] || row.content_type} />
       </td>
       <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(28rem,40vw)]">
         <ProjectNavLink

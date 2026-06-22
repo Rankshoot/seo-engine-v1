@@ -73,6 +73,12 @@ export const V1Routes = {
   projectBrand: (projectId: string) => `/projects/${projectId}/brand`,
   projectBrandRefresh: (projectId: string) => `/projects/${projectId}/brand/refresh`,
 
+  // ── Integrations ─────────────────────────────────────────────────────────
+  strapiPublish:       "/integrations/strapi/publish",
+  userStrapiIntegration: "/integrations/user-strapi",
+  userStrapiTest:      "/integrations/user-strapi/test",
+  blogPublishCms: (blogId: string) => `/blogs/${blogId}/publish-cms`,
+
   // ── Admin (platform) ─────────────────────────────────────────────────────
   adminMe: "/admin/me",
   adminOverview: "/admin/overview",

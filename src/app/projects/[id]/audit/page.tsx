@@ -118,7 +118,7 @@ export default function ContentAuditStudioPage() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors">("issues");
 
-  // Shared calendar entry between Generate + Schedule (avoids duplicate entries)
+  // Shared calendar entry between Generate + Schedule
   const [entryId, setEntryId] = useState<string | null>(null);
   const [scheduledDate, setScheduledDate] = useState<string | null>(null);
   const [scheduleSaving, setScheduleSaving] = useState(false);
@@ -127,9 +127,11 @@ export default function ContentAuditStudioPage() {
 
   // Generation
   const [generating, setGenerating] = useState(false);
-  const [genStage, setGenStage] = useState("");
   const [generatedBlogId, setGeneratedBlogId] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState("");
+  const [thinkingChunks, setThinkingChunks] = useState<string[]>([]);
+  const [streamLog, setStreamLog] = useState<string[]>([]);
+  const [showStreamPanel, setShowStreamPanel] = useState(false);
 
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -156,6 +158,24 @@ export default function ContentAuditStudioPage() {
 
   useEffect(() => { void loadHistory(); void loadScheduledDates(); }, [loadHistory, loadScheduledDates]);
 
+  // When a report is loaded (fresh audit or from history), check if there's
+  // already a generated enhanced blog for that URL so the button shows "View Blog"
+  // instead of "Generate Enhanced Blog" after a page refresh.
+  useEffect(() => {
+    if (!report?.url || !projectId) return;
+    setGeneratedBlogId(null);
+    const auditUrl = report.url;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/projects/${projectId}/content-audit/check-generated?url=${encodeURIComponent(auditUrl)}`
+        );
+        const data = (await res.json()) as { blogId?: string };
+        if (data.blogId) setGeneratedBlogId(data.blogId);
+      } catch { /* non-fatal */ }
+    })();
+  }, [report?.url, projectId]);
+
   const startStepAnimation = () => {
     setAnalysisStep(0);
     let step = 0;
@@ -172,9 +192,12 @@ export default function ContentAuditStudioPage() {
   const resetPostAuditState = () => {
     setGeneratedBlogId(null);
     setGenerateError("");
-    setGenStage("");
     setEntryId(null);
     setScheduledDate(null);
+    setScheduleOpen(false);
+    setThinkingChunks([]);
+    setStreamLog([]);
+    setShowStreamPanel(false);
   };
 
   const handleAnalyze = async (targetUrl?: string) => {
@@ -189,7 +212,6 @@ export default function ContentAuditStudioPage() {
       setReport(null);
       setAnalyzing(true);
       startStepAnimation();
-      // Synthetic stable URL so re-auditing the same file updates the same row
       const syntheticUrl = `upload://${projectId}/${uploadedName || "pasted-content"}`;
       try {
         const res = await contentAuditApi.analyze(projectId, syntheticUrl, {
@@ -245,7 +267,6 @@ export default function ContentAuditStudioPage() {
     }
   };
 
-  // Map audit report → snapshot used by the repair pipeline
   const buildSnapshot = (r: ContentAuditReport): ContentHealthAuditSnapshot => ({
     version: 2,
     capturedAt: r.analyzed_at,
@@ -278,7 +299,6 @@ export default function ContentAuditStudioPage() {
     scheduled_from: "analyze_content",
   });
 
-  // Create (once) the calendar entry that both Generate and Schedule reuse.
   const ensureEntry = useCallback(async (): Promise<{ id: string; date: string } | { error: string }> => {
     if (entryId) return { id: entryId, date: scheduledDate ?? "" };
     if (!report) return { error: "No audit to schedule." };
@@ -300,7 +320,9 @@ export default function ContentAuditStudioPage() {
     if (!report) return;
     setGenerating(true);
     setGenerateError("");
-    setGenStage("Starting generation…");
+    setThinkingChunks([]);
+    setStreamLog(["Starting generation…"]);
+    setShowStreamPanel(true);
     try {
       let blogId: string | null = null;
       const streamPayload = entryId
@@ -316,9 +338,20 @@ export default function ContentAuditStudioPage() {
           };
 
       for await (const ev of blogsApi.generateStream(streamPayload)) {
-        if (ev.event === "stage") setGenStage(ev.detail ?? ev.stage);
-        else if (ev.event === "done") { blogId = ev.blogId; }
-        else if (ev.event === "error") { setGenerateError(ev.message || "Generation failed."); return; }
+        if (ev.event === "stage") {
+          const label = ev.detail ?? ev.stage;
+          setStreamLog(prev => [...prev, label]);
+        } else if (ev.event === "thinking") {
+          setThinkingChunks(prev => [...prev, ev.chunk]);
+        } else if (ev.event === "thinking_done") {
+          setStreamLog(prev => [...prev, "AI reasoning complete"]);
+        } else if (ev.event === "done") {
+          blogId = ev.blogId;
+          setStreamLog(prev => [...prev, "Blog saved successfully"]);
+        } else if (ev.event === "error") {
+          setGenerateError(ev.message || "Generation failed.");
+          return;
+        }
       }
       if (blogId) {
         setGeneratedBlogId(blogId);
@@ -330,7 +363,6 @@ export default function ContentAuditStudioPage() {
       setGenerateError(e instanceof Error ? e.message : "Unexpected error during generation.");
     } finally {
       setGenerating(false);
-      setGenStage("");
     }
   };
 
@@ -398,10 +430,23 @@ export default function ContentAuditStudioPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  // Load the history item as the active audit so the user can generate from it
+  const handleGenerateFromHistory = (item: ContentAuditHistoryItem) => {
+    openHistoryItem(item);
+    // After the report loads, the user sees the full AuditResults section with
+    // the "Generate Enhanced Blog" button ready to click.
+  };
+
+  const handleScheduleFromHistory = (item: ContentAuditHistoryItem) => {
+    openHistoryItem(item);
+    // Open the calendar picker after the report is set
+    setScheduleOpen(true);
+  };
+
   return (
     <div className="relative space-y-6 pb-20 -mt-6 lg:-mt-8">
 
-      {/* ── Sticky header (matches Content Studio header) ── */}
+      {/* ── Sticky header ── */}
       <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
         <div className="mx-auto max-w-4xl">
           <h1 className="text-[26px] font-bold tracking-tight text-text-primary">Content Audit Studio</h1>
@@ -411,12 +456,10 @@ export default function ContentAuditStudioPage() {
         </div>
       </div>
 
-      {/* All content shares one max-width so blocks line up */}
       <div className="mx-auto max-w-4xl space-y-6">
 
         {/* ── Input card ── */}
         <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
-          {/* Mode toggle */}
           <div className="mb-4 inline-flex rounded-[10px] border border-border-subtle bg-surface-secondary p-0.5">
             {(["url", "upload"] as const).map(m => (
               <button
@@ -537,6 +580,16 @@ export default function ContentAuditStudioPage() {
           )}
         </div>
 
+        {/* ── Generation stream panel ── */}
+        {showStreamPanel && (
+          <GenerationStreamPanel
+            stages={streamLog}
+            thinkingChunks={thinkingChunks}
+            isGenerating={generating}
+            onClose={() => setShowStreamPanel(false)}
+          />
+        )}
+
         {/* ── Results ── */}
         {report && (
           <AuditResults
@@ -546,7 +599,6 @@ export default function ContentAuditStudioPage() {
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             generating={generating}
-            genStage={genStage}
             generatedBlogId={generatedBlogId}
             generateError={generateError}
             onGenerate={handleGenerate}
@@ -566,6 +618,8 @@ export default function ContentAuditStudioPage() {
             items={history}
             loading={historyLoading}
             onOpen={openHistoryItem}
+            onGenerateFromHistory={handleGenerateFromHistory}
+            onScheduleFromHistory={handleScheduleFromHistory}
           />
         )}
       </div>
@@ -577,7 +631,7 @@ export default function ContentAuditStudioPage() {
 
 function AuditResults({
   report, reportSource, projectId, activeTab, setActiveTab,
-  generating, genStage, generatedBlogId, generateError, onGenerate,
+  generating, generatedBlogId, generateError, onGenerate,
   scheduleSaving, scheduledDate, onSchedule, scheduleOpen, setScheduleOpen, onReschedule, scheduledDates,
 }: {
   report: ContentAuditReport;
@@ -586,7 +640,6 @@ function AuditResults({
   activeTab: "issues" | "rubric" | "competitors";
   setActiveTab: (t: "issues" | "rubric" | "competitors") => void;
   generating: boolean;
-  genStage: string;
   generatedBlogId: string | null;
   generateError: string;
   onGenerate: () => void;
@@ -610,9 +663,7 @@ function AuditResults({
       const d = new Date(today);
       d.setDate(today.getDate() + i);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      if (!scheduledDates.has(key)) {
-        return key;
-      }
+      if (!scheduledDates.has(key)) return key;
     }
     return null;
   }, [scheduledDates]);
@@ -703,7 +754,9 @@ function AuditResults({
               disabled={generating}
               className="h-9 px-4 rounded-[10px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-60 transition-all flex items-center gap-2"
             >
-              {generating ? <><Spinner size={13} /> {genStage || "Generating…"}</> : (
+              {generating ? (
+                <><Spinner size={13} /> Generating…</>
+              ) : (
                 <>
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
@@ -715,7 +768,7 @@ function AuditResults({
           ) : (
             <button
               type="button"
-              onClick={() => router.push(`/projects/${projectId}/content-generator/blogs/${generatedBlogId}`)}
+              onClick={() => router.push(`/projects/${projectId}/content-history/${generatedBlogId}`)}
               className="h-9 px-4 rounded-[10px] bg-emerald-600 text-white text-[13px] font-semibold hover:bg-emerald-600/90 transition-all flex items-center gap-2"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -775,7 +828,7 @@ function AuditResults({
         ))}
       </div>
 
-      {/* ── Tab navigation (Revamp Brief removed — used internally for generation) ── */}
+      {/* ── Tab navigation ── */}
       <div className="border-b border-border-subtle">
         <nav className="flex gap-1 -mb-px">
           {(["issues", "rubric", "competitors"] as const).map(tab => {
@@ -947,11 +1000,13 @@ function CompetitorsPanel({ insights }: { insights: ContentAuditReport["competit
 const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
 
 function AuditHistory({
-  items, loading, onOpen,
+  items, loading, onOpen, onGenerateFromHistory, onScheduleFromHistory,
 }: {
   items: ContentAuditHistoryItem[];
   loading: boolean;
   onOpen: (item: ContentAuditHistoryItem) => void;
+  onGenerateFromHistory: (item: ContentAuditHistoryItem) => void;
+  onScheduleFromHistory: (item: ContentAuditHistoryItem) => void;
 }) {
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
@@ -1032,10 +1087,21 @@ function AuditHistory({
           const score = item.overall_score || item.health_score;
           const color = scoreColor(score);
           const isExpanded = expandedUrl === item.url;
+          const issueList = (item.report?.issues ?? []) as ContentAuditReport["issues"];
+          const sortedIssues = [...issueList].sort(
+            (a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99)
+          );
+
           return (
             <div key={item.url} className="rounded-[12px] border border-border-subtle bg-surface-elevated overflow-hidden transition-all">
-              <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-hover transition-colors" onClick={() => setExpandedUrl(isExpanded ? null : item.url)}>
-                <div className="shrink-0"><span className="text-[16px] font-bold tabular-nums" style={{ color }}>{score}</span></div>
+              {/* ── Row header ── */}
+              <div
+                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-hover transition-colors"
+                onClick={() => setExpandedUrl(isExpanded ? null : item.url)}
+              >
+                <div className="shrink-0">
+                  <span className="text-[16px] font-bold tabular-nums" style={{ color }}>{score}</span>
+                </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] font-semibold text-text-primary leading-snug truncate">{item.title || item.url}</p>
                   <div className="flex items-center gap-2">
@@ -1058,40 +1124,223 @@ function AuditHistory({
                 </div>
               </div>
 
+              {/* ── Expanded inline audit ── */}
               {isExpanded && (
-                <div className="px-4 pb-4 border-t border-border-subtle/50">
-                  {item.plain_language_verdict && <p className="text-[13px] text-text-secondary leading-relaxed mt-3 mb-3">{item.plain_language_verdict}</p>}
-                  {item.report && (
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
-                      {(["seo", "geo", "aeo", "content_quality", "keyword_relevance", "freshness"] as const).map(k => {
-                        const sc = (item.report!.scores as unknown as Record<string, number>)[k] ?? 0;
-                        const lbl: Record<string, string> = { seo: "SEO", geo: "GEO", aeo: "AEO", content_quality: "Quality", keyword_relevance: "Keyword", freshness: "Fresh" };
-                        return (
-                          <div key={k} className="rounded-[8px] border border-border-subtle bg-surface-secondary/40 px-2 py-1.5 text-center">
-                            <div className="text-[14px] font-bold tabular-nums" style={{ color: scoreColor(sc) }}>{sc}</div>
-                            <div className="text-[9px] text-text-tertiary uppercase tracking-wide">{lbl[k]}</div>
+                <div className="border-t border-border-subtle/50">
+                  {/* Scrollable content area */}
+                  <div className="max-h-[420px] overflow-y-auto p-4 space-y-4">
+                    {item.plain_language_verdict && (
+                      <p className="text-[13px] text-text-secondary leading-relaxed">{item.plain_language_verdict}</p>
+                    )}
+
+                    {/* Dimension scores */}
+                    {item.report && (
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                        {(["seo", "geo", "aeo", "content_quality", "keyword_relevance", "freshness"] as const).map(k => {
+                          const sc = (item.report!.scores as unknown as Record<string, number>)[k] ?? 0;
+                          const lbl: Record<string, string> = { seo: "SEO", geo: "GEO", aeo: "AEO", content_quality: "Quality", keyword_relevance: "Keyword", freshness: "Fresh" };
+                          return (
+                            <div key={k} className="rounded-[8px] border border-border-subtle bg-surface-secondary/40 px-2 py-1.5 text-center">
+                              <div className="text-[14px] font-bold tabular-nums" style={{ color: scoreColor(sc) }}>{sc}</div>
+                              <div className="text-[9px] text-text-tertiary uppercase tracking-wide">{lbl[k]}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Top issues inline */}
+                    {sortedIssues.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary">
+                          Top issues ({sortedIssues.length})
+                        </p>
+                        {sortedIssues.slice(0, 6).map((issue, i) => (
+                          <div key={i} className="flex items-start gap-2 rounded-[8px] border border-border-subtle/50 bg-surface-secondary/30 px-3 py-2">
+                            <SeverityChip severity={issue.severity} />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[12px] font-semibold text-text-primary leading-snug">{issue.title}</p>
+                              {issue.fix && (
+                                <p className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed line-clamp-2">{issue.fix}</p>
+                              )}
+                            </div>
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => onOpen(item)}
-                    className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
-                    </svg>
-                    View full audit
-                  </button>
+                        ))}
+                        {sortedIssues.length > 6 && (
+                          <p className="text-[11px] text-text-tertiary text-center py-1">
+                            +{sortedIssues.length - 6} more — click "View full audit" to see all
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action buttons row */}
+                  <div className="px-4 py-3 border-t border-border-subtle/30 flex items-center gap-2 flex-wrap bg-surface-secondary/20">
+                    <button
+                      type="button"
+                      onClick={() => onGenerateFromHistory(item)}
+                      className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                      </svg>
+                      Generate Enhanced Blog
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onScheduleFromHistory(item)}
+                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                      </svg>
+                      Schedule to Calendar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpen(item)}
+                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-tertiary hover:text-text-primary transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+                      </svg>
+                      View full audit
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── Generation stream panel ──────────────────────────────────────────────────
+
+function GenerationStreamPanel({
+  stages, thinkingChunks, isGenerating, onClose,
+}: {
+  stages: string[];
+  thinkingChunks: string[];
+  isGenerating: boolean;
+  onClose: () => void;
+}) {
+  const [minimized, setMinimized] = useState(false);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logRef.current && !minimized) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [stages, minimized]);
+
+  const allThinking = thinkingChunks.join("");
+
+  return (
+    <div className={`rounded-[16px] border bg-surface-elevated shadow-sm overflow-hidden transition-all ${
+      isGenerating ? "border-brand-violet/30" : "border-emerald-500/30"
+    }`}>
+      {/* Header */}
+      <div className={`flex items-center justify-between px-4 py-3 ${
+        isGenerating ? "bg-brand-violet/5" : "bg-emerald-500/5"
+      }`}>
+        <div className="flex items-center gap-2.5">
+          {isGenerating ? (
+            <Spinner size={13} />
+          ) : (
+            <svg className="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 6 9 17l-5-5" />
+            </svg>
+          )}
+          <span className="text-[13px] font-semibold text-text-primary">
+            {isGenerating ? "Generating enhanced blog…" : "Generation complete"}
+          </span>
+          {stages.length > 0 && isGenerating && (
+            <span className="text-[11px] text-text-tertiary hidden sm:block">
+              {stages[stages.length - 1]}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setMinimized(v => !v)}
+            className="text-[11px] font-medium text-text-tertiary hover:text-text-primary transition-colors px-2 py-0.5 rounded-[6px] hover:bg-surface-secondary"
+          >
+            {minimized ? "Show details" : "Minimize"}
+          </button>
+          {!isGenerating && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-6 h-6 flex items-center justify-center rounded-[6px] text-text-tertiary hover:text-rose-400 hover:bg-rose-500/10 transition-all"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      {!minimized && (
+        <div className="p-4 space-y-3">
+          {/* Stage log */}
+          <div ref={logRef} className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+            {stages.map((stage, i) => {
+              const isLatest = i === stages.length - 1;
+              return (
+                <div key={i} className="flex items-start gap-2">
+                  {isLatest && isGenerating ? (
+                    <span className="w-1.5 h-1.5 mt-[5px] rounded-full bg-brand-violet animate-pulse shrink-0" />
+                  ) : (
+                    <svg className="w-3 h-3 mt-0.5 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M20 6 9 17l-5-5" />
+                    </svg>
+                  )}
+                  <span className={`text-[12px] leading-relaxed ${isLatest ? "text-text-primary font-medium" : "text-text-tertiary"}`}>
+                    {stage}
+                  </span>
+                </div>
+              );
+            })}
+            {isGenerating && stages.length === 0 && (
+              <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-violet animate-pulse shrink-0" />
+                Connecting to generation service…
+              </div>
+            )}
+          </div>
+
+          {/* Thinking section — only shown for Claude streaming (non-repair) path */}
+          {allThinking && (
+            <div className="border-t border-border-subtle/50 pt-3">
+              <button
+                type="button"
+                onClick={() => setThinkingExpanded(v => !v)}
+                className="flex items-center gap-1.5 text-[11px] font-medium text-text-tertiary hover:text-text-primary transition-colors mb-2 w-full text-left"
+              >
+                <svg className={`w-3.5 h-3.5 transition-transform shrink-0 ${thinkingExpanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                </svg>
+                AI reasoning process
+                <span className="ml-auto text-[10px] text-text-tertiary/60">{thinkingChunks.length} steps</span>
+              </button>
+              {thinkingExpanded && (
+                <div className="max-h-56 overflow-y-auto rounded-[10px] bg-surface-secondary/60 border border-border-subtle/50 p-3">
+                  <pre className="text-[11px] text-text-tertiary font-mono leading-relaxed whitespace-pre-wrap break-words">{allThinking}</pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

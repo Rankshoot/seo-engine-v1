@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { toast } from "react-hot-toast";
 import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
@@ -299,17 +300,22 @@ export default function ContentAuditStudioPage() {
     if (!report) return;
     setGenerating(true);
     setGenerateError("");
-    setGenStage("Adding to calendar…");
+    setGenStage("Starting generation…");
     try {
-      const ensured = await ensureEntry();
-      if ("error" in ensured) { setGenerateError(ensured.error); return; }
-
-      setGenStage("Starting generation…");
       let blogId: string | null = null;
-      for await (const ev of blogsApi.generateStream({
-        entryId: ensured.id,
-        wordCount: report.revamp_brief?.recommended_word_count ?? 2500,
-      })) {
+      const streamPayload = entryId
+        ? {
+            entryId,
+            wordCount: report.revamp_brief?.recommended_word_count ?? 2500,
+          }
+        : {
+            projectId,
+            keyword: report.primary_keyword || report.title,
+            contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+            wordCount: report.revamp_brief?.recommended_word_count ?? 2500,
+          };
+
+      for await (const ev of blogsApi.generateStream(streamPayload)) {
         if (ev.event === "stage") setGenStage(ev.detail ?? ev.stage);
         else if (ev.event === "done") { blogId = ev.blogId; }
         else if (ev.event === "error") { setGenerateError(ev.message || "Generation failed."); return; }
@@ -328,15 +334,45 @@ export default function ContentAuditStudioPage() {
     }
   };
 
-  const handleSchedule = async () => {
+  const handleScheduleConfirm = async (date: string) => {
     if (!report) return;
     setScheduleSaving(true);
     try {
-      const ensured = await ensureEntry();
-      if ("error" in ensured) { setGenerateError(ensured.error); return; }
-      setScheduledDate(ensured.date);
+      if (generatedBlogId) {
+        const res = await calendarApi.scheduleExistingBlog(projectId, {
+          blogId: generatedBlogId,
+          targetDate: date,
+        });
+        if (res.success && res.data) {
+          setEntryId(res.data.id);
+          setScheduledDate(date);
+          void loadScheduledDates();
+          toast.success("Blog scheduled to calendar");
+        } else {
+          setGenerateError((res as any).error ?? "Failed to schedule blog.");
+        }
+      } else {
+        const res = await calendarApi.addContentHealth(projectId, {
+          focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword || report.title,
+          auditUrl: report.url,
+          contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+          targetDate: date,
+        });
+        if (res.success && res.data) {
+          const actualDate = (res as { scheduled_date?: string }).scheduled_date ?? String(res.data.scheduled_date).slice(0, 10);
+          setEntryId(res.data.id);
+          setScheduledDate(actualDate);
+          void loadScheduledDates();
+          toast.success("Scheduled to calendar");
+        } else {
+          setGenerateError((res as any).error ?? "Could not add to calendar.");
+        }
+      }
+    } catch (e) {
+      setGenerateError(e instanceof Error ? e.message : "Unexpected error during scheduling.");
     } finally {
       setScheduleSaving(false);
+      setScheduleOpen(false);
     }
   };
 
@@ -516,7 +552,7 @@ export default function ContentAuditStudioPage() {
             onGenerate={handleGenerate}
             scheduleSaving={scheduleSaving}
             scheduledDate={scheduledDate}
-            onSchedule={handleSchedule}
+            onSchedule={handleScheduleConfirm}
             scheduleOpen={scheduleOpen}
             setScheduleOpen={setScheduleOpen}
             onReschedule={handleReschedule}
@@ -556,7 +592,7 @@ function AuditResults({
   onGenerate: () => void;
   scheduleSaving: boolean;
   scheduledDate: string | null;
-  onSchedule: () => void;
+  onSchedule: (date: string) => void;
   scheduleOpen: boolean;
   setScheduleOpen: (v: boolean) => void;
   onReschedule: (date: string) => void;
@@ -566,6 +602,20 @@ function AuditResults({
   const grade = scoreGrade(overall);
   const color = scoreColor(overall);
   const router = useRouter();
+
+  const nextVacantDate = useMemo(() => {
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    for (let i = 0; i < 500; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (!scheduledDates.has(key)) {
+        return key;
+      }
+    }
+    return null;
+  }, [scheduledDates]);
 
   const tooltipFor = (key: ScoreDim["key"]) => {
     if (key === "keyword_relevance" && report.keyword_data) {
@@ -677,19 +727,17 @@ function AuditResults({
           )}
 
           {!scheduledDate ? (
-            <button
-              type="button"
-              onClick={onSchedule}
-              disabled={scheduleSaving || generating}
+            <CalendarDatePicker
+              open={scheduleOpen}
+              onOpenChange={setScheduleOpen}
+              currentDate={nextVacantDate}
+              onConfirm={onSchedule}
+              saving={scheduleSaving}
+              scheduledDates={scheduledDates}
+              variant="pick"
+              label={scheduleSaving ? "Scheduling…" : "Schedule to Calendar"}
               className="h-9 px-4 rounded-[10px] border border-border-subtle bg-surface-secondary text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong disabled:opacity-50 transition-all flex items-center gap-2"
-            >
-              {scheduleSaving ? <Spinner size={13} /> : (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
-                </svg>
-              )}
-              Schedule to Calendar
-            </button>
+            />
           ) : (
             <div className="flex items-center gap-2 px-3 h-9 rounded-[10px] bg-emerald-500/10 border border-emerald-500/20 text-[12px] font-medium text-emerald-400">
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

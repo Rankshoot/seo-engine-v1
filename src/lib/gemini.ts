@@ -491,6 +491,50 @@ interface GeminiBlogJson {
   externalLinksUsed?: string[];
 }
 
+/** Attempt to salvage a truncated JSON string by extracting any complete key values. */
+function repairTruncatedBlogJson(raw: string): GeminiBlogJson | null {
+  // Strip markdown fences
+  const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
+  // Try stripping trailing commas then close unclosed brackets
+  const strip = stripJsonTrailingCommas(text);
+  for (const attempt of [strip, text]) {
+    // Count open vs close braces to repair truncated JSON
+    let depth = 0;
+    let inStr = false;
+    let escape = false;
+    for (const ch of attempt) {
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+    }
+    if (depth > 0) {
+      const closed = attempt + "}".repeat(depth);
+      try { return JSON.parse(closed) as GeminiBlogJson; } catch { /* continue */ }
+    }
+  }
+
+  // Last resort: extract individual fields with regex
+  const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/s.exec(text)?.[1];
+  const meta = /"metaDescription"\s*:\s*"((?:[^"\\]|\\.)*)"/s.exec(text)?.[1];
+  // For contentMarkdown, grab everything from the key to the point where we run out
+  const cmMatch = /"contentMarkdown"\s*:\s*"([\s\S]*)/.exec(text);
+  let contentMarkdown = "";
+  if (cmMatch) {
+    // Unescape what we have — it's likely truncated mid-string
+    contentMarkdown = cmMatch[1]
+      .replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\")
+      .replace(/",?\s*"(?:faqQuestions|internalLinksUsed|externalLinksUsed)[\s\S]*$/, ""); // strip rest
+  }
+  if (title || contentMarkdown) {
+    return { title: title ?? "", metaDescription: meta ?? "", contentMarkdown, faqQuestions: [], internalLinksUsed: [], externalLinksUsed: [] };
+  }
+  return null;
+}
+
 export function parseGeneratedBlogJson(
   rawText: string,
   entry: { title: string; slug: string; focus_keyword: string },
@@ -498,8 +542,8 @@ export function parseGeneratedBlogJson(
   research?: ResearchContext
 ): GeneratedBlog {
   let parsed: GeminiBlogJson | null = null;
-  const cleanedText = rawText.trim();
-  
+  const cleanedText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
   // Try direct parsing
   try {
     parsed = JSON.parse(cleanedText) as GeminiBlogJson;
@@ -510,8 +554,17 @@ export function parseGeneratedBlogJson(
       try {
         parsed = JSON.parse(match[0]) as GeminiBlogJson;
       } catch {
-        /* proceed to fallback */
+        // Try trailing-comma strip
+        try {
+          parsed = JSON.parse(stripJsonTrailingCommas(match[0])) as GeminiBlogJson;
+        } catch {
+          /* proceed to truncation repair */
+        }
       }
+    }
+    // If still no luck, attempt truncation repair
+    if (!parsed) {
+      parsed = repairTruncatedBlogJson(cleanedText);
     }
   }
 
@@ -840,9 +893,12 @@ REPAIR INSTRUCTIONS:
   3. At least one H2 heading
   4. The conclusion section
   5. The meta description (must be exactly 150-160 characters long).
-- Ensure a FAQ section exists under "## FAQs" with 4-6 FAQs, each question formatted as "###".
+- Ensure a FAQ section exists under "## FAQs" with 7-10 FAQs, each question formatted as "###".
 - Maintain keyword density strictly between 0.5% and 3%. Do not keyword stuff!
 - Do not invent any new external/internal links. Use only the verified ones present in the original post.
+- Internal links: the repaired post should retain 4–6 internal links from the original. Do not drop existing internal links unless they are broken.
+- External links: the repaired post should retain 4–6 credible external citations from the original. Do not replace or invent new external URLs — only use what was already in the original post.
+- Preserve the human, editorial tone of the original. Do not introduce robotic or filler phrases.
 - Return a strict JSON response only matching this exact format:
 {
   "title": "[Fixed H1 Title]",

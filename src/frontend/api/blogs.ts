@@ -33,7 +33,10 @@ export const blogsApi = {
    *   { event: "error", message: string }
    */
   async *generateStream(body: {
-    entryId: string;
+    entryId?: string;
+    projectId?: string;
+    keyword?: string;
+    contentHealthAudit?: Record<string, any>;
     wordCount?: number;
     writerNotes?: string;
     brandPersona?: string;

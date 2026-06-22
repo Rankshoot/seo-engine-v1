@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     secondaryKeywords?: string[];
     wordCount?: number;
     writerNotes?: string;
+    contentHealthAudit?: Record<string, any>;
     // Advanced options
     brandPersona?: string;
     useAhrefsData?: boolean;
@@ -104,7 +105,7 @@ export async function POST(req: Request) {
             title: body.topic || kw,
             article_type: "Blog Post",
             secondary_keywords: body.secondaryKeywords || [],
-            content_health_audit: null,
+            content_health_audit: body.contentHealthAudit || null,
             slug: kw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80),
           };
         }
@@ -130,9 +131,10 @@ export async function POST(req: Request) {
         // we DON'T regenerate from scratch — we surgically fix the audited issues
         // while preserving everything that already passes. Runs over SSE so it
         // never hits the gateway timeout.
-        if (body.entryId) {
+        const auditData = body.contentHealthAudit || (entry ? (entry as any).content_health_audit : null);
+        if (auditData) {
           const { parseContentHealthRepairPlan } = await import("@/lib/content-health-calendar");
-          const repairPlan = parseContentHealthRepairPlan((entry as any).content_health_audit);
+          const repairPlan = parseContentHealthRepairPlan(auditData);
           if (repairPlan) {
             emit({ event: "stage", stage: "repair_scrape", detail: "Reading the original article…" });
 
@@ -226,8 +228,21 @@ export async function POST(req: Request) {
               updated_at: new Date().toISOString(),
             };
 
-            const { data: existingRepair } = await supabaseAdmin
-              .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
+            let existingRepair = null;
+            if (body.entryId) {
+              const { data } = await supabaseAdmin
+                .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
+              existingRepair = data;
+            } else if (repairPlan.url) {
+              const { data } = await supabaseAdmin
+                .from("blogs")
+                .select("id")
+                .eq("project_id", projectId)
+                .eq("source_url", repairPlan.url)
+                .is("entry_id", null)
+                .maybeSingle();
+              existingRepair = data;
+            }
 
             let repairBlogId: string;
             if (existingRepair) {
@@ -237,15 +252,17 @@ export async function POST(req: Request) {
               repairBlogId = data.id;
             } else {
               const { data, error } = await supabaseAdmin
-                .from("blogs").insert({ ...repairPayload, entry_id: body.entryId, project_id: projectId })
+                .from("blogs").insert({ ...repairPayload, entry_id: body.entryId || null, project_id: projectId })
                 .select("id").single();
               if (error) throw error;
               repairBlogId = data.id;
             }
 
-            await supabaseAdmin
-              .from("calendar_entries").update({ status: "generated", title: repaired.title })
-              .eq("id", body.entryId);
+            if (body.entryId) {
+              await supabaseAdmin
+                .from("calendar_entries").update({ status: "generated", title: repaired.title })
+                .eq("id", body.entryId);
+            }
 
             emit({ event: "done", blogId: repairBlogId });
             controller.close();
@@ -449,7 +466,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           stallTimeoutId = setTimeout(() => {
             wasStalled = true;
             abortController.abort();
-          }, 45000);
+          }, 120000);
         };
 
         resetStallTimeout();
@@ -457,7 +474,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
         const anthropic = getAnthropicClient();
         const claudeStream = anthropic.messages.stream({
           model: claudeModel,
-          max_tokens: 16000,
+          max_tokens: 32000,
           thinking: { type: "enabled", budget_tokens: 8000 },
           messages: [{ role: "user", content: blogPrompt }],
           system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,

@@ -13,14 +13,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
       focusKeyword: string;
       auditUrl?: string;
       contentHealthAudit?: Record<string, unknown> | null;
+      targetDate?: string;
     };
     if (!body.focusKeyword?.trim()) {
-      return apiJson({ success: false, error: "Expected { focusKeyword, auditUrl?, contentHealthAudit? }" }, { status: 400 });
+      return apiJson({ success: false, error: "Expected { focusKeyword, auditUrl?, contentHealthAudit?, targetDate? }" }, { status: 400 });
     }
     const result = await addContentHealthKeywordToCalendar(projectId, {
       focusKeyword: body.focusKeyword,
       auditUrl: body.auditUrl,
       contentHealthAudit: body.contentHealthAudit,
+      targetDate: body.targetDate,
     });
     return apiJson(result, { status: result.success ? 200 : 400 });
   } catch {

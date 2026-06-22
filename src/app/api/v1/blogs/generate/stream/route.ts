@@ -173,28 +173,49 @@ export async function POST(req: Request) {
               (u) => u && u !== repairPlan.url
             ) as string[];
 
-            const { repairBlogPost } = await import("@/lib/gemini");
+            // ── Strip PDF artefacts before passing to the repair LLM ──────
+            // Pages that embed PDF viewers can have their full PDF text
+            // extracted by Jina/Playwright. Without this, the repaired blog
+            // ends up being just a dump of the PDF content.
+            const { stripPdfArtifacts, hasPdfContent } = await import("@/lib/pdf-content");
+            let cleanedMarkdown = originalMarkdown;
+            if (hasPdfContent(originalMarkdown)) {
+              const { cleaned, strippedPdf } = stripPdfArtifacts(originalMarkdown);
+              cleanedMarkdown = cleaned;
+              if (strippedPdf) {
+                emit({ event: "stage", stage: "repair_clean", detail: "Detected embedded PDF — separating article content from document content…" });
+              }
+            }
 
-            const repaired = await repairBlogPost({
-              sourceUrl: repairPlan.url,
-              originalTitle: repairPlan.title || "",
-              originalMarkdown,
-              issues: (analysis.issues ?? []).map((i: any) => ({
-                label: i.label,
-                detail: i.detail,
-                fix: i.fix,
-                severity: i.severity,
-                category: i.category,
-                why_it_matters: i.why_it_matters,
-              })),
-              contentGaps: analysis.content_gaps ?? [],
-              internalLinkPool,
-              primaryKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
-              secondaryKeywords: analysis.secondary_keywords ?? [],
-              brief,
-              project,
-              wordCount: Math.min(4500, Math.max(1400, countWords(originalMarkdown) + 250)),
-            });
+            const { repairBlogPost } = await import("@/lib/claude-blog-repair");
+
+            const repaired = await repairBlogPost(
+              {
+                sourceUrl: repairPlan.url,
+                originalTitle: repairPlan.title || "",
+                originalMarkdown: cleanedMarkdown,
+                issues: (analysis.issues ?? []).map((i: any) => ({
+                  label: i.label,
+                  detail: i.detail,
+                  fix: i.fix,
+                  severity: i.severity,
+                  category: i.category,
+                  why_it_matters: i.why_it_matters,
+                })),
+                contentGaps: analysis.content_gaps ?? [],
+                internalLinkPool,
+                primaryKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
+                secondaryKeywords: analysis.secondary_keywords ?? [],
+                brief,
+                project,
+                wordCount: Math.min(4500, Math.max(1400, countWords(cleanedMarkdown) + 250)),
+              },
+              {
+                // Forward Claude's streaming chunks as thinking events so the
+                // UI can show the generation progress in real time.
+                onChunk: (chunk) => emit({ event: "thinking", chunk }),
+              }
+            );
 
             emit({ event: "stage", stage: "polish", detail: "Polishing markdown and validating links…" });
 

@@ -200,6 +200,70 @@ function PlaceholderImageCard({
   );
 }
 
+// ─── PDF link card ────────────────────────────────────────────────────────
+
+/** Returns true if the URL likely points to a PDF document. */
+function isPdfHref(href: string): boolean {
+  try {
+    const u = new URL(href);
+    const path = u.pathname.toLowerCase();
+    if (path.endsWith(".pdf")) return true;
+    if (u.searchParams.get("filetype") === "pdf") return true;
+    if (u.searchParams.get("type") === "pdf") return true;
+  } catch { /* relative or invalid URL — not a PDF */ }
+  return /\.pdf(\?|#|$)/i.test(href);
+}
+
+function PdfLinkCard({ href, label }: { href: string; label: string }) {
+  const filename = (() => {
+    try { return decodeURIComponent(new URL(href).pathname.split("/").filter(Boolean).pop() ?? "document.pdf"); }
+    catch { return label || "document.pdf"; }
+  })();
+
+  return (
+    <span className="my-4 flex items-center gap-3 rounded-[12px] border border-rose-500/20 bg-rose-500/5 px-4 py-3 not-italic no-underline">
+      {/* PDF icon */}
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-rose-500/10">
+        <svg className="h-5 w-5 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9z" />
+        </svg>
+      </span>
+
+      {/* Filename */}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-semibold text-text-primary">{label || filename}</span>
+        <span className="block text-[11px] text-text-tertiary">PDF Document</span>
+      </span>
+
+      {/* Actions */}
+      <span className="flex items-center gap-2 shrink-0">
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex h-8 items-center gap-1.5 rounded-[8px] bg-rose-500/10 px-3 text-[12px] font-medium text-rose-400 hover:bg-rose-500/20 transition-colors"
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+          </svg>
+          View
+        </a>
+        <a
+          href={href}
+          download
+          className="flex h-8 items-center gap-1.5 rounded-[8px] border border-border-subtle bg-surface-secondary px-3 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors"
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+          Download
+        </a>
+      </span>
+    </span>
+  );
+}
+
 // ─── Markdown component builder ────────────────────────────────────────────
 
 function linkHostName(href: string): string | null {
@@ -221,13 +285,19 @@ export function buildMarkdownComponents(
     ...rest
   }) => {
     const isHttp = /^https?:\/\//i.test(href);
+    const label = typeof children === "string" ? children : flattenChildren(children);
+
+    // Render PDF links as a download card instead of an inline text link.
+    if (isHttp && isPdfHref(href)) {
+      return <PdfLinkCard href={href} label={label} />;
+    }
+
     const host = isHttp ? linkHostName(href) : null;
     const isOwnSite = Boolean(
       ownSiteHost && host && (host === ownSiteHost || host.endsWith(`.${ownSiteHost}`))
     );
     const isInternal = (!isHttp && href.startsWith("/")) || internalSet.has(href) || isOwnSite;
     const showExternalChrome = isHttp && !isOwnSite;
-    const label = typeof children === "string" ? children : flattenChildren(children);
     return (
       <a
         href={href}

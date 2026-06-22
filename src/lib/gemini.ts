@@ -1246,7 +1246,9 @@ Write the repaired blog now. End the blog content, then on the next line output 
 ---META---
 {"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;
 
-  const text = await geminiGenerate(prompt, 3, true, undefined, project.user_id, project.id);
+  // maxOutputTokens: 32 768 ensures long blogs aren't cut off.
+  // timeoutMs: 0 disables the 120 s hard abort that caused truncation.
+  const text = await geminiGenerate(prompt, 3, true, undefined, project.user_id, project.id, 32_768, 0);
 
   const sepIdx = text.indexOf('---META---');
   let content = text.trim();

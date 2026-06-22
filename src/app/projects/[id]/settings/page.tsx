@@ -8,6 +8,7 @@ import { projectsApi } from "@/frontend/api/projects";
 import { PageTitle } from "@/components/common";
 import type { Project } from "@/lib/types";
 import { RefreshCw, Check, AlertCircle, Palette, Upload, Wand2, X } from "lucide-react";
+import { StrapiIntegrationSection } from "@/components/settings/StrapiIntegrationSection";
 
 // ─── option lists ────────────────────────────────────────────────────────────
 
@@ -447,6 +448,8 @@ export default function ProjectSettingsPage() {
           ))}
         </div>
       )}
+
+      <StrapiIntegrationSection />
     </div>
   );
 }

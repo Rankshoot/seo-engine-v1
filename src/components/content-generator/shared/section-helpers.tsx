@@ -166,13 +166,15 @@ export function MetricPill({
 }
 
 /** Content-type badge ("Ebook", "Whitepaper", "LinkedIn", "Blog"). */
-export function ContentTypeBadge({ type }: { type: string }) {
+export function ContentTypeBadge({ type }: { type?: string }) {
+  const safeType = type || "Blog";
+  const lower = safeType.toLowerCase();
   const tone =
-    type.toLowerCase() === "ebook"
+    lower === "ebook"
       ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
-      : type.toLowerCase() === "whitepaper"
+      : lower === "whitepaper"
         ? "border-blue-500/30 bg-blue-500/10 text-blue-300"
-        : type.toLowerCase() === "linkedin"
+        : lower === "linkedin" || lower.includes("linkedin")
           ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
           : "border-border-subtle bg-surface-tertiary text-text-secondary";
   return (
@@ -182,7 +184,7 @@ export function ContentTypeBadge({ type }: { type: string }) {
         tone,
       )}
     >
-      {type}
+      {safeType}
     </span>
   );
 }

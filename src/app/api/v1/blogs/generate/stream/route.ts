@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     secondaryKeywords?: string[];
     wordCount?: number;
     writerNotes?: string;
+    contentHealthAudit?: Record<string, any>;
     // Advanced options
     brandPersona?: string;
     useAhrefsData?: boolean;
@@ -104,7 +105,7 @@ export async function POST(req: Request) {
             title: body.topic || kw,
             article_type: "Blog Post",
             secondary_keywords: body.secondaryKeywords || [],
-            content_health_audit: null,
+            content_health_audit: body.contentHealthAudit || null,
             slug: kw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80),
           };
         }
@@ -124,6 +125,150 @@ export async function POST(req: Request) {
             .from("project_briefs").select("brief").eq("project_id", projectId).maybeSingle();
           brief = briefRow?.brief ?? null;
         } catch { /* optional */ }
+
+        // ── Surgical repair branch (Content Audit Studio → Generate Enhanced) ──
+        // When the calendar entry carries a content-health audit in repair mode,
+        // we DON'T regenerate from scratch — we surgically fix the audited issues
+        // while preserving everything that already passes. Runs over SSE so it
+        // never hits the gateway timeout.
+        const auditData = body.contentHealthAudit || (entry ? (entry as any).content_health_audit : null);
+        if (auditData) {
+          const { parseContentHealthRepairPlan } = await import("@/lib/content-health-calendar");
+          const repairPlan = parseContentHealthRepairPlan(auditData);
+          if (repairPlan) {
+            emit({ event: "stage", stage: "repair_scrape", detail: "Reading the original article…" });
+
+            // Prefer the markdown we already scraped during the audit (works for
+            // both URL audits and uploaded content); fall back to a fresh scrape.
+            let originalMarkdown = "";
+            try {
+              const { data: auditRow } = await supabaseAdmin
+                .from("blog_audits")
+                .select("scraped_markdown")
+                .eq("project_id", projectId)
+                .eq("url", repairPlan.url)
+                .maybeSingle();
+              originalMarkdown = (auditRow?.scraped_markdown as string) || "";
+            } catch { /* fall through to scrape */ }
+
+            if (originalMarkdown.trim().length < 400 && /^https?:\/\//i.test(repairPlan.url)) {
+              const { hybridReadUrl } = await import("@/services/hybridScraper");
+              const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
+              if (fresh.ok) originalMarkdown = fresh.markdown;
+            }
+
+            if (originalMarkdown.trim().length < 400) {
+              emit({ event: "error", message: "Could not read the original article content to enhance. Re-run the audit and try again." });
+              await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
+              controller.close();
+              return;
+            }
+
+            emit({ event: "stage", stage: "repair_draft", detail: "Applying audit fixes while preserving strong sections…" });
+
+            const analysis: any = repairPlan.analysis;
+            const fromAudit = (analysis.internal_link_opportunities ?? []).map((i: any) => i.target_url);
+            const fromBrief = (brief?.internal_link_candidates ?? []).map((c: any) => c.url);
+            const internalLinkPool = Array.from(new Set([...fromAudit, ...fromBrief])).filter(
+              (u) => u && u !== repairPlan.url
+            ) as string[];
+
+            const { repairBlogPost } = await import("@/lib/gemini");
+
+            const repaired = await repairBlogPost({
+              sourceUrl: repairPlan.url,
+              originalTitle: repairPlan.title || "",
+              originalMarkdown,
+              issues: (analysis.issues ?? []).map((i: any) => ({
+                label: i.label,
+                detail: i.detail,
+                fix: i.fix,
+                severity: i.severity,
+                category: i.category,
+                why_it_matters: i.why_it_matters,
+              })),
+              contentGaps: analysis.content_gaps ?? [],
+              internalLinkPool,
+              primaryKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
+              secondaryKeywords: analysis.secondary_keywords ?? [],
+              brief,
+              project,
+              wordCount: Math.min(4500, Math.max(1400, countWords(originalMarkdown) + 250)),
+            });
+
+            emit({ event: "stage", stage: "polish", detail: "Polishing markdown and validating links…" });
+
+            const { insertBlogImagePlaceholders } = await import("@/services/openAiImages");
+            const { sanitizeBlogContent } = await import("@/lib/blog-content");
+
+            const withImages = insertBlogImagePlaceholders(repaired.content, {
+              title: repaired.title,
+              targetKeyword: entry.focus_keyword,
+              wordCount: countWords(repaired.content),
+            });
+            const sanitized = await sanitizeBlogContent(sanitizeBlogMarkdown(withImages), {
+              ownDomain: project.domain ?? "",
+            });
+            const finalContent = sanitizeBlogMarkdown(sanitized.content);
+
+            const repairPayload = {
+              title: repaired.title,
+              content: finalContent,
+              meta_description: analysis.summary || repaired.meta_description,
+              slug: repaired.slug,
+              word_count: countWords(finalContent),
+              target_keyword: entry.focus_keyword,
+              article_type: "Repair",
+              status: "generated" as const,
+              research_sources: repaired.research_sources,
+              external_links: sanitized.externalLinks.slice(0, 10),
+              internal_links: sanitized.internalLinks.slice(0, 12),
+              source_url: repairPlan.url,
+              repair_notes: repaired.repair_notes ?? [],
+              updated_at: new Date().toISOString(),
+            };
+
+            let existingRepair = null;
+            if (body.entryId) {
+              const { data } = await supabaseAdmin
+                .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
+              existingRepair = data;
+            } else if (repairPlan.url) {
+              const { data } = await supabaseAdmin
+                .from("blogs")
+                .select("id")
+                .eq("project_id", projectId)
+                .eq("source_url", repairPlan.url)
+                .is("entry_id", null)
+                .maybeSingle();
+              existingRepair = data;
+            }
+
+            let repairBlogId: string;
+            if (existingRepair) {
+              const { data, error } = await supabaseAdmin
+                .from("blogs").update(repairPayload).eq("id", existingRepair.id).select("id").single();
+              if (error) throw error;
+              repairBlogId = data.id;
+            } else {
+              const { data, error } = await supabaseAdmin
+                .from("blogs").insert({ ...repairPayload, entry_id: body.entryId || null, project_id: projectId })
+                .select("id").single();
+              if (error) throw error;
+              repairBlogId = data.id;
+            }
+
+            if (body.entryId) {
+              await supabaseAdmin
+                .from("calendar_entries").update({ status: "generated", title: repaired.title })
+                .eq("id", body.entryId);
+            }
+
+            emit({ event: "done", blogId: repairBlogId });
+            controller.close();
+            return;
+          }
+        }
 
         // ── Stage 2: Research ─────────────────────────────────────────────
         emit({ event: "stage", stage: "research", detail: "Gathering live SERP research and keyword context…" });
@@ -321,7 +466,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           stallTimeoutId = setTimeout(() => {
             wasStalled = true;
             abortController.abort();
-          }, 45000);
+          }, 120000);
         };
 
         resetStallTimeout();

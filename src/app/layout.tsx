@@ -19,8 +19,10 @@ const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
 });
 
+import { isClerkKeyValid } from "@/lib/clerk-keys";
+
 // Conditionally import Clerk only if keys are configured
-const isClerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const isClerkConfigured = isClerkKeyValid(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 export const metadata: Metadata = {
   title: "Rankshoot — AI SEO Operating System",

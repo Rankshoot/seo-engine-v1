@@ -243,17 +243,21 @@ export default function ProjectSidebar({
       icon: Icon.audit,
       label: "Content Health",
       href: auditBase,
-      badge: "Soon",
-      badgeColor: "bg-surface-tertiary/50 text-text-tertiary border-border-subtle opacity-50",
       prefetchLabel: "Content Health",
-      disabled: true,
+      exact: true,
+      children: [
+        { label: "Content Analyser", href: `${auditBase}/import`, exact: true },
+        { label: "Discover Pages", href: `${auditBase}/discover-pages`, exact: true },
+      ],
     },
     {
       icon: Icon.settings,
       label: "Settings",
       href: `${base}/settings`,
       prefetchLabel: "Settings",
+      exact: true,
     },
+
   ], [base, auditBase, navCountsReady, liveStats]);
 
   /* ── Derived plan info ── */

@@ -326,5 +326,25 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
 11. PERSONALIZATION FOR HEAD+ DECISION MAKERS:
    - Address Head+ designations in HR (such as CHROs, HR leaders, TA leaders, HR Heads, HRBPs, HR Managers) to appeal to thought-leadership style articles, focusing on emerging roles, recruitment transformations, and workforce changes.
 
+════════════════════════════════════════
+GEO (GENERATIVE ENGINE OPTIMIZATION) — must satisfy all of these so AI tools like ChatGPT, Perplexity, and Google AI Overviews cite this page:
+════════════════════════════════════════
+GEO-1. DIRECT ANSWER FIRST: The very first paragraph (before any subheading) must contain a crisp, standalone answer to the implied search query — 2–3 sentences, no fluff. This is what AI scrapers extract.
+GEO-2. DEFINITION BOXES: When introducing any technical term or concept, include a one-line bold definition immediately after its first use: **[Term]**: [definition in ≤ 20 words].
+GEO-3. FACTUAL DENSITY: Include at least 6 verified, specific facts or statistics (with inline citation links). AI models weight fact-dense content higher for citation.
+GEO-4. SOURCE TRANSPARENCY: Every statistic or research claim must be followed by the author/source name in parentheses: e.g. "(McKinsey, 2024)" — this mimics academic citation style that AI models trust.
+GEO-5. ENTITY CLARITY: Explicitly name the key entities (companies, tools, standards, frameworks) relevant to this topic so AI can build a knowledge graph from this page.
+GEO-6. SUMMARY SECTION: End with a "## Key Takeaways" or "## Summary" section containing 5–7 bullet points — this is the section AI models most often extract verbatim for answers.
+
+════════════════════════════════════════
+AEO (ANSWER ENGINE OPTIMIZATION) — must satisfy all of these for voice search and featured snippets:
+════════════════════════════════════════
+AEO-1. QUESTION HEADINGS: At least 3 of the H2 headings must be phrased as questions (e.g. "What is…?", "How do you…?", "Why does…?"). Answer engines pull these into "People Also Ask" boxes.
+AEO-2. SNIPPET PARAGRAPHS: Every question-phrased H2 must be followed immediately by a 40–55 word paragraph that fully answers the question — concise enough to be read aloud, factual enough to be trusted. Bold the first sentence.
+AEO-3. STRUCTURED DATA HINT: Add a comment line at the end of the markdown: <!-- Schema: FAQPage, Article --> listing the schema types this content maps to.
+AEO-4. NUMBERED / STEP-BASED ANSWERS: For process topics ("how to do X"), use a numbered list format under its own H2. Voice assistants read numbered lists verbatim for procedural queries.
+AEO-5. CONCISE FAQ ANSWERS: Each FAQ answer must be 40–60 words — long enough to be useful, short enough for voice playback. Start every answer with the key noun/verb (not "Yes," or "It depends,").
+AEO-6. CONVERSATIONAL LANGUAGE: Write at a Grade 8–9 reading level. Use contractions naturally ("you're", "it's", "don't") — this improves voice-search match rates significantly.
+
 Return JSON only.`;
 }

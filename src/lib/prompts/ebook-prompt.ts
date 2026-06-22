@@ -147,6 +147,15 @@ CRITICAL RULES — every bullet is enforced:
 - Keep paragraph length 3–4 lines. Sentences ≤ 22 words.
 - No HTML, no JSON-LD schema blocks, no code blocks unless the topic is technical.
 
+GEO + AEO REQUIREMENTS (so AI engines like ChatGPT/Perplexity and answer boxes cite this ebook):
+- DIRECT ANSWER FIRST: open every chapter with a crisp 2–3 sentence answer to that chapter's core question before expanding.
+- DEFINITION BOXES: bold a one-line definition (≤ 20 words) the first time any key term appears.
+- FACT DENSITY + ATTRIBUTION: every statistic is followed by its source name in parentheses, e.g. "(Gartner, 2024)".
+- QUESTION HEADINGS: phrase at least 3 chapter or section headings as natural questions a reader would search/ask aloud.
+- SNIPPET PARAGRAPHS: under each question heading add a 40–55 word self-contained answer with a bold first sentence.
+- KEY TAKEAWAYS: end every chapter with a 3–5 bullet "Key Takeaways" list — the section AI models extract most.
+- CONVERSATIONAL CLARITY: Grade 8–9 reading level, natural contractions; FAQ answers 40–60 words starting with the key noun/verb.
+
 After the ebook output EXACTLY this block (no extra text, valid JSON, no trailing commas):
 ---META---
 {

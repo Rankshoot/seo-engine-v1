@@ -51,6 +51,7 @@ export async function GET(
       overall_score: (analysis?.scores as Record<string, number> | undefined)?.overall ?? row.health_score,
       plain_language_verdict: (analysis?.plain_language_verdict as string) ?? '',
       report: analysis ?? null,
+      source: ((analysis?._source as string) === 'upload' ? 'upload' : 'url') as 'url' | 'upload',
     };
   });
 

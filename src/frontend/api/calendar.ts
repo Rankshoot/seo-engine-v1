@@ -73,7 +73,7 @@ export const calendarApi = {
 
   addContentHealth(
     projectId: string,
-    body: { focusKeyword: string; auditUrl?: string; contentHealthAudit?: unknown }
+    body: { focusKeyword: string; auditUrl?: string; contentHealthAudit?: unknown; targetDate?: string }
   ): Promise<
     | { success: true; data?: CalendarEntry; scheduled_date?: string; rescheduled?: boolean }
     | { success: false; error: string }

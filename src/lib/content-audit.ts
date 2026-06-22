@@ -219,7 +219,18 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
 
   // 2. Live body + Ahrefs context (ranking + inbound links + authority).
   const scrapeT0 = Date.now();
-  const page = await hybridReadUrl(url, { timeoutMs: 25_000 });
+  // Run Jina + raw HTML fetch in parallel — raw HTML gives us the actual <title>,
+  // <meta name="description">, and <script type="application/ld+json"> that Jina strips.
+  const [page, rawHtmlSignals] = await Promise.all([
+    hybridReadUrl(url, { timeoutMs: 25_000 }),
+    fetchRawHtmlSignals(url),
+  ]);
+  // Attach raw HTML signals as non-enumerable private fields so extractSignals can read them.
+  if (rawHtmlSignals.hasSchema) (page as any)._rawHtmlHasSchema = true;
+  if (rawHtmlSignals.title && !page.markdown.match(/^#\s+.+$/m)) {
+    // Prepend title as H1 if Jina didn't capture it
+    page.markdown = `# ${rawHtmlSignals.title}\n\n${page.markdown}`;
+  }
   trace.push({
     provider: 'jina',
     step: 'hybrid-read-url',
@@ -280,6 +291,7 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
     sitePeerUrls,
     ahrefs_signals: isAhrefsConfigured() ? ahrefs_signals : null,
     projectId: input.projectId,
+    rawHtmlSignals,
   });
   trace.push({
     provider: 'gemini',
@@ -341,7 +353,7 @@ export async function auditBlogUrl(input: AuditBlogInput): Promise<AuditBlogUrlR
   const vitals = kwLookup ? vitalsMap.get(kwLookup.toLowerCase()) : undefined;
   const demand = vitalsToKeywordDemand(vitals);
 
-  const quality_rubric = buildQualityRubric(signals, page.markdown, inboundPeerLinks);
+  const quality_rubric = buildQualityRubric(signals, page.markdown, inboundPeerLinks, rawHtmlSignals);
 
   if (!geminiSkipped && urlKeywords.length === 0) {
     const dup = analysis.issues.some(i => i.label === 'Not ranking for any keyword');
@@ -551,6 +563,53 @@ function thinOrUnreadableRecord(url: string, reason: string): BlogAuditRecord {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Raw HTML signal extraction — runs in parallel with Jina to get metadata that
+// Jina strips (<title>, <meta name="description">, JSON-LD schema).
+
+interface RawHtmlSignals {
+  title: string | null;
+  metaDescription: string | null;
+  hasSchema: boolean;
+  schemaTypes: string[];
+}
+
+async function fetchRawHtmlSignals(url: string): Promise<RawHtmlSignals> {
+  const empty: RawHtmlSignals = { title: null, metaDescription: null, hasSchema: false, schemaTypes: [] };
+  try {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 10_000);
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEOBot/1.0; +https://rankit.ai/bot)' },
+    });
+    clearTimeout(tid);
+    if (!res.ok) return empty;
+    const html = await res.text();
+
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,300})<\/title>/i);
+    const title = titleMatch ? titleMatch[1].trim().replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))) : null;
+
+    const metaMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,500})["']/i)
+      ?? html.match(/<meta[^>]+content=["']([^"']{1,500})["'][^>]+name=["']description["']/i);
+    const metaDescription = metaMatch ? metaMatch[1].trim() : null;
+
+    const schemaMatches = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+    const hasSchema = schemaMatches.length > 0;
+    const schemaTypes: string[] = [];
+    for (const m of schemaMatches) {
+      try {
+        const parsed = JSON.parse(m[1]) as Record<string, unknown>;
+        if (parsed['@type']) schemaTypes.push(String(parsed['@type']));
+      } catch { /* malformed JSON-LD — still counts as present */ }
+    }
+
+    return { title, metaDescription, hasSchema, schemaTypes };
+  } catch {
+    return empty;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Structural extraction (deterministic, no LLM)
 
 function extractSignals(page: JinaPage): StructuralSignals {
@@ -585,7 +644,13 @@ function extractSignals(page: JinaPage): StructuralSignals {
     firstParagraph.length <= 420 &&
     hasSharedNoun(firstParagraph, title);
 
-  const hasSchemaHints = /<script[^>]*type=["']application\/ld\+json["']/i.test(md);
+  // Note: Jina strips <script> tags from markdown, so schema/title/meta detection
+  // from markdown alone is unreliable. We rely on rawHtmlSignals passed in from
+  // the parallel raw-fetch; fall back to scanning the markdown string as a best-effort.
+  const hasSchemaHints =
+    (page as any)._rawHtmlHasSchema === true ||
+    /<script[^>]*type=["']application\/ld\+json["']/i.test(md) ||
+    /\"@type\"\s*:\s*["'](Article|FAQPage|BlogPosting|WebPage)/.test(md);
 
   return {
     title,
@@ -696,7 +761,8 @@ function vitalsToKeywordDemand(vitals: KeywordVitals | undefined): KeywordDemand
 function buildQualityRubric(
   signals: StructuralSignals,
   markdown: string,
-  inboundPeerLinks: number
+  inboundPeerLinks: number,
+  rawHtml?: RawHtmlSignals
 ): QualityRubricRow[] {
   const firstBlock = firstBodyPlainText(markdown);
   const first80 = firstBlock.split(/\s+/).filter(Boolean).slice(0, 80).join(' ');
@@ -711,9 +777,14 @@ function buildQualityRubric(
 
   const { article, faq } = jsonLdArticleFaqInMarkdown(markdown);
   const hasFaqHeading = signals.faq_section;
+  // Use raw HTML signals first (more reliable), then fall back to markdown heuristics
+  const rawHasArticle = rawHtml?.schemaTypes?.some(t => ['Article', 'BlogPosting', 'NewsArticle'].includes(t)) ?? false;
+  const rawHasFaq = rawHtml?.schemaTypes?.some(t => t === 'FAQPage') ?? false;
+  const effectiveArticle = article || rawHasArticle;
+  const effectiveFaq = faq || rawHasFaq;
   let schemaRow: 'pass' | 'warn' | 'fail' = 'fail';
-  if (article && faq) schemaRow = 'pass';
-  else if (article || faq || signals.has_schema_hints) schemaRow = 'warn';
+  if (effectiveArticle && effectiveFaq) schemaRow = 'pass';
+  else if (effectiveArticle || effectiveFaq || signals.has_schema_hints || rawHtml?.hasSchema) schemaRow = 'warn';
 
   let faqRow: 'pass' | 'warn' | 'fail' = 'fail';
   if (hasFaqHeading && faq) faqRow = 'pass';
@@ -826,6 +897,7 @@ interface DiagnoseInput {
   sitePeerUrls: string[];
   ahrefs_signals: BlogAuditAnalysis['ahrefs_signals'];
   projectId?: string;
+  rawHtmlSignals?: RawHtmlSignals;
 }
 
 const AuditAnalysisSchema = z.object({
@@ -852,7 +924,7 @@ const AuditAnalysisSchema = z.object({
 });
 
 async function diagnoseWithGemini(input: DiagnoseInput): Promise<BlogAuditAnalysis> {
-  const { url, page, signals, brief, sitePeerUrls, ahrefs_signals, projectId } = input;
+  const { url, page, signals, brief, sitePeerUrls, ahrefs_signals, projectId, rawHtmlSignals } = input;
 
   const head = page.markdown.slice(0, 18_000);
   const tail =
@@ -901,6 +973,12 @@ STRUCTURAL SIGNALS (already computed, trust these, do not recount):
 - external_link_count: ${signals.external_link_count}
 - answer_first_intro_likely: ${signals.answer_first}
 - schema_ld_hint_found: ${signals.has_schema_hints}
+
+RAW HTML META SIGNALS (fetched directly from HTML — more reliable than markdown):
+- html_title_tag: ${rawHtmlSignals?.title ?? '(not fetched)'}
+- html_meta_description: ${rawHtmlSignals?.metaDescription ?? '(absent or not fetched)'}
+- html_json_ld_schema_present: ${rawHtmlSignals?.hasSchema ?? false}
+- html_schema_types: ${rawHtmlSignals?.schemaTypes?.join(', ') || 'none'}
 
 ${ahrefsBlock}
 
@@ -964,11 +1042,12 @@ Return ONLY the JSON object.`;
       temperature: 0.2,
       userId: null,
       projectId,
+      timeoutMs: 120_000,
     });
     return coerceAnalysis(result, sitePeerUrls);
   } catch (e) {
     return emptyAnalysis(
-      `LLM diagnosis failed: \${e instanceof Error ? e.message : String(e)}`
+      `LLM diagnosis failed: ${e instanceof Error ? e.message : String(e)}`
     );
   }
 }

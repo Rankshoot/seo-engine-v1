@@ -289,6 +289,55 @@ export interface ScrapedPageMarkdown {
   error?: string;
 }
 
+function extractFaqsFromHtml(html: string): string {
+  const $ = cheerio.load(html);
+  const faqs: { q: string; a: string }[] = [];
+
+  // Find all accordion/FAQ items
+  $('.jet-accordion__item, .elementor-accordion-item, .elementor-toggle-item, .accordion-item, .wp-block-yoast-faq-block, .schema-faq-section, .su-spoiler').each((_, item) => {
+    const q = $(item).find(
+      '.jet-accordion__control, .jet-toggle__control, .jet-accordion__item-header, ' +
+      '.elementor-accordion-title, .elementor-toggle-title, ' +
+      '.accordion-header, .accordion-title, .accordion-button, ' +
+      '.schema-faq-question, .su-spoiler-title'
+    ).text().trim();
+
+    const a = $(item).find(
+      '.jet-accordion__content, .jet-toggle__content, .jet-accordion__item-body, ' +
+      '.elementor-accordion-content, .elementor-tab-content, ' +
+      '.accordion-content, .accordion-panel, ' +
+      '.schema-faq-answer, .su-spoiler-content'
+    ).text().trim();
+
+    if (q && a) {
+      faqs.push({ q, a });
+    }
+  });
+
+  if (faqs.length === 0) {
+    // Fallback for Yoast FAQ blocks structure
+    $('.schema-faq-question').each((_, el) => {
+      const q = $(el).text().trim();
+      const a = $(el).next('.schema-faq-answer').text().trim();
+      if (q && a) {
+        faqs.push({ q, a });
+      }
+    });
+  }
+
+  if (faqs.length === 0) {
+    return '';
+  }
+
+  let markdown = '\n\n## Frequently Asked Questions\n\n';
+  faqs.forEach((faq, i) => {
+    const cleanQ = faq.q.replace(/^\d+[\s.)-]+\s*/, '');
+    markdown += `### ${i + 1}. ${cleanQ}\n\n${faq.a}\n\n`;
+  });
+
+  return markdown;
+}
+
 export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapedPageMarkdown> {
   try {
     const timeoutMs = opts.timeoutMs ?? 15_000;
@@ -330,6 +379,15 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
       // Remove scripts, styles before turndown
       turndownService.remove(['script', 'style']);
       markdown = turndownService.turndown(article.content);
+
+      // Check if FAQ section is present in parsed markdown; if missing, extract and append via Cheerio
+      const hasFaq = /(faq|frequently asked)/i.test(markdown);
+      if (!hasFaq) {
+        const faqsMd = extractFaqsFromHtml(html);
+        if (faqsMd) {
+          markdown += faqsMd;
+        }
+      }
     } else {
       // Fallback: if readability fails, try just cheerio text
       const $ = cheerio.load(html);

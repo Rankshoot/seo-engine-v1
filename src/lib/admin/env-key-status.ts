@@ -1,4 +1,5 @@
 import type { AdminEnvKeyStatus } from "@/types/admin-settings";
+import { isClerkKeyValid } from "@/lib/clerk-keys";
 
 /** Whether required env vars are present (never expose values). */
 export function getAdminEnvKeyStatus(): AdminEnvKeyStatus {
@@ -12,7 +13,7 @@ export function getAdminEnvKeyStatus(): AdminEnvKeyStatus {
     openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
     serper: Boolean(process.env.SERPER_API_KEY?.trim()),
     clerk: Boolean(
-      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() &&
+      isClerkKeyValid(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) &&
         process.env.CLERK_SECRET_KEY?.trim()
     ),
     supabase: Boolean(

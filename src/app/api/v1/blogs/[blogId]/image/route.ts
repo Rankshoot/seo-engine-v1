@@ -117,6 +117,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ blogId:
           });
         }
 
+        // Upload the generated base64 image to Supabase Storage immediately
+        try {
+          const { uploadSingleBase64Image } = await import("@/lib/server/blog-images");
+          image.url = await uploadSingleBase64Image(image.url, blogId);
+        } catch (uploadErr) {
+          console.error("[blog-image-route] failed to upload generated image to Supabase", uploadErr);
+          // Return the base64 URL anyway if upload fails to avoid hard failure for user
+        }
+
         return new Response(JSON.stringify({ success: true, data: image }), {
           status: 200,
           headers: { "Content-Type": "application/json" },

@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Blog } from "@/lib/types";
+import type { Blog, BlogContentData } from "@/lib/types";
 import {
   internalSetForBlog,
   stripHeroHeading,
@@ -108,6 +108,7 @@ export function EditorialPreview({
 } & ArticleMetaSchedulingProps) {
   const internalSet = useMemo(() => internalSetForBlog(blog), [blog]);
   const { heroTitle, body } = useMemo(() => stripHeroHeading(blog), [blog]);
+  const coverImageUrl = (blog.content_data as BlogContentData | undefined)?.cover_image_url;
   const components = useMemo(
     () => buildMarkdownComponents(internalSet, ownSiteHost, imageGenOptions),
     [internalSet, ownSiteHost, imageGenOptions]
@@ -136,6 +137,15 @@ export function EditorialPreview({
             </p>
           )}
         </header>
+        {coverImageUrl && (
+          <div className="mb-10 rounded-2xl overflow-hidden aspect-[16/9] bg-surface-secondary border border-border-subtle shadow-sm">
+            <img
+              src={coverImageUrl}
+              alt={blog.title}
+              className="w-full h-full object-cover"
+            />
+          </div>
+        )}
         <div className="editorial-body space-y-5 text-text-secondary" style={{ fontSize: 17, lineHeight: 1.78 }}>
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

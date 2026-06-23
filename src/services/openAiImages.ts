@@ -93,7 +93,11 @@ function assetWithPlaceholder(request: Omit<BlogImageAsset, 'url'>): BlogImageAs
  */
 export function normalizeMarkdownImages(content: string): string {
   if (!content) return content;
-  return content.replace(
+  
+  // Clean up split markdown image brackets and parentheses
+  const healed = content.replace(/!\[([^\]]*?)\]\s+\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, '![$1]($2)');
+
+  return healed.replace(
     /(!\[[^\]]*\]\()(data:image\/svg\+xml[^)]*)(\))/gi,
     `$1${BLOG_IMAGE_PLACEHOLDER_URL}$3`
   );
@@ -157,17 +161,16 @@ export function insertBlogImagePlaceholders(
 ): string {
   if (!content.trim()) return content;
 
-  const heroAlt = `${input.title} — featured image`;
-  const sectionAlt = `${input.targetKeyword} — section illustration`;
-
-  const heroMd = `![${escapeMarkdownAlt(heroAlt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
-
   let next = content.trim();
-  next = insertAfterIntro(next, heroMd);
+  
+  const section1Alt = `${input.targetKeyword} — section illustration`;
+  const section1Md = `![${escapeMarkdownAlt(section1Alt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
+  next = insertBeforeNthH2(next, section1Md, 2);
 
   if (input.wordCount >= 1400) {
-    const sectionMd = `![${escapeMarkdownAlt(sectionAlt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
-    next = insertBeforeNthH2(next, sectionMd, 2);
+    const section2Alt = `${input.targetKeyword} — summary visual`;
+    const section2Md = `![${escapeMarkdownAlt(section2Alt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
+    next = insertBeforeHeading(next, section2Md, /frequently asked questions|faq|conclusion/i);
   }
 
   return next.replace(/\n{3,}/g, '\n\n').trim();

@@ -9,7 +9,7 @@ export const maxDuration = 300;
 function getAnthropicClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
-  return new Anthropic({ apiKey });
+  return new Anthropic({ apiKey, maxRetries: 5 });
 }
 
 /**

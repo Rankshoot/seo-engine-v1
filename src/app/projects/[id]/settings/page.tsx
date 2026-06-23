@@ -610,7 +610,6 @@ export default function ProjectSettingsPage() {
             </div>
           </div>
         </div>
-      )}
 
       <StrapiIntegrationSection />
 

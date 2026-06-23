@@ -2,17 +2,6 @@ import { apiDelete, apiGet, apiPost } from "./http";
 import { V1Routes } from "./routes";
 
 export const integrationsApi = {
-  /** Publish a blog to Rankshoot's own Strapi (internal blog). */
-  publishToOwnStrapi(blogId: string): Promise<{
-    success: boolean;
-    error?: string;
-    documentId?: string;
-    slug?: string;
-    publishedAt?: string | null;
-  }> {
-    return apiPost(V1Routes.strapiPublish, { blogId });
-  },
-
   /** Get the current user's saved Strapi integration config. */
   getUserStrapi(): Promise<{
     success: boolean;

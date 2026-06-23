@@ -54,7 +54,7 @@ export class ClaudeProvider implements AIProvider {
       if (!ANTHROPIC_API_KEY) {
         throw new Error("ANTHROPIC_API_KEY is not configured");
       }
-      this.client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+      this.client = new Anthropic({ apiKey: ANTHROPIC_API_KEY, maxRetries: 5 });
     }
     return this.client;
   }

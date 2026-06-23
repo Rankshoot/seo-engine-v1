@@ -13,12 +13,12 @@ import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
-import { analyzeBlogContent, type BlogContentAnalysis } from "@/app/actions/blog-actions";
+import { analyzeBlogContent, updateBlogCoverImage, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { normalizeMarkdownImages, BLOG_IMAGE_PLACEHOLDER_URL } from "@/services/openAiImages";
 import {
   exportToMarkdown, exportToHTML, exportToText, exportToDocx, triggerBlogDownload,
 } from "@/lib/export";
-import type { Blog, BlogSeoIssueKey, BlogStatus, ExportFormat, CalendarEntry } from "@/lib/types";
+import type { Blog, BlogSeoIssueKey, BlogStatus, ExportFormat, CalendarEntry, BlogContentData } from "@/lib/types";
 import type { Project } from "@/lib/types";
 import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
 
@@ -175,6 +175,11 @@ export default function BlogViewerPage() {
   // ── Image editing ──────────────────────────────────────────────────────
   const [editingImage,      setEditingImage]      = useState<HTMLImageElement | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState(false);
+
+  // ── Cover image states & ref ───────────────────────────────────────────
+  const coverImageFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [generatingCoverImage, setGeneratingCoverImage] = useState(false);
+  const [uploadingCoverImage, setUploadingCoverImage] = useState(false);
 
   // ── Content analysis ───────────────────────────────────────────────────
   const [analysisModalOpen,  setAnalysisModalOpen]  = useState(false);
@@ -429,6 +434,75 @@ export default function BlogViewerPage() {
       return false;
     }
   }, [displayBlog, updateDisplayBlog]);
+
+  const handleGenerateCoverImage = async () => {
+    if (!currentBlog) return;
+    setGeneratingCoverImage(true);
+    try {
+      const res = await blogsApi.regenerateImage(currentBlog.id, {
+        imageAlt: `${currentBlog.title} — cover image`,
+        contextBefore: "cover image for a blog",
+        contextAfter: "",
+      });
+      if (res.success && res.data) {
+        const saveRes = await updateBlogCoverImage(currentBlog.id, res.data.url);
+        if (saveRes.success && saveRes.data) {
+          updateDisplayBlog(saveRes.data);
+          toast.success("Cover image generated successfully!");
+        } else {
+          toast.error(saveRes.error || "Failed to save cover image");
+        }
+      } else {
+        toast.error(res.error || "Failed to generate cover image");
+      }
+    } catch (e: any) {
+      toast.error(e.message || "Failed to generate cover image");
+    } finally {
+      setGeneratingCoverImage(false);
+    }
+  };
+
+  const handleUploadCoverImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentBlog) return;
+    setUploadingCoverImage(true);
+    const reader = new FileReader();
+    reader.onload = async event => {
+      const base64 = event.target?.result as string;
+      if (base64) {
+        try {
+          const saveRes = await updateBlogCoverImage(currentBlog.id, base64);
+          if (saveRes.success && saveRes.data) {
+            updateDisplayBlog(saveRes.data);
+            toast.success("Cover image uploaded successfully!");
+          } else {
+            toast.error(saveRes.error || "Failed to save cover image");
+          }
+        } catch (err: any) {
+          toast.error(err.message || "Failed to upload cover image");
+        } finally {
+          setUploadingCoverImage(false);
+        }
+      }
+    };
+    reader.readAsDataURL(file);
+    if (coverImageFileInputRef.current) coverImageFileInputRef.current.value = "";
+  };
+
+  const handleRemoveCoverImage = async () => {
+    if (!currentBlog) return;
+    try {
+      const saveRes = await updateBlogCoverImage(currentBlog.id, null);
+      if (saveRes.success && saveRes.data) {
+        updateDisplayBlog(saveRes.data);
+        toast.success("Cover image removed");
+      } else {
+        toast.error(saveRes.error || "Failed to remove cover image");
+      }
+    } catch (e: any) {
+      toast.error(e.message || "Failed to remove cover image");
+    }
+  };
 
   const getEditRoots = useCallback(
     () => [titleEditorRef.current, descEditorRef.current, editorRef.current],
@@ -847,6 +921,8 @@ export default function BlogViewerPage() {
   );
 
   // ── Render: sidebar ────────────────────────────────────────────────────
+  const sidebarCoverImageUrl = (currentBlog.content_data as BlogContentData | undefined)?.cover_image_url;
+
   const sidebar = (
     <>
       {/* Before / After compare (analysis-enhanced) */}
@@ -906,6 +982,114 @@ export default function BlogViewerPage() {
         </>
       )}
 
+
+      {/* Cover Image Widget */}
+      <div className={`px-4 pt-4 pb-2 relative transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>
+        <SLabel>Cover Image</SLabel>
+        {sidebarCoverImageUrl ? (
+          <div className="relative group rounded-xl overflow-hidden aspect-[16/9] border border-border-subtle bg-surface-secondary shadow-sm">
+            <img
+              src={sidebarCoverImageUrl}
+              alt="Cover Image"
+              className="w-full h-full object-cover"
+            />
+            {/* Hover overlay with Actions */}
+            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-3 transition-opacity duration-200">
+              <button
+                type="button"
+                onClick={() => coverImageFileInputRef.current?.click()}
+                disabled={uploadingCoverImage || generatingCoverImage}
+                className="p-2.5 rounded-xl bg-white/10 hover:bg-white/25 border border-white/20 text-white transition-colors"
+                title="Upload new image"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={handleGenerateCoverImage}
+                disabled={uploadingCoverImage || generatingCoverImage}
+                className="p-2.5 rounded-xl bg-white/10 hover:bg-white/25 border border-white/20 text-white transition-colors"
+                title="Regenerate cover"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={handleRemoveCoverImage}
+                disabled={uploadingCoverImage || generatingCoverImage}
+                className="p-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/40 border border-rose-500/30 text-rose-200 transition-colors"
+                title="Remove cover"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            {(uploadingCoverImage || generatingCoverImage) && (
+              <div className="absolute inset-0 bg-surface-primary/85 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-1.5">
+                  <SpinIcon className="w-5 h-5 text-brand-action animate-spin" />
+                  <span className="text-[10px] font-medium text-text-tertiary">
+                    {uploadingCoverImage ? "Uploading..." : "Generating..."}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="relative rounded-xl border border-dashed border-border-subtle hover:border-border-strong bg-surface-secondary/40 p-4 transition-all duration-200">
+            <p className="text-[11px] text-text-tertiary text-center mb-3.5">
+              No cover image selected.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleGenerateCoverImage}
+                disabled={uploadingCoverImage || generatingCoverImage}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-surface-elevated hover:bg-surface-hover px-2.5 py-1.5 text-[11px] font-bold text-text-primary transition-all disabled:opacity-40"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                </svg>
+                Generate
+              </button>
+              <button
+                type="button"
+                onClick={() => coverImageFileInputRef.current?.click()}
+                disabled={uploadingCoverImage || generatingCoverImage}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-surface-elevated hover:bg-surface-hover px-2.5 py-1.5 text-[11px] font-bold text-text-primary transition-all disabled:opacity-40"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                </svg>
+                Upload
+              </button>
+            </div>
+            {(uploadingCoverImage || generatingCoverImage) && (
+              <div className="absolute inset-0 bg-surface-primary/85 flex items-center justify-center rounded-xl">
+                <div className="flex flex-col items-center gap-1.5">
+                  <SpinIcon className="w-5 h-5 text-brand-action animate-spin" />
+                  <span className="text-[10px] font-medium text-text-tertiary">
+                    {uploadingCoverImage ? "Uploading..." : "Generating..."}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        <input
+          type="file"
+          ref={coverImageFileInputRef}
+          onChange={handleUploadCoverImage}
+          accept="image/*"
+          className="hidden"
+        />
+      </div>
+      <Divider />
 
       {/* SEO Score */}
       <div className={`transition-all duration-300 ${sidebarMuted ? "opacity-25 grayscale pointer-events-none" : ""}`}>

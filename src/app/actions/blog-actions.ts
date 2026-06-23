@@ -2621,3 +2621,54 @@ Rules — read carefully:
     return { success: false, error: e instanceof Error ? e.message : "Analysis failed" };
   }
 }
+
+export async function updateBlogCoverImage(blogId: string, imageUrl: string | null) {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null };
+
+  const { data: blog, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, project_id, content_data')
+    .eq('id', blogId)
+    .single();
+
+  if (bErr || !blog) return { success: false, error: 'Blog not found', data: null };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Not authorized', data: null };
+
+  let finalUrl = imageUrl;
+  if (imageUrl && imageUrl.startsWith('data:image/')) {
+    try {
+      const { uploadSingleBase64Image } = await import('@/lib/server/blog-images');
+      finalUrl = await uploadSingleBase64Image(imageUrl, blogId);
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to upload cover image', data: null };
+    }
+  }
+
+  const currentContentData = (blog.content_data ?? {}) as Record<string, any>;
+  const nextContentData = { ...currentContentData, cover_image_url: finalUrl || undefined };
+  if (!finalUrl) {
+    delete nextContentData.cover_image_url;
+  }
+
+  const { data: updated, error: uErr } = await supabaseAdmin
+    .from('blogs')
+    .update({
+      content_data: nextContentData,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', blogId)
+    .select()
+    .single();
+
+  if (uErr) return { success: false, error: uErr.message, data: null };
+  return { success: true, data: updated as Blog };
+}

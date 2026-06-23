@@ -87,19 +87,31 @@ export async function POST(
     // Proceed publishing with original content even if storage upload fails to avoid blocking user
   }
 
+  let coverImageUrl = (blog.content_data as any)?.cover_image_url || null;
+  let contentForCms = finalContent;
+
+  if (!coverImageUrl) {
+    coverImageUrl = extractCoverImageUrl(finalContent);
+    if (coverImageUrl) {
+      const escapedUrl = coverImageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const imageRegex = new RegExp(`!\\[[^\\]]*\\]\\(${escapedUrl}\\)\\s*\\n?`, 'g');
+      contentForCms = finalContent.replace(imageRegex, '');
+    }
+  }
+
   const client = createUserStrapiClient(integration.base_url, integration.api_token, integration.collection_name);
 
   try {
     const result = await client.publishArticle({
       title:           blog.title,
       slug:            blog.slug,
-      content:         finalContent,
-      excerpt:         buildExcerpt(finalContent),
+      content:         contentForCms,
+      excerpt:         buildExcerpt(contentForCms),
       meta_description: blog.meta_description,
       target_keyword:  blog.target_keyword,
       seo_score:       null,
       word_count:      blog.word_count ?? null,
-      cover_image_url: extractCoverImageUrl(finalContent),
+      cover_image_url: coverImageUrl,
       source_blog_id:  blog.id,
     });
 

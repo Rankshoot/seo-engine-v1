@@ -10,7 +10,8 @@ export type ButtonVariant =
   | "ghost"
   | "outline"
   | "destructive"
-  | "action";
+  | "action"
+  | "violet";
 
 export type ButtonSize = "xs" | "sm" | "md" | "lg";
 export type ButtonShape = "rounded" | "pill";
@@ -29,7 +30,9 @@ const shapeClass: Record<ButtonShape, Record<ButtonSize, string>> = {
 
 const variantClass: Record<ButtonVariant, string> = {
   primary:
-    "bg-text-primary text-surface-primary hover:opacity-90 active:opacity-80 disabled:opacity-50",
+    "bg-brand-violet text-white hover:opacity-90 active:opacity-80 disabled:opacity-50",
+  violet:
+    "bg-brand-violet text-white hover:opacity-90 active:opacity-80 disabled:opacity-50",
   secondary:
     "bg-surface-elevated text-text-primary border border-border-subtle hover:border-border-strong hover:bg-surface-hover disabled:opacity-50",
   outline:

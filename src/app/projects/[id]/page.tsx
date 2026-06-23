@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { motion } from "framer-motion";
+import { PageHeader } from "@/components/common";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -177,29 +179,20 @@ export default function ProjectOverviewPage() {
   }
 
   return (
-    <div className="pb-20 -mt-6 lg:-mt-8">
+    <div className="pb-20 px-4">
       {/* ── Header ── */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 mb-6">
-        <div className="border-b border-border-subtle/70 bg-surface-primary/95 backdrop-blur-md px-6 lg:px-8 pt-6 lg:pt-8 pb-4">
-          {/* Gradient glow top accent */}
-          <div aria-hidden className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-brand-violet/40 to-transparent" />
-
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary mb-1.5">
-                <Link href="/projects" className="hover:text-text-secondary transition-colors">Projects</Link>
-                <ChevronRight className="h-3 w-3 opacity-40" />
-                <span className="text-text-secondary font-medium truncate">{project.name}</span>
-                <span className="opacity-40 mx-0.5">·</span>
-                <Globe2 className="h-3 w-3" />
-                <span className="font-mono text-text-tertiary">{project.domain}</span>
-              </div>
-              <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-text-primary leading-tight truncate">
-                {project.name}
-              </h1>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
+      <div className="mb-6">
+        <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary mb-3">
+          <Link href="/projects" className="hover:text-text-secondary transition-colors">Projects</Link>
+          <ChevronRight className="h-3 w-3 opacity-40" />
+          <Globe2 className="h-3 w-3" />
+          <span className="font-mono text-text-tertiary">{project.domain}</span>
+        </div>
+        <PageHeader
+          title={project.name}
+          description={`${project.domain} · Content engine overview`}
+          actions={
+            <>
               <ProjectNavLink
                 href={`/projects/${id}/keywords`}
                 className="inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-elevated px-3.5 py-1.5 text-[12.5px] font-medium text-text-primary transition-all hover:-translate-y-0.5 hover:shadow-sm"
@@ -212,12 +205,18 @@ export default function ProjectOverviewPage() {
               >
                 <Wand2 className="h-3.5 w-3.5" /> Generate
               </ProjectNavLink>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          borderless
+        />
       </div>
 
-      <div className="px-4 space-y-6">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1], staggerChildren: 0.06 }}
+        className="space-y-6"
+      >
         {/* ── Metrics strip ── */}
         <StatStrip projectId={id} stats={stats} />
 
@@ -355,7 +354,7 @@ export default function ProjectOverviewPage() {
 
         {/* ── Content Health widget ── */}
         <ContentHealthWidget projectId={id} />
-      </div>
+      </motion.div>
     </div>
   );
 }

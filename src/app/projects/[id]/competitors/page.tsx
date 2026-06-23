@@ -9,8 +9,9 @@ import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
 import type { KeywordStatus } from "@/lib/types";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
-import { PageTitle } from "@/components/common";
+import { Button, PageHeader } from "@/components/common";
 import { scoreCompetitorKeywordsWithAI } from "@/app/actions/keyword-actions";
+import { motion } from "framer-motion";
 import {
   loadApprovedGapKeywords, persistApprovedGapKeywords,
   loadRejectedGapKeywords, persistRejectedGapKeywords,
@@ -233,42 +234,42 @@ export default function CompetitorsPage() {
   const sortedGaps = useMemo(() => [...gaps].sort((a, b) => b.volume - a.volume), [gaps]);
   const hasBenchmark = competitors.length > 0;
 
+  const lastBenchmarkedStr = lastBenchmarkedAt
+    ? `Last benchmark: ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(lastBenchmarkedAt))}`
+    : undefined;
+
   return (
     <div className="space-y-10 pb-16 max-w-full pl-4 pr-4 mx-auto">
-      <div className="pt-4 pb-8 border-b border-border-subtle flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <PageTitle>Competitor insights</PageTitle>
-          <p className="mt-3 text-[16px] text-text-tertiary max-w-[600px]">
-            Benchmark the competitors winning your SERPs, diff their keyword coverage against yours, and publish the opportunities with one click.
-          </p>
-          {lastBenchmarkedAt ? (
-            <p className="mt-2 text-[12px] text-text-tertiary">
-              Last benchmark:{" "}
-              {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(lastBenchmarkedAt))}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <ProjectNavLink
-            href={`/projects/${projectId}/keywords`}
-            className="rounded-[30px] border border-border-subtle bg-surface-secondary px-5 py-2.5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors inline-flex items-center gap-2"
-          >
-            Keywords
-          </ProjectNavLink>
-          <button
-            onClick={handleRun}
-            disabled={running}
-            className="rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60 flex items-center gap-2"
-          >
-            {running ? (
-              <><div className="w-4 h-4 border-2 border-brand-on-primary/30 border-t-brand-on-primary rounded-full animate-spin" />Benchmarking…</>
-            ) : (
-              <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>{hasBenchmark ? "Re-benchmark" : "Run benchmark"}</>
-            )}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Competitor insights"
+        description={`Benchmark the competitors winning your SERPs, diff their keyword coverage against yours, and publish the opportunities with one click.${lastBenchmarkedStr ? ` ${lastBenchmarkedStr}.` : ""}`}
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              shape="pill"
+              size="md"
+              onClick={() => { window.location.href = `/projects/${projectId}/keywords`; }}
+            >
+              Keywords
+            </Button>
+            <Button
+              variant="primary"
+              shape="pill"
+              size="md"
+              loading={running}
+              onClick={() => void handleRun()}
+              iconLeft={!running ? (
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>
+              ) : undefined}
+            >
+              {running ? "Benchmarking…" : hasBenchmark ? "Re-benchmark" : "Run benchmark"}
+            </Button>
+          </>
+        }
+      />
 
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }} className="space-y-10">
       {error && (
         <div className="rounded-[16px] border border-brand-coral/20 bg-brand-coral/10 p-5 text-[14px] text-brand-coral">{error}</div>
       )}
@@ -295,9 +296,9 @@ export default function CompetitorsPage() {
           <p className="mb-8 text-[16px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
             We&apos;ll pull the organic keywords your competitors rank for and identify coverage gaps. Add competitor domains to get started.
           </p>
-          <button onClick={handleRun} disabled={running} className="rounded-[32px] bg-brand-primary px-8 py-3 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-60">
+          <Button variant="primary" shape="pill" size="lg" loading={running} onClick={() => void handleRun()}>
             {running ? "Benchmarking…" : "Run benchmark"}
-          </button>
+          </Button>
         </div>
       ) : (
         <>
@@ -347,6 +348,7 @@ export default function CompetitorsPage() {
           )}
         </>
       )}
+      </motion.div>
     </div>
   );
 }

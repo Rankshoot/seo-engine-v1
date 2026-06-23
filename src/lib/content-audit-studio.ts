@@ -676,6 +676,7 @@ OUTPUT RULES:
 5. Competitor gaps should be specific (what exactly are competitors covering that this post misses?).
 6. For faq_questions: write actual questions a reader/searcher would type, in natural language.
 7. llm_quality_score: holistic quality 0–100. 90+ = excellent on all dimensions. 70–89 = solid with gaps. 50–69 = several issues. <50 = major problems.
+8. Respect PDF downloads: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides), do NOT flag this as an issue (such as 'content hidden in PDF' or 'locked value proposition'). Respect the PDF download as a premium feature/downloadable asset and focus your audit purely on the on-page text content.
 
 Return ONLY this JSON (no prose, no markdown fences):
 

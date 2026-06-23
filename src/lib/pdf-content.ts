@@ -19,16 +19,6 @@ export function hasPdfContent(markdown: string): boolean {
     const density = markdownElements / (markdown.length / 1000); // per kchar
     if (density < 0.5) return true; // almost no markdown structure in a very long doc
   }
-  // Q&A / interview-question PDF dump patterns — these appear even in shorter scraped content
-  // when a PDF viewer extracts interview questions into the page body
-  const pdfQaPatterns = [
-    /(?:Strong Answer:|Weak Answer:|Recruiter Cue:|Sample Answer:)/i,
-    /Q\d+[.:)\s]+[A-Z].{20,}/,        // Q1. What is... Q2. How...
-    /(?:Question \d+|Ans\.|Answer:)[:\s]+/i,
-    /Page \d+ of \d+/i,
-  ];
-  const patternMatches = pdfQaPatterns.filter(re => re.test(markdown)).length;
-  if (patternMatches >= 2) return true;
   return false;
 }
 
@@ -61,16 +51,10 @@ export function stripPdfArtifacts(markdown: string): { cleaned: string; stripped
 
   // ── 3. Remove blocks that look like PDF text dumps ───────────────────────
   // Paragraphs in blog markdown are separated by double newlines.
+  // We consider a block to be "PDF-like" when it is long and lacks markdown.
   const paragraphs = out.split(/\n{2,}/);
   const kept: string[] = [];
   let pdfSectionCount = 0;
-
-  // Pre-scan: count how many blocks match Q&A / interview-question patterns.
-  // If the document has many such blocks (indicating bulk PDF extraction),
-  // flag ALL matching blocks for removal even if individually short.
-  const QA_BLOCK_RE = /(?:Strong Answer:|Weak Answer:|Recruiter Cue:|Sample Answer:|Page \d+ of \d+|Q\d+[.:)\s]+[A-Z].{10,}|(?:Question \d+)[:\s]+|Ans\.[\s]+)/i;
-  const qaBlockCount = paragraphs.filter(p => QA_BLOCK_RE.test(p.trim())).length;
-  const bulkQaDump = qaBlockCount >= 3; // ≥3 Q&A-pattern blocks = likely PDF dump
 
   for (const para of paragraphs) {
     const trimmed = para.trim();
@@ -86,17 +70,16 @@ export function stripPdfArtifacts(markdown: string): { cleaned: string; stripped
     const isPdfBlock =
       trimmed.length > 2_500 && !hasMarkdownStructure;
 
-    // Catch PDF-specific text patterns:
-    // - Always strip if individually long (>200 chars) with a Q&A pattern
-    // - Also strip even short Q&A blocks when the whole doc is a bulk dump
+    // Also catch PDF-specific text patterns even in shorter blocks
     const hasPdfTextPattern =
-      QA_BLOCK_RE.test(trimmed) && (trimmed.length > 200 || bulkQaDump);
+      /(?:Strong Answer:|Weak Answer:|Recruiter Cue:|Page \d+ of \d+)/i.test(trimmed) &&
+      trimmed.length > 400;
 
     if (isPdfBlock || hasPdfTextPattern) {
       pdfSectionCount++;
       strippedPdf = true;
       if (pdfSectionCount === 1) {
-        // Insert a single note so the LLM knows a PDF existed — don't reproduce its content
+        // Keep a tiny excerpt of the first PDF block so the LLM knows what the PDF was about
         kept.push(
           `> **[Embedded document content removed]** — This page contained an embedded PDF with ${Math.round(trimmed.length / 5)} words of content that has been excluded to focus on the web article.`
         );

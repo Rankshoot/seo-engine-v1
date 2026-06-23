@@ -135,15 +135,16 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       const preserveTitle = !repairTitleNeedsRepairFlag(analysis) && Boolean(repairPlan.title);
       const finalTitle = preserveTitle ? repairPlan.title : repaired.title;
       const rawMarkdown = preserveTitle ? replaceFirstH1(repaired.content, repairPlan.title) : repaired.content;
+      const contentWithPdfLinks = preservePdfLinks(fresh.markdown, rawMarkdown);
       const finalMetaDescription = repairMetaNeedsRepairFlag(analysis)
         ? repaired.meta_description
         : (analysis.summary || repaired.meta_description);
       const repairNotes = normalizeRepairNotesFromModel(repaired.repair_notes, analysis);
 
-      const contentWithImages = sanitizeBlogMarkdown(insertBlogImagePlaceholders(rawMarkdown, {
+      const contentWithImages = sanitizeBlogMarkdown(insertBlogImagePlaceholders(contentWithPdfLinks, {
         title: finalTitle,
         targetKeyword: entry.focus_keyword,
-        wordCount: countWords(rawMarkdown),
+        wordCount: countWords(contentWithPdfLinks),
       }));
       const sanitized = await sanitizeBlogContent(contentWithImages, {
         ownDomain: project.domain ?? '',
@@ -2598,7 +2599,8 @@ Rules — read carefully:
 - Include 0-5 content_gaps (only real missing topics, not padding).
 - Include 1-4 quick_wins.
 - Be specific. Reference actual text from the article when relevant.
-- Do NOT fabricate keyword volume data. Focus purely on content quality.`;
+- Do NOT fabricate keyword volume data. Focus purely on content quality.
+- Respect PDF downloads: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides), do NOT flag this as an issue (such as 'content hidden in PDF' or 'locked value proposition'). Respect the PDF download as a premium feature/downloadable asset and focus your audit purely on the on-page text content.`;
 
   try {
     const raw = await geminiGenerate(prompt, 2);
@@ -2608,4 +2610,64 @@ Rules — read carefully:
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : "Analysis failed" };
   }
+}
+
+function preservePdfLinks(originalMarkdown: string, generatedMarkdown: string): string {
+  const pdfLinkRegex = /\[([^\]]+)\]\(([^)\s]+\.pdf(?:[?#]\S*)?)\)/gi;
+  const originalPdfLinks: { full: string; label: string; href: string }[] = [];
+  
+  let match: RegExpExecArray | null;
+  while ((match = pdfLinkRegex.exec(originalMarkdown)) !== null) {
+    originalPdfLinks.push({
+      full: match[0],
+      label: match[1],
+      href: match[2]
+    });
+  }
+
+  if (originalPdfLinks.length === 0) return generatedMarkdown;
+
+  let result = generatedMarkdown;
+  
+  for (const link of originalPdfLinks) {
+    if (result.toLowerCase().includes(link.href.toLowerCase())) {
+      continue;
+    }
+
+    const lines = result.split('\n');
+    let injectedIndex = -1;
+
+    // Pass 1: Look for a paragraph containing BOTH "download" AND ("pdf" or "template")
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].toLowerCase();
+      const isParagraph = !line.startsWith('#') && !line.startsWith('!') && !line.startsWith('[') && line.length > 20;
+      if (isParagraph && line.includes('download') && (line.includes('pdf') || line.includes('template'))) {
+        injectedIndex = i;
+        break;
+      }
+    }
+
+    // Pass 2: Fallback to a paragraph containing "pdf" or "download" or "template"
+    if (injectedIndex === -1) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].toLowerCase();
+        const isParagraph = !line.startsWith('#') && !line.startsWith('!') && !line.startsWith('[') && line.length > 20;
+        if (isParagraph && (line.includes('pdf') || line.includes('download') || line.includes('template'))) {
+          injectedIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (injectedIndex !== -1) {
+      console.log(`[link-preservation] Injecting PDF link after line: "${lines[injectedIndex]}"`);
+      lines.splice(injectedIndex + 1, 0, '', link.full, '');
+      result = lines.join('\n');
+    } else {
+      console.log(`[link-preservation] Appending PDF link to the end of markdown: ${link.href}`);
+      result = result.trim() + `\n\n${link.full}\n`;
+    }
+  }
+
+  return result;
 }

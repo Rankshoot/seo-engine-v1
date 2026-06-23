@@ -1055,27 +1055,6 @@ export default function BlogViewerPage() {
         />
       </div>
 
-      {/* Publish to CMS */}
-      {(hasCmsIntegration || process.env.NEXT_PUBLIC_STRAPI_CONFIGURED === "true") && (
-        <>
-          <Divider />
-          <div className="px-4 py-3.5 space-y-2">
-            <SLabel>Publish</SLabel>
-            <PublishToOwnBlogButton
-              blogId={blog.id}
-              disabled={editMode || savingContent}
-              onPublished={() => handleStatusChange("published")}
-            />
-            <PublishToCmsButton
-              blogId={blog.id}
-              hasCmsIntegration={hasCmsIntegration}
-              disabled={editMode || savingContent}
-              onPublished={() => handleStatusChange("published")}
-            />
-          </div>
-        </>
-      )}
-
       {/* Export */}
       <Divider />
       <div className="px-4 py-3.5">
@@ -1095,31 +1074,23 @@ export default function BlogViewerPage() {
         </div>
       </div>
 
-      {/* Generate (calendar-based) */}
-      {!isImport && !isRepair && (
-        <>
-          <Divider />
-          <div className="px-4 py-4">
-            <SLabel>Generate</SLabel>
-            <p className="text-[11px] text-text-tertiary mb-2.5 leading-relaxed">
-              {isAfterView
-                ? "Calendar regeneration runs against the original draft. Switch to Before to use it."
-                : blog.entry_id
-                ? "Runs full research + generation with Gemini AI"
-                : "Not available for imported drafts — create a scheduled post from Calendar to run full generation."}
-            </p>
-            <button
-              onClick={handleRegenerate}
-              disabled={regenerating || !blog.entry_id || isAfterView}
-              className="w-full rounded-[32px] py-2.5 text-[13px] font-medium flex items-center justify-center gap-2 transition-opacity disabled:opacity-50"
-              style={{ background: V.txt, color: V.bg }}
-            >
-              {regenerating ? <><SpinIcon />&nbsp;Generating…</> : "Generate blog"}
-            </button>
-            {editError && <p className="mt-2 text-[11px] text-brand-coral">{editError}</p>}
-          </div>
-        </>
-      )}
+      {/* Publish */}
+      <Divider />
+      <div className="px-4 py-4 space-y-2.5">
+        <SLabel>Publish</SLabel>
+        <PublishToOwnBlogButton
+          blogId={blog.id}
+          disabled={editMode || savingContent}
+          onPublished={() => handleStatusChange("published")}
+        />
+        <PublishToCmsButton
+          blogId={blog.id}
+          projectId={projectId}
+          hasCmsIntegration={hasCmsIntegration}
+          disabled={editMode || savingContent}
+          onPublished={() => handleStatusChange("published")}
+        />
+      </div>
     </>
   );
 

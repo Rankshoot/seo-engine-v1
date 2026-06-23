@@ -22,7 +22,6 @@ export const integrationsApi = {
       cms_type: string;
       base_url: string;
       masked_token: string;
-      collection_name: string;
       created_at: string;
       updated_at: string;
     } | null;
@@ -34,7 +33,6 @@ export const integrationsApi = {
   saveUserStrapi(body: {
     base_url: string;
     api_token: string;
-    collection_name?: string;
   }): Promise<{ success: boolean; error?: string; masked_token?: string }> {
     return apiPost(V1Routes.userStrapiIntegration, body);
   },

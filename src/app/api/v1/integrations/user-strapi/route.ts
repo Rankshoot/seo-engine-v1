@@ -24,7 +24,7 @@ export async function GET() {
 
   const { data, error } = await supabaseAdmin
     .from("user_cms_integrations")
-    .select("id, cms_type, base_url, masked_token, collection_name, created_at, updated_at")
+    .select("id, cms_type, base_url, masked_token, created_at, updated_at")
     .eq("user_id", user.id)
     .eq("cms_type", "strapi")
     .maybeSingle();
@@ -38,14 +38,15 @@ export async function POST(req: Request) {
   const user = await currentUser();
   if (!user) return apiJson({ success: false, error: "Not authenticated" }, { status: 401 });
 
-  let body: { base_url?: string; api_token?: string; collection_name?: string };
+  let body: { base_url?: string; api_token?: string };
   try {
     body = await req.json();
   } catch {
     return apiJson({ success: false, error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { base_url, api_token, collection_name = "articles" } = body;
+  const { base_url, api_token } = body;
+  const collection_name = "articles";
   if (!base_url || !api_token) {
     return apiJson(
       { success: false, error: "base_url and api_token are required" },

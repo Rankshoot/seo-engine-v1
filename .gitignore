@@ -47,3 +47,4 @@ graphify-out/
 # Strapi
 /rankshoot/dist/
 /rankshoot/.strapi/
+.claude/worktrees/

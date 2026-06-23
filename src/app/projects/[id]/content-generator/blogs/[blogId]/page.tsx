@@ -47,7 +47,7 @@ import { unscheduleContentAction } from "@/app/actions/content-actions";
 import {
   SpinIcon, ExternalLinkIcon, DownloadIcon, RepairBanner,
 } from "@/components/blog/BlogViewerHelpers";
-import { PublishToOwnBlogButton, PublishToCmsButton } from "@/components/blog/PublishToStrapiButton";
+import { PublishToCmsButton } from "@/components/blog/PublishToStrapiButton";
 import { integrationsApi } from "@/frontend/api/integrations";
 import {
   buildMarkdownComponents, markdownUrlTransform, internalSetForBlog,
@@ -1078,11 +1078,6 @@ export default function BlogViewerPage() {
       <Divider />
       <div className="px-4 py-4 space-y-2.5">
         <SLabel>Publish</SLabel>
-        <PublishToOwnBlogButton
-          blogId={blog.id}
-          disabled={editMode || savingContent}
-          onPublished={() => handleStatusChange("published")}
-        />
         <PublishToCmsButton
           blogId={blog.id}
           projectId={projectId}

@@ -70,7 +70,7 @@ export async function POST(
     }
   }
 
-  const client = createUserStrapiClient(integration.base_url, integration.api_token);
+  const client = createUserStrapiClient(integration.base_url, integration.api_token, integration.collection_name);
 
   try {
     const result = await client.publishArticle({

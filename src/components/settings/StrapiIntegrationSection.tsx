@@ -33,6 +33,7 @@ function IntegrationCard({
   connected,
   maskedToken,
   baseUrl,
+  collectionName,
   onEdit,
   onDelete,
   deleting,
@@ -43,6 +44,7 @@ function IntegrationCard({
   connected: boolean;
   maskedToken?: string;
   baseUrl?: string;
+  collectionName?: string;
   onEdit: () => void;
   onDelete: () => void;
   deleting?: boolean;
@@ -96,10 +98,14 @@ function IntegrationCard({
         </div>
 
         {connected && baseUrl && (
-          <div className="mt-3 pt-3 border-t border-emerald-500/15 grid grid-cols-2 gap-3">
+          <div className="mt-3 pt-3 border-t border-emerald-500/15 grid grid-cols-3 gap-3">
             <div>
               <p className="text-[9px] font-semibold uppercase tracking-widest text-text-tertiary mb-0.5" style={{ fontFamily: "CohereMono, monospace" }}>URL</p>
               <p className="text-[11px] text-text-secondary truncate font-mono">{baseUrl}</p>
+            </div>
+            <div>
+              <p className="text-[9px] font-semibold uppercase tracking-widest text-text-tertiary mb-0.5" style={{ fontFamily: "CohereMono, monospace" }}>Collection</p>
+              <p className="text-[11px] text-text-secondary truncate font-mono">{collectionName || "articles"}</p>
             </div>
             <div>
               <p className="text-[9px] font-semibold uppercase tracking-widest text-text-tertiary mb-0.5" style={{ fontFamily: "CohereMono, monospace" }}>Token</p>
@@ -136,12 +142,13 @@ function StrapiForm({
   onClose,
   onSaved,
 }: {
-  existing?: { base_url: string; masked_token: string } | null;
+  existing?: { base_url: string; masked_token: string; collection_name: string } | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [baseUrl,  setBaseUrl]  = useState(existing?.base_url ?? "");
   const [apiToken, setApiToken] = useState("");
+  const [collectionName, setCollectionName] = useState(existing?.collection_name ?? "articles");
   const [status,   setStatus]   = useState<FormStatus>("idle");
   const [message,  setMessage]  = useState("");
 
@@ -158,7 +165,11 @@ function StrapiForm({
   const handleSave = async () => {
     if (!baseUrl || !apiToken) { setMessage("Both fields are required"); return; }
     setStatus("saving"); setMessage("");
-    const r = await integrationsApi.saveUserStrapi({ base_url: baseUrl, api_token: apiToken });
+    const r = await integrationsApi.saveUserStrapi({
+      base_url: baseUrl,
+      api_token: apiToken,
+      collection_name: collectionName,
+    });
     if (r.success) {
       setStatus("success");
       onSaved();
@@ -219,6 +230,22 @@ function StrapiForm({
             />
             <p className="text-[11px] text-text-tertiary mt-1">
               Strapi admin → Settings → API Tokens → Create → <strong>Full access</strong>
+            </p>
+          </div>
+
+          <div>
+            <label className="text-[12px] font-semibold text-text-secondary block mb-1.5">
+              Collection Name <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={collectionName}
+              onChange={e => { setCollectionName(e.target.value); setMessage(""); setStatus("idle"); }}
+              placeholder="e.g. articles"
+              className="w-full h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand-action/50 transition-colors"
+            />
+            <p className="text-[11px] text-text-tertiary mt-1">
+              The Strapi Content-Type API ID (plural, e.g. <code>articles</code> or <code>blogs</code>).
             </p>
           </div>
 
@@ -326,6 +353,7 @@ export function StrapiIntegrationSection() {
               connected={Boolean(existing)}
               maskedToken={existing?.masked_token}
               baseUrl={existing?.base_url}
+              collectionName={existing?.collection_name}
               onEdit={() => setShowForm(true)}
               onDelete={handleDelete}
               deleting={deleting}

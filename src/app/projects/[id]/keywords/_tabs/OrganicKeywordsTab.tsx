@@ -83,7 +83,7 @@ function MonthlySearchesChart({ data }: { data: { month: string; volume: number 
 }
 
 const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
+  kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function AI_SCORE_CATEGORY(score: number): { icon: string; cls: string; label: string } {
   if (score >= 75) return { icon: "★", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400", label: "High opportunity" };
@@ -772,7 +772,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${
-                    kw.kd < 30 ? "bg-[#10b981]" : kw.kd < 60 ? "bg-[#f59e0b]" : "bg-brand-coral"
+                    kw.kd < 30 ? "bg-status-success" : kw.kd < 60 ? "bg-status-warning" : "bg-brand-coral"
                   }`}
                   style={{ width: `${kw.kd}%` }}
                 />
@@ -807,10 +807,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         if (!kw.intent) return <span className="text-[13px] text-text-tertiary">—</span>;
         const norm = kw.intent.toLowerCase();
         const color =
-          norm.includes("transactional") ? "text-[#10b981]" :
-          norm.includes("commercial") ? "text-[#f59e0b]" :
-          norm.includes("informational") ? "text-[#60a5fa]" :
-          norm.includes("navigational") ? "text-[#a78bfa]" : "text-text-tertiary";
+          norm.includes("transactional") ? "text-status-success" :
+          norm.includes("commercial") ? "text-status-warning" :
+          norm.includes("informational") ? "text-status-info" :
+          norm.includes("navigational") ? "text-brand-violet-soft" : "text-text-tertiary";
         return (
           <span className={`text-[12px] font-semibold capitalize ${color}`}>
             {kw.intent}
@@ -956,13 +956,13 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
             disabled={aiScoring || discovering || loading}
             className={`inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:scale-105 ${
               aiScoring
-                ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/20 text-[#8b5cf6] animate-pulse"
-                : "border-[#8b5cf6]/30 bg-[#8b5cf6]/10 text-[#8b5cf6] hover:bg-[#8b5cf6]/20"
+                ? "border-brand-violet/40 bg-brand-violet/20 text-brand-violet animate-pulse"
+                : "border-brand-violet/30 bg-brand-violet/10 text-brand-violet hover:bg-brand-violet/20"
             }`}
           >
             {aiScoring ? (
               <>
-                <div className="h-3 w-3 rounded-full border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] animate-spin" />
+                <div className="h-3 w-3 rounded-full border-2 border-brand-violet/30 border-t-[#8b5cf6] animate-spin" />
                 <span>Scoring…</span>
               </>
             ) : (

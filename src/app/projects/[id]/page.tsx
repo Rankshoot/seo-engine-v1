@@ -308,32 +308,32 @@ export default function ProjectOverviewPage() {
                 icon: <Search className="h-4 w-4" />,
                 label: "Keywords",
                 sub: `${formatCompactNumber(stats?.totalKeywords ?? 0)} found`,
-                color: "text-violet-500",
-                bg: "bg-violet-500/10",
+                color: "text-brand-violet",
+                bg: "bg-brand-violet/10",
               },
               {
                 href: `/projects/${id}/content-calendar`,
                 icon: <Calendar className="h-4 w-4" />,
                 label: "Calendar",
                 sub: `${formatCompactNumber(stats?.calendarEntries ?? 0)} scheduled`,
-                color: "text-blue-500",
-                bg: "bg-blue-500/10",
+                color: "text-status-info",
+                bg: "bg-status-info/10",
               },
               {
                 href: `/projects/${id}/content-generator`,
                 icon: <Wand2 className="h-4 w-4" />,
                 label: "Generate",
                 sub: "Blogs, ebooks, LinkedIn",
-                color: "text-emerald-500",
-                bg: "bg-emerald-500/10",
+                color: "text-status-success",
+                bg: "bg-status-success/10",
               },
               {
                 href: `/projects/${id}/content-history`,
                 icon: <FileText className="h-4 w-4" />,
                 label: "Library",
                 sub: `${formatCompactNumber(stats?.blogsGenerated ?? 0)} created`,
-                color: "text-amber-500",
-                bg: "bg-amber-500/10",
+                color: "text-status-warning",
+                bg: "bg-status-warning/10",
               },
             ].map(item => (
               <ProjectNavLink
@@ -381,7 +381,7 @@ function ContentHealthWidget({ projectId }: { projectId: string }) {
       <section className="rounded-xl border border-border-subtle bg-surface-elevated px-5 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-status-warning/10 text-status-warning">
               <Activity className="h-4 w-4" />
             </div>
             <div>
@@ -404,7 +404,7 @@ function ContentHealthWidget({ projectId }: { projectId: string }) {
 
   const avgHealth = coverage?.avg_health ?? 0;
   const healthColor =
-    avgHealth >= 70 ? "text-emerald-500" : avgHealth >= 50 ? "text-amber-500" : "text-red-500";
+    avgHealth >= 70 ? "text-status-success" : avgHealth >= 50 ? "text-status-warning" : "text-status-danger";
   const highSeverity = coverage?.high_severity ?? 0;
   const blogsAudited = coverage?.blogs_audited ?? 0;
 
@@ -412,7 +412,7 @@ function ContentHealthWidget({ projectId }: { projectId: string }) {
     <section className="rounded-xl border border-border-subtle bg-surface-elevated overflow-hidden">
       <div className="px-5 py-3.5 flex items-center justify-between border-b border-border-subtle/60">
         <div className="flex items-center gap-2">
-          <Activity className="h-3.5 w-3.5 text-amber-500" />
+          <Activity className="h-3.5 w-3.5 text-status-warning" />
           <span className="text-[13px] font-semibold text-text-primary">Content Health</span>
         </div>
         <ProjectNavLink
@@ -430,7 +430,7 @@ function ContentHealthWidget({ projectId }: { projectId: string }) {
           <div className="text-[10.5px] text-text-tertiary mt-0.5">Avg health</div>
         </div>
         <div className="px-4 py-3 text-center">
-          <div className="text-[20px] font-semibold tabular-nums text-red-500">{highSeverity}</div>
+          <div className="text-[20px] font-semibold tabular-nums text-status-danger">{highSeverity}</div>
           <div className="text-[10.5px] text-text-tertiary mt-0.5">Need fixes</div>
         </div>
         <div className="px-4 py-3 text-center">
@@ -439,10 +439,10 @@ function ContentHealthWidget({ projectId }: { projectId: string }) {
         </div>
       </div>
       {highSeverity > 0 && (
-        <div className="px-5 py-2.5 border-t border-border-subtle/60 bg-red-500/5">
+        <div className="px-5 py-2.5 border-t border-border-subtle/60 bg-status-danger/5">
           <ProjectNavLink
             href={`/projects/${projectId}/audit?filter=high`}
-            className="flex items-center gap-1.5 text-[12px] font-medium text-red-600 hover:text-red-700 transition-colors"
+            className="flex items-center gap-1.5 text-[12px] font-medium text-status-danger hover:opacity-80 transition-opacity"
           >
             <AlertCircle className="h-3.5 w-3.5" />
             {highSeverity} page{highSeverity !== 1 ? "s" : ""} need urgent attention
@@ -482,21 +482,21 @@ function StatStrip({
       value: stats?.calendarEntries,
       href: `/projects/${projectId}/content-calendar`,
       icon: <Calendar className="h-3.5 w-3.5" />,
-      accentColor: "text-blue-500",
+      accentColor: "text-status-info",
     },
     {
       label: "Generated",
       value: stats?.blogsGenerated,
       href: `/projects/${projectId}/content-history`,
       icon: <TrendingUp className="h-3.5 w-3.5" />,
-      accentColor: "text-emerald-500",
+      accentColor: "text-status-success",
     },
     {
       label: "Total keywords",
       value: stats?.totalKeywords,
       href: `/projects/${projectId}/keywords`,
       icon: <Globe2 className="h-3.5 w-3.5" />,
-      accentColor: "text-amber-500",
+      accentColor: "text-status-warning",
     },
   ];
 

@@ -73,8 +73,8 @@ type InsightsView = "opportunities" | "competitors";
 
 const GAP_STYLES: Record<GapType, string> = {
   missing: "border-brand-coral/20 bg-brand-coral/10 text-brand-coral",
-  weak: "border-[#f59e0b]/20 bg-[#f59e0b]/10 text-[#f59e0b]",
-  untapped: "border-[#10b981]/20 bg-[#10b981]/10 text-[#10b981]",
+  weak: "border-status-warning/20 bg-status-warning/10 text-status-warning",
+  untapped: "border-status-success/20 bg-status-success/10 text-status-success",
 };
 
 function formatMonthlyTraffic(volume: number): string {
@@ -93,8 +93,8 @@ function compactUrl(url: string) {
 }
 
 function scoreColor(score: number) {
-  if (score >= 70) return "text-[#10b981] border-[#10b981]/20 bg-[#10b981]/10";
-  if (score >= 50) return "text-[#f59e0b] border-[#f59e0b]/20 bg-[#f59e0b]/10";
+  if (score >= 70) return "text-status-success border-status-success/20 bg-status-success/10";
+  if (score >= 50) return "text-status-warning border-status-warning/20 bg-status-warning/10";
   if (score >= 30) return "text-brand-action border-brand-action/20 bg-brand-action/10";
   return "text-text-tertiary border-border-subtle bg-surface-elevated";
 }
@@ -644,8 +644,8 @@ function InsightsViewDropdown({
 type GapAiEvalData = NonNullable<KeywordGap['ai_eval_data']>;
 
 function AI_GAP_SCORE_CATEGORY(score: number): { icon: string; colorClass: string; label: string } {
-  if (score >= 75) return { icon: "★", colorClass: "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10", label: "High opportunity" };
-  if (score >= 55) return { icon: "◆", colorClass: "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10", label: "Good fit" };
+  if (score >= 75) return { icon: "★", colorClass: "text-status-success border-status-success/25 bg-status-success/10", label: "High opportunity" };
+  if (score >= 55) return { icon: "◆", colorClass: "text-status-warning border-status-warning/25 bg-status-warning/10", label: "Good fit" };
   if (score >= 35) return { icon: "▸", colorClass: "text-brand-action border-brand-action/25 bg-brand-action/10", label: "Moderate" };
   return { icon: "▾", colorClass: "text-text-tertiary border-border-subtle bg-surface-elevated", label: "Low priority" };
 }
@@ -691,7 +691,7 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
               <span className="w-[100px] shrink-0 text-[10px] text-text-tertiary">{d.label}</span>
               <div className="flex-1 h-1 rounded-full bg-surface-tertiary overflow-hidden">
                 <div
-                  className={`h-full rounded-full ${d.val >= 7 ? 'bg-[#10b981]' : d.val >= 4 ? 'bg-[#f59e0b]' : 'bg-brand-coral'}`}
+                  className={`h-full rounded-full ${d.val >= 7 ? 'bg-status-success' : d.val >= 4 ? 'bg-status-warning' : 'bg-brand-coral'}`}
                   style={{ width: `${d.val * 10}%` }}
                 />
               </div>
@@ -709,7 +709,7 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
       {/* Strengths */}
       {data.reasoning.strengths?.length > 0 && (
         <div>
-          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#10b981]">Strengths</p>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-status-success">Strengths</p>
           <ul className="space-y-0.5">
             {data.reasoning.strengths.slice(0, 2).map((s, i) => (
               <li key={i} className="text-[11px] text-text-secondary leading-snug">+ {s}</li>
@@ -928,7 +928,7 @@ function OpportunityDashboard({
       ) : null}
 
       {hasGapsInProject && aiScoringDone && (
-        <div className="flex items-center gap-3 rounded-[12px] border border-[#8b5cf6]/25 bg-[#8b5cf6]/10 px-4 py-3 text-[13px] text-[#8b5cf6]">
+        <div className="flex items-center gap-3 rounded-[12px] border border-brand-violet/25 bg-brand-violet/10 px-4 py-3 text-[13px] text-brand-violet">
           <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
@@ -998,13 +998,13 @@ function OpportunityDashboard({
                   disabled={aiScoring}
                   className={`inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:scale-105 ${
                     aiScoring
-                      ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/20 text-[#8b5cf6] animate-pulse"
-                      : "border-[#8b5cf6]/30 bg-[#8b5cf6]/10 text-[#8b5cf6] hover:bg-[#8b5cf6]/20"
+                      ? "border-brand-violet/40 bg-brand-violet/20 text-brand-violet animate-pulse"
+                      : "border-brand-violet/30 bg-brand-violet/10 text-brand-violet hover:bg-brand-violet/20"
                   }`}
                 >
                   {aiScoring ? (
                     <>
-                      <div className="h-3 w-3 rounded-full border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] animate-spin" />
+                      <div className="h-3 w-3 rounded-full border-2 border-brand-violet/30 border-t-brand-violet animate-spin" />
                       <span>Scoring…</span>
                     </>
                   ) : (
@@ -1111,10 +1111,10 @@ function OpportunityDashboard({
               <tbody className="divide-y divide-border-subtle/60">
                 {displayedGaps.map(g => {
                   const intentTags: Array<{ label: string; abbr: string; active: boolean; color: string }> = [
-                    { label: "Informational", abbr: "I", active: Boolean(g.is_informational), color: "text-[#60a5fa] border-[#60a5fa]/25 bg-[#60a5fa]/10" },
-                    { label: "Navigational", abbr: "N", active: Boolean(g.is_navigational), color: "text-[#a78bfa] border-[#a78bfa]/25 bg-[#a78bfa]/10" },
-                    { label: "Commercial", abbr: "C", active: Boolean(g.is_commercial), color: "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" },
-                    { label: "Transactional", abbr: "T", active: Boolean(g.is_transactional), color: "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10" },
+                    { label: "Informational", abbr: "I", active: Boolean(g.is_informational), color: "text-status-info border-status-info/25 bg-status-info/10" },
+                    { label: "Navigational", abbr: "N", active: Boolean(g.is_navigational), color: "text-brand-violet-soft border-brand-violet-soft/25 bg-brand-violet-soft/10" },
+                    { label: "Commercial", abbr: "C", active: Boolean(g.is_commercial), color: "text-status-warning border-status-warning/25 bg-status-warning/10" },
+                    { label: "Transactional", abbr: "T", active: Boolean(g.is_transactional), color: "text-status-success border-status-success/25 bg-status-success/10" },
                   ].filter(t => t.active);
                   const kd = g.kd;
                   const position = g.position;
@@ -1151,7 +1151,7 @@ function OpportunityDashboard({
                         <div className="flex items-center gap-2">
                           <p className="truncate text-[14px] font-medium text-text-primary">{g.keyword}</p>
                           {aiGapKeywordSet.has(g.keyword.toLowerCase()) ? (
-                            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">AI pick</span>
+                            <span className="shrink-0 rounded-full border border-brand-violet/30 bg-brand-violet/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-violet">AI pick</span>
                           ) : null}
                         </div>
                         <p className="mt-0.5 text-[11px] text-text-tertiary">{g.top_competitor_domain}</p>
@@ -1175,8 +1175,8 @@ function OpportunityDashboard({
                         {typeof kd === "number" && kd > 0 ? (
                           <span className={`inline-flex items-center justify-center min-w-[34px] rounded-[4px] border px-1.5 py-0.5 text-[12px] font-bold tabular-nums ${
                             kd >= 70 ? "text-brand-coral border-brand-coral/25 bg-brand-coral/10" :
-                            kd >= 40 ? "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" :
-                            "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10"
+                            kd >= 40 ? "text-status-warning border-status-warning/25 bg-status-warning/10" :
+                            "text-status-success border-status-success/25 bg-status-success/10"
                           }`}>{kd}</span>
                         ) : <span className="text-[12px] text-text-tertiary">—</span>}
                       </td>
@@ -1184,8 +1184,8 @@ function OpportunityDashboard({
                       <td className="px-4 py-3 text-center">
                         {typeof position === "number" && position > 0 ? (
                           <span className={`inline-flex items-center justify-center min-w-[34px] rounded-[4px] border px-1.5 py-0.5 text-[12px] font-bold tabular-nums ${
-                            position <= 3 ? "text-[#10b981] border-[#10b981]/25 bg-[#10b981]/10" :
-                            position <= 10 ? "text-[#f59e0b] border-[#f59e0b]/25 bg-[#f59e0b]/10" :
+                            position <= 3 ? "text-status-success border-status-success/25 bg-status-success/10" :
+                            position <= 10 ? "text-status-warning border-status-warning/25 bg-status-warning/10" :
                             "text-text-secondary border-border-subtle bg-surface-elevated"
                           }`}>#{position}</span>
                         ) : <span className="text-[12px] text-text-tertiary">—</span>}

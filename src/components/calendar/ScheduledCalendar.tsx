@@ -50,8 +50,8 @@ function fmtDate(iso: string): string {
 
 function KdCell({ kd }: { kd?: number | null }) {
   if (!kd || kd <= 0) return <span className="text-text-tertiary text-[13px]">—</span>;
-  if (kd < 30) return <span className="text-[12px] font-bold text-[#10b981]">Easy</span>;
-  if (kd < 60) return <span className="text-[12px] font-bold text-[#f59e0b]">Medium</span>;
+  if (kd < 30) return <span className="text-[12px] font-bold text-status-success">Easy</span>;
+  if (kd < 60) return <span className="text-[12px] font-bold text-status-warning">Medium</span>;
   return <span className="text-[12px] font-bold text-brand-coral">Hard</span>;
 }
 
@@ -244,7 +244,7 @@ const CalendarListRow = memo(function CalendarListRow({
         {isLocked && (
           <ProjectNavLink
             href={getContentPreviewUrl(projectId, resolvedBlogId || entry.id, historyEntry?.contentType || entry.article_type)}
-            className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1 rounded-full border border-status-success/20 bg-status-success/10 px-4 py-1.5 text-[12px] font-semibold text-status-success transition-colors hover:bg-status-success/20 whitespace-nowrap"
           >
             View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
           </ProjectNavLink>
@@ -259,8 +259,8 @@ const CalendarListRow = memo(function CalendarListRow({
           </button>
         )}
         {isGenerating && (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#f59e0b]/20 px-4 py-1.5 text-[12px] font-semibold text-[#f59e0b]/70 select-none whitespace-nowrap">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f59e0b]" />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-status-warning/20 px-4 py-1.5 text-[12px] font-semibold text-status-warning/70 select-none whitespace-nowrap">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-status-warning" />
             Generating…
           </span>
         )}
@@ -576,7 +576,7 @@ export function ScheduledCalendar() {
               className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
             >
               View History
-              <span className="rounded-full bg-[#10b981]/15 px-2 py-0.5 text-[11px] font-bold text-[#10b981]">
+              <span className="rounded-full bg-status-success/15 px-2 py-0.5 text-[11px] font-bold text-status-success">
                 {blogReady} ready
               </span>
             </ProjectNavLink>
@@ -617,7 +617,7 @@ export function ScheduledCalendar() {
                 {blogReady > 0 && (
                   <>
                     <span className="text-text-tertiary/30">·</span>
-                    <span className="text-[#10b981]">
+                    <span className="text-status-success">
                       <span className="font-semibold">{blogReady}</span> asset{blogReady !== 1 ? "s" : ""} ready
                     </span>
                   </>

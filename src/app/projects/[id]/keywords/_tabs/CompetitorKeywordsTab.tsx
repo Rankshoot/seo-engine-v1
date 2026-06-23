@@ -46,7 +46,7 @@ function compactUrl(url: string): string {
 }
 
 const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
+  kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function getAiGapScoreCategory(score: number): { icon: string; colorClass: string; label: string } {
   if (score >= 75) return { icon: "★", colorClass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400", label: "High opportunity" };
@@ -115,7 +115,7 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
               <span className="w-[100px] shrink-0 text-[10px] text-text-tertiary">{d.label}</span>
               <div className="flex-1 h-1 rounded-full bg-surface-tertiary overflow-hidden">
                 <div
-                  className={`h-full rounded-full ${d.val >= 7 ? "bg-[#10b981]" : d.val >= 4 ? "bg-[#f59e0b]" : "bg-brand-coral"}`}
+                  className={`h-full rounded-full ${d.val >= 7 ? "bg-status-success" : d.val >= 4 ? "bg-status-warning" : "bg-brand-coral"}`}
                   style={{ width: `${d.val * 10}%` }}
                 />
               </div>
@@ -131,7 +131,7 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
 
       {data.reasoning.strengths?.length > 0 && (
         <div>
-          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#10b981]">Strengths</p>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-status-success">Strengths</p>
           <ul className="space-y-0.5">
             {data.reasoning.strengths.slice(0, 2).map((s, i) => (
               <li key={i} className="text-[11px] text-text-secondary leading-snug">+ {s}</li>
@@ -562,7 +562,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             </p>
           </Tooltip>
           {aiGapKeywordSet.has(g.keyword.toLowerCase()) && (
-            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+            <span className="shrink-0 rounded-full border border-brand-violet/30 bg-brand-violet/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-violet">
               AI pick
             </span>
           )}
@@ -603,10 +603,10 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       tooltip: "Search intent: Informational · Navigational · Commercial · Transactional",
       cell: (g: KeywordGap) => {
         const activeIntents = [
-          g.is_transactional && { label: "Transactional", color: "text-[#10b981]" },
-          g.is_commercial && { label: "Commercial", color: "text-[#f59e0b]" },
-          g.is_informational && { label: "Informational", color: "text-[#60a5fa]" },
-          g.is_navigational && { label: "Navigational", color: "text-[#a78bfa]" },
+          g.is_transactional && { label: "Transactional", color: "text-status-success" },
+          g.is_commercial && { label: "Commercial", color: "text-status-warning" },
+          g.is_informational && { label: "Informational", color: "text-status-info" },
+          g.is_navigational && { label: "Navigational", color: "text-brand-violet-soft" },
         ].filter((t): t is { label: string; color: string } => !!t);
 
         return activeIntents.length > 0 ? (
@@ -781,13 +781,13 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             disabled={aiScoring || loading}
             className={`inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:scale-105 ${
               aiScoring
-                ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/20 text-[#8b5cf6] animate-pulse"
-                : "border-[#8b5cf6]/30 bg-[#8b5cf6]/10 text-[#8b5cf6] hover:bg-[#8b5cf6]/20"
+                ? "border-brand-violet/40 bg-brand-violet/20 text-brand-violet animate-pulse"
+                : "border-brand-violet/30 bg-brand-violet/10 text-brand-violet hover:bg-brand-violet/20"
             }`}
           >
             {aiScoring ? (
               <>
-                <div className="h-3 w-3 rounded-full border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] animate-spin" />
+                <div className="h-3 w-3 rounded-full border-2 border-brand-violet/30 border-t-[#8b5cf6] animate-spin" />
                 <span>Scoring…</span>
               </>
             ) : (

@@ -74,7 +74,10 @@ async function fetchHtmlWithPlaywright(url: string, timeoutMs = 25_000): Promise
   if (!playwrightAvailable) return null;
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
     const context = await browser.newContext({
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -338,6 +341,27 @@ function extractFaqsFromHtml(html: string): string {
   return markdown;
 }
 
+export function isJinaPdfHijack(markdown: string, originalUrl: string): boolean {
+  // If the user intentionally audited a PDF URL, it's not a hijack
+  const path = originalUrl.toLowerCase().split('?')[0];
+  if (path.endsWith('.pdf')) {
+    return false;
+  }
+
+  // Inspect the top metadata section (first 1500 chars) of Jina's response
+  const header = markdown.slice(0, 1500);
+
+  // Check if Jina's PDF metadata header is present:
+  // Jina's PDF engine always prepends "Number of Pages: X" to its markdown output.
+  const hasPdfPages = /^\s*Number of Pages:\s*\d+/im.test(header);
+
+  // As a backup, check if the Title metadata explicitly references PDF and Jina metadata is present
+  const hasPdfTitle = /^\s*Title:\s*.*?\bpdf\b/im.test(header);
+  const isJinaScrape = header.includes('URL Source:');
+
+  return hasPdfPages || (hasPdfTitle && isJinaScrape);
+}
+
 export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapedPageMarkdown> {
   try {
     const timeoutMs = opts.timeoutMs ?? 15_000;
@@ -345,7 +369,10 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
     if (!html) {
       console.log(`[hybridScraper] Using Jina Reader for ${url}`);
       const jina = await readUrlViaJinaReader(url, { timeoutMs });
-      if (jina.ok && jina.markdown.trim()) {
+      
+      const isHijack = jina.ok && isJinaPdfHijack(jina.markdown, url);
+
+      if (jina.ok && jina.markdown.trim() && !isHijack) {
         return {
           url,
           markdown: jina.markdown,
@@ -353,7 +380,12 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
           ok: true,
         };
       }
-      console.log(`[hybridScraper] Using Playwright fallback for ${url}`);
+      
+      if (isHijack) {
+        console.log(`[hybridScraper] Jina PDF hijack detected for ${url}. Falling back to Playwright.`);
+      } else {
+        console.log(`[hybridScraper] Jina failed or returned empty, using Playwright fallback for ${url}`);
+      }
       html = await fetchHtmlWithPlaywright(url, timeoutMs);
     }
     if (!html) {

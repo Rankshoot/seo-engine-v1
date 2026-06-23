@@ -108,62 +108,44 @@ Key diagnosis: ${contentAnalysisBundle.plain_language_verdict}`
   const originalBudget = fullBundle ? 20_000 : 10_000;
   const originalHead = originalMarkdown.slice(0, originalBudget);
 
-  const modeIntro = fullBundle
-    ? `You are a senior SEO editor. The user clicked "Generate enhanced" after a full content-quality analysis. Your job is to produce a **strong, search-ready** version of the SAME article: same core topic, same audience, same primary keyword intent — but comprehensively upgraded for clarity, depth, E-E-A-T, on-page SEO, and reader UX.
-
-This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong existing paragraphs where they already work; rewrite or expand anywhere needed to satisfy **every** requirement block below (all audit issues, all rubric rows that are not pass, all quick wins, all content gaps).`
-    : `You are a senior SEO + content editor. Repair an existing public blog post by making the smallest useful changes needed to address the audit issues below. This is NOT a net-new article generation task.`;
-
-  const modeRules = fullBundle
-    ? `IMPORTANT RULES (FULL ENHANCEMENT):
-- Keep the same topic, angle, and reader promise as the original. Do NOT pivot industry, product, or audience.
-- Target PRIMARY KEYWORD naturally in the H1 (if TITLE_NEEDS_REPAIR), first ~120 words, at least one H2, and sporadically in body — never keyword stuffing.
-- Aim for roughly ${targetWords} words (±15%). If the draft was thin, add substantive sections; if long, tighten fluff without losing coverage of gaps/issues.
-- Output valid Markdown only. No HTML.
-- Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
-- Start with one H1 (# Title).
-- Immediately under the H1, write one "answer-first" paragraph in ≤80 words that states the direct takeaway (optimized for AI Overviews / featured snippets).
-- Use clear modular H2/H3 hierarchy (RAG-friendly). Merge redundant headings; fix weak single-sentence sections.
-- Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and long-tail phrasing.
-- Include **at least 3 and at most 8** credible external citations as markdown links in the body. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
-- Use **at least 2** INTERNAL LINK POOL URLs verbatim in contextually relevant sentences.
-- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
-- Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
-- If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
-- Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.`
-    : `IMPORTANT RULES (REPAIR):
-- This is a REPAIR of an existing page — the topic must stay the same. Do NOT pivot to a different product, industry, or audience.
-- Target the same primary keyword unless the audit explicitly says the keyword is dead; then re-target to the closest secondary keyword listed.
-- Preserve every section, claim, example, and phrasing that is already correct. Only rewrite the parts connected to the listed audit issues or missing subtopics.
-- Output must be valid Markdown. No HTML.
-- Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
-- Start with an H1 (# Title).
-- Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
-- Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
-- Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
-- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
-- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
-- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
-- IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`;
+  const systemInstructions = `You are a senior SEO editor. Your job is to produce a strong, search-ready version of the blog post: maintaining the same core topic, same audience, and same primary keyword intent, but comprehensively upgraded for clarity, depth, E-E-A-T, on-page SEO, and reader UX by addressing all audit issues and missing subtopics.`;
 
   const titleMetaBlock = `- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || "(keep original H1)"}".
 - Do not change the meta description unless META_NEEDS_REPAIR is true. If false, keep the same marketing angle as the original page (do not invent a new pitch).`;
 
-  const rubricSection =
-    fullBundle && rubricBlock
-      ? `QUALITY RUBRIC — STILL NEEDS WORK (address each; if an item is marginal, strengthen it anyway):\n${rubricBlock}\n\n`
-      : "";
+  const rules = `IMPORTANT RULES FOR BLOG REPAIR & ENHANCEMENT:
+- TOPIC & VOICE PRESERVATION: Keep the same core topic, angle, and reader promise as the original. Do NOT pivot the industry, product, or audience. Preserve all sections, claims, examples, and phrasing that are already correct, unless they conflict with the audit issues or missing subtopics.
+- KEYWORD TARGETING: Target the PRIMARY KEYWORD naturally in the H1 title, within the first 120 words of the intro, in at least one H2 heading, and naturally/sporadically throughout the body text (aim for 0.5%–3% density, do not keyword stuff).
+- TARGET LENGTH & DEPTH: Aim to expand the content if the original is thin or missing key subtopics, targeting roughly ${targetWords} words (±15%). If the draft is already long and complete, focus on tightening fluff without losing coverage of gaps/issues.
+- FORMATTING: Output valid Markdown only. No HTML. Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
+- STRUCTURE:
+  * Start with exactly one H1 (# Title) at the very top.
+  * Immediately under the H1, write one "answer-first" paragraph in ≤80 words stating the direct takeaway/summary (optimized for AI Overviews / featured snippets).
+  * Use clear modular H2/H3 headings for hierarchy.
+- CITATIONS & LINKS:
+  * Include/Preserve 3 to 8 credible external citations as markdown links in the body. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
+  * Weave in at least 2 internal links from the INTERNAL LINK POOL verbatim.
+  * Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
+- FREQUENTLY ASKED QUESTIONS: Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and search questions.
+- STYLE & QUALITY:
+  * Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
+  * If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
+  * Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections.
+- PDF CONTENT HANDLING: If the ORIGINAL PAGE contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`;
 
-  const quickWinsSection =
-    fullBundle && contentAnalysisBundle?.quick_wins?.length
-      ? `QUICK WINS (implement each):\n- ${contentAnalysisBundle.quick_wins.join("\n- ")}\n\n`
-      : "";
+  const rubricSection = rubricBlock
+    ? `QUALITY RUBRIC — STILL NEEDS WORK (address each; if an item is marginal, strengthen it anyway):\n${rubricBlock}\n\n`
+    : "";
 
-  const prompt = `${modeIntro}
+  const quickWinsSection = contentAnalysisBundle?.quick_wins?.length
+    ? `QUICK WINS (implement each):\n- ${contentAnalysisBundle.quick_wins.join("\n- ")}\n\n`
+    : "";
+
+  const prompt = `${systemInstructions}
 
 ${titleMetaBlock}
 
-${modeRules}
+${rules}
 
 SOURCE URL (the live page being repaired): ${sourceUrl}
 ORIGINAL TITLE/H1: ${originalTitle || "(unknown)"}
@@ -171,7 +153,7 @@ TITLE_NEEDS_REPAIR: ${titleNeedsRepair ? "true" : "false"}
 META_NEEDS_REPAIR: ${metaNeedsRepair ? "true" : "false"}
 PRIMARY KEYWORD: ${primaryKeyword || "(infer from title)"}
 SECONDARY KEYWORDS: ${secondaryKeywords.join(", ") || "(none)"}
-TARGET LENGTH: ~${targetWords} words (${fullBundle ? "full enhancement" : "repair"} mode)
+TARGET LENGTH: ~${targetWords} words
 ${briefLine}
 
 AUDIENCE: ${project.target_audience}

@@ -2612,7 +2612,7 @@ Rules — read carefully:
 - Include 1-4 quick_wins.
 - Be specific. Reference actual text from the article when relevant.
 - Do NOT fabricate keyword volume data. Focus purely on content quality.
-- Respect PDF downloads: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides), do NOT flag this as an issue (such as 'content hidden in PDF' or 'locked value proposition'). Respect the PDF download as a premium feature/downloadable asset and focus your audit purely on the on-page text content.`;
+- Respect PDF downloads & promised content: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides) and the title/H1 promises a specific number or list of items (e.g., "60+ questions", "100+ templates"), do NOT flag this as an issue (such as 'content hidden in PDF', 'locked value proposition', 'items/questions not listed on-page', or 'thin content'). Respect that the PDF download serves as the premium delivery mechanism for the full list/assets, and focus your audit purely on the supporting on-page text content without demanding that the full set be pasted onto the page.`;
 
   try {
     const raw = await geminiGenerate(prompt, 2);

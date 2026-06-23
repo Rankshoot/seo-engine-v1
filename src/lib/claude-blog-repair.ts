@@ -127,6 +127,7 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and long-tail phrasing.
 - Include **at least 3 and at most 8** credible external citations as markdown links in the body. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
 - Use **at least 2** INTERNAL LINK POOL URLs verbatim in contextually relevant sentences.
+- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
 - Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
 - If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
 - Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.`
@@ -141,8 +142,9 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
 - Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
 - Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
+- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
 - Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
-- **IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`;
+- IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`;
 
   const titleMetaBlock = `- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || "(keep original H1)"}".
 - Do not change the meta description unless META_NEEDS_REPAIR is true. If false, keep the same marketing angle as the original page (do not invent a new pitch).`;

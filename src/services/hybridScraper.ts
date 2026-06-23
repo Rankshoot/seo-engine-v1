@@ -362,6 +362,117 @@ export function isJinaPdfHijack(markdown: string, originalUrl: string): boolean 
   return hasPdfPages || (hasPdfTitle && isJinaScrape);
 }
 
+/**
+ * Pre-processes HTML to find PDF links/embeds, extracting them and placing them
+ * in clean, non-strippable paragraphs so that Readability doesn't discard them.
+ */
+function extractAndPreservePdfLinks(html: string, baseUrl: string): { html: string; extractedUrls: { url: string; label: string }[] } {
+  const $ = cheerio.load(html);
+  const extractedUrls: { url: string; label: string }[] = [];
+  const processedUrls = new Set<string>();
+
+  const addExtracted = (rawUrl: string, rawLabel: string) => {
+    try {
+      const resolved = new URL(rawUrl, baseUrl).href;
+      if (!processedUrls.has(resolved)) {
+        processedUrls.add(resolved);
+        const cleanLabel = rawLabel.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+        extractedUrls.push({ url: resolved, label: cleanLabel });
+      }
+    } catch {
+      // Invalid URL
+    }
+  };
+
+  // 1. Process wp-block-file containers (WordPress specific but very common)
+  $('.wp-block-file').each((_, container) => {
+    const $container = $(container);
+    let pdfUrl = '';
+    let label = '';
+
+    // Look for pdf links inside this container
+    $container.find('a[href]').each((_, a) => {
+      const $a = $(a);
+      const href = $a.attr('href');
+      if (href && href.toLowerCase().includes('.pdf')) {
+        pdfUrl = href;
+        const text = $a.text().trim();
+        if (text && text.toLowerCase() !== 'download' && !label) {
+          label = text;
+        }
+      }
+    });
+
+    // If no label but object exists
+    if (!label) {
+      const embed = $container.find('.wp-block-file__embed');
+      if (embed.length) {
+        label = embed.attr('aria-label') || 'Download PDF';
+        if (!pdfUrl) {
+          pdfUrl = embed.attr('data') || embed.attr('src') || '';
+        }
+      }
+    }
+
+    if (pdfUrl) {
+      addExtracted(pdfUrl, label || 'Download PDF');
+      const resolvedUrl = new URL(pdfUrl, baseUrl).href;
+      const cleanLabel = label.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+      
+      // Replace entire container with a standard paragraph containing the link
+      $container.replaceWith(`<p><a href="${resolvedUrl}">${cleanLabel}</a></p>`);
+    }
+  });
+
+  // 2. Process other elements that might embed PDFs (object, embed, iframe)
+  $('object[data], embed[src], iframe[src]').each((_, el) => {
+    const $el = $(el);
+    // Skip if it was already removed/replaced
+    if ($el.closest('html').length === 0) return;
+
+    const data = $el.attr('data') || '';
+    const src = $el.attr('src') || '';
+    const type = $el.attr('type') || '';
+    const pdfUrl = data.toLowerCase().includes('.pdf') ? data : (src.toLowerCase().includes('.pdf') || type.toLowerCase() === 'application/pdf' ? src : '');
+
+    if (pdfUrl) {
+      const label = $el.attr('aria-label') || $el.text().trim() || 'Download PDF';
+      addExtracted(pdfUrl, label);
+      
+      const resolvedUrl = new URL(pdfUrl, baseUrl).href;
+      const cleanLabel = label.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+      
+      // Replace with clean paragraph link
+      $el.replaceWith(`<p><a href="${resolvedUrl}">${cleanLabel}</a></p>`);
+    }
+  });
+
+  // 3. Process any other raw a[href] tags pointing to a PDF to make sure they are not stripped
+  $('a[href]').each((_, el) => {
+    const $el = $(el);
+    if ($el.closest('html').length === 0) return;
+
+    const href = $el.attr('href') || '';
+    if (href.toLowerCase().includes('.pdf')) {
+      const label = $el.text().trim() || 'Download PDF';
+      addExtracted(href, label);
+
+      // Make sure it is inside a readable paragraph, or wrap it
+      const parent = $el.parent();
+      const parentTag = parent.prop('tagName')?.toLowerCase();
+      if (parentTag !== 'p' && parentTag !== 'li' && parentTag !== 'td') {
+        const resolvedUrl = new URL(href, baseUrl).href;
+        $el.replaceWith(`<p><a href="${resolvedUrl}">${label}</a></p>`);
+      }
+    }
+  });
+
+  return {
+    html: $.html(),
+    extractedUrls
+  };
+}
+
 export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapedPageMarkdown> {
   try {
     const timeoutMs = opts.timeoutMs ?? 15_000;
@@ -391,6 +502,10 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
     if (!html) {
       throw new Error(`Failed to fetch HTML for ${url}`);
     }
+
+    // Pre-process HTML to extract and preserve PDF links from stripping
+    const { html: processedHtml, extractedUrls } = extractAndPreservePdfLinks(html, url);
+    html = processedHtml;
 
     const { document } = parseHTML(html);
     
@@ -425,6 +540,17 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
       const $ = cheerio.load(html);
       $('script, style, noscript').remove();
       markdown = $('body').text().replace(/\s+/g, ' ').trim();
+    }
+
+    // Post-process markdown to append any PDF links that might have been stripped
+    if (extractedUrls.length > 0) {
+      extractedUrls.forEach(({ url: pdfUrl, label }) => {
+        const hasLink = markdown.toLowerCase().includes(pdfUrl.toLowerCase());
+        if (!hasLink) {
+          console.log(`[hybridScraper] Appending missing PDF link to markdown: ${pdfUrl}`);
+          markdown += `\n\n[${label}](${pdfUrl})\n`;
+        }
+      });
     }
 
     return {

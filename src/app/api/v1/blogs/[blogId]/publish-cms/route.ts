@@ -10,6 +10,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { apiJson } from "@/server/http/json";
 import { createUserStrapiClient, StrapiUserClientError } from "@/services/strapi/user-client";
 import type { Blog } from "@/lib/types";
+import { uploadBase64Images } from "@/lib/server/blog-images";
 
 export const runtime = "nodejs";
 
@@ -70,19 +71,35 @@ export async function POST(
     }
   }
 
+  // Extract and upload any base64 images to Supabase Storage, and update local database
+  let finalContent = blog.content;
+  try {
+    const updatedContent = await uploadBase64Images(blog.content, blog.id);
+    if (updatedContent !== blog.content) {
+      finalContent = updatedContent;
+      await supabaseAdmin
+        .from("blogs")
+        .update({ content: updatedContent, updated_at: new Date().toISOString() })
+        .eq("id", blog.id);
+    }
+  } catch (storageErr) {
+    console.error("[publish-cms] failed to process and upload inline images", storageErr);
+    // Proceed publishing with original content even if storage upload fails to avoid blocking user
+  }
+
   const client = createUserStrapiClient(integration.base_url, integration.api_token, integration.collection_name);
 
   try {
     const result = await client.publishArticle({
       title:           blog.title,
       slug:            blog.slug,
-      content:         blog.content,
-      excerpt:         buildExcerpt(blog.content),
+      content:         finalContent,
+      excerpt:         buildExcerpt(finalContent),
       meta_description: blog.meta_description,
       target_keyword:  blog.target_keyword,
       seo_score:       null,
       word_count:      blog.word_count ?? null,
-      cover_image_url: extractCoverImageUrl(blog.content),
+      cover_image_url: extractCoverImageUrl(finalContent),
       source_blog_id:  blog.id,
     });
 
@@ -116,3 +133,4 @@ export async function POST(
     return apiJson({ success: false, error: "Failed to publish to your CMS" }, { status: 500 });
   }
 }
+

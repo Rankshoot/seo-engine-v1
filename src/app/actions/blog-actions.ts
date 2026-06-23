@@ -679,10 +679,13 @@ function sanitizeBlogMarkdown(markdown: string): string {
   // JSON (e.g. `{"title":"...","contentMarkdown":"# H1\n\n...","..."}`)
   // extract contentMarkdown before any other processing.
   const rescued = rescueJsonBlogContent(markdown);
+
+  // Clean up any newlines or spaces between markdown image brackets and parentheses
+  const healed = rescued.replace(/!\[([^\]]*?)\]\s+\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, '![$1]($2)');
   
   // Mask ```youtube\n...\n``` blocks
   const youtubeBlocks: string[] = [];
-  let masked = rescued.replace(/```youtube\r?\n([\s\S]*?)\r?\n```/g, (match) => {
+  let masked = healed.replace(/```youtube\r?\n([\s\S]*?)\r?\n```/g, (match) => {
     youtubeBlocks.push(match);
     return `__YOUTUBE_BLOCK_PLACEHOLDER_${youtubeBlocks.length - 1}__`;
   });
@@ -916,6 +919,15 @@ export async function updateBlogContent(
     return { success: false, error: 'Blog content is too short to save.', data: null };
   }
 
+  // Upload any inline base64 images to Supabase Storage
+  let uploadedContent = cleaned;
+  try {
+    const { uploadBase64Images } = await import('@/lib/server/blog-images');
+    uploadedContent = await uploadBase64Images(cleaned, blogId);
+  } catch (err) {
+    console.error('[blog-actions] failed to process and upload inline images during update', err);
+  }
+
   const { data: blog, error: bErr } = await supabaseAdmin
     .from('blogs')
     .select('id, project_id')
@@ -933,10 +945,10 @@ export async function updateBlogContent(
 
   if (pErr || !project) return { success: false, error: 'Not authorized', data: null };
 
-  const { externalLinks, internalLinks } = extractMarkdownLinks(cleaned, project.domain as string);
+  const { externalLinks, internalLinks } = extractMarkdownLinks(uploadedContent, project.domain as string);
   const patch: Record<string, unknown> = {
-    content: cleaned,
-    word_count: countWords(cleaned),
+    content: uploadedContent,
+    word_count: countWords(uploadedContent),
     external_links: externalLinks,
     internal_links: internalLinks,
     updated_at: new Date().toISOString(),

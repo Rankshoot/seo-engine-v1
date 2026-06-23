@@ -197,7 +197,7 @@ Write the repaired blog now. End the blog content, then on the next line output 
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
 
-  const anthropic = new Anthropic({ apiKey });
+  const anthropic = new Anthropic({ apiKey, maxRetries: 5 });
 
   let fullText = "";
   const stream = anthropic.messages.stream({

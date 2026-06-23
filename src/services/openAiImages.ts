@@ -93,7 +93,11 @@ function assetWithPlaceholder(request: Omit<BlogImageAsset, 'url'>): BlogImageAs
  */
 export function normalizeMarkdownImages(content: string): string {
   if (!content) return content;
-  return content.replace(
+  
+  // Clean up split markdown image brackets and parentheses
+  const healed = content.replace(/!\[([^\]]*?)\]\s+\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, '![$1]($2)');
+
+  return healed.replace(
     /(!\[[^\]]*\]\()(data:image\/svg\+xml[^)]*)(\))/gi,
     `$1${BLOG_IMAGE_PLACEHOLDER_URL}$3`
   );

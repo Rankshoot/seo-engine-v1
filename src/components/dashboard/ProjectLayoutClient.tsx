@@ -29,7 +29,7 @@ export default function ProjectLayoutClient({
   // }
 
   return (
-    <div className="h-screen overflow-hidden bg-surface-primary flex transition-all duration-300 ease-in-out">
+    <div className="h-screen overflow-hidden bg-surface-primary flex">
       <ProjectSidebar
         project={project}
         projectId={projectId}
@@ -39,11 +39,13 @@ export default function ProjectLayoutClient({
         setIsCollapsed={setIsCollapsed}
       />
       <main
-        className={`flex-1 min-w-0 overflow-y-auto p-6 lg:p-8 transition-all duration-300 ease-in-out ${
+        className={`flex-1 min-w-0 overflow-y-auto transition-[margin] duration-300 ease-out ${
           isCollapsed ? "ml-[68px]" : "ml-[260px]"
         }`}
       >
-        {children}
+        <div className="p-6 lg:p-8 min-h-full">
+          {children}
+        </div>
       </main>
       <NavigationOverlay />
     </div>

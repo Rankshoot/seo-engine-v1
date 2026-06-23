@@ -8,6 +8,7 @@
  */
 
 export * from "./buttons/Button";
+export * from "./PageHeader";
 export * from "./cards/Card";
 export * from "./cards/StatCard";
 export * from "./typography/Typography";

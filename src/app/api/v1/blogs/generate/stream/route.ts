@@ -151,10 +151,18 @@ export async function POST(req: Request) {
               originalMarkdown = (auditRow?.scraped_markdown as string) || "";
             } catch { /* fall through to scrape */ }
 
-            if (originalMarkdown.trim().length < 400 && /^https?:\/\//i.test(repairPlan.url)) {
+            let pdfCtaUrl: string | null = null;
+            if (/^https?:\/\//i.test(repairPlan.url)) {
               const { hybridReadUrl } = await import("@/services/hybridScraper");
-              const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
-              if (fresh.ok) originalMarkdown = fresh.markdown;
+              if (originalMarkdown.trim().length < 400) {
+                const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
+                if (fresh.ok) originalMarkdown = fresh.markdown;
+                pdfCtaUrl = fresh.pdfDownloadUrl ?? null;
+              } else {
+                const { hybridReadUrl: scrapeForPdf } = await import("@/services/hybridScraper");
+                const pdfScrape = await scrapeForPdf(repairPlan.url, { timeoutMs: 10_000 }).catch(() => null);
+                pdfCtaUrl = pdfScrape?.pdfDownloadUrl ?? null;
+              }
             }
 
             if (originalMarkdown.trim().length < 400) {
@@ -209,6 +217,7 @@ export async function POST(req: Request) {
                 brief,
                 project,
                 wordCount: Math.min(4500, Math.max(1400, countWords(cleanedMarkdown) + 250)),
+                pdfCtaUrl,
               },
               {
                 // Forward Claude's streaming chunks as thinking events so the

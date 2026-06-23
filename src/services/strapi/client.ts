@@ -26,7 +26,7 @@ const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN ?? "";
 
 const COLLECTION = "articles";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RETRIES        = 3;
 
 // ─── Retry logic ──────────────────────────────────────────────────────────────
@@ -47,8 +47,9 @@ async function withRetry<T>(
     } catch (err) {
       lastError = err;
       const isNetwork = err instanceof TypeError; // fetch network error
+      const isTimeout = err instanceof Error && err.name === "AbortError";
       const isStatusErr = err instanceof StrapiApiError && isRetryable(err.status);
-      if (!isNetwork && !isStatusErr) throw err;
+      if (!isNetwork && !isTimeout && !isStatusErr) throw err;
       if (attempt < retries) {
         await new Promise(r => setTimeout(r, delayMs * 2 ** attempt));
       }

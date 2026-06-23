@@ -29,7 +29,8 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordModal";
-import { PageTitle } from "@/components/common";
+import { PageHeader, Button } from "@/components/common";
+import { motion } from "framer-motion";
 import { Dialog } from "@/components/common/dialogs/Dialog";
 import { toast } from "react-hot-toast";
 
@@ -560,39 +561,41 @@ export default function CalendarPage() {
     <div className="space-y-8 pb-20 max-w-full px-4 mx-auto">
 
       {/* ── HEADER ──────────────────────────────────────────────────────── */}
-      <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <PageTitle>Content Calendar</PageTitle>
-          <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
-            Schedule approved keywords to publish dates and track blog generation.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {blogReady > 0 && (
-            <ProjectNavLink
-              href={`/projects/${projectId}/content-generator/blogs`}
-              className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+      <PageHeader
+        title="Content Calendar"
+        description="Schedule, track and manage your content pipeline."
+        actions={
+          <>
+            {blogReady > 0 && (
+              <ProjectNavLink
+                href={`/projects/${projectId}/content-generator/blogs`}
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+              >
+                View Blogs
+                <span className="rounded-full bg-status-success/15 px-2 py-0.5 text-[11px] font-bold text-status-success">
+                  {blogReady} ready
+                </span>
+              </ProjectNavLink>
+            )}
+            <Button
+              variant="primary"
+              shape="pill"
+              size="md"
+              onClick={() => setAddKeywordModalDate("")}
+              iconLeft={
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              }
             >
-              View Blogs
-              <span className="rounded-full bg-status-success/15 px-2 py-0.5 text-[11px] font-bold text-status-success">
-                {blogReady} ready
-              </span>
-            </ProjectNavLink>
-          )}
-          <button
-            type="button"
-            onClick={() => setAddKeywordModalDate("")}
-            className="inline-flex h-10 items-center gap-2 rounded-[30px] bg-brand-primary px-5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            Add keyword
-          </button>
-        </div>
-      </div>
+              Add keyword
+            </Button>
+          </>
+        }
+      />
 
       {/* ── CALENDAR: list ↔ grid (same `calendar_entries` rows) ───────── */}
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}>
       <section className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           {/* Stats inline where the heading used to be */}
@@ -734,6 +737,7 @@ export default function CalendarPage() {
           />
         )}
       </section>
+      </motion.div>
 
       {/* ── ADD CUSTOM KEYWORD MODAL ────────────────────────────────────── */}
       <AddCustomKeywordModal

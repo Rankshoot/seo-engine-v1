@@ -10,6 +10,8 @@ import type { ContentAuditReport } from "@/lib/content-audit-studio";
 import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
 import type { BlogAuditAnalysis } from "@/lib/content-audit";
 import { Spinner, StepIndicator } from "./_shared/ch-ui";
+import { PageHeader } from "@/components/common";
+import { motion } from "framer-motion";
 import { STEPS } from "./_components/audit-config";
 import { AuditResults } from "./_components/AuditResults";
 import { AuditHistory } from "./_components/AuditHistory";
@@ -340,17 +342,13 @@ export default function ContentAuditStudioPage() {
   const handleScheduleFromHistory = (item: ContentAuditHistoryItem) => { openHistoryItem(item); setScheduleOpen(true); };
 
   return (
-    <div className="relative space-y-6 pb-20 -mt-6 lg:-mt-8">
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
-        <div className="mx-auto max-w-4xl">
-          <h1 className="text-[26px] font-bold tracking-tight text-text-primary">Content Audit Studio</h1>
-          <p className="mt-1 text-[14px] text-text-tertiary leading-relaxed">
-            Audit any blog by URL or uploaded content — SEO, GEO, AEO scores, competitor insights, and one-click enhanced regeneration.
-          </p>
-        </div>
-      </div>
+    <div className="relative space-y-6 pb-20">
+      <PageHeader
+        title="Content Audit Studio"
+        description="Audit any blog by URL or uploaded content — SEO, GEO, AEO scores, competitor insights, and one-click enhanced regeneration."
+      />
 
-      <div className="mx-auto max-w-4xl space-y-6">
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }} className="mx-auto max-w-4xl space-y-6">
         {/* ── Input card ── */}
         <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
           <div className="mb-4 inline-flex rounded-[10px] border border-border-subtle bg-surface-secondary p-0.5">
@@ -513,7 +511,7 @@ export default function ContentAuditStudioPage() {
             onScheduleFromHistory={handleScheduleFromHistory}
           />
         )}
-      </div>
+      </motion.div>
     </div>
   );
 }

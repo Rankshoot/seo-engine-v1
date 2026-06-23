@@ -1,485 +1,1346 @@
 "use client";
 
-import { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
-import { useParams } from "next/navigation";
-import { ProjectNavLink } from "@/components/ProjectNavLink";
-import { useQueryClient } from "@tanstack/react-query";
-import { qk } from "@/lib/query";
-import type { AuditCoverage, PersistedBlogAudit } from "@/app/actions/audit-actions";
-import { auditsApi } from "@/frontend/api/audits";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { toast } from "react-hot-toast";
+import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import { calendarApi } from "@/frontend/api/calendar";
-
-// Lazy load heavy modal to improve initial page load
-const AuditDetailModal = lazy(() =>
-  import("@/components/AuditDetailModal").then(m => ({
-    default: m.AuditDetailModal,
-  }))
-);
-import { buildContentHealthAuditSnapshot, extractCalendarFocusKeyword } from "@/lib/content-health-calendar";
-import { criticalityFromScore } from "@/lib/audit-criticality";
-import { Tooltip, InfoIcon } from "@/components/Tooltip";
+import { blogsApi } from "@/frontend/api/blogs";
+import type { ContentAuditReport, ContentAuditScores } from "@/lib/content-audit-studio";
+import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
+import type { BlogAuditAnalysis } from "@/lib/content-audit";
+import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import {
-  useAppDispatch,
-  useAppSelector,
-  selectContentHealthAuditWorkspace,
-} from "@/lib/redux/hooks";
-import {
-  contentHealthAuditFilterSet,
-  contentHealthAuditLoadFailed,
-  contentHealthAuditLoadStarted,
-  contentHealthAuditLoadSuccess,
-  contentHealthAuditReset,
-  type ContentHealthSeverityFilter,
-} from "@/lib/redux/content-health-audit-slice";
-import {
-  CHPageShell,
-  CHEmptyState,
-  CHFilterTabs,
-  ScoreRing,
-  SeverityChip,
-  DemandChip,
-  FunnelChip,
-  StatTile,
-  ErrorBanner,
-  SuccessBanner,
-  SkeletonRows,
-  Spinner,
-  healthScoreColor,
-  formatVolume,
+  ScoreRing, ScoreCard, SeverityChip, CategoryBadge, RubricStatus,
+  StepIndicator, EmptyState, Spinner, KeywordVerdictChip, scoreGrade, scoreColor,
 } from "./_shared/ch-ui";
 
-// ─── local constants ───────────────────────────────────────────────────────
+// ─── Analysis steps ───────────────────────────────────────────────────────────
 
-const EMPTY_COVERAGE: AuditCoverage = {
-  blogs_found: 0,
-  blogs_audited: 0,
-  last_updated_at: null,
-  avg_health: 0,
-  high_severity: 0,
-  severity_counts: { high: 0, medium: 0, low: 0 },
-};
-const BATCH_SIZE = 10;
-const AUDIT_PAGE_SIZE = 20;
-const dismissedKey = (id: string) => `seo-engine:ch-dismissed:${id}`;
+const STEPS = [
+  { label: "Reading content" },
+  { label: "Analyzing keyword" },
+  { label: "Checking competitors" },
+  { label: "Scoring with AI" },
+];
 
-function loadDismissed(projectId: string): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = localStorage.getItem(dismissedKey(projectId));
-    const a = raw ? (JSON.parse(raw) as unknown) : null;
-    return new Set(Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : []);
-  } catch { return new Set(); }
+// ─── Score dimension config ───────────────────────────────────────────────────
+
+interface ScoreDim {
+  key: keyof Omit<ContentAuditScores, "overall">;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
 }
 
-// ─── page ──────────────────────────────────────────────────────────────────
+const SCORE_DIMS: ScoreDim[] = [
+  {
+    key: "seo",
+    label: "SEO Score",
+    description: "On-page optimisation: title keyword, meta description, heading structure, schema markup, and link count.",
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
+      </svg>
+    ),
+  },
+  {
+    key: "geo",
+    label: "GEO Score",
+    description: "Generative Engine Optimization: direct answer first, cited sources, factual clarity — optimised for AI like ChatGPT and Perplexity.",
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+        <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
+        <path d="M12 6v6l4 2" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    key: "aeo",
+    label: "AEO Score",
+    description: "Answer Engine Optimization: FAQ section, question-style headings, structured data, voice-search readiness.",
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
+      </svg>
+    ),
+  },
+  {
+    key: "content_quality",
+    label: "Content Quality",
+    description: "Depth, structure, usefulness, real examples vs filler text, and overall writing quality.",
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9z" />
+      </svg>
+    ),
+  },
+  {
+    key: "keyword_relevance",
+    label: "Keyword Relevance",
+    description: "Is your primary keyword still trending? Does it have search volume? Is it worth competing for?",
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7 20 l4-16 m2 16 l4-16 M6 9h14 M4 15h14" />
+      </svg>
+    ),
+  },
+  {
+    key: "freshness",
+    label: "Freshness Score",
+    description: "How current is this content? Detects publish date, outdated statistics, and stale context.",
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+      </svg>
+    ),
+  },
+];
 
-export default function ContentHealthPage() {
+const MAX_UPLOAD_CHARS = 200_000;
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
+export default function ContentAuditStudioPage() {
   const { id: projectId } = useParams<{ id: string }>();
-  const queryClient = useQueryClient();
-  const dispatch = useAppDispatch();
-  const chStore = useAppSelector(s => selectContentHealthAuditWorkspace(s, projectId));
 
-  const [running, setRunning] = useState(false);
-  const [runSummary, setRunSummary] = useState("");
+  const [inputMode, setInputMode] = useState<"url" | "upload">("url");
+  const [url, setUrl] = useState("");
+  const [uploadedContent, setUploadedContent] = useState("");
+  const [uploadedName, setUploadedName] = useState("");
+
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisStep, setAnalysisStep] = useState(-1);
   const [error, setError] = useState("");
-  const [modalAudit, setModalAudit] = useState<PersistedBlogAudit | null>(null);
-  const [calendarAddingUrl, setCalendarAddingUrl] = useState<string | null>(null);
-  const [calendarLinkedByUrl, setCalendarLinkedByUrl] = useState<Record<string, boolean>>({});
-  const [dismissedUrls, setDismissedUrls] = useState<Set<string>>(() => new Set());
-  const loadSeq = useRef(0);
+  const [report, setReport] = useState<ContentAuditReport | null>(null);
+  const [reportSource, setReportSource] = useState<"url" | "upload">("url");
+  const [history, setHistory] = useState<ContentAuditHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors">("issues");
 
-  useEffect(() => { setDismissedUrls(loadDismissed(projectId)); }, [projectId]);
+  // Shared calendar entry between Generate + Schedule
+  const [entryId, setEntryId] = useState<string | null>(null);
+  const [scheduledDate, setScheduledDate] = useState<string | null>(null);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduledDates, setScheduledDates] = useState<Set<string>>(new Set());
 
-  const persistDismissed = useCallback((next: Set<string>) => {
-    try { localStorage.setItem(dismissedKey(projectId), JSON.stringify([...next])); } catch { /**/ }
+  // Generation
+  const [generating, setGenerating] = useState(false);
+  const [generatedBlogId, setGeneratedBlogId] = useState<string | null>(null);
+  const [generateError, setGenerateError] = useState("");
+  const [thinkingChunks, setThinkingChunks] = useState<string[]>([]);
+  const [streamLog, setStreamLog] = useState<string[]>([]);
+  const [showStreamPanel, setShowStreamPanel] = useState(false);
+
+  const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const loadHistory = useCallback(async () => {
+    if (!projectId) return;
+    setHistoryLoading(true);
+    try {
+      const res = await contentAuditApi.history(projectId);
+      if (res.success) setHistory(res.items);
+    } finally {
+      setHistoryLoading(false);
+    }
   }, [projectId]);
 
-  const dismissRow = useCallback((url: string) => {
-    setDismissedUrls(prev => {
-      const n = new Set(prev); n.add(url);
-      persistDismissed(n); return n;
-    });
-  }, [persistDismissed]);
+  const loadScheduledDates = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const res = await calendarApi.withBlogs(projectId);
+      if (res.success) setScheduledDates(new Set(res.data.map(e => String(e.scheduled_date).slice(0, 10))));
+    } catch { /* non-fatal */ }
+  }, [projectId]);
 
-  const refetchFirstPage = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!projectId) return;
-      const seq = ++loadSeq.current;
-      if (!opts?.silent) dispatch(contentHealthAuditLoadStarted({ projectId, mode: "replace" }));
-      const res = await auditsApi.list(projectId, { limit: AUDIT_PAGE_SIZE, offset: 0 });
-      if (seq !== loadSeq.current) return;
-      if (!res.success) {
-        dispatch(contentHealthAuditLoadFailed({ projectId, error: res.error ?? "Failed" }));
+  useEffect(() => { void loadHistory(); void loadScheduledDates(); }, [loadHistory, loadScheduledDates]);
+
+  // When a report is loaded (fresh audit or from history), check if there's
+  // already a generated enhanced blog for that URL so the button shows "View Blog"
+  // instead of "Generate Enhanced Blog" after a page refresh.
+  useEffect(() => {
+    if (!report?.url || !projectId) return;
+    setGeneratedBlogId(null);
+    const auditUrl = report.url;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/projects/${projectId}/content-audit/check-generated?url=${encodeURIComponent(auditUrl)}`
+        );
+        const data = (await res.json()) as { blogId?: string };
+        if (data.blogId) setGeneratedBlogId(data.blogId);
+      } catch { /* non-fatal */ }
+    })();
+  }, [report?.url, projectId]);
+
+  const startStepAnimation = () => {
+    setAnalysisStep(0);
+    let step = 0;
+    stepTimerRef.current = setInterval(() => {
+      step = Math.min(step + 1, STEPS.length - 1);
+      setAnalysisStep(step);
+    }, 8000);
+  };
+  const stopStepAnimation = () => {
+    if (stepTimerRef.current) { clearInterval(stepTimerRef.current); stepTimerRef.current = null; }
+    setAnalysisStep(-1);
+  };
+
+  const resetPostAuditState = () => {
+    setGeneratedBlogId(null);
+    setGenerateError("");
+    setEntryId(null);
+    setScheduledDate(null);
+    setScheduleOpen(false);
+    setThinkingChunks([]);
+    setStreamLog([]);
+    setShowStreamPanel(false);
+  };
+
+  const handleAnalyze = async (targetUrl?: string) => {
+    resetPostAuditState();
+
+    if (inputMode === "upload") {
+      if (uploadedContent.trim().length < 160) {
+        setError("Uploaded content is too short to audit (need ~160+ characters).");
         return;
       }
-      dispatch(
-        contentHealthAuditLoadSuccess({
-          projectId,
-          mode: "replace",
-          data: res.data,
-          coverage: res.coverage,
-          total: res.total,
-          hasMore: res.hasMore,
-          limit: res.limit,
-          offset: res.offset,
-        })
-      );
-    },
-    [dispatch, projectId]
-  );
-
-  useEffect(() => {
-    if (!projectId) return;
-    if (chStore == null) {
-      void refetchFirstPage();
+      setError("");
+      setReport(null);
+      setAnalyzing(true);
+      startStepAnimation();
+      const syntheticUrl = `upload://${projectId}/${uploadedName || "pasted-content"}`;
+      try {
+        const res = await contentAuditApi.analyze(projectId, syntheticUrl, {
+          uploadedContent: uploadedContent.trim(),
+          uploadedTitle: uploadedName || undefined,
+        });
+        if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
+        setReport(res.report);
+        setReportSource("upload");
+        setActiveTab("issues");
+        void loadHistory();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Unexpected error. Please try again.");
+      } finally {
+        setAnalyzing(false);
+        stopStepAnimation();
+      }
       return;
     }
-    if (chStore.loading === "loading" || chStore.loading === "loadingMore") return;
-    if (chStore.stale && chStore.coverage != null) {
-      void refetchFirstPage({ silent: true });
-      return;
+
+    const auditUrl = (targetUrl ?? url).trim();
+    if (!auditUrl) { setError("Please enter a URL to audit."); inputRef.current?.focus(); return; }
+    if (!/^https?:\/\//i.test(auditUrl)) { setError("Please include https:// in the URL."); return; }
+
+    setError("");
+    setReport(null);
+    setAnalyzing(true);
+    startStepAnimation();
+    try {
+      const res = await contentAuditApi.analyze(projectId, auditUrl);
+      if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
+      setReport(res.report);
+      setReportSource("url");
+      setActiveTab("issues");
+      void loadHistory();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unexpected error. Please try again.");
+    } finally {
+      setAnalyzing(false);
+      stopStepAnimation();
     }
-    if (chStore.coverage != null && !chStore.stale) return;
-    if (chStore.coverage == null && chStore.error) return;
-    void refetchFirstPage();
-  }, [projectId, chStore, refetchFirstPage]);
-
-  const loadMore = useCallback(async () => {
-    if (!projectId || !chStore) return;
-    if (chStore.loading !== "idle" || !chStore.hasMore) return;
-    dispatch(contentHealthAuditLoadStarted({ projectId, mode: "append" }));
-    const res = await auditsApi.list(projectId, { limit: chStore.pageSize, offset: chStore.offset });
-    if (!res.success) { dispatch(contentHealthAuditLoadFailed({ projectId, error: res.error ?? "Failed" })); return; }
-    dispatch(contentHealthAuditLoadSuccess({ projectId, mode: "append", data: res.data, coverage: res.coverage, total: res.total, hasMore: res.hasMore, limit: res.limit, offset: res.offset }));
-  }, [projectId, chStore, dispatch]);
-
-  const filter: ContentHealthSeverityFilter = chStore?.filter ?? "all";
-  const rows: PersistedBlogAudit[] = chStore?.rows ?? [];
-  const loading = chStore?.loading === "loading";
-  const loadingMore = chStore?.loading === "loadingMore";
-  const coverage: AuditCoverage = chStore?.coverage ?? EMPTY_COVERAGE;
-
-  const handleRun = async (force: boolean) => {
-    setRunning(true); setRunSummary(""); setError("");
-    const res = await auditsApi.run(projectId, { force, limit: BATCH_SIZE });
-    if (res.success) {
-      const remaining = Math.max(0, res.coverage.blogs_found - res.coverage.blogs_audited);
-      setRunSummary(`Audited ${res.audited}${res.failed ? ` · failed ${res.failed}` : ""}${remaining ? ` · ${remaining} still pending` : ""}`);
-      if (res.vendorTrace?.length) console.log("[content-health] vendorTrace", res.vendorTrace);
-      await Promise.all([queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }), refetchFirstPage()]);
-    } else { setError(res.error ?? "Audit failed"); }
-    setRunning(false);
   };
 
-  const handleClear = async () => {
-    if (!confirm("Delete all audit results? You can re-run any time.")) return;
-    setRunning(true);
-    await auditsApi.clear(projectId);
-    dispatch(contentHealthAuditReset({ projectId }));
-    await Promise.all([queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }), refetchFirstPage()]);
-    setRunning(false);
-  };
-
-  const handleAddToCalendar = async (row: PersistedBlogAudit) => {
-    const focus = extractCalendarFocusKeyword(row);
-    if (focus.length < 2) { setError("No usable focus keyword for this row."); return; }
-    setCalendarAddingUrl(row.url); setError(""); setRunSummary("");
-    const snapshot = buildContentHealthAuditSnapshot(row);
-    const res = await calendarApi.addContentHealth(projectId, { focusKeyword: focus, auditUrl: row.url, contentHealthAudit: snapshot as unknown as Record<string, unknown> });
-    if (res.success) {
-      setCalendarLinkedByUrl(prev => ({ ...prev, [row.url]: true }));
-      setModalAudit(null);
-      const r = res as { data?: { scheduled_date?: string }; scheduled_date?: string };
-      const sd = (typeof r.scheduled_date === "string" ? r.scheduled_date : undefined) ?? r.data?.scheduled_date;
-      setRunSummary(sd ? `Added "${focus}" to calendar for ${sd}.` : `Added "${focus}" to calendar.`);
-      await Promise.all([queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) }), queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) }), queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) })]);
-    } else {
-      const msg = "error" in res && typeof res.error === "string" ? res.error : "Could not add to calendar";
-      if (/already on your calendar|already scheduled/i.test(msg)) setCalendarLinkedByUrl(prev => ({ ...prev, [row.url]: true }));
-      setError(msg);
+  const handleFile = async (file: File) => {
+    if (file.size > 5 * 1024 * 1024) { setError("File is too large (max 5 MB)."); return; }
+    try {
+      const text = await file.text();
+      setUploadedContent(text.slice(0, MAX_UPLOAD_CHARS));
+      setUploadedName(file.name);
+      setError("");
+    } catch {
+      setError("Could not read that file. Try a .txt, .md, or .html file, or paste the content.");
     }
-    setCalendarAddingUrl(null);
   };
 
-  const filtered = useMemo(() => {
-    if (filter === "all") return rows;
-    return rows.filter(r => criticalityFromScore(r.health_score, r.analysis.page_status) === filter);
-  }, [rows, filter]);
+  const buildSnapshot = (r: ContentAuditReport): ContentHealthAuditSnapshot => ({
+    version: 2,
+    capturedAt: r.analyzed_at,
+    url: r.url,
+    title: r.title,
+    health_score: r.scores.overall,
+    primary_keyword: r.primary_keyword,
+    word_count: r.word_count,
+    analysis: {
+      page_status: r.page_status,
+      primary_keyword: r.primary_keyword,
+      secondary_keywords: r.secondary_keywords,
+      summary: r.summary,
+      plain_language_verdict: r.plain_language_verdict,
+      issues: r.issues.map(i => ({
+        severity: i.severity, category: i.category, label: i.title,
+        detail: i.detail, fix: i.fix, why_it_matters: i.impact,
+      })),
+      quality_rubric: r.quality_rubric.map(row => ({ label: row.label, status: row.status, detail: row.detail })),
+      content_gaps: r.revamp_brief?.missing_topics ?? [],
+      internal_link_opportunities: [],
+      keyword_demand: r.keyword_data
+        ? { keyword: r.keyword_data.keyword, verdict: r.keyword_data.verdict, monthly_volume: r.keyword_data.volume }
+        : undefined,
+      llm_quality_score: r.scores.content_quality,
+      publish_date_estimate: r.publish_date_detected ?? undefined,
+      analyze_page_meta: { sourced_from_analyze_page: true },
+    } as unknown as BlogAuditAnalysis,
+    generation_mode: "repair",
+    scheduled_from: "analyze_content",
+  });
 
-  const pendingAudits = Math.max(0, coverage.blogs_found - coverage.blogs_audited);
+  const ensureEntry = useCallback(async (): Promise<{ id: string; date: string } | { error: string }> => {
+    if (entryId) return { id: entryId, date: scheduledDate ?? "" };
+    if (!report) return { error: "No audit to schedule." };
+    const res = await calendarApi.addContentHealth(projectId, {
+      focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword || report.title,
+      auditUrl: report.url,
+      contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+    });
+    if (!res.success || !res.data) {
+      return { error: (res as { error?: string }).error ?? "Could not add to calendar." };
+    }
+    const date = (res as { scheduled_date?: string }).scheduled_date ?? String(res.data.scheduled_date).slice(0, 10);
+    setEntryId(res.data.id);
+    void loadScheduledDates();
+    return { id: res.data.id, date };
+  }, [entryId, scheduledDate, report, projectId, loadScheduledDates]);
+
+  const handleGenerate = async () => {
+    if (!report) return;
+    setGenerating(true);
+    setGenerateError("");
+    setThinkingChunks([]);
+    setStreamLog(["Starting generation…"]);
+    setShowStreamPanel(true);
+    try {
+      let blogId: string | null = null;
+      const streamPayload = entryId
+        ? {
+            entryId,
+            wordCount: report.revamp_brief?.recommended_word_count ?? 2500,
+          }
+        : {
+            projectId,
+            keyword: report.primary_keyword || report.title,
+            contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+            wordCount: report.revamp_brief?.recommended_word_count ?? 2500,
+          };
+
+      for await (const ev of blogsApi.generateStream(streamPayload)) {
+        if (ev.event === "stage") {
+          const label = ev.detail ?? ev.stage;
+          setStreamLog(prev => [...prev, label]);
+        } else if (ev.event === "thinking") {
+          setThinkingChunks(prev => [...prev, ev.chunk]);
+        } else if (ev.event === "thinking_done") {
+          setStreamLog(prev => [...prev, "AI reasoning complete"]);
+        } else if (ev.event === "done") {
+          blogId = ev.blogId;
+          setStreamLog(prev => [...prev, "Blog saved successfully"]);
+        } else if (ev.event === "error") {
+          setGenerateError(ev.message || "Generation failed.");
+          return;
+        }
+      }
+      if (blogId) {
+        setGeneratedBlogId(blogId);
+        void loadHistory();
+      } else {
+        setGenerateError("Generation finished without returning a blog. Check Content History.");
+      }
+    } catch (e) {
+      setGenerateError(e instanceof Error ? e.message : "Unexpected error during generation.");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleScheduleConfirm = async (date: string) => {
+    if (!report) return;
+    setScheduleSaving(true);
+    try {
+      if (generatedBlogId) {
+        const res = await calendarApi.scheduleExistingBlog(projectId, {
+          blogId: generatedBlogId,
+          targetDate: date,
+        });
+        if (res.success && res.data) {
+          setEntryId(res.data.id);
+          setScheduledDate(date);
+          void loadScheduledDates();
+          toast.success("Blog scheduled to calendar");
+        } else {
+          setGenerateError((res as any).error ?? "Failed to schedule blog.");
+        }
+      } else {
+        const res = await calendarApi.addContentHealth(projectId, {
+          focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword || report.title,
+          auditUrl: report.url,
+          contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+          targetDate: date,
+        });
+        if (res.success && res.data) {
+          const actualDate = (res as { scheduled_date?: string }).scheduled_date ?? String(res.data.scheduled_date).slice(0, 10);
+          setEntryId(res.data.id);
+          setScheduledDate(actualDate);
+          void loadScheduledDates();
+          toast.success("Scheduled to calendar");
+        } else {
+          setGenerateError((res as any).error ?? "Could not add to calendar.");
+        }
+      }
+    } catch (e) {
+      setGenerateError(e instanceof Error ? e.message : "Unexpected error during scheduling.");
+    } finally {
+      setScheduleSaving(false);
+      setScheduleOpen(false);
+    }
+  };
+
+  const handleReschedule = async (date: string) => {
+    if (!entryId) return;
+    setScheduleSaving(true);
+    try {
+      const res = await calendarApi.rescheduleEntry(projectId, { entryId, date });
+      if (res.success) { setScheduledDate(date); void loadScheduledDates(); }
+    } finally {
+      setScheduleSaving(false);
+      setScheduleOpen(false);
+    }
+  };
+
+  const openHistoryItem = (item: ContentAuditHistoryItem) => {
+    if (!item.report) { setUrl(item.url); setInputMode("url"); void handleAnalyze(item.url); return; }
+    resetPostAuditState();
+    setUrl(item.url);
+    setReport(item.report as unknown as ContentAuditReport);
+    setReportSource(item.source ?? "url");
+    setActiveTab("issues");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Load the history item as the active audit so the user can generate from it
+  const handleGenerateFromHistory = (item: ContentAuditHistoryItem) => {
+    openHistoryItem(item);
+    // After the report loads, the user sees the full AuditResults section with
+    // the "Generate Enhanced Blog" button ready to click.
+  };
+
+  const handleScheduleFromHistory = (item: ContentAuditHistoryItem) => {
+    openHistoryItem(item);
+    // Open the calendar picker after the report is set
+    setScheduleOpen(true);
+  };
 
   return (
-    <CHPageShell
-      title="Content health"
-      subtitle={<>Audit each blog on its own merits — technical health, keyword demand, and writing quality. Click <strong className="text-text-secondary font-medium">See fixes</strong> to expand the diagnosis.</>}
-      actions={
-        <>
-          <ProjectNavLink
-            href={`/projects/${projectId}/audit/import`}
-            className="inline-flex h-9 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary hover:border-brand-action/30 hover:text-text-primary transition-all"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" /></svg>
-            Content Analyzer
-          </ProjectNavLink>
-          <ProjectNavLink
-            href={`/projects/${projectId}/audit/discover-pages`}
-            className="inline-flex h-9 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-4 text-[13px] font-medium text-text-secondary hover:border-brand-action/30 hover:text-text-primary transition-all"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" /></svg>
-            Discover pages
-          </ProjectNavLink>
-        </>
-      }
-    >
-      {/* ── alerts ────────────────────────────────────────────────────────── */}
-      {error && <ErrorBanner message={error} />}
-      {runSummary && !error && <SuccessBanner message={runSummary} />}
+    <div className="relative space-y-6 pb-20 -mt-6 lg:-mt-8">
 
-      {/* ── stats ─────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatTile
-          label="Blogs found"
-          value={coverage.blogs_found}
-          sub="in your sitemap"
-          icon={<Tooltip content="Total blog-style URLs found in your sitemap."><InfoIcon /></Tooltip>}
-        />
-        <StatTile
-          label="Audited"
-          value={coverage.blogs_audited}
-          sub={pendingAudits > 0 ? `${pendingAudits} pending` : "up to date"}
-          icon={<Tooltip content="How many blogs have been scraped and diagnosed."><InfoIcon /></Tooltip>}
-        />
-        <StatTile
-          label="Avg. health"
-          value={coverage.avg_health}
-          sub="score 0–100"
-          valueClass={healthScoreColor(coverage.avg_health).text}
-          icon={<Tooltip content="Average health score across all audited blogs."><InfoIcon /></Tooltip>}
-        />
-        <StatTile
-          label="High severity"
-          value={coverage.high_severity}
-          sub="need fixes now"
-          valueClass="text-rose-400"
-          icon={<Tooltip content="Blogs actively blocked from ranking today."><InfoIcon /></Tooltip>}
-        />
+      {/* ── Sticky header ── */}
+      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
+        <div className="mx-auto max-w-4xl">
+          <h1 className="text-[26px] font-bold tracking-tight text-text-primary">Content Audit Studio</h1>
+          <p className="mt-1 text-[14px] text-text-tertiary leading-relaxed">
+            Audit any blog by URL or uploaded content — SEO, GEO, AEO scores, competitor insights, and one-click enhanced regeneration.
+          </p>
+        </div>
       </div>
 
-      {/* ── empty sitemap ─────────────────────────────────────────────────── */}
-      {coverage.blogs_found === 0 && !loading && (
-        <CHEmptyState
-          icon={<svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803a7.5 7.5 0 0 0 10.607 0z" /></svg>}
-          title="No blog URLs found"
-          body={<>We couldn&apos;t find blog-style URLs in your sitemap. Make sure <code className="rounded bg-surface-elevated px-1.5 py-0.5 text-[12px]">/blog/…</code> paths are included, then refresh your brief.</>}
-          action={
-            <ProjectNavLink href={`/projects/${projectId}/keywords`} className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-5 py-2.5 text-[13px] font-medium text-text-secondary hover:text-text-primary transition-colors">
-              Refresh brief
-            </ProjectNavLink>
-          }
-        />
-      )}
+      <div className="mx-auto max-w-4xl space-y-6">
 
-      {/* ── filter tabs ───────────────────────────────────────────────────── */}
-      {coverage.blogs_audited > 0 && (
-        <CHFilterTabs
-          items={[
-            { id: "all" as ContentHealthSeverityFilter, label: "All", count: coverage.blogs_audited },
-            { id: "high" as ContentHealthSeverityFilter, label: "High severity", count: coverage.severity_counts?.high ?? 0 },
-            { id: "medium" as ContentHealthSeverityFilter, label: "Medium", count: coverage.severity_counts?.medium ?? 0 },
-            { id: "low" as ContentHealthSeverityFilter, label: "Low", count: coverage.severity_counts?.low ?? 0 },
-          ]}
-          active={filter}
-          onChange={f => dispatch(contentHealthAuditFilterSet({ projectId, filter: f }))}
-          disabled={loading}
-        />
-      )}
-
-      {/* ── audit list ────────────────────────────────────────────────────── */}
-      {loading ? (
-        <SkeletonRows count={6} />
-      ) : filtered.length === 0 && coverage.blogs_found > 0 ? (
-        <div className="rounded-[20px] border border-dashed border-border-strong bg-surface-secondary/50 py-16 text-center text-[14px] text-text-tertiary">
-          {coverage.blogs_audited === 0
-            ? `Use the audit controls below to run your first ${BATCH_SIZE} blogs.`
-            : "No blogs match this filter."}
-        </div>
-      ) : (
-        <div className="space-y-2.5">
-          {filtered.map((row, idx) => {
-            const a = row.analysis;
-            const demand = a.keyword_demand;
-            const crit = criticalityFromScore(row.health_score, a.page_status);
-            const onCalendar = !!calendarLinkedByUrl[row.url];
-            const calBusy = calendarAddingUrl === row.url;
-            const kw = extractCalendarFocusKeyword(row);
-            const dismissed = dismissedUrls.has(row.url);
-
-            return (
-              <div
-                key={row.url}
-                className={`group flex gap-4 rounded-[16px] border border-border-subtle bg-surface-elevated p-4 shadow-sm transition-opacity hover:border-border-strong ${dismissed ? "opacity-50" : ""}`}
+        {/* ── Input card ── */}
+        <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
+          <div className="mb-4 inline-flex rounded-[10px] border border-border-subtle bg-surface-secondary p-0.5">
+            {(["url", "upload"] as const).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setInputMode(m); setError(""); }}
+                className={`h-8 px-4 rounded-[8px] text-[12px] font-semibold transition-all ${
+                  inputMode === m ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-primary"
+                }`}
               >
-                {/* score ring */}
-                <div className="shrink-0 mt-0.5">
-                  <ScoreRing score={row.health_score} size={52} />
-                </div>
+                {m === "url" ? "Audit a URL" : "Upload content"}
+              </button>
+            ))}
+          </div>
 
-                {/* content */}
-                <div className="min-w-0 flex-1 space-y-2">
-                  <div>
-                    <p className="text-[15px] font-semibold leading-snug text-text-primary line-clamp-1" title={row.title || row.url}>
-                      {row.title || row.url}
-                    </p>
-                    <a
-                      href={row.url} target="_blank" rel="noopener noreferrer"
-                      className="mt-0.5 block truncate text-[11px] text-text-tertiary hover:text-brand-action transition-colors"
-                      title={row.url}
-                    >
-                      {row.url}
-                    </a>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <SeverityChip severity={crit} />
-                    {demand && <DemandChip verdict={demand.verdict} volume={demand.volume} />}
-                    {a.suggested_funnel_stage && <FunnelChip stage={a.suggested_funnel_stage} />}
-                    {row.word_count > 0 && (
-                      <span className="text-[11px] text-text-tertiary tabular-nums">{row.word_count.toLocaleString()} words</span>
-                    )}
-                    {kw && (
-                      <span className="text-[11px] text-text-tertiary">
-                        <span className="text-text-secondary font-medium">Keyword:</span> {kw}
-                      </span>
-                    )}
-                  </div>
-
-                  {row.error && <p className="text-[11px] text-rose-400 line-clamp-1">Error: {row.error}</p>}
-                  {a.plain_language_verdict && !row.error && (
-                    <p className="text-[12px] text-text-tertiary line-clamp-2 leading-relaxed">{a.plain_language_verdict}</p>
-                  )}
-                </div>
-
-                {/* actions */}
-                <div className="flex shrink-0 flex-col items-end gap-1.5">
-                  <span className="text-[11px] text-text-tertiary tabular-nums">#{idx + 1}</span>
-
-                  <button
-                    type="button"
-                    onClick={() => setModalAudit(row)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-violet-400/40 bg-linear-to-r from-violet-500/20 via-brand-action/12 to-fuchsia-500/12 px-3 text-[11px] font-semibold text-violet-200 shadow-sm transition-all hover:border-violet-300/55 hover:from-violet-500/30"
-                  >
-                    <svg className="h-3.5 w-3.5 text-violet-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.847-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+          {inputMode === "url" ? (
+            <>
+              <label className="block text-[13px] font-semibold text-text-secondary mb-3">Blog or article URL to audit</label>
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
                     </svg>
-                    See fixes
-                  </button>
-
-                  {calBusy ? (
-                    <div className="flex h-8 items-center gap-1.5 rounded-[10px] border border-border-subtle px-3 text-[11px] text-text-tertiary">
-                      <Spinner size={12} /> Scheduling…
-                    </div>
-                  ) : onCalendar ? (
-                    <ProjectNavLink
-                      href={`/projects/${projectId}/calendar`}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-emerald-500/30 bg-emerald-500/10 px-3 text-[11px] font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-                    >
-                      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7"/></svg>
-                      Scheduled
-                    </ProjectNavLink>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => void handleAddToCalendar(row)}
-                      disabled={calendarAddingUrl !== null}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-brand-primary px-3 text-[11px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-                    >
-                      <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-                      Schedule
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => dismissRow(row.url)}
-                    className="text-[10px] text-text-tertiary/60 hover:text-rose-400 transition-colors mt-0.5"
-                    title="Dismiss from view"
-                  >
-                    Dismiss
-                  </button>
+                  </div>
+                  <input
+                    ref={inputRef}
+                    type="url"
+                    value={url}
+                    onChange={e => setUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && !analyzing) void handleAnalyze(); }}
+                    placeholder="https://yoursite.com/blog/your-post"
+                    disabled={analyzing}
+                    className="w-full h-11 pl-10 pr-4 rounded-[12px] border border-border-subtle bg-surface-primary text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.08)] disabled:opacity-50 transition-all"
+                  />
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void handleAnalyze()}
+                  disabled={analyzing || !url.trim()}
+                  className="h-11 px-6 rounded-[12px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all shrink-0 flex items-center gap-2"
+                >
+                  {analyzing ? <><Spinner size={14} /> Analyzing…</> : "Audit this page"}
+                </button>
               </div>
-            );
-          })}
-
-          {loadingMore && <SkeletonRows count={3} />}
-
-          {chStore?.hasMore && !loading && (
-            <div className="flex justify-center pt-2">
+            </>
+          ) : (
+            <>
+              <label className="block text-[13px] font-semibold text-text-secondary mb-3">Upload or paste your content</label>
+              {!uploadedContent ? (
+                <div
+                  onClick={() => fileRef.current?.click()}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) void handleFile(f); }}
+                  className="cursor-pointer rounded-[12px] border-2 border-dashed border-border-strong bg-surface-secondary/40 px-6 py-10 text-center hover:border-brand-violet/50 transition-colors"
+                >
+                  <svg className="mx-auto mb-3 w-8 h-8 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                  </svg>
+                  <p className="text-[13px] font-medium text-text-primary">Drop a file or click to upload</p>
+                  <p className="mt-1 text-[11px] text-text-tertiary">Supports .txt, .md, .html, .markdown — or paste below</p>
+                </div>
+              ) : (
+                <div className="rounded-[12px] border border-border-subtle bg-surface-secondary/40 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <svg className="w-4 h-4 text-brand-violet shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9z" />
+                      </svg>
+                      <span className="text-[12px] font-medium text-text-primary truncate">{uploadedName || "Pasted content"}</span>
+                      <span className="text-[11px] text-text-tertiary shrink-0">· {uploadedContent.length.toLocaleString()} chars</span>
+                    </div>
+                    <button type="button" onClick={() => { setUploadedContent(""); setUploadedName(""); }} className="text-[11px] text-text-tertiary hover:text-rose-400 transition-colors shrink-0">Clear</button>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-[11px] text-text-tertiary leading-relaxed">{uploadedContent.slice(0, 240)}</p>
+                </div>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".txt,.md,.markdown,.html,.htm,text/plain,text/markdown,text/html"
+                className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) void handleFile(f); }}
+              />
+              <textarea
+                value={uploadedContent}
+                onChange={e => setUploadedContent(e.target.value.slice(0, MAX_UPLOAD_CHARS))}
+                placeholder="…or paste your blog content / markdown here"
+                rows={4}
+                className="mt-3 w-full rounded-[12px] border border-border-subtle bg-surface-primary px-3 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 transition-all resize-y"
+              />
               <button
                 type="button"
-                onClick={() => void loadMore()}
-                disabled={loadingMore}
-                className="inline-flex h-10 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-6 text-[13px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 transition-all"
+                onClick={() => void handleAnalyze()}
+                disabled={analyzing || uploadedContent.trim().length < 160}
+                className="mt-3 h-11 px-6 rounded-[12px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all flex items-center gap-2"
               >
-                {loadingMore ? <><Spinner size={14} /> Loading…</> : `Load more (${chStore.rows.length} of ${chStore.total})`}
+                {analyzing ? <><Spinner size={14} /> Analyzing…</> : "Audit this content"}
               </button>
+            </>
+          )}
+
+          {error && (
+            <div className="mt-3 flex items-start gap-2 text-[13px] text-rose-400 bg-rose-500/8 border border-rose-500/20 rounded-[10px] px-3 py-2.5">
+              <svg className="w-4 h-4 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+              {error}
+            </div>
+          )}
+
+          {analyzing && (
+            <div className="mt-4 pt-4 border-t border-border-subtle">
+              <p className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wide mb-3">Analyzing your content…</p>
+              <StepIndicator steps={STEPS} currentStep={analysisStep} />
+              <p className="mt-3 text-[12px] text-text-tertiary">This takes 30–90 seconds while we read the content, check competitors, and run AI analysis.</p>
+            </div>
+          )}
+        </div>
+
+        {/* ── Generation stream panel ── */}
+        {showStreamPanel && (
+          <GenerationStreamPanel
+            stages={streamLog}
+            thinkingChunks={thinkingChunks}
+            isGenerating={generating}
+            onClose={() => setShowStreamPanel(false)}
+          />
+        )}
+
+        {/* ── Results ── */}
+        {report && (
+          <AuditResults
+            report={report}
+            reportSource={reportSource}
+            projectId={projectId}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            generating={generating}
+            generatedBlogId={generatedBlogId}
+            generateError={generateError}
+            onGenerate={handleGenerate}
+            scheduleSaving={scheduleSaving}
+            scheduledDate={scheduledDate}
+            onSchedule={handleScheduleConfirm}
+            scheduleOpen={scheduleOpen}
+            setScheduleOpen={setScheduleOpen}
+            onReschedule={handleReschedule}
+            scheduledDates={scheduledDates}
+          />
+        )}
+
+        {/* ── History ── */}
+        {!analyzing && (
+          <AuditHistory
+            items={history}
+            loading={historyLoading}
+            onOpen={openHistoryItem}
+            onGenerateFromHistory={handleGenerateFromHistory}
+            onScheduleFromHistory={handleScheduleFromHistory}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Audit Results ────────────────────────────────────────────────────────────
+
+function AuditResults({
+  report, reportSource, projectId, activeTab, setActiveTab,
+  generating, generatedBlogId, generateError, onGenerate,
+  scheduleSaving, scheduledDate, onSchedule, scheduleOpen, setScheduleOpen, onReschedule, scheduledDates,
+}: {
+  report: ContentAuditReport;
+  reportSource: "url" | "upload";
+  projectId: string;
+  activeTab: "issues" | "rubric" | "competitors";
+  setActiveTab: (t: "issues" | "rubric" | "competitors") => void;
+  generating: boolean;
+  generatedBlogId: string | null;
+  generateError: string;
+  onGenerate: () => void;
+  scheduleSaving: boolean;
+  scheduledDate: string | null;
+  onSchedule: (date: string) => void;
+  scheduleOpen: boolean;
+  setScheduleOpen: (v: boolean) => void;
+  onReschedule: (date: string) => void;
+  scheduledDates: Set<string>;
+}) {
+  const overall = report.scores.overall;
+  const grade = scoreGrade(overall);
+  const color = scoreColor(overall);
+  const router = useRouter();
+
+  const nextVacantDate = useMemo(() => {
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    for (let i = 0; i < 500; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (!scheduledDates.has(key)) return key;
+    }
+    return null;
+  }, [scheduledDates]);
+
+  const tooltipFor = (key: ScoreDim["key"]) => {
+    if (key === "keyword_relevance" && report.keyword_data) {
+      const k = report.keyword_data;
+      return (
+        <div className="space-y-1.5">
+          <p className="text-[12px] font-semibold text-text-primary">{k.keyword}</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+            <span className="text-text-tertiary">Volume</span>
+            <span className="text-text-primary text-right tabular-nums">{k.volume ? `${k.volume.toLocaleString()}/mo` : "—"}</span>
+            <span className="text-text-tertiary">Trend</span>
+            <span className={`text-right tabular-nums ${k.trend_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{k.trend_pct >= 0 ? "+" : ""}{k.trend_pct}%</span>
+            <span className="text-text-tertiary">Demand</span>
+            <span className="text-text-primary text-right capitalize">{k.verdict}</span>
+          </div>
+          {k.monthly_searches?.length > 1 && (
+            <p className="text-[10px] text-text-tertiary pt-1">12-month search trend from DataForSEO.</p>
+          )}
+        </div>
+      );
+    }
+    if (key === "freshness") {
+      return (
+        <div className="space-y-1 text-[11px]">
+          <p className="text-[12px] font-semibold text-text-primary">Freshness signals</p>
+          <p className="text-text-tertiary">Detected publish date: <span className="text-text-primary">{report.publish_date_detected || "not found"}</span></p>
+          <p className="text-text-tertiary">Word count: <span className="text-text-primary">{report.word_count.toLocaleString()}</span></p>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div className="space-y-6">
+
+      {/* ── Overall score hero ── */}
+      <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
+        <div className="flex flex-col sm:flex-row gap-6 items-start">
+          <div className="flex items-center gap-5 shrink-0">
+            <ScoreRing score={overall} size={96} strokeWidth={7} />
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[32px] font-bold" style={{ color }}>{grade}</span>
+                <span className="text-[13px] text-text-tertiary font-medium">Grade</span>
+              </div>
+              <p className="text-[13px] font-semibold text-text-secondary">Overall Audit Score</p>
+              {reportSource === "upload" ? (
+                <span className="mt-1 inline-flex items-center gap-1 text-[12px] text-text-tertiary">
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 7.5 12 3m0 0L7.5 7.5M12 3v13.5" /></svg>
+                  Uploaded content
+                </span>
+              ) : (
+                <a href={report.url} target="_blank" rel="noopener noreferrer" className="mt-1 block text-[12px] text-text-tertiary hover:text-brand-violet transition-colors truncate max-w-[260px]">
+                  {report.url}
+                </a>
+              )}
+            </div>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              {report.primary_keyword && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-brand-violet/10 text-brand-violet text-[11px] font-semibold border border-brand-violet/20">
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 20 l4-16 m2 16 l4-16 M6 9h14 M4 15h14" />
+                  </svg>
+                  {report.primary_keyword}
+                </span>
+              )}
+              {report.keyword_data && <KeywordVerdictChip verdict={report.keyword_data.verdict} volume={report.keyword_data.volume} />}
+              {report.word_count > 0 && <span className="text-[11px] text-text-tertiary">{report.word_count.toLocaleString()} words</span>}
+              {report.publish_date_detected && <span className="text-[11px] text-text-tertiary">Published ~{report.publish_date_detected}</span>}
+            </div>
+            <p className="text-[14px] text-text-primary leading-relaxed font-medium">{report.plain_language_verdict}</p>
+          </div>
+        </div>
+
+        {/* ── Action bar ── */}
+        <div className="mt-5 pt-5 border-t border-border-subtle flex flex-wrap items-center gap-3">
+          {!generatedBlogId ? (
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={generating}
+              className="h-9 px-4 rounded-[10px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-60 transition-all flex items-center gap-2"
+            >
+              {generating ? (
+                <><Spinner size={13} /> Generating…</>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                  </svg>
+                  Generate Enhanced Blog
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => router.push(`/projects/${projectId}/content-history/${generatedBlogId}`)}
+              className="h-9 px-4 rounded-[10px] bg-emerald-600 text-white text-[13px] font-semibold hover:bg-emerald-600/90 transition-all flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+              </svg>
+              View Blog
+            </button>
+          )}
+
+          {!scheduledDate ? (
+            <CalendarDatePicker
+              open={scheduleOpen}
+              onOpenChange={setScheduleOpen}
+              currentDate={nextVacantDate}
+              onConfirm={onSchedule}
+              saving={scheduleSaving}
+              scheduledDates={scheduledDates}
+              variant="pick"
+              label={scheduleSaving ? "Scheduling…" : "Schedule to Calendar"}
+              className="h-9 px-4 rounded-[10px] border border-border-subtle bg-surface-secondary text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong disabled:opacity-50 transition-all flex items-center gap-2"
+            />
+          ) : (
+            <div className="flex items-center gap-2 px-3 h-9 rounded-[10px] bg-emerald-500/10 border border-emerald-500/20 text-[12px] font-medium text-emerald-400">
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+              </svg>
+              Scheduled for {new Date(scheduledDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              <CalendarDatePicker
+                open={scheduleOpen}
+                onOpenChange={setScheduleOpen}
+                currentDate={scheduledDate}
+                onConfirm={onReschedule}
+                saving={scheduleSaving}
+                scheduledDates={scheduledDates}
+                variant="change"
+                iconOnly
+              />
+            </div>
+          )}
+
+          {generateError && <span className="text-[12px] text-rose-400">{generateError}</span>}
+        </div>
+      </div>
+
+      {/* ── 6 Score cards ── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        {SCORE_DIMS.map(dim => (
+          <ScoreCard
+            key={dim.key}
+            label={dim.label}
+            score={report.scores[dim.key]}
+            description={dim.description}
+            icon={dim.icon}
+            tooltip={tooltipFor(dim.key)}
+          />
+        ))}
+      </div>
+
+      {/* ── Tab navigation ── */}
+      <div className="border-b border-border-subtle">
+        <nav className="flex gap-1 -mb-px">
+          {(["issues", "rubric", "competitors"] as const).map(tab => {
+            const labels: Record<string, string> = {
+              issues: `Issues (${report.issues.length})`,
+              rubric: "Quality Checklist",
+              competitors: `Competitors (${report.competitor_insights.length})`,
+            };
+            return (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`px-4 py-2.5 text-[13px] font-medium border-b-2 transition-all whitespace-nowrap ${
+                  activeTab === tab ? "border-brand-violet text-brand-violet" : "border-transparent text-text-tertiary hover:text-text-primary"
+                }`}
+              >
+                {labels[tab]}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      {activeTab === "issues" && <IssuesPanel issues={report.issues} />}
+      {activeTab === "rubric" && <RubricPanel rows={report.quality_rubric} />}
+      {activeTab === "competitors" && <CompetitorsPanel insights={report.competitor_insights} />}
+    </div>
+  );
+}
+
+// ─── Issues panel ─────────────────────────────────────────────────────────────
+
+const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+function IssuesPanel({ issues }: { issues: ContentAuditReport["issues"] }) {
+  const sorted = [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99));
+  if (!sorted.length) {
+    return (
+      <EmptyState
+        icon={<svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20 6 9 17l-5-5" /></svg>}
+        title="No issues found"
+        body="This content looks great! No significant SEO, GEO, or AEO issues were detected."
+      />
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {sorted.map((issue, i) => <IssueCard key={issue.id || i} issue={issue} />)}
+    </div>
+  );
+}
+
+function IssueCard({ issue }: { issue: ContentAuditReport["issues"][0] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-[14px] border border-border-subtle bg-surface-elevated overflow-hidden">
+      <button type="button" onClick={() => setOpen(v => !v)} className="w-full flex items-start gap-3 p-4 text-left hover:bg-surface-hover transition-colors">
+        <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+          <SeverityChip severity={issue.severity} />
+          <CategoryBadge category={issue.category} />
+          <span className="text-[13px] font-semibold text-text-primary leading-snug">{issue.title}</span>
+        </div>
+        <svg className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform mt-0.5 ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 space-y-3 border-t border-border-subtle/50">
+          <div className="pt-3 grid gap-3 sm:grid-cols-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary mb-1">What&apos;s wrong</p>
+              <p className="text-[13px] text-text-secondary leading-relaxed">{issue.detail}</p>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary mb-1">Why it matters</p>
+              <p className="text-[13px] text-text-secondary leading-relaxed">{issue.impact}</p>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary mb-1">How to fix it</p>
+              <p className="text-[13px] text-brand-violet leading-relaxed font-medium">{issue.fix}</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Quality rubric ───────────────────────────────────────────────────────────
+
+function RubricPanel({ rows }: { rows: ContentAuditReport["quality_rubric"] }) {
+  const pass = rows.filter(r => r.status === "pass").length;
+  const pct = rows.length > 0 ? Math.round((pass / rows.length) * 100) : 0;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3 mb-2">
+        <span className="text-[13px] text-text-secondary font-medium">{pass}/{rows.length} checks passing</span>
+        <div className="flex-1 h-2 rounded-full bg-surface-tertiary overflow-hidden">
+          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: scoreColor(pct) }} />
+        </div>
+        <span className="text-[13px] font-bold tabular-nums" style={{ color: scoreColor(pct) }}>{pct}%</span>
+      </div>
+      <div className="space-y-2">
+        {rows.map(row => (
+          <div key={row.id} className="flex items-start gap-3 rounded-[12px] border border-border-subtle bg-surface-elevated px-4 py-3">
+            <RubricStatus status={row.status} />
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-semibold text-text-primary leading-snug">{row.label}</p>
+              <p className="text-[12px] text-text-tertiary mt-0.5 leading-relaxed">{row.detail}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Competitors panel ────────────────────────────────────────────────────────
+
+function CompetitorsPanel({ insights }: { insights: ContentAuditReport["competitor_insights"] }) {
+  if (!insights.length) {
+    return (
+      <EmptyState
+        icon={<svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>}
+        title="No competitor data"
+        body="Competitor analysis requires DataForSEO SERP access. Configure your DataForSEO credentials in admin settings to enable this."
+      />
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <p className="text-[13px] text-text-tertiary">These are the pages currently outranking you for your primary keyword. Here&apos;s what they&apos;re doing differently.</p>
+      {insights.map((c, i) => (
+        <div key={c.url} className="rounded-[14px] border border-border-subtle bg-surface-elevated p-4">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full bg-surface-tertiary text-text-tertiary text-[11px] font-bold flex items-center justify-center shrink-0">#{i + 1}</span>
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold text-text-primary leading-snug line-clamp-1">{c.title}</p>
+                <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-text-tertiary hover:text-brand-violet transition-colors truncate block">{c.url}</a>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3 text-[11px] text-text-tertiary mb-3">
+            <span>{c.word_count.toLocaleString()} words</span>
+            <span>{c.h2_count} H2 sections</span>
+            {c.has_faq && <span className="text-emerald-400">✓ FAQ section</span>}
+            {c.has_schema && <span className="text-emerald-400">✓ Schema markup</span>}
+          </div>
+          {c.advantages.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary">What they do better:</p>
+              {c.advantages.map((adv, j) => (
+                <div key={j} className="flex items-start gap-2 text-[12px] text-text-secondary">
+                  <span className="text-rose-400 shrink-0 mt-0.5">→</span>{adv}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Audit History ────────────────────────────────────────────────────────────
+
+const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
+
+function AuditHistory({
+  items, loading, onOpen, onGenerateFromHistory, onScheduleFromHistory,
+}: {
+  items: ContentAuditHistoryItem[];
+  loading: boolean;
+  onOpen: (item: ContentAuditHistoryItem) => void;
+  onGenerateFromHistory: (item: ContentAuditHistoryItem) => void;
+  onScheduleFromHistory: (item: ContentAuditHistoryItem) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [severityFilter, setSeverityFilter] = useState<string>("all");
+  const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    let list = items;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(i =>
+        i.url.toLowerCase().includes(q) || i.title?.toLowerCase().includes(q) || i.primary_keyword?.toLowerCase().includes(q)
+      );
+    }
+    if (severityFilter !== "all") list = list.filter(i => i.severity === severityFilter);
+    return list;
+  }, [items, search, severityFilter]);
+
+  if (loading) {
+    return (
+      <div className="space-y-2">
+        {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-[12px] bg-surface-elevated border border-border-subtle animate-pulse" />)}
+      </div>
+    );
+  }
+
+  if (!items.length) {
+    return (
+      <EmptyState
+        icon={<svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" /></svg>}
+        title="No audits yet"
+        body="Enter a blog URL or upload content above to run your first audit. Results are saved here for quick reference."
+      />
+    );
+  }
+
+  return (
+    <div>
+      <h2 className="text-[14px] font-semibold text-text-secondary flex items-center gap-2 mb-3">
+        <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+        </svg>
+        Audit History ({items.length})
+      </h2>
+
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <div className="relative flex-1 min-w-[160px]">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by URL or keyword…"
+            className="w-full h-8 pl-8 pr-3 rounded-[8px] border border-border-subtle bg-surface-elevated text-[12px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/40 transition-all"
+          />
+        </div>
+        <div className="flex gap-1">
+          {SEVERITY_OPTS.map(s => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setSeverityFilter(s)}
+              className={`h-8 px-3 rounded-[8px] text-[11px] font-medium transition-all ${
+                severityFilter === s ? "bg-brand-violet text-white" : "border border-border-subtle bg-surface-elevated text-text-tertiary hover:text-text-primary"
+              }`}
+            >
+              {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0 && <p className="text-[13px] text-text-tertiary py-4 text-center">No results match your filters.</p>}
+
+      <div className="space-y-2">
+        {filtered.slice(0, 20).map(item => {
+          const score = item.overall_score || item.health_score;
+          const color = scoreColor(score);
+          const isExpanded = expandedUrl === item.url;
+          const issueList = (item.report?.issues ?? []) as ContentAuditReport["issues"];
+          const sortedIssues = [...issueList].sort(
+            (a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99)
+          );
+
+          return (
+            <div key={item.url} className="rounded-[12px] border border-border-subtle bg-surface-elevated overflow-hidden transition-all">
+              {/* ── Row header ── */}
+              <div
+                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-hover transition-colors"
+                onClick={() => setExpandedUrl(isExpanded ? null : item.url)}
+              >
+                <div className="shrink-0">
+                  <span className="text-[16px] font-bold tabular-nums" style={{ color }}>{score}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-semibold text-text-primary leading-snug truncate">{item.title || item.url}</p>
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${item.source === "upload" ? "text-violet-400" : "text-text-tertiary"}`}>
+                      {item.source === "upload" ? (
+                        <><svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 7.5 12 3m0 0L7.5 7.5M12 3v13.5" /></svg> Uploaded</>
+                      ) : (
+                        <><svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757" /></svg> Link</>
+                      )}
+                    </span>
+                    <p className="text-[11px] text-text-tertiary truncate">{item.source === "upload" ? "Uploaded content" : item.url}</p>
+                  </div>
+                </div>
+                <div className="shrink-0 flex items-center gap-2">
+                  {item.severity && item.severity !== "none" && <SeverityChip severity={item.severity} />}
+                  <span className="text-[10px] text-text-tertiary">{new Date(item.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                  <svg className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                  </svg>
+                </div>
+              </div>
+
+              {/* ── Expanded inline audit ── */}
+              {isExpanded && (
+                <div className="border-t border-border-subtle/50">
+                  {/* Scrollable content area */}
+                  <div className="max-h-[420px] overflow-y-auto p-4 space-y-4">
+                    {item.plain_language_verdict && (
+                      <p className="text-[13px] text-text-secondary leading-relaxed">{item.plain_language_verdict}</p>
+                    )}
+
+                    {/* Dimension scores */}
+                    {item.report && (
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                        {(["seo", "geo", "aeo", "content_quality", "keyword_relevance", "freshness"] as const).map(k => {
+                          const sc = (item.report!.scores as unknown as Record<string, number>)[k] ?? 0;
+                          const lbl: Record<string, string> = { seo: "SEO", geo: "GEO", aeo: "AEO", content_quality: "Quality", keyword_relevance: "Keyword", freshness: "Fresh" };
+                          return (
+                            <div key={k} className="rounded-[8px] border border-border-subtle bg-surface-secondary/40 px-2 py-1.5 text-center">
+                              <div className="text-[14px] font-bold tabular-nums" style={{ color: scoreColor(sc) }}>{sc}</div>
+                              <div className="text-[9px] text-text-tertiary uppercase tracking-wide">{lbl[k]}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Top issues inline */}
+                    {sortedIssues.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary">
+                          Top issues ({sortedIssues.length})
+                        </p>
+                        {sortedIssues.slice(0, 6).map((issue, i) => (
+                          <div key={i} className="flex items-start gap-2 rounded-[8px] border border-border-subtle/50 bg-surface-secondary/30 px-3 py-2">
+                            <SeverityChip severity={issue.severity} />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[12px] font-semibold text-text-primary leading-snug">{issue.title}</p>
+                              {issue.fix && (
+                                <p className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed line-clamp-2">{issue.fix}</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {sortedIssues.length > 6 && (
+                          <p className="text-[11px] text-text-tertiary text-center py-1">
+                            +{sortedIssues.length - 6} more — click "View full audit" to see all
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action buttons row */}
+                  <div className="px-4 py-3 border-t border-border-subtle/30 flex items-center gap-2 flex-wrap bg-surface-secondary/20">
+                    <button
+                      type="button"
+                      onClick={() => onGenerateFromHistory(item)}
+                      className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                      </svg>
+                      Generate Enhanced Blog
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onScheduleFromHistory(item)}
+                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                      </svg>
+                      Schedule to Calendar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpen(item)}
+                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-tertiary hover:text-text-primary transition-all flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+                      </svg>
+                      View full audit
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Generation stream panel ──────────────────────────────────────────────────
+
+function GenerationStreamPanel({
+  stages, thinkingChunks, isGenerating, onClose,
+}: {
+  stages: string[];
+  thinkingChunks: string[];
+  isGenerating: boolean;
+  onClose: () => void;
+}) {
+  const [minimized, setMinimized] = useState(false);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logRef.current && !minimized) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [stages, minimized]);
+
+  const allThinking = thinkingChunks.join("");
+
+  return (
+    <div className={`rounded-[16px] border bg-surface-elevated shadow-sm overflow-hidden transition-all ${
+      isGenerating ? "border-brand-violet/30" : "border-emerald-500/30"
+    }`}>
+      {/* Header */}
+      <div className={`flex items-center justify-between px-4 py-3 ${
+        isGenerating ? "bg-brand-violet/5" : "bg-emerald-500/5"
+      }`}>
+        <div className="flex items-center gap-2.5">
+          {isGenerating ? (
+            <Spinner size={13} />
+          ) : (
+            <svg className="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 6 9 17l-5-5" />
+            </svg>
+          )}
+          <span className="text-[13px] font-semibold text-text-primary">
+            {isGenerating ? "Generating enhanced blog…" : "Generation complete"}
+          </span>
+          {stages.length > 0 && isGenerating && (
+            <span className="text-[11px] text-text-tertiary hidden sm:block">
+              {stages[stages.length - 1]}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setMinimized(v => !v)}
+            className="text-[11px] font-medium text-text-tertiary hover:text-text-primary transition-colors px-2 py-0.5 rounded-[6px] hover:bg-surface-secondary"
+          >
+            {minimized ? "Show details" : "Minimize"}
+          </button>
+          {!isGenerating && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-6 h-6 flex items-center justify-center rounded-[6px] text-text-tertiary hover:text-rose-400 hover:bg-rose-500/10 transition-all"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      {!minimized && (
+        <div className="p-4 space-y-3">
+          {/* Stage log */}
+          <div ref={logRef} className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+            {stages.map((stage, i) => {
+              const isLatest = i === stages.length - 1;
+              return (
+                <div key={i} className="flex items-start gap-2">
+                  {isLatest && isGenerating ? (
+                    <span className="w-1.5 h-1.5 mt-[5px] rounded-full bg-brand-violet animate-pulse shrink-0" />
+                  ) : (
+                    <svg className="w-3 h-3 mt-0.5 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M20 6 9 17l-5-5" />
+                    </svg>
+                  )}
+                  <span className={`text-[12px] leading-relaxed ${isLatest ? "text-text-primary font-medium" : "text-text-tertiary"}`}>
+                    {stage}
+                  </span>
+                </div>
+              );
+            })}
+            {isGenerating && stages.length === 0 && (
+              <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-violet animate-pulse shrink-0" />
+                Connecting to generation service…
+              </div>
+            )}
+          </div>
+
+          {/* Thinking section — only shown for Claude streaming (non-repair) path */}
+          {allThinking && (
+            <div className="border-t border-border-subtle/50 pt-3">
+              <button
+                type="button"
+                onClick={() => setThinkingExpanded(v => !v)}
+                className="flex items-center gap-1.5 text-[11px] font-medium text-text-tertiary hover:text-text-primary transition-colors mb-2 w-full text-left"
+              >
+                <svg className={`w-3.5 h-3.5 transition-transform shrink-0 ${thinkingExpanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                </svg>
+                AI reasoning process
+                <span className="ml-auto text-[10px] text-text-tertiary/60">{thinkingChunks.length} steps</span>
+              </button>
+              {thinkingExpanded && (
+                <div className="max-h-56 overflow-y-auto rounded-[10px] bg-surface-secondary/60 border border-border-subtle/50 p-3">
+                  <pre className="text-[11px] text-text-tertiary font-mono leading-relaxed whitespace-pre-wrap break-words">{allThinking}</pre>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
-
-      {/* ── controls ──────────────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-4 rounded-[20px] border border-border-subtle bg-surface-secondary/50 p-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-        <p className="text-[12px] text-text-tertiary max-w-lg leading-relaxed">
-          Audits run in batches of {BATCH_SIZE} to keep costs predictable. Open{" "}
-          <ProjectNavLink href={`/projects/${projectId}/audit/discover-pages`} className="font-medium text-text-secondary underline-offset-2 hover:underline">Discover pages</ProjectNavLink>{" "}
-          to browse your sitemap and audit specific URLs.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => handleRun(false)}
-            disabled={running || (coverage.blogs_audited > 0 && pendingAudits === 0)}
-            className="inline-flex h-10 items-center gap-2 rounded-full bg-brand-primary px-5 text-[13px] font-semibold text-brand-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {running ? <><Spinner size={14} className="border-brand-on-primary/30 border-t-brand-on-primary" /> Auditing…</>
-              : coverage.blogs_audited === 0 ? `Audit first ${Math.min(BATCH_SIZE, Math.max(coverage.blogs_found, BATCH_SIZE))} blogs`
-              : pendingAudits === 0 ? "All audited"
-              : `Audit ${Math.min(BATCH_SIZE, pendingAudits)} more`}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleRun(true)}
-            disabled={running || coverage.blogs_audited === 0}
-            className="inline-flex h-10 items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-5 text-[13px] font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-40 transition-all"
-          >
-            Re-audit 10
-          </button>
-          <button
-            type="button"
-            onClick={handleClear}
-            disabled={running || coverage.blogs_audited === 0}
-            className="inline-flex h-10 items-center gap-2 rounded-full border border-rose-500/20 bg-rose-500/8 px-4 text-[13px] font-medium text-rose-400 hover:bg-rose-500/15 disabled:opacity-40 transition-all"
-          >
-            Clear all
-          </button>
-        </div>
-      </div>
-
-      <Suspense fallback={null}>
-        <AuditDetailModal
-          open={!!modalAudit}
-          row={modalAudit}
-          projectId={projectId}
-          onClose={() => setModalAudit(null)}
-          onScheduleToCalendar={() => (modalAudit ? handleAddToCalendar(modalAudit) : Promise.resolve())}
-          scheduleBusy={!!modalAudit && calendarAddingUrl === modalAudit.url}
-          onCalendar={!!modalAudit && !!calendarLinkedByUrl[modalAudit.url]}
-        />
-      </Suspense>
-    </CHPageShell>
+    </div>
   );
 }
-
-// keep formatVolume as a local re-export shim so old call sites still compile
-export { formatVolume };

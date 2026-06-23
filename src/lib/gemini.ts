@@ -491,6 +491,50 @@ interface GeminiBlogJson {
   externalLinksUsed?: string[];
 }
 
+/** Attempt to salvage a truncated JSON string by extracting any complete key values. */
+function repairTruncatedBlogJson(raw: string): GeminiBlogJson | null {
+  // Strip markdown fences
+  const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
+  // Try stripping trailing commas then close unclosed brackets
+  const strip = stripJsonTrailingCommas(text);
+  for (const attempt of [strip, text]) {
+    // Count open vs close braces to repair truncated JSON
+    let depth = 0;
+    let inStr = false;
+    let escape = false;
+    for (const ch of attempt) {
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+    }
+    if (depth > 0) {
+      const closed = attempt + "}".repeat(depth);
+      try { return JSON.parse(closed) as GeminiBlogJson; } catch { /* continue */ }
+    }
+  }
+
+  // Last resort: extract individual fields with regex
+  const title = /"title"\s*:\s*"((?:[^"\\]|\\(?:[\s\S]))*)"/.exec(text)?.[1];
+  const meta = /"metaDescription"\s*:\s*"((?:[^"\\]|\\(?:[\s\S]))*)"/.exec(text)?.[1];
+  // For contentMarkdown, grab everything from the key to the point where we run out
+  const cmMatch = /"contentMarkdown"\s*:\s*"([\s\S]*)/.exec(text);
+  let contentMarkdown = "";
+  if (cmMatch) {
+    // Unescape what we have — it's likely truncated mid-string
+    contentMarkdown = cmMatch[1]
+      .replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\")
+      .replace(/",?\s*"(?:faqQuestions|internalLinksUsed|externalLinksUsed)[\s\S]*$/, ""); // strip rest
+  }
+  if (title || contentMarkdown) {
+    return { title: title ?? "", metaDescription: meta ?? "", contentMarkdown, faqQuestions: [], internalLinksUsed: [], externalLinksUsed: [] };
+  }
+  return null;
+}
+
 export function parseGeneratedBlogJson(
   rawText: string,
   entry: { title: string; slug: string; focus_keyword: string },
@@ -498,8 +542,8 @@ export function parseGeneratedBlogJson(
   research?: ResearchContext
 ): GeneratedBlog {
   let parsed: GeminiBlogJson | null = null;
-  const cleanedText = rawText.trim();
-  
+  const cleanedText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
   // Try direct parsing
   try {
     parsed = JSON.parse(cleanedText) as GeminiBlogJson;
@@ -510,8 +554,17 @@ export function parseGeneratedBlogJson(
       try {
         parsed = JSON.parse(match[0]) as GeminiBlogJson;
       } catch {
-        /* proceed to fallback */
+        // Try trailing-comma strip
+        try {
+          parsed = JSON.parse(stripJsonTrailingCommas(match[0])) as GeminiBlogJson;
+        } catch {
+          /* proceed to truncation repair */
+        }
       }
+    }
+    // If still no luck, attempt truncation repair
+    if (!parsed) {
+      parsed = repairTruncatedBlogJson(cleanedText);
     }
   }
 
@@ -1129,9 +1182,11 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and long-tail phrasing.
 - Include **at least 3 and at most 8** credible external citations as markdown links in the body. Use Google Search to find the PRIMARY SOURCE of each claim — the actual research report, government dataset, academic paper, or official standards page, NOT a blog post or news article summarising it. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
 - Use **at least 2** INTERNAL LINK POOL URLs verbatim in contextually relevant sentences.
+- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
 - Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
 - If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
-- Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.`
+- Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.
+- IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`
     : `IMPORTANT RULES (REPAIR):
 - This is a REPAIR of an existing page — the topic must stay the same. Do NOT pivot to a different product, industry, or audience.
 - Target the same primary keyword unless the audit explicitly says the keyword is dead; then re-target to the closest secondary keyword listed.
@@ -1143,7 +1198,9 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
 - Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
 - Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. Use Google Search to find the PRIMARY SOURCE of each citation — the actual research report, government dataset, or academic paper, NOT a blog or news article summarising it. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains (e.g. "https://www.gartner.com") or competitor blogs. No Wikipedia.
-- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.`;
+- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
+- Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
+- IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`;
 
   const titleMetaBlock = `- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || '(keep original H1)'}".
 - Do not change the meta description unless META_NEEDS_REPAIR is true. If false, keep the same marketing angle as the original page (do not invent a new pitch).`;
@@ -1194,7 +1251,9 @@ Write the repaired blog now. End the blog content, then on the next line output 
 ---META---
 {"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;
 
-  const text = await geminiGenerate(prompt, 3, true, undefined, project.user_id, project.id);
+  // maxOutputTokens: 32 768 ensures long blogs aren't cut off.
+  // timeoutMs: 0 disables the 120 s hard abort that caused truncation.
+  const text = await geminiGenerate(prompt, 3, true, undefined, project.user_id, project.id, 32_768, 0);
 
   const sepIdx = text.indexOf('---META---');
   let content = text.trim();

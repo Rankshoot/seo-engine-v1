@@ -200,6 +200,64 @@ function PlaceholderImageCard({
   );
 }
 
+// ─── PDF link card ────────────────────────────────────────────────────────
+
+/** Returns true if the URL likely points to a PDF document. */
+function isPdfHref(href: string): boolean {
+  try {
+    const u = new URL(href);
+    const path = u.pathname.toLowerCase();
+    if (path.endsWith(".pdf")) return true;
+    if (u.searchParams.get("filetype") === "pdf") return true;
+    if (u.searchParams.get("type") === "pdf") return true;
+  } catch { /* relative or invalid URL — not a PDF */ }
+  return /\.pdf(\?|#|$)/i.test(href);
+}
+
+function PdfPreviewer({ href, label }: { href: string; label: string }) {
+  const filename = (() => {
+    try { return decodeURIComponent(new URL(href).pathname.split("/").filter(Boolean).pop() ?? "document.pdf"); }
+    catch { return label || "document.pdf"; }
+  })();
+
+  const displayTitle = label || filename;
+
+  return (
+    <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-sm not-italic no-underline">
+      {/* PDF Iframe Viewer */}
+      <iframe
+        src={`${href}#toolbar=0&navpanes=0`}
+        className="w-full border-none block bg-surface-primary"
+        style={{ height: "600px" }}
+        title={displayTitle}
+        allowFullScreen
+      />
+
+      {/* PDF Download Bar */}
+      <span className="flex items-center justify-between gap-4 border-t border-border-subtle bg-surface-primary px-6 py-4 flex-wrap">
+        <span
+          className="text-[14px] font-bold tracking-tight"
+          style={{ color: "var(--brand-coral, #ff7759)" }}
+        >
+          {displayTitle}
+        </span>
+
+        <a
+          href={href}
+          download
+          className="inline-flex h-9 items-center justify-center rounded-full px-5 text-[13px] font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+          style={{
+            backgroundColor: "#22252a",
+            border: "1px solid var(--brand-coral, #ff7759)",
+          }}
+        >
+          Download
+        </a>
+      </span>
+    </span>
+  );
+}
+
 // ─── Markdown component builder ────────────────────────────────────────────
 
 function linkHostName(href: string): string | null {
@@ -221,13 +279,19 @@ export function buildMarkdownComponents(
     ...rest
   }) => {
     const isHttp = /^https?:\/\//i.test(href);
+    const label = typeof children === "string" ? children : flattenChildren(children);
+
+    // Render PDF links as an embedded PDF previewer instead of an inline text link.
+    if (isHttp && isPdfHref(href)) {
+      return <PdfPreviewer href={href} label={label} />;
+    }
+
     const host = isHttp ? linkHostName(href) : null;
     const isOwnSite = Boolean(
       ownSiteHost && host && (host === ownSiteHost || host.endsWith(`.${ownSiteHost}`))
     );
     const isInternal = (!isHttp && href.startsWith("/")) || internalSet.has(href) || isOwnSite;
     const showExternalChrome = isHttp && !isOwnSite;
-    const label = typeof children === "string" ? children : flattenChildren(children);
     return (
       <a
         href={href}

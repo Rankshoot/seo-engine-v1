@@ -241,19 +241,19 @@ export default function ProjectSidebar({
     },
     {
       icon: Icon.audit,
-      label: "Content Health",
+      label: "Content Audit Studio",
       href: auditBase,
-      badge: "Soon",
-      badgeColor: "bg-surface-tertiary/50 text-text-tertiary border-border-subtle opacity-50",
-      prefetchLabel: "Content Health",
-      disabled: true,
+      prefetchLabel: "Content Audit Studio",
+      exact: true,
     },
     {
       icon: Icon.settings,
       label: "Settings",
       href: `${base}/settings`,
       prefetchLabel: "Settings",
+      exact: true,
     },
+
   ], [base, auditBase, navCountsReady, liveStats]);
 
   /* ── Derived plan info ── */

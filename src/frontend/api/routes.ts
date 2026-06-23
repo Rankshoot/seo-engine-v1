@@ -50,13 +50,17 @@ export const V1Routes = {
   competitorsLoadMoreAhrefs: (projectId: string) =>
     `/projects/${projectId}/competitors/load-more-from-ahrefs`,
 
-  // ── Content health (audits) ────────────────────────────────────────────────
+  // ── Content health (audits) — legacy ──────────────────────────────────────
   contentHealthAudits: (projectId: string) => `/projects/${projectId}/content-health/audits`,
   contentHealthAuditsRun: (projectId: string) => `/projects/${projectId}/content-health/audits/run`,
   contentHealthAuditsSelected: (projectId: string) =>
     `/projects/${projectId}/content-health/audits/selected`,
   contentHealthSitemapPages: (projectId: string) =>
     `/projects/${projectId}/content-health/sitemap-pages`,
+
+  // ── Content Audit Studio ──────────────────────────────────────────────────
+  contentAuditAnalyze: (projectId: string) => `/projects/${projectId}/content-audit/analyze`,
+  contentAuditHistory: (projectId: string) => `/projects/${projectId}/content-audit/history`,
 
   // ── Blogs ─────────────────────────────────────────────────────────────────
   blog: (blogId: string) => `/blogs/${blogId}`,
@@ -72,6 +76,12 @@ export const V1Routes = {
   // ── Brand Intelligence ────────────────────────────────────────────────────
   projectBrand: (projectId: string) => `/projects/${projectId}/brand`,
   projectBrandRefresh: (projectId: string) => `/projects/${projectId}/brand/refresh`,
+
+  // ── Integrations ─────────────────────────────────────────────────────────
+  strapiPublish:       "/integrations/strapi/publish",
+  userStrapiIntegration: "/integrations/user-strapi",
+  userStrapiTest:      "/integrations/user-strapi/test",
+  blogPublishCms: (blogId: string) => `/blogs/${blogId}/publish-cms`,
 
   // ── Admin (platform) ─────────────────────────────────────────────────────
   adminMe: "/admin/me",

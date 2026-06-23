@@ -47,6 +47,8 @@ import { unscheduleContentAction } from "@/app/actions/content-actions";
 import {
   SpinIcon, ExternalLinkIcon, DownloadIcon, RepairBanner,
 } from "@/components/blog/BlogViewerHelpers";
+import { PublishToOwnBlogButton, PublishToCmsButton } from "@/components/blog/PublishToStrapiButton";
+import { integrationsApi } from "@/frontend/api/integrations";
 import {
   buildMarkdownComponents, markdownUrlTransform, internalSetForBlog,
   markdownAiSnippetToDocumentFragment,
@@ -195,6 +197,14 @@ export default function BlogViewerPage() {
   const [enhancedBlog,      setEnhancedBlog]      = useState<Blog | null>(null);
   const [compareView,       setCompareView]       = useState<"before" | "after">("before");
   const isAfterView = compareView === "after" && enhancedBlog !== null;
+
+  // ── CMS integration ────────────────────────────────────────────────────
+  const { data: cmsIntegrationRes } = useQuery({
+    queryKey: ["user-cms-integration"],
+    queryFn:  () => integrationsApi.getUserStrapi(),
+    staleTime: 60_000,
+  });
+  const hasCmsIntegration = Boolean(cmsIntegrationRes?.success && cmsIntegrationRes?.data);
 
   // ── Derived display blog ───────────────────────────────────────────────
   const displayBlog: Blog | null = isAfterView ? enhancedBlog : blog;
@@ -1044,6 +1054,27 @@ export default function BlogViewerPage() {
           }}
         />
       </div>
+
+      {/* Publish to CMS */}
+      {(hasCmsIntegration || process.env.NEXT_PUBLIC_STRAPI_CONFIGURED === "true") && (
+        <>
+          <Divider />
+          <div className="px-4 py-3.5 space-y-2">
+            <SLabel>Publish</SLabel>
+            <PublishToOwnBlogButton
+              blogId={blog.id}
+              disabled={editMode || savingContent}
+              onPublished={() => handleStatusChange("published")}
+            />
+            <PublishToCmsButton
+              blogId={blog.id}
+              hasCmsIntegration={hasCmsIntegration}
+              disabled={editMode || savingContent}
+              onPublished={() => handleStatusChange("published")}
+            />
+          </div>
+        </>
+      )}
 
       {/* Export */}
       <Divider />

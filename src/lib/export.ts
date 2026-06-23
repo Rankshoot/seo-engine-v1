@@ -752,7 +752,21 @@ function renderMarkdownToHtml(markdown: string): string {
       buf.push(lines[i].trim());
       i++;
     }
-    out.push(`<p>${renderInline(buf.join(' '))}</p>`);
+    const paragraphText = buf.join(' ');
+    const pdfMatch = paragraphText.trim().match(/^\[([^\]]+)\]\(([^)\s]+\.pdf(?:[?#]\S*)?)\)$/i);
+    if (pdfMatch) {
+      const label = pdfMatch[1];
+      const href = pdfMatch[2];
+      out.push(`<div class="pdf-preview-container" style="margin: 2.5em 0; border: 1px solid #d0d0dc; border-radius: 16px; overflow: hidden; background: #f4f4f8; font-family: system-ui, -apple-system, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+  <iframe src="${href}#toolbar=0&navpanes=0" style="width: 100%; height: 600px; border: none; display: block; background: #ececf2;" allowfullscreen></iframe>
+  <div class="pdf-download-bar" style="display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; background: #ffffff; border-top: 1px solid #d0d0dc; gap: 16px; flex-wrap: wrap;">
+    <span class="pdf-title" style="font-size: 14px; font-weight: 700; color: #ff7759; word-break: break-word;">${escapeHTML(label)}</span>
+    <a href="${href}" download style="display: inline-flex; align-items: center; justify-content: center; background: #22252a; color: #ffffff; border: 1px solid #ff7759; padding: 8px 20px; border-radius: 9999px; font-size: 13px; font-weight: 600; text-decoration: none; transition: opacity 0.15s ease;">Download</a>
+  </div>
+</div>`);
+    } else {
+      out.push(`<p>${renderInline(paragraphText)}</p>`);
+    }
   }
 
   closeLists();

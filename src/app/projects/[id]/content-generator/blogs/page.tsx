@@ -190,6 +190,14 @@ export default function BlogGeneratorPage() {
   const entryId = searchParams?.get("entryId");
   const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
 
+  // Audit-fix mode: coming from Content Health → Generate enhanced
+  const auditUrl = searchParams?.get("auditUrl") || "";
+  const auditKeyword = searchParams?.get("auditKeyword") || "";
+  const auditTitle = searchParams?.get("auditTitle") || "";
+  const auditMode = searchParams?.get("auditMode") || ""; // "fix" = surgical edit, not rewrite
+  const auditIssues = searchParams?.get("auditIssues") || "";
+  const isAuditFixMode = auditMode === "fix" && !!auditUrl;
+
   const { data: entriesData } = useQuery({
     queryKey: qk.calendarWithBlogs(projectId),
     queryFn: () => calendarApi.withBlogs(projectId),
@@ -278,6 +286,18 @@ export default function BlogGeneratorPage() {
       if (scheduledEntry.secondary_keywords?.length) setSecondaryKeywords(scheduledEntry.secondary_keywords);
     }
   }, [scheduledEntry]);
+
+  // Seed form from audit params when in fix mode
+  useEffect(() => {
+    if (!isAuditFixMode) return;
+    if (auditKeyword && !keywordParam) setPrimaryKeyword(auditKeyword);
+    if (auditTitle) setTopic(auditTitle);
+    if (auditIssues) {
+      setCustomInstructions(
+        `AUDIT FIX MODE — apply these specific fixes to the existing blog at ${auditUrl}. DO NOT rewrite the entire post. Make surgical edits only:\n\n${auditIssues}`
+      );
+    }
+  }, [isAuditFixMode]);
 
   // ── Ahrefs keyword fetch (triggered by toggle) ─────────────────────────
   const fetchAhrefsData = useCallback(async () => {
@@ -495,6 +515,22 @@ export default function BlogGeneratorPage() {
       {/* Sticky header */}
       <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
         <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Blogs" />
+        {isAuditFixMode && (
+          <div className="mb-4 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/8 px-4 py-3">
+            <span className="mt-0.5 shrink-0 rounded-full border border-yellow-500/40 bg-yellow-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-400">
+              Enhancing existing blog
+            </span>
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-yellow-300 leading-snug truncate">{auditTitle || auditUrl}</p>
+              <p className="text-[11px] text-text-tertiary mt-0.5">
+                Applying surgical fixes from content audit — not a full rewrite.{" "}
+                <a href={auditUrl} target="_blank" rel="noopener noreferrer" className="text-brand-action hover:underline underline-offset-2">
+                  View page →
+                </a>
+              </p>
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0 max-w-3xl">
             <PageTitle>{heroTitle}</PageTitle>

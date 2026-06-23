@@ -144,6 +144,14 @@ CRITICAL RULES — every bullet is enforced:
 - No HTML, no schema JSON-LD, no fenced code blocks unless engineering depth.
 - Write at least 5 distinct numbered sections or H2 headings.
 
+GEO + AEO REQUIREMENTS (so AI research engines and answer boxes cite this whitepaper):
+- DIRECT ANSWER FIRST: lead each section with a 2–3 sentence thesis answering its core question before the supporting analysis.
+- DEFINITION ON FIRST USE: bold a one-line definition (≤ 20 words) for each key term/framework the first time it appears.
+- ATTRIBUTION STYLE: follow every statistic with the source name in parentheses, e.g. "(McKinsey, 2024)" — academic-style attribution AI models trust.
+- ENTITY CLARITY: explicitly name the standards, vendors, frameworks, and bodies relevant to the topic so AI can map the knowledge graph.
+- QUESTION-FRAMED SUBHEADS: include at least 2 subheadings phrased as the exact questions a decision-maker would ask.
+- KEY TAKEAWAYS / TL;DR: end each major section with a 3–5 bullet takeaway list; this is the block AI engines extract for answers.
+
 After the whitepaper output EXACTLY this block (valid JSON, no trailing commas):
 ---META---
 {

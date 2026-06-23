@@ -338,98 +338,69 @@ function extractFaqsFromHtml(html: string): string {
   return markdown;
 }
 
-/**
- * Returns true if Readability extracted meaningful article content.
- * A very short result (< 300 words) likely means the content area was not
- * found — this happens on pages where content is inside a lazy-loaded widget
- * or behind a JS render gate.
- */
-function isReadabilityResultSufficient(markdown: string): boolean {
-  const wordCount = markdown.trim().split(/\s+/).filter(Boolean).length;
-  return wordCount >= 300;
-}
-
 export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapedPageMarkdown> {
   try {
     const timeoutMs = opts.timeoutMs ?? 15_000;
     let html = await fetchHtmlWithRetries(url, 1, timeoutMs);
-
-    // Try Playwright before Jina when direct fetch fails — Playwright renders
-    // JavaScript so it captures the full blog content including lazy sections.
-    // Jina is kept as a last resort because it can be confused by embedded PDFs.
     if (!html) {
-      console.log(`[hybridScraper] Direct fetch failed, trying Playwright for ${url}`);
+      console.log(`[hybridScraper] Using Jina Reader for ${url}`);
+      const jina = await readUrlViaJinaReader(url, { timeoutMs });
+      if (jina.ok && jina.markdown.trim()) {
+        return {
+          url,
+          markdown: jina.markdown,
+          length: jina.markdown.length,
+          ok: true,
+        };
+      }
+      console.log(`[hybridScraper] Using Playwright fallback for ${url}`);
       html = await fetchHtmlWithPlaywright(url, timeoutMs);
     }
-
-    if (html) {
-      // Parse the HTML and check if Readability got enough content.
-      // If not (e.g. JS-rendered page that Playwright didn't fully settle),
-      // fall through to Jina.
-      const { document } = parseHTML(html);
-      const base = document.createElement('base');
-      base.href = url;
-      document.head?.appendChild(base);
-      const reader = new Readability(document as any);
-      const article = reader.parse();
-
-      let markdown = '';
-      if (article?.content) {
-        const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
-        turndownService.remove(['script', 'style']);
-        markdown = turndownService.turndown(article.content);
-
-        const hasFaq = /(faq|frequently asked)/i.test(markdown);
-        if (!hasFaq) {
-          const faqsMd = extractFaqsFromHtml(html);
-          if (faqsMd) markdown += faqsMd;
-        }
-      } else {
-        const $ = cheerio.load(html);
-        $('script, style, noscript').remove();
-        markdown = $('body').text().replace(/\s+/g, ' ').trim();
-      }
-
-      if (isReadabilityResultSufficient(markdown)) {
-        return { url, markdown, length: markdown.length, ok: true };
-      }
-      console.log(`[hybridScraper] Readability result too short (${markdown.trim().split(/\s+/).length} words), falling back to Jina for ${url}`);
-    }
-
-    // Last resort: Jina Reader (strips embedded PDFs via headers in readUrlViaJinaReader).
-    console.log(`[hybridScraper] Using Jina Reader for ${url}`);
-    const jina = await readUrlViaJinaReader(url, { timeoutMs });
-    if (jina.ok && jina.markdown.trim()) {
-      return {
-        url,
-        markdown: jina.markdown,
-        length: jina.markdown.length,
-        ok: true,
-      };
-    }
-
     if (!html) {
-      throw new Error(`Failed to fetch HTML for ${url}: ${jina.error ?? 'all methods exhausted'}`);
+      throw new Error(`Failed to fetch HTML for ${url}`);
     }
 
-    // html is non-null here but Readability was insufficient — return what we have
     const { document } = parseHTML(html);
-    const base2 = document.createElement('base');
-    base2.href = url;
-    document.head?.appendChild(base2);
-    const reader2 = new Readability(document as any);
-    const article2 = reader2.parse();
-    let fallbackMarkdown = '';
-    if (article2?.content) {
-      const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
-      td.remove(['script', 'style']);
-      fallbackMarkdown = td.turndown(article2.content);
+    
+    // Set baseURI for relative link resolution in Readability
+    const base = document.createElement('base');
+    base.href = url;
+    document.head?.appendChild(base);
+
+    const reader = new Readability(document as any);
+    const article = reader.parse();
+
+    let markdown = '';
+    if (article?.content) {
+      const turndownService = new TurndownService({
+        headingStyle: 'atx',
+        codeBlockStyle: 'fenced'
+      });
+      // Remove scripts, styles before turndown
+      turndownService.remove(['script', 'style']);
+      markdown = turndownService.turndown(article.content);
+
+      // Check if FAQ section is present in parsed markdown; if missing, extract and append via Cheerio
+      const hasFaq = /(faq|frequently asked)/i.test(markdown);
+      if (!hasFaq) {
+        const faqsMd = extractFaqsFromHtml(html);
+        if (faqsMd) {
+          markdown += faqsMd;
+        }
+      }
     } else {
+      // Fallback: if readability fails, try just cheerio text
       const $ = cheerio.load(html);
       $('script, style, noscript').remove();
-      fallbackMarkdown = $('body').text().replace(/\s+/g, ' ').trim();
+      markdown = $('body').text().replace(/\s+/g, ' ').trim();
     }
-    return { url, markdown: fallbackMarkdown, length: fallbackMarkdown.length, ok: true };
+
+    return {
+      url,
+      markdown,
+      length: markdown.length,
+      ok: true
+    };
   } catch (error) {
     return {
       url,

@@ -284,6 +284,10 @@ export async function readUrlViaJinaReader(
       Accept: 'text/markdown,text/plain,*/*',
       'X-Return-Format': 'markdown',
       'X-Md-Heading-Style': 'atx',
+      // Strip embedded PDFs and iframes so Jina reads the surrounding HTML blog
+      // content instead of following an embedded PDF document.
+      'X-Remove-Selector': 'iframe, embed, object[type="application/pdf"], object[data$=".pdf"]',
+      'X-With-Iframe': 'false',
     };
     const key = process.env.JINA_API_KEY?.trim();
     if (key) headers.Authorization = `Bearer ${key}`;
@@ -296,6 +300,12 @@ export async function readUrlViaJinaReader(
     const markdown = (await res.text()).trim();
     if (!markdown || markdown.length < 40) {
       result = { ok: false, markdown: '', error: 'Jina Reader returned empty body' };
+      return result;
+    }
+    // Reject if Jina returned PDF document content instead of HTML page content.
+    // PDFs routed through Jina always have a "Number of Pages:" metadata header.
+    if (/^Number of Pages:\s*\d+/m.test(markdown.slice(0, 500))) {
+      result = { ok: false, markdown: '', error: 'Jina Reader returned PDF content instead of page HTML' };
       return result;
     }
     result = { ok: true, markdown };

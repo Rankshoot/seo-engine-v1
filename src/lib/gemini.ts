@@ -1077,11 +1077,6 @@ export interface RepairBlogInput {
     quick_wins: string[];
     quality_rubric: Array<{ label: string; detail: string; status: 'pass' | 'warn' | 'fail' }>;
   };
-  /**
-   * If the original page hosts a downloadable PDF, its direct URL.
-   * When provided, the LLM is instructed to include a natural CTA link to the PDF inside the repaired blog.
-   */
-  pdfCtaUrl?: string | null;
 }
 
 export interface RepairedBlog extends GeneratedBlog {
@@ -1190,18 +1185,16 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
 - If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
 - Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.`
-    : `IMPORTANT RULES (REPAIR — structure-preserving surgical edit):
+    : `IMPORTANT RULES (REPAIR):
 - This is a REPAIR of an existing page — the topic must stay the same. Do NOT pivot to a different product, industry, or audience.
-- **STRUCTURE IS SACRED: Do NOT rename, reorder, merge, split, or remove any existing H1, H2, or H3 heading. Do NOT move, reorder, or remove any existing FAQ questions. The exact heading hierarchy and section order of the original must be preserved verbatim.**
-- Only ADD content: new paragraphs, new FAQ Q&A pairs, new citations, new internal/external links, or new short sections for content gaps — inserted at the most logical position within the existing structure.
-- Only rewrite an existing paragraph if that specific paragraph is the direct subject of an audit issue AND the fix requires rewording (not structural change).
 - Target the same primary keyword unless the audit explicitly says the keyword is dead; then re-target to the closest secondary keyword listed.
+- Preserve every section, claim, example, and phrasing that is already correct. Only rewrite the parts connected to the listed audit issues or missing subtopics.
 - Output must be valid Markdown. No HTML.
 - Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
-- The H1 must remain exactly as specified by TITLE_NEEDS_REPAIR rules below.
-- If the original has no answer-first paragraph under the H1, ADD one in ≤80 words — do not replace existing intro text, prepend it.
-- Add H2/H3 sections, FAQ Q&As, internal links, external links, examples, or data ONLY where the audit says those are missing or weak. Do not add sections that already exist.
-- Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak. Use verbatim URLs. Never invent URLs.
+- Start with an H1 (# Title).
+- Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
+- Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
+- Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
 - Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. Use Google Search to find the PRIMARY SOURCE of each citation — the actual research report, government dataset, or academic paper, NOT a blog or news article summarising it. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains (e.g. "https://www.gartner.com") or competitor blogs. No Wikipedia.
 - Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.`;
 
@@ -1245,19 +1238,11 @@ ${gapsBlock}
 INTERNAL LINK POOL (you MUST use at least 2 of these, verbatim):
 ${linkPoolBlock}
 
-ORIGINAL PAGE NOTE: If the page content below contains any text that appears extracted from an embedded PDF (interview questions, Q&A blocks labelled "Strong Answer"/"Weak Answer"/"Recruiter Cue", numbered questions like "Q1.", page markers like "Page X of Y", or bulk answer dumps) — **ignore all of it entirely**. That content belongs in the PDF download, NOT in the article body. The article body must only contain normal blog prose: intro, section headings, paragraphs, examples, and FAQ.
-
-ORIGINAL PAGE (first ~${Math.round(originalBudget / 1000)}k chars of markdown — ${fullBundle ? 'use as base; rewrite and expand where needed' : 'PRESERVE THIS STRUCTURE EXACTLY; only add the missing elements identified above'}):
+ORIGINAL PAGE (first ~${Math.round(originalBudget / 1000)}k chars of markdown, for reference — do not copy verbatim; rewrite):
 ---
 ${originalHead}
 ---
 
-${input.pdfCtaUrl ? `
-PDF RESOURCE: The original page offers a downloadable PDF at: ${input.pdfCtaUrl}
-You MUST include a natural in-article callout that links to this PDF. Place it either (a) at the end of the introduction section, or (b) just before the FAQ section — whichever fits the flow better. Use this exact format on its own line:
-> 📄 **Download the full guide as a PDF** — [Get the PDF](${input.pdfCtaUrl})
-Do NOT place it inside the FAQ. Do NOT add more than one PDF callout.
-` : ''}
 Write the repaired blog now. End the blog content, then on the next line output EXACTLY:
 ---META---
 {"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;

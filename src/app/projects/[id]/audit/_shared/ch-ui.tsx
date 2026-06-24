@@ -149,18 +149,37 @@ export function SkeletonRow() {
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
 export function EmptyState({
-  icon, title, body, action,
+  icon, illustration, title, body, hints, action,
 }: {
   icon?: ReactNode;
+  illustration?: ReactNode;
   title: string;
   body: ReactNode;
+  hints?: string[];
   action?: ReactNode;
 }) {
   return (
     <div className="rounded-[20px] border border-dashed border-border-strong bg-surface-secondary/30 py-16 text-center px-6">
-      {icon && <div className="inline-flex items-center justify-center w-12 h-12 rounded-[14px] bg-surface-tertiary text-text-tertiary mb-4">{icon}</div>}
+      {illustration
+        ? <div className="flex justify-center mb-5 opacity-80">{illustration}</div>
+        : icon
+          ? <div className="inline-flex items-center justify-center w-12 h-12 rounded-[14px] bg-surface-tertiary text-text-tertiary mb-4">{icon}</div>
+          : null
+      }
       <h3 className="text-[15px] font-semibold text-text-primary mb-2">{title}</h3>
       <p className="text-[13px] text-text-tertiary max-w-sm mx-auto leading-relaxed">{body}</p>
+      {hints && hints.length > 0 && (
+        <ul className="mt-4 space-y-1.5 text-left max-w-xs mx-auto">
+          {hints.map((hint, i) => (
+            <li key={i} className="flex items-start gap-2 text-[12px] text-text-tertiary leading-snug">
+              <span className="mt-0.5 h-4 w-4 shrink-0 flex items-center justify-center rounded-full bg-surface-elevated border border-border-subtle text-[9px] font-bold text-text-tertiary tabular-nums">
+                {i + 1}
+              </span>
+              {hint}
+            </li>
+          ))}
+        </ul>
+      )}
       {action && <div className="mt-6">{action}</div>}
     </div>
   );

@@ -320,6 +320,35 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
   }
 }
 
+function WriteBacklogBanner({ count, projectId }: { count: number; projectId: string }) {
+  return (
+    <div className="mb-4 shrink-0 flex items-center gap-4 rounded-[14px] border border-brand-violet/25 bg-brand-violet/[0.07] px-4 py-3.5">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-brand-violet/25 bg-brand-violet/10">
+        <svg className="h-4 w-4 text-brand-violet" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+        </svg>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] font-semibold text-text-primary">
+          {count} approved keyword{count !== 1 ? "s" : ""} waiting to be written
+        </p>
+        <p className="mt-0.5 text-[12px] text-text-secondary leading-snug">
+          These keywords are approved but not yet scheduled. Turn them into content now.
+        </p>
+      </div>
+      <a
+        href={`/projects/${projectId}/content-generator/blogs`}
+        className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-brand-violet px-4 py-2 text-[12px] font-semibold text-white transition-opacity hover:opacity-90"
+      >
+        Write now
+        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m9 18 6-6-6-6" />
+        </svg>
+      </a>
+    </div>
+  );
+}
+
 export default function OrganicKeywordsTab({ projectId }: { projectId: string }) {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
@@ -433,6 +462,17 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       ),
     [serverKeywords, keywordStatuses]
   );
+
+  // Keywords approved but not yet scheduled on the calendar — the "write backlog"
+  const writeBacklogCount = useMemo(() =>
+    keywords.filter(kw =>
+      kw.status === "approved" &&
+      !calendarMap.has(kw.id) &&
+      !calendarMap.has(kw.keyword.toLowerCase())
+    ).length,
+    [keywords, calendarMap]
+  );
+
   useEffect(() => {
     if (serverKeywords.length === 0) return;
     dispatch(
@@ -1110,6 +1150,13 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               </div>
             )}
           </div>
+        )}
+
+        {writeBacklogCount > 0 && (
+          <WriteBacklogBanner
+            count={writeBacklogCount}
+            projectId={projectId}
+          />
         )}
 
         <Suspense fallback={<KeywordTableSkeleton />}>

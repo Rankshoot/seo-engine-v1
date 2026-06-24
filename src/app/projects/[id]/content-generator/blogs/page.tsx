@@ -513,7 +513,6 @@ export default function BlogGeneratorPage() {
 
   return (
     <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
-      <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Blogs" />
       {isAuditFixMode && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/8 px-4 py-3">
           <span className="mt-0.5 shrink-0 rounded-full border border-yellow-500/40 bg-yellow-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-400">
@@ -536,7 +535,6 @@ export default function BlogGeneratorPage() {
         </div>
       )}
       <PageHeader
-        eyebrow="Content Generator"
         title={heroTitle}
         description={heroLead}
         actions={

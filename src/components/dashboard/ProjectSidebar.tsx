@@ -111,6 +111,8 @@ interface ProjectSidebarProps {
   allProjects: Project[];
   isCollapsed: boolean;
   setIsCollapsed: (val: boolean) => void;
+  mobileOpen?: boolean;
+  setMobileOpen?: (val: boolean) => void;
 }
 
 export default function ProjectSidebar({
@@ -120,6 +122,8 @@ export default function ProjectSidebar({
   allProjects,
   isCollapsed,
   setIsCollapsed,
+  mobileOpen = false,
+  setMobileOpen,
 }: ProjectSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -177,6 +181,11 @@ export default function ProjectSidebar({
   useEffect(() => {
     if (serverStats) dispatch(hydrateProjectStats({ projectId, stats: serverStats }));
   }, [dispatch, projectId, serverStats]);
+
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    if (setMobileOpen) setMobileOpen(false);
+  }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   type NavLeaf = {
     icon: ReactNode;
@@ -289,8 +298,10 @@ export default function ProjectSidebar({
 
   return (
     <aside
-      className={`h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-secondary flex flex-col z-60 transition-[width] duration-300 ease-out ${
+      className={`h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-secondary flex flex-col z-60 transition-all duration-300 ease-out ${
         isCollapsed ? "w-[68px]" : "w-[260px]"
+      } ${
+        mobileOpen ? "translate-x-0" : "-translate-x-full sm:translate-x-0"
       }`}
     >
       {/* Subtle violet top glow */}
@@ -330,14 +341,29 @@ export default function ProjectSidebar({
             <Link href="/" className="flex items-center">
               <Logo size="sm" />
             </Link>
-            <button
-              onClick={() => setIsCollapsed(true)}
-              className="flex items-center justify-center w-7 h-7 rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-all"
-              title="Collapse sidebar"
-              aria-label="Collapse sidebar"
-            >
-              {Icon.chevronLeft}
-            </button>
+            <div className="flex items-center gap-1">
+              {/* Mobile close button */}
+              {setMobileOpen && (
+                <button
+                  onClick={() => setMobileOpen(false)}
+                  className="flex items-center justify-center w-7 h-7 rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-all sm:hidden"
+                  title="Close sidebar"
+                  aria-label="Close sidebar"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+              <button
+                onClick={() => setIsCollapsed(true)}
+                className="hidden sm:flex items-center justify-center w-7 h-7 rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-all"
+                title="Collapse sidebar"
+                aria-label="Collapse sidebar"
+              >
+                {Icon.chevronLeft}
+              </button>
+            </div>
           </>
         )}
       </div>

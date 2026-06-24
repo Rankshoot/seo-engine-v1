@@ -131,22 +131,22 @@
   }
 
   :root[class~="dark"] {
-    /* Dark Mode — deep navy/slate (not pure black), indigo-tinted surfaces.
-       Inspired by GitHub dark, Vercel, Linear — proven readable at scale.
-       Cards stand clearly above background; borders create depth, not noise. */
-    --surface-primary: #0d1117;
-    --surface-secondary: #131a26;
-    --surface-tertiary: #1a2233;
-    --surface-elevated: #1e2840;
-    --surface-hover: #253047;
+    /* Dark Mode — near-black with subtle violet tint.
+       Inspired by Linear, Vercel, and Raycast dark modes.
+       Cleaner contrast: deep base, distinct elevations, crisp text. */
+    --surface-primary: #0c0c10;
+    --surface-secondary: #111118;
+    --surface-tertiary: #16161f;
+    --surface-elevated: #1c1c28;
+    --surface-hover: #22222e;
 
-    --border-subtle: #222d44;
-    --border-default: #2d3d58;
-    --border-strong: #4a5f80;
+    --border-subtle: #1e1e2e;
+    --border-default: #28283c;
+    --border-strong: #3a3a54;
 
-    --text-primary: #e8edf5;
-    --text-secondary: #a8b4cc;
-    --text-tertiary: #5e7096;
+    --text-primary: #eeeef5;
+    --text-secondary: #9898b8;
+    --text-tertiary: #4a4a6a;
 
     --brand-primary: #e8edf5;
     --brand-on-primary: #0d1117;

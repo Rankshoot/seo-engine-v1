@@ -397,9 +397,9 @@ export default function ProjectSettingsPage() {
   };
 
   return (
-    <div className="relative space-y-8 pb-20 pl-4 pr-4 -mt-6 lg:-mt-8">
+    <div className="relative space-y-8 pb-20 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 -mt-4 sm:-mt-6 lg:-mt-8">
       {/* ── sticky header ─────────────────────────────────────────────────── */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-4 border-b border-border-subtle bg-surface-primary/95 px-4 pb-6 pt-6 lg:pt-8 backdrop-blur-sm">
+      <div className="sticky -top-4 sm:-top-6 lg:-top-8 z-20 -mx-4 sm:-mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8 pt-4 sm:pt-6 lg:pt-8 backdrop-blur-sm">
         <h1 className="text-[26px] font-bold tracking-tight text-text-primary">Project Settings</h1>
         <p className="mt-1 text-[14px] text-text-tertiary">Manage brand identity and integrations.</p>
       </div>

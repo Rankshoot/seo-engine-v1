@@ -369,7 +369,7 @@ export function HistoryTab() {
   const toRecord = Math.min(page * PAGE_SIZE, totalCount);
 
   return (
-    <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
+    <div className="flex flex-col h-full gap-4 pb-4">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3">
         {/* Content type dropdown */}
@@ -448,28 +448,30 @@ export function HistoryTab() {
       </div>
 
       {isLoading ? (
-        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
+        <div className="flex-1 min-h-0 rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <TableSkeleton rows={8} columns={6} />
         </div>
       ) : allRows.length === 0 ? (
-        <EmptyState
-          title={isEmptyStateForNoContent ? "No content generated yet" : "No assets match these filters"}
-          body={
-            isEmptyStateForNoContent
-              ? "Open a studio above and generate your first piece — it'll show up here automatically."
-              : "Try widening your filters or clearing the search to see more assets."
-          }
-          action={
-            <ProjectNavLink href={studioBase}>
-              <Button variant="primary" size="md" shape="pill">
-                Open content studio
-              </Button>
-            </ProjectNavLink>
-          }
-        />
+        <div className="flex-1 min-h-0">
+          <EmptyState
+            title={isEmptyStateForNoContent ? "No content generated yet" : "No assets match these filters"}
+            body={
+              isEmptyStateForNoContent
+                ? "Open a studio above and generate your first piece — it'll show up here automatically."
+                : "Try widening your filters or clearing the search to see more assets."
+            }
+            action={
+              <ProjectNavLink href={studioBase}>
+                <Button variant="primary" size="md" shape="pill">
+                  Open content studio
+                </Button>
+              </ProjectNavLink>
+            }
+          />
+        </div>
       ) : (
-        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="flex-1 min-h-0 flex flex-col rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
             <table className="w-full min-w-[840px] text-left border-collapse">
               <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
@@ -497,7 +499,7 @@ export function HistoryTab() {
           </div>
 
           {/* Pagination */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/20">
+          <div className="shrink-0 flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/20">
             <p className="text-[12px] text-text-tertiary tabular-nums">
               {totalCount === 0 ? "No results" : `Showing ${fromRecord}–${toRecord} of ${totalCount}`}
             </p>

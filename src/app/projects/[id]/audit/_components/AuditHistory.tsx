@@ -44,9 +44,27 @@ export function AuditHistory({
   if (!items.length) {
     return (
       <EmptyState
-        icon={<svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" /></svg>}
+        illustration={
+          <svg viewBox="0 0 160 80" className="w-40 h-20" fill="none" aria-hidden>
+            {/* Document */}
+            <rect x="30" y="4" width="100" height="72" rx="6" stroke="var(--border-subtle)" strokeWidth="1.5" fill="var(--surface-secondary)" />
+            {/* Score circle */}
+            <circle cx="80" cy="34" r="18" stroke="var(--border-subtle)" strokeWidth="2" />
+            <circle cx="80" cy="34" r="18" stroke="var(--brand-violet)" strokeWidth="2" strokeDasharray="75 38" strokeDashoffset="-9" opacity="0.6" />
+            <text x="80" y="38" fontSize="11" fontWeight="700" fill="var(--brand-violet)" fontFamily="sans-serif" textAnchor="middle" opacity="0.8">78</text>
+            {/* Issue chips */}
+            <rect x="44" y="60" width="20" height="8" rx="3" fill="var(--status-danger)" opacity="0.4" />
+            <rect x="68" y="60" width="24" height="8" rx="3" fill="var(--status-warning)" opacity="0.4" />
+            <rect x="96" y="60" width="20" height="8" rx="3" fill="var(--status-success)" opacity="0.4" />
+          </svg>
+        }
         title="No audits yet"
-        body="Enter a blog URL or upload content above to run your first audit. Results are saved here for quick reference."
+        body="Paste a blog URL or upload content above to get a score, issues list, and AI-powered fix suggestions."
+        hints={[
+          "Supports public URLs and pasted text",
+          "Scores SEO, GEO, AEO, quality & freshness",
+          "Save audits to track improvement over time",
+        ]}
       />
     );
   }

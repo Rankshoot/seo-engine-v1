@@ -9,7 +9,7 @@ import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
 import type { KeywordStatus } from "@/lib/types";
 import { useAppSelector, selectAiSuggestedGapKeywords } from "@/lib/redux/hooks";
-import { Button, PageHeader } from "@/components/common";
+import { Button, PageHeader, EmptyState } from "@/components/common";
 import { scoreCompetitorKeywordsWithAI } from "@/app/actions/keyword-actions";
 import { motion } from "framer-motion";
 import {
@@ -284,22 +284,39 @@ export default function CompetitorsPage() {
           ))}
         </div>
       ) : !hasBenchmark ? (
-        <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
-          <div className="mb-6 flex justify-center">
-            <div className="w-16 h-16 rounded-[16px] bg-surface-tertiary flex items-center justify-center text-text-primary border border-border-subtle">
-              <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
-              </svg>
-            </div>
-          </div>
-          <h3 className="mb-3 text-[24px] font-normal tracking-[-0.24px] text-text-primary font-display">No competitor keywords yet</h3>
-          <p className="mb-8 text-[16px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            We&apos;ll pull the organic keywords your competitors rank for and identify coverage gaps. Add competitor domains to get started.
-          </p>
-          <Button variant="primary" shape="pill" size="lg" loading={running} onClick={() => void handleRun()}>
-            {running ? "Benchmarking…" : "Run benchmark"}
-          </Button>
-        </div>
+        <EmptyState
+          illustration={
+            <svg viewBox="0 0 160 96" className="w-44 h-28" fill="none" aria-hidden>
+              {/* Three bar chart columns — competitors */}
+              <rect x="20" y="60" width="24" height="28" rx="3" stroke="var(--border-subtle)" strokeWidth="1.5" fill="var(--surface-secondary)" />
+              <rect x="68" y="38" width="24" height="50" rx="3" stroke="var(--border-subtle)" strokeWidth="1.5" fill="var(--surface-secondary)" />
+              <rect x="116" y="22" width="24" height="66" rx="3" stroke="var(--border-subtle)" strokeWidth="1.5" fill="var(--surface-secondary)" />
+              {/* "Your brand" bar — highlighted */}
+              <rect x="44" y="44" width="24" height="44" rx="3" fill="var(--brand-violet)" opacity="0.4" />
+              <rect x="44" y="44" width="24" height="44" rx="3" stroke="var(--brand-violet)" strokeWidth="1.5" />
+              {/* Gap arrow */}
+              <path d="M56 38 L56 18" stroke="var(--brand-violet)" strokeWidth="1.5" strokeDasharray="3 2" />
+              <path d="M52 22 L56 16 L60 22" stroke="var(--brand-violet)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              {/* Labels */}
+              <text x="24" y="96" fontSize="7" fill="var(--text-tertiary)" fontFamily="sans-serif" textAnchor="middle">Comp A</text>
+              <text x="56" y="96" fontSize="7" fill="var(--brand-violet)" fontFamily="sans-serif" textAnchor="middle" fontWeight="600">You</text>
+              <text x="80" y="96" fontSize="7" fill="var(--text-tertiary)" fontFamily="sans-serif" textAnchor="middle">Comp B</text>
+              <text x="128" y="96" fontSize="7" fill="var(--text-tertiary)" fontFamily="sans-serif" textAnchor="middle">Comp C</text>
+            </svg>
+          }
+          title="No competitor benchmark yet"
+          body="We'll crawl your competitors' organic rankings and surface gaps — keywords they rank for that you don't."
+          hints={[
+            "Add competitor domains in the panel above",
+            "Run the benchmark to pull their keyword rankings",
+            "Review gaps and approve the best ones for your calendar",
+          ]}
+          action={
+            <Button variant="primary" shape="pill" size="lg" loading={running} onClick={() => void handleRun()}>
+              {running ? "Benchmarking…" : "Run benchmark"}
+            </Button>
+          }
+        />
       ) : (
         <>
           {insightsView === "opportunities" && (

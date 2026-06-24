@@ -1,11 +1,9 @@
 /**
  * Claude-based enhanced blog repair.
  *
- * Functionally identical to the Gemini version in gemini.ts but uses
- * Claude (claude-sonnet-4-6) via direct Anthropic SDK streaming so we can:
- *  - Avoid the 8 192-token cap in the shared aiGenerate helper.
+ * Uses Claude (claude-sonnet-4-6) via direct Anthropic SDK streaming so we can:
  *  - Produce up to 32 768 output tokens (enough for a 4 500-word post).
- *  - Emit progress during the streaming via an optional callback.
+ *  - Emit streaming progress via an optional callback (useful for SSE forwarding).
  *  - Avoid hard timeouts that caused content truncation.
  */
 
@@ -31,11 +29,14 @@ function slugify(input: string): string {
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 /**
- * Repair / enhance a blog post using Claude claude-sonnet-4-6.
+ * Repair / enhance a blog post using Claude.
  *
- * @param input   The repair input (same interface used by the Gemini version).
- * @param opts.onChunk  Optional callback called with each text chunk as Claude
- *                      streams its response — useful for forwarding SSE events.
+ * Two modes, controlled by whether `contentAnalysisBundle` is provided:
+ *  - FULL ENHANCEMENT: comprehensive rewrite targeting all rubric/gap/issue findings.
+ *  - REPAIR: minimal surgical fix addressing only the listed audit issues.
+ *
+ * @param input  The repair input (same interface used by the Gemini version).
+ * @param opts.onChunk  Optional callback fired with each streaming text chunk.
  */
 export async function repairBlogPost(
   input: RepairBlogInput,
@@ -71,6 +72,8 @@ export async function repairBlogPost(
     /meta description|meta tag|description/i.test(`${i.label} ${i.detail} ${i.fix}`)
   );
 
+  // ── Context blocks ──────────────────────────────────────────────────────────
+
   const issueBlock = issues.length
     ? issues.map((i, idx) => {
         const cat = i.category ? ` · ${i.category.toUpperCase()}` : "";
@@ -82,6 +85,8 @@ export async function repairBlogPost(
   const gapsBlock = contentGaps.length
     ? contentGaps.map(g => `- ${g}`).join("\n")
     : "(the LLM did not flag explicit content gaps)";
+
+  const fullBundle = Boolean(contentAnalysisBundle);
 
   const rubricNeedsWork =
     contentAnalysisBundle?.quality_rubric?.filter(r => r.status === "fail" || r.status === "warn") ?? [];
@@ -104,9 +109,20 @@ Key diagnosis: ${contentAnalysisBundle.plain_language_verdict}`
     ? `Company voice (for tone ONLY — do not hijack the topic): ${brief.summary} · Products: ${brief.products.slice(0, 3).join(", ") || "n/a"}`
     : "";
 
-  const fullBundle = Boolean(contentAnalysisBundle);
   const originalBudget = fullBundle ? 20_000 : 10_000;
   const originalHead = originalMarkdown.slice(0, originalBudget);
+
+  const rubricSection =
+    fullBundle && rubricBlock
+      ? `QUALITY RUBRIC — STILL NEEDS WORK (address each; if an item is marginal, strengthen it anyway):\n${rubricBlock}\n\n`
+      : "";
+
+  const quickWinsSection =
+    fullBundle && contentAnalysisBundle?.quick_wins?.length
+      ? `QUICK WINS (implement each):\n- ${contentAnalysisBundle.quick_wins.join("\n- ")}\n\n`
+      : "";
+
+  // ── Single consolidated prompt ──────────────────────────────────────────────
 
   const modeIntro = fullBundle
     ? `You are a senior SEO editor. The user clicked "Generate enhanced" after a full content-quality analysis. Your job is to produce a **strong, search-ready** version of the SAME article: same core topic, same audience, same primary keyword intent — but comprehensively upgraded for clarity, depth, E-E-A-T, on-page SEO, and reader UX.
@@ -125,39 +141,32 @@ This is NOT a pivot and NOT a brand-new article from scratch. Reuse strong exist
 - Immediately under the H1, write one "answer-first" paragraph in ≤80 words that states the direct takeaway (optimized for AI Overviews / featured snippets).
 - Use clear modular H2/H3 hierarchy (RAG-friendly). Merge redundant headings; fix weak single-sentence sections.
 - Include a "## Frequently Asked Questions" section with 5–9 Q&A pairs (### question as heading, answer paragraph). Address real reader objections and long-tail phrasing.
-- Include **at least 3 and at most 8** credible external citations as markdown links in the body. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
+- Include **at least 3 and at most 8** credible external citations as markdown links in the body. Find the PRIMARY SOURCE of each claim — the actual research report, government dataset, academic paper, or official standards page, NOT a blog post or news article summarising it. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
 - Use **at least 2** INTERNAL LINK POOL URLs verbatim in contextually relevant sentences.
+- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
+- Respect PDF promised content: If the original blog title/H1 promises a specific number or list of items (e.g., "60+ questions", "100+ templates") that are delivered via a downloadable PDF, do NOT inline those items into the blog body. The PDF remains the delivery vehicle — keep the on-page prose as context, explanation, and guidance only.
 - Remove crutch phrases ("in today's world", "in recent years", "it's important to note", "game-changer", "leverage" without substance).
 - If the original used base64 or data-URI images, replace with descriptive markdown image placeholders or prose (no raw base64).
-- Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.`
-    : `IMPORTANT RULES (REPAIR — structure-preserving surgical edit):
+- Tables of contents are optional; only add "## Table of contents" if the post has 4+ H2 sections and it improves UX.
+- IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`
+    : `IMPORTANT RULES (REPAIR):
 - This is a REPAIR of an existing page — the topic must stay the same. Do NOT pivot to a different product, industry, or audience.
-- **STRUCTURE IS SACRED: Do NOT rename, reorder, merge, split, or remove any existing H1, H2, or H3 heading. Do NOT move, reorder, or remove any existing FAQ questions. The exact heading hierarchy and section order of the original must be preserved verbatim.**
-- Only ADD content: new paragraphs, new FAQ Q&A pairs, new citations, new internal/external links, or new short sections for content gaps — inserted at the most logical position within the existing structure.
-- Only rewrite an existing paragraph if that specific paragraph is the direct subject of an audit issue AND the fix requires rewording (not structural change).
 - Target the same primary keyword unless the audit explicitly says the keyword is dead; then re-target to the closest secondary keyword listed.
+- Preserve every section, claim, example, and phrasing that is already correct. Only rewrite the parts connected to the listed audit issues or missing subtopics.
 - Output must be valid Markdown. No HTML.
 - Do not include schema JSON-LD, raw JSON, or implementation code blocks in the article body.
-- The H1 must remain exactly as specified by TITLE_NEEDS_REPAIR rules below.
-- If the original has no answer-first paragraph under the H1, ADD one in ≤80 words — do not replace existing intro text, prepend it.
-- Add H2/H3 sections, FAQ Q&As, internal links, external links, examples, or data ONLY where the audit says those are missing or weak. Do not add sections that already exist.
-- Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak. Use verbatim URLs. Never invent URLs.
-- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
+- Start with an H1 (# Title).
+- Include an "answer-first" paragraph directly under the H1 in ≤80 words that plainly answers "what is this post about and what will the reader learn".
+- Add H2/H3 structure, FAQ, internal links, external links, examples, or data ONLY where the audit says those are missing or weak.
+- Link to peer URLs from the INTERNAL LINK POOL only if internal links are missing/weak or the repair naturally touches those sections. Use verbatim URLs. Never invent URLs.
+- Link to credible external sources only if the audit says citations/data are missing or a changed section needs proof. Find the PRIMARY SOURCE of each citation — the actual research report, government dataset, or academic paper, NOT a blog or news article summarising it. Preferred domains: .gov, .edu, PubMed/NCBI, WHO, CDC, McKinsey, Gartner, Deloitte, PwC, EY, Accenture, Forrester, Statista report pages, SHRM, IEEE, ISO, peer-reviewed journals. Never link to root domains or competitor blogs. No Wikipedia.
+- Always preserve any PDF download links (links pointing to .pdf files) from the original page/content in your generated/repaired content verbatim. Place them in the corresponding sections where they were originally located.
+- Respect PDF promised content: If the original blog title/H1 promises a specific number or list of items (e.g., "60+ questions", "100+ templates") that are delivered via a downloadable PDF, do NOT inline those items into the blog body. The PDF remains the delivery vehicle — keep the on-page prose as context, explanation, and guidance only.
 - Keep length close to the original unless the audit says thin content / missing depth. If expanding, add only the listed missing subtopics.
-- **IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`;
+- IMPORTANT: If the ORIGINAL PAGE section contains any text that appears to be extracted from an embedded PDF document (interview questions, Q&A dumps, page-number markers, etc.), ignore it entirely. Focus only on the actual web article content (intro text, headings, paragraphs written as a blog post).`;
 
   const titleMetaBlock = `- Do not change the title/H1 unless TITLE_NEEDS_REPAIR is true. If false, the H1 must remain exactly: "${originalTitle || "(keep original H1)"}".
 - Do not change the meta description unless META_NEEDS_REPAIR is true. If false, keep the same marketing angle as the original page (do not invent a new pitch).`;
-
-  const rubricSection =
-    fullBundle && rubricBlock
-      ? `QUALITY RUBRIC — STILL NEEDS WORK (address each; if an item is marginal, strengthen it anyway):\n${rubricBlock}\n\n`
-      : "";
-
-  const quickWinsSection =
-    fullBundle && contentAnalysisBundle?.quick_wins?.length
-      ? `QUICK WINS (implement each):\n- ${contentAnalysisBundle.quick_wins.join("\n- ")}\n\n`
-      : "";
 
   const prompt = `${modeIntro}
 
@@ -186,19 +195,11 @@ ${gapsBlock}
 INTERNAL LINK POOL (you MUST use at least 2 of these, verbatim):
 ${linkPoolBlock}
 
-ORIGINAL PAGE NOTE: If the page content below contains any text that appears extracted from an embedded PDF (interview questions, Q&A blocks labelled "Strong Answer"/"Weak Answer"/"Recruiter Cue", numbered questions like "Q1.", page markers like "Page X of Y", or bulk answer dumps) — **ignore all of it entirely**. That content belongs in the PDF download, NOT in the article body. The article body must only contain normal blog prose: intro, section headings, paragraphs, examples, and FAQ.
-
-ORIGINAL PAGE (first ~${Math.round(originalBudget / 1000)}k chars of markdown — ${fullBundle ? 'use as base; rewrite and expand where needed' : 'PRESERVE THIS STRUCTURE EXACTLY; only add the missing elements identified above'}):
+ORIGINAL PAGE (first ~${Math.round(originalBudget / 1000)}k chars of markdown, for reference — do not copy verbatim; rewrite):
 ---
 ${originalHead}
 ---
 
-${input.pdfCtaUrl ? `
-PDF RESOURCE: The original page offers a downloadable PDF at: ${input.pdfCtaUrl}
-You MUST include a natural in-article callout that links to this PDF. Place it either (a) at the end of the introduction section, or (b) just before the FAQ section — whichever fits the flow better. Use this exact format on its own line:
-> 📄 **Download the full guide as a PDF** — [Get the PDF](${input.pdfCtaUrl})
-Do NOT place it inside the FAQ. Do NOT add more than one PDF callout.
-` : ''}
 Write the repaired blog now. End the blog content, then on the next line output EXACTLY:
 ---META---
 {"meta_description":"150–160 chars only if META_NEEDS_REPAIR, otherwise preserve the original angle","slug":"url-slug-from-title","external_links":["url1"],"internal_links":["url1","url2"],"repair_notes":["Done: specific fix applied and where","Still to do: optional manual follow-up, or 'Still to do: none'"]}`;
@@ -207,7 +208,7 @@ Write the repaired blog now. End the blog content, then on the next line output 
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
 
-  const anthropic = new Anthropic({ apiKey });
+  const anthropic = new Anthropic({ apiKey, maxRetries: 5 });
 
   let fullText = "";
   const stream = anthropic.messages.stream({

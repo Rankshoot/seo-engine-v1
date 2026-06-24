@@ -231,6 +231,67 @@ export async function createProject(data: {
   return { success: true, data: project as Project };
 }
 
+async function enrichProjectsWithLastActive(projects: any[]): Promise<Project[]> {
+  if (!projects || projects.length === 0) return [];
+  const projectIds = projects.map(p => p.id);
+
+  const [blogsRes, keywordsRes, calendarRes] = await Promise.all([
+    supabaseAdmin
+      .from('blogs')
+      .select('project_id, updated_at, created_at')
+      .in('project_id', projectIds),
+    supabaseAdmin
+      .from('keywords')
+      .select('project_id, updated_at, created_at')
+      .in('project_id', projectIds),
+    supabaseAdmin
+      .from('calendar_entries')
+      .select('project_id, created_at')
+      .in('project_id', projectIds),
+  ]);
+
+  const blogData = blogsRes.data ?? [];
+  const keywordData = keywordsRes.data ?? [];
+  const calendarData = calendarRes.data ?? [];
+
+  return projects.map(project => {
+    let latestTime = new Date(project.updated_at || project.created_at).getTime();
+
+    const checkDate = (dateStr?: string | null) => {
+      if (!dateStr) return;
+      const t = new Date(dateStr).getTime();
+      if (!isNaN(t) && t > latestTime) {
+        latestTime = t;
+      }
+    };
+
+    blogData.forEach(b => {
+      if (b.project_id === project.id) {
+        checkDate(b.updated_at);
+        checkDate(b.created_at);
+      }
+    });
+
+    keywordData.forEach(k => {
+      if (k.project_id === project.id) {
+        checkDate(k.updated_at);
+        checkDate(k.created_at);
+      }
+    });
+
+    calendarData.forEach(c => {
+      if (c.project_id === project.id) {
+        checkDate(c.created_at);
+      }
+    });
+
+    return {
+      ...project,
+      updated_at: new Date(latestTime).toISOString(),
+    };
+  });
+}
+
 export async function getProjects() {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated', data: [] as Project[] };
@@ -242,7 +303,8 @@ export async function getProjects() {
     .order('created_at', { ascending: false });
 
   if (error) return { success: false, error: error.message, data: [] as Project[] };
-  return { success: true, data: data as Project[] };
+  const enriched = await enrichProjectsWithLastActive(data);
+  return { success: true, data: enriched };
 }
 
 export async function getProject(id: string) {
@@ -257,7 +319,9 @@ export async function getProject(id: string) {
     .single();
 
   if (error) return { success: false, error: error.message, data: null };
-  return { success: true, data: data as Project };
+  if (!data) return { success: true, data: null };
+  const enriched = await enrichProjectsWithLastActive([data]);
+  return { success: true, data: enriched[0] };
 }
 
 export async function deleteProject(id: string) {

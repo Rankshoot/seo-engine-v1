@@ -214,49 +214,43 @@ function isPdfHref(href: string): boolean {
   return /\.pdf(\?|#|$)/i.test(href);
 }
 
-function PdfLinkCard({ href, label }: { href: string; label: string }) {
+function PdfPreviewer({ href, label }: { href: string; label: string }) {
   const filename = (() => {
     try { return decodeURIComponent(new URL(href).pathname.split("/").filter(Boolean).pop() ?? "document.pdf"); }
     catch { return label || "document.pdf"; }
   })();
 
+  const displayTitle = label || filename;
+
   return (
-    <span className="my-4 flex items-center gap-3 rounded-[12px] border border-rose-500/20 bg-rose-500/5 px-4 py-3 not-italic no-underline">
-      {/* PDF icon */}
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-rose-500/10">
-        <svg className="h-5 w-5 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9z" />
-        </svg>
-      </span>
+    <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-sm not-italic no-underline">
+      {/* PDF Iframe Viewer */}
+      <iframe
+        src={`${href}#toolbar=0&navpanes=0`}
+        className="w-full border-none block bg-surface-primary"
+        style={{ height: "600px" }}
+        title={displayTitle}
+        allowFullScreen
+      />
 
-      {/* Filename */}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-semibold text-text-primary">{label || filename}</span>
-        <span className="block text-[11px] text-text-tertiary">PDF Document</span>
-      </span>
-
-      {/* Actions */}
-      <span className="flex items-center gap-2 shrink-0">
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex h-8 items-center gap-1.5 rounded-[8px] bg-rose-500/10 px-3 text-[12px] font-medium text-rose-400 hover:bg-rose-500/20 transition-colors"
+      {/* PDF Download Bar */}
+      <span className="flex items-center justify-between gap-4 border-t border-border-subtle bg-surface-primary px-6 py-4 flex-wrap">
+        <span
+          className="text-[14px] font-bold tracking-tight"
+          style={{ color: "var(--brand-coral, #ff7759)" }}
         >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
-          </svg>
-          View
-        </a>
+          {displayTitle}
+        </span>
+
         <a
           href={href}
           download
-          className="flex h-8 items-center gap-1.5 rounded-[8px] border border-border-subtle bg-surface-secondary px-3 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors"
+          className="inline-flex h-9 items-center justify-center rounded-full px-5 text-[13px] font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+          style={{
+            backgroundColor: "#22252a",
+            border: "1px solid var(--brand-coral, #ff7759)",
+          }}
         >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
-          </svg>
           Download
         </a>
       </span>
@@ -287,9 +281,9 @@ export function buildMarkdownComponents(
     const isHttp = /^https?:\/\//i.test(href);
     const label = typeof children === "string" ? children : flattenChildren(children);
 
-    // Render PDF links as a download card instead of an inline text link.
+    // Render PDF links as an embedded PDF previewer instead of an inline text link.
     if (isHttp && isPdfHref(href)) {
-      return <PdfLinkCard href={href} label={label} />;
+      return <PdfPreviewer href={href} label={label} />;
     }
 
     const host = isHttp ? linkHostName(href) : null;

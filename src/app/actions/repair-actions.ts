@@ -184,7 +184,6 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
       brief,
       project,
       wordCount: 2200,
-      pdfCtaUrl: fresh.pdfDownloadUrl ?? null,
     });
 
     // Guardrail: repair should not rename the page unless the audit explicitly
@@ -192,6 +191,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
     const preserveTitle = !titleNeedsRepair(analysis) && Boolean(auditRow.title);
     const finalTitle = preserveTitle ? auditRow.title : repaired.title;
     const rawContent = preserveTitle ? replaceFirstH1(repaired.content, auditRow.title) : repaired.content;
+    const contentWithPdfLinks = preservePdfLinks(fresh.markdown, rawContent);
     const finalMetaDescription = metaNeedsRepair(analysis)
       ? repaired.meta_description
       : (analysis.summary || repaired.meta_description);
@@ -200,7 +200,7 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
     // Same link validation + image cap we apply to fresh generations — a
     // repaired blog should never ship with dead citations or stray
     // IMAGE_PLACEHOLDER artifacts either.
-    const sanitized = await sanitizeBlogContent(rawContent, {
+    const sanitized = await sanitizeBlogContent(contentWithPdfLinks, {
       ownDomain: project.domain ?? '',
     });
     const finalContent = sanitized.content;
@@ -351,9 +351,6 @@ export async function repairBlogFromContent(
       brief,
       project,
       wordCount: Math.min(4000, Math.max(1500, wc + 400)),
-      pdfCtaUrl: /^https?:\/\//i.test(candidateLive)
-        ? ((await jinaReadUrl(candidateLive, { timeoutMs: 5_000 }).catch(() => null))?.pdfDownloadUrl ?? null)
-        : null,
       contentAnalysisBundle: {
         summary: analysis.summary,
         plain_language_verdict: analysis.plain_language_verdict,
@@ -369,7 +366,8 @@ export async function repairBlogFromContent(
       'Still to do: none — re-run Content Analysis after updating your live page to verify fixes.',
     ].slice(0, 10);
 
-    const sanitized = await sanitizeBlogContent(repaired.content, {
+    const contentWithPdfLinks = preservePdfLinks(originalMarkdown, repaired.content);
+    const sanitized = await sanitizeBlogContent(contentWithPdfLinks, {
       ownDomain: project.domain ?? '',
     });
 
@@ -413,4 +411,64 @@ export async function repairBlogFromContent(
       error: `Enhancement failed: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
+}
+
+function preservePdfLinks(originalMarkdown: string, generatedMarkdown: string): string {
+  const pdfLinkRegex = /\[([^\]]+)\]\(([^)\s]+\.pdf(?:[?#]\S*)?)\)/gi;
+  const originalPdfLinks: { full: string; label: string; href: string }[] = [];
+  
+  let match: RegExpExecArray | null;
+  while ((match = pdfLinkRegex.exec(originalMarkdown)) !== null) {
+    originalPdfLinks.push({
+      full: match[0],
+      label: match[1],
+      href: match[2]
+    });
+  }
+
+  if (originalPdfLinks.length === 0) return generatedMarkdown;
+
+  let result = generatedMarkdown;
+  
+  for (const link of originalPdfLinks) {
+    if (result.toLowerCase().includes(link.href.toLowerCase())) {
+      continue;
+    }
+
+    const lines = result.split('\n');
+    let injectedIndex = -1;
+
+    // Pass 1: Look for a paragraph containing BOTH "download" AND ("pdf" or "template")
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].toLowerCase();
+      const isParagraph = !line.startsWith('#') && !line.startsWith('!') && !line.startsWith('[') && line.length > 20;
+      if (isParagraph && line.includes('download') && (line.includes('pdf') || line.includes('template'))) {
+        injectedIndex = i;
+        break;
+      }
+    }
+
+    // Pass 2: Fallback to a paragraph containing "pdf" or "download" or "template"
+    if (injectedIndex === -1) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].toLowerCase();
+        const isParagraph = !line.startsWith('#') && !line.startsWith('!') && !line.startsWith('[') && line.length > 20;
+        if (isParagraph && (line.includes('pdf') || line.includes('download') || line.includes('template'))) {
+          injectedIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (injectedIndex !== -1) {
+      console.log(`[link-preservation] Injecting PDF link after line: "${lines[injectedIndex]}"`);
+      lines.splice(injectedIndex + 1, 0, '', link.full, '');
+      result = lines.join('\n');
+    } else {
+      console.log(`[link-preservation] Appending PDF link to the end of markdown: ${link.href}`);
+      result = result.trim() + `\n\n${link.full}\n`;
+    }
+  }
+
+  return result;
 }

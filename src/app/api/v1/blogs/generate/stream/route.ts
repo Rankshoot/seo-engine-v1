@@ -9,7 +9,7 @@ export const maxDuration = 300;
 function getAnthropicClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
-  return new Anthropic({ apiKey });
+  return new Anthropic({ apiKey, maxRetries: 5 });
 }
 
 /**
@@ -151,18 +151,10 @@ export async function POST(req: Request) {
               originalMarkdown = (auditRow?.scraped_markdown as string) || "";
             } catch { /* fall through to scrape */ }
 
-            let pdfCtaUrl: string | null = null;
-            if (/^https?:\/\//i.test(repairPlan.url)) {
+            if (originalMarkdown.trim().length < 400 && /^https?:\/\//i.test(repairPlan.url)) {
               const { hybridReadUrl } = await import("@/services/hybridScraper");
-              if (originalMarkdown.trim().length < 400) {
-                const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
-                if (fresh.ok) originalMarkdown = fresh.markdown;
-                pdfCtaUrl = fresh.pdfDownloadUrl ?? null;
-              } else {
-                const { hybridReadUrl: scrapeForPdf } = await import("@/services/hybridScraper");
-                const pdfScrape = await scrapeForPdf(repairPlan.url, { timeoutMs: 10_000 }).catch(() => null);
-                pdfCtaUrl = pdfScrape?.pdfDownloadUrl ?? null;
-              }
+              const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
+              if (fresh.ok) originalMarkdown = fresh.markdown;
             }
 
             if (originalMarkdown.trim().length < 400) {
@@ -217,7 +209,6 @@ export async function POST(req: Request) {
                 brief,
                 project,
                 wordCount: Math.min(4500, Math.max(1400, countWords(cleanedMarkdown) + 250)),
-                pdfCtaUrl,
               },
               {
                 // Forward Claude's streaming chunks as thinking events so the

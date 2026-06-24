@@ -505,7 +505,6 @@ export default function ContentAuditStudioPage() {
           <AuditHistory
             items={history}
             loading={historyLoading}
-            projectId={projectId}
             onOpen={openHistoryItem}
             onGenerateFromHistory={handleGenerateFromHistory}
             onScheduleFromHistory={handleScheduleFromHistory}

@@ -1028,6 +1028,7 @@ CATEGORY GUIDE:
 
 RULES:
 - Set "llm_quality_score" to an integer 0–100 (not the placeholder 0): holistic SEO+GEO quality vs the Rankshoot bars in the intro. 90+ = meets or nearly meets all bars; 70–89 = solid with gaps; 50–69 = several misses; below 50 = thin or structurally weak. Use 0 only if the body is empty or unusable.
+- Respect PDF downloads & promised content: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides) and the title/H1 promises a specific number or list of items (e.g., "60+ questions", "100+ templates"), do NOT flag this as an issue (such as 'content hidden in PDF', 'locked value proposition', 'items/questions not listed on-page', or 'thin content'). Respect that the PDF download serves as the premium delivery mechanism for the full list/assets, and focus your audit purely on the supporting on-page text content without demanding that the full set be pasted onto the page.
 - Maximum 8 issues. Order by severity desc then impact desc.
 - "high" severity = likely blocks ranking or AI Overview citation today. "medium" = dents CTR/engagement. "low" = polish.
 - Each fix must be specific to THIS post (reference the actual topic or heading when possible). No generic "write better content".

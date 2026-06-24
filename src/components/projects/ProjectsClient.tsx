@@ -132,27 +132,13 @@ export default function ProjectsClient({
 
         {/* ── Greeting header ─────────────────────────────────── */}
         <header className="mb-10">
-          <p className="text-[13px] font-medium text-text-tertiary">
+          <p className="text-[18px] font-medium text-text-tertiary">
             {getGreeting()}{firstName ? `, ${firstName}` : ""} — here's your workspace
           </p>
           <h1 className="mt-1.5 text-[36px] font-semibold tracking-[-0.028em] leading-[1.05] sm:text-[42px]">
             Your projects
           </h1>
 
-          {/* Quick stats row */}
-          {projects.length > 0 && (
-            <div className="mt-6 flex flex-wrap gap-3">
-              <StatPill icon={<Globe2 className="h-3.5 w-3.5" />} value={`${projects.length}`} label="projects" />
-              {mostRecent && (
-                <StatPill
-                  icon={<Clock className="h-3.5 w-3.5" />}
-                  value={formatRelativeTime(mostRecent.updated_at || mostRecent.created_at)}
-                  label="last activity"
-                />
-              )}
-              <StatPill icon={<Zap className="h-3.5 w-3.5" />} value="AI" label="auto-brief on every project" />
-            </div>
-          )}
         </header>
 
         {/* ── Resume banner ──────────────────────────────────── */}

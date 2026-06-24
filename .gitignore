@@ -47,4 +47,9 @@ graphify-out/
 # Strapi
 /rankshoot/dist/
 /rankshoot/.strapi/
+.strapi/
+.strapi-updater.json
+dist/
+
+# Claude Code worktrees
 .claude/worktrees/

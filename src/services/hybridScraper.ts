@@ -4,7 +4,6 @@ import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { chromium, type Browser } from 'playwright';
 import { readUrlViaJinaReader } from '@/lib/jina';
-import { hasPdfContent, stripPdfArtifacts } from '@/lib/pdf-content';
 import { analyzeWebsiteWithAI, type AIAnalysisResult } from './aiWebsiteAnalyzer';
 
 export interface ScrapedBlogPost {
@@ -75,7 +74,10 @@ async function fetchHtmlWithPlaywright(url: string, timeoutMs = 25_000): Promise
   if (!playwrightAvailable) return null;
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
     const context = await browser.newContext({
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -288,40 +290,6 @@ export interface ScrapedPageMarkdown {
   length: number;
   ok: boolean;
   error?: string;
-  /** Direct URL to a downloadable PDF found on the page, if any. */
-  pdfDownloadUrl?: string | null;
-}
-
-/**
- * Extracts the first downloadable PDF URL from raw HTML.
- * Matches <a href="..."> that end in .pdf or contain /pdf/ in the path,
- * and data-pdf-url / data-download attributes as fallbacks.
- */
-function extractPdfDownloadUrl(html: string, baseUrl: string): string | null {
-  const $ = cheerio.load(html);
-
-  // 1. Explicit data attribute (e.g. download buttons)
-  const dataAttr = $('[data-pdf-url], [data-download-url]').first();
-  if (dataAttr.length) {
-    const raw = dataAttr.attr('data-pdf-url') || dataAttr.attr('data-download-url') || '';
-    if (raw) {
-      try { return new URL(raw, baseUrl).href; } catch { /* ignore */ }
-    }
-  }
-
-  // 2. <a href> ending in .pdf or containing /pdf
-  let found: string | null = null;
-  $('a[href]').each((_, el) => {
-    if (found) return;
-    const href = $(el).attr('href') || '';
-    if (/\.pdf(\?[^"]*)?$/i.test(href) || /\/pdf[s]?\//i.test(href)) {
-      try {
-        found = new URL(href, baseUrl).href;
-      } catch { /* ignore */ }
-    }
-  });
-
-  return found;
 }
 
 function extractFaqsFromHtml(html: string): string {
@@ -373,6 +341,138 @@ function extractFaqsFromHtml(html: string): string {
   return markdown;
 }
 
+export function isJinaPdfHijack(markdown: string, originalUrl: string): boolean {
+  // If the user intentionally audited a PDF URL, it's not a hijack
+  const path = originalUrl.toLowerCase().split('?')[0];
+  if (path.endsWith('.pdf')) {
+    return false;
+  }
+
+  // Inspect the top metadata section (first 1500 chars) of Jina's response
+  const header = markdown.slice(0, 1500);
+
+  // Check if Jina's PDF metadata header is present:
+  // Jina's PDF engine always prepends "Number of Pages: X" to its markdown output.
+  const hasPdfPages = /^\s*Number of Pages:\s*\d+/im.test(header);
+
+  // As a backup, check if the Title metadata explicitly references PDF and Jina metadata is present
+  const hasPdfTitle = /^\s*Title:\s*.*?\bpdf\b/im.test(header);
+  const isJinaScrape = header.includes('URL Source:');
+
+  return hasPdfPages || (hasPdfTitle && isJinaScrape);
+}
+
+/**
+ * Pre-processes HTML to find PDF links/embeds, extracting them and placing them
+ * in clean, non-strippable paragraphs so that Readability doesn't discard them.
+ */
+function extractAndPreservePdfLinks(html: string, baseUrl: string): { html: string; extractedUrls: { url: string; label: string }[] } {
+  const $ = cheerio.load(html);
+  const extractedUrls: { url: string; label: string }[] = [];
+  const processedUrls = new Set<string>();
+
+  const addExtracted = (rawUrl: string, rawLabel: string) => {
+    try {
+      const resolved = new URL(rawUrl, baseUrl).href;
+      if (!processedUrls.has(resolved)) {
+        processedUrls.add(resolved);
+        const cleanLabel = rawLabel.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+        extractedUrls.push({ url: resolved, label: cleanLabel });
+      }
+    } catch {
+      // Invalid URL
+    }
+  };
+
+  // 1. Process wp-block-file containers (WordPress specific but very common)
+  $('.wp-block-file').each((_, container) => {
+    const $container = $(container);
+    let pdfUrl = '';
+    let label = '';
+
+    // Look for pdf links inside this container
+    $container.find('a[href]').each((_, a) => {
+      const $a = $(a);
+      const href = $a.attr('href');
+      if (href && href.toLowerCase().includes('.pdf')) {
+        pdfUrl = href;
+        const text = $a.text().trim();
+        if (text && text.toLowerCase() !== 'download' && !label) {
+          label = text;
+        }
+      }
+    });
+
+    // If no label but object exists
+    if (!label) {
+      const embed = $container.find('.wp-block-file__embed');
+      if (embed.length) {
+        label = embed.attr('aria-label') || 'Download PDF';
+        if (!pdfUrl) {
+          pdfUrl = embed.attr('data') || embed.attr('src') || '';
+        }
+      }
+    }
+
+    if (pdfUrl) {
+      addExtracted(pdfUrl, label || 'Download PDF');
+      const resolvedUrl = new URL(pdfUrl, baseUrl).href;
+      const cleanLabel = label.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+      
+      // Replace entire container with a standard paragraph containing the link
+      $container.replaceWith(`<p><a href="${resolvedUrl}">${cleanLabel}</a></p>`);
+    }
+  });
+
+  // 2. Process other elements that might embed PDFs (object, embed, iframe)
+  $('object[data], embed[src], iframe[src]').each((_, el) => {
+    const $el = $(el);
+    // Skip if it was already removed/replaced
+    if ($el.closest('html').length === 0) return;
+
+    const data = $el.attr('data') || '';
+    const src = $el.attr('src') || '';
+    const type = $el.attr('type') || '';
+    const pdfUrl = data.toLowerCase().includes('.pdf') ? data : (src.toLowerCase().includes('.pdf') || type.toLowerCase() === 'application/pdf' ? src : '');
+
+    if (pdfUrl) {
+      const label = $el.attr('aria-label') || $el.text().trim() || 'Download PDF';
+      addExtracted(pdfUrl, label);
+      
+      const resolvedUrl = new URL(pdfUrl, baseUrl).href;
+      const cleanLabel = label.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+      
+      // Replace with clean paragraph link
+      $el.replaceWith(`<p><a href="${resolvedUrl}">${cleanLabel}</a></p>`);
+    }
+  });
+
+  // 3. Process any other raw a[href] tags pointing to a PDF to make sure they are not stripped
+  $('a[href]').each((_, el) => {
+    const $el = $(el);
+    if ($el.closest('html').length === 0) return;
+
+    const href = $el.attr('href') || '';
+    if (href.toLowerCase().includes('.pdf')) {
+      const label = $el.text().trim() || 'Download PDF';
+      addExtracted(href, label);
+
+      // Make sure it is inside a readable paragraph, or wrap it
+      const parent = $el.parent();
+      const parentTag = parent.prop('tagName')?.toLowerCase();
+      if (parentTag !== 'p' && parentTag !== 'li' && parentTag !== 'td') {
+        const resolvedUrl = new URL(href, baseUrl).href;
+        $el.replaceWith(`<p><a href="${resolvedUrl}">${label}</a></p>`);
+      }
+    }
+  });
+
+  return {
+    html: $.html(),
+    extractedUrls
+  };
+}
+
 export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapedPageMarkdown> {
   try {
     const timeoutMs = opts.timeoutMs ?? 15_000;
@@ -380,39 +480,35 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
     if (!html) {
       console.log(`[hybridScraper] Using Jina Reader for ${url}`);
       const jina = await readUrlViaJinaReader(url, { timeoutMs });
-      if (jina.ok && jina.markdown.trim()) {
-        // Jina sometimes extracts the full text of an embedded PDF instead of the
-        // surrounding blog/article HTML. When that happens, ignore the Jina result
-        // and fall through to Playwright so Readability can target the real page.
-        if (hasPdfContent(jina.markdown)) {
-          console.log(`[hybridScraper] Jina returned PDF-dominated content for ${url}; trying Playwright`);
-          html = await fetchHtmlWithPlaywright(url, timeoutMs);
-        }
+      
+      const isHijack = jina.ok && isJinaPdfHijack(jina.markdown, url);
 
-        if (!html) {
-          // No Playwright rescue: strip the PDF dump and keep whatever article text remains.
-          const { cleaned } = stripPdfArtifacts(jina.markdown);
-          return {
-            url,
-            markdown: cleaned,
-            length: cleaned.length,
-            ok: cleaned.length >= 160,
-            error: cleaned.length >= 160 ? undefined : 'Jina returned only embedded PDF content; no article text found',
-          };
-        }
-      } else {
-        console.log(`[hybridScraper] Using Playwright fallback for ${url}`);
-        html = await fetchHtmlWithPlaywright(url, timeoutMs);
+      if (jina.ok && jina.markdown.trim() && !isHijack) {
+        return {
+          url,
+          markdown: jina.markdown,
+          length: jina.markdown.length,
+          ok: true,
+        };
       }
+      
+      if (isHijack) {
+        console.log(`[hybridScraper] Jina PDF hijack detected for ${url}. Falling back to Playwright.`);
+      } else {
+        console.log(`[hybridScraper] Jina failed or returned empty, using Playwright fallback for ${url}`);
+      }
+      html = await fetchHtmlWithPlaywright(url, timeoutMs);
     }
     if (!html) {
       throw new Error(`Failed to fetch HTML for ${url}`);
     }
 
-    const pdfDownloadUrl = extractPdfDownloadUrl(html, url);
+    // Pre-process HTML to extract and preserve PDF links from stripping
+    const { html: processedHtml, extractedUrls } = extractAndPreservePdfLinks(html, url);
+    html = processedHtml;
 
     const { document } = parseHTML(html);
-
+    
     // Set baseURI for relative link resolution in Readability
     const base = document.createElement('base');
     base.href = url;
@@ -446,23 +542,22 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
       markdown = $('body').text().replace(/\s+/g, ' ').trim();
     }
 
-    // Embedded PDFs can leak into Playwright / raw HTML output too.
-    // Always run stripPdfArtifacts — it is a no-op when nothing matches,
-    // but catches Q&A / interview-question PDF dumps that hasPdfContent misses.
-    const { cleaned: cleanedMarkdown, strippedPdf } = stripPdfArtifacts(markdown);
-    markdown = cleanedMarkdown;
-    if (strippedPdf) {
-      console.log(`[hybridScraper] Stripped PDF content from ${url}`);
+    // Post-process markdown to append any PDF links that might have been stripped
+    if (extractedUrls.length > 0) {
+      extractedUrls.forEach(({ url: pdfUrl, label }) => {
+        const hasLink = markdown.toLowerCase().includes(pdfUrl.toLowerCase());
+        if (!hasLink) {
+          console.log(`[hybridScraper] Appending missing PDF link to markdown: ${pdfUrl}`);
+          markdown += `\n\n[${label}](${pdfUrl})\n`;
+        }
+      });
     }
-
-    // console.log(`[hybridScraper] Scraped output for ${url}:\n${markdown}`);
 
     return {
       url,
       markdown,
       length: markdown.length,
-      ok: true,
-      pdfDownloadUrl,
+      ok: true
     };
   } catch (error) {
     return {

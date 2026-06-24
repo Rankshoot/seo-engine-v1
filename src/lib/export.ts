@@ -2,6 +2,11 @@ import { Blog, ExportFormat } from './types';
 import { EXPORT_FILE_INFO, safeFilename } from './blog-content';
 import { buildBlogSchemas, type ProjectMeta } from './schema';
 import { displayDomain } from './studio-brand';
+import {
+  preprocessMarkdownForHtmlExport,
+  preprocessMarkdownForDocx,
+  stripVisualPlaceholders,
+} from './visual-export';
 
 export function extractYouTubeId(url: string): string | null {
   try {
@@ -79,7 +84,9 @@ ${orgBlock}---
 }
 
 export function exportToHTML(blog: Blog, projectMeta?: ProjectMeta): Blob {
-  const body = renderMarkdownToHtml(blog.content);
+  // Render visual placeholders as inline HTML/SVG before line-by-line parsing.
+  // Use 'paper' variant as a neutral default for standalone HTML export.
+  const body = renderMarkdownToHtml(preprocessMarkdownForHtmlExport(blog.content, 'paper'));
 
   const { article, faq } = buildBlogSchemas(blog, projectMeta);
   const articleScript = `<script type="application/ld+json">\n${JSON.stringify(article, null, 2)}\n</script>`;
@@ -149,7 +156,7 @@ export function exportToText(
   blog: Blog,
   opts?: { publisherLine?: string },
 ): Blob {
-  const stripped = blog.content
+  const stripped = stripVisualPlaceholders(blog.content)
     // Drop image markdown — they make no sense in plain text.
     .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
     // Inline links → "text (url)" so the URL is still readable.
@@ -207,7 +214,11 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
   // Cache image fetches so the same data: URL doesn't get decoded twice.
   const imageCache = new Map<string, Uint8Array>();
 
-  const lines = blog.content.split('\n');
+  // Convert visual placeholders → markdown pipe tables / bulleted text blocks
+  // before the line-by-line DOCX builder runs. The builder already handles
+  // pipe tables natively (renders them as proper DOCX Table objects).
+  const processedContent = preprocessMarkdownForDocx(blog.content);
+  const lines = processedContent.split('\n');
   let i = 0;
   let inYoutubeBlock = false;
   let youtubeUrl = '';

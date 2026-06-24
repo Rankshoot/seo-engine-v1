@@ -23,6 +23,10 @@ import {
   extractYouTubeId,
 } from './export';
 import { safeFilename } from './blog-content';
+import {
+  preprocessMarkdownForHtmlExport,
+  stripVisualPlaceholders,
+} from './visual-export';
 import type {
   Blog,
   EbookContentData,
@@ -156,7 +160,7 @@ export async function exportEbook(blog: Blog, format: EbookExportFormat, project
   }
 
   if (format === 'chapters-txt') {
-    const chapters = splitMarkdownByH2(blog.content);
+    const chapters = splitMarkdownByH2(stripVisualPlaceholders(blog.content));
     const out = chapters
       .map((c, i) => `CHAPTER ${i + 1}: ${c.title}\n${'='.repeat(60)}\n\n${stripMarkdown(c.body)}`)
       .join('\n\n\n');
@@ -363,7 +367,8 @@ function buildEbookPrintHtml(
   const toc = (data.table_of_contents ?? [])
     .map(c => `<li><span class="toc-num">${String(c.number).padStart(2, '0')}</span> ${escapeHtml(c.title)}</li>`)
     .join('');
-  const body = renderMarkdownToBookHtml(blog.content);
+  // Pre-process visual placeholders → inline HTML/SVG before line-by-line rendering
+  const body = renderMarkdownToBookHtml(preprocessMarkdownForHtmlExport(blog.content, 'ebook'));
   const faqs = (data.faqs ?? [])
     .map(q => `<div class="faq"><h3>${escapeHtml(q.question)}</h3><p>${escapeHtml(q.answer)}</p></div>`)
     .join('');
@@ -452,7 +457,8 @@ function buildWhitepaperPrintHtml(
   const refs = (data.references ?? [])
     .map((u, i) => `<li><span>[${i + 1}]</span> <a href="${escapeAttr(u)}">${escapeHtml(u)}</a></li>`)
     .join('');
-  const body = renderMarkdownToBookHtml(blog.content);
+  // Pre-process visual placeholders → inline HTML/SVG before line-by-line rendering
+  const body = renderMarkdownToBookHtml(preprocessMarkdownForHtmlExport(blog.content, 'paper'));
 
   return `<!DOCTYPE html>
 <html lang="en"><head>

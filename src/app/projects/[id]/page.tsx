@@ -33,6 +33,9 @@ import {
   TrendingUp,
   Eye,
   Activity,
+  Lightbulb,
+  PenLine,
+  Send,
 } from "lucide-react";
 import { auditsApi } from "@/frontend/api/audits";
 
@@ -219,6 +222,13 @@ export default function ProjectOverviewPage() {
       >
         {/* ── Metrics strip ── */}
         <StatStrip projectId={id} stats={stats} />
+
+        {/* ── Quick Wins ── */}
+        <QuickWinsWidget
+          projectId={id}
+          stats={stats}
+          allEntries={allEntries}
+        />
 
         {/* ── Today's Focus ── */}
         <AIDailyBrief
@@ -449,6 +459,172 @@ function ContentHealthWidget({ projectId }: { projectId: string }) {
           </ProjectNavLink>
         </div>
       )}
+    </section>
+  );
+}
+
+/* ─────────── QuickWinsWidget ─────────── */
+
+interface QuickWin {
+  id: string;
+  icon: React.ReactNode;
+  iconBg: string;
+  title: string;
+  body: string;
+  cta: string;
+  href: string;
+  priority: "high" | "medium" | "low";
+}
+
+function QuickWinsWidget({
+  projectId,
+  stats,
+  allEntries,
+}: {
+  projectId: string;
+  stats?: { totalKeywords: number; approvedKeywords: number; calendarEntries: number; blogsGenerated: number; articlesInLibrary?: number } | undefined;
+  allEntries: CalendarEntryWithBlog[];
+}) {
+  const wins = useMemo<QuickWin[]>(() => {
+    const result: QuickWin[] = [];
+
+    // 1. Keywords approved but not yet on calendar
+    const approved = stats?.approvedKeywords ?? 0;
+    const scheduled = stats?.calendarEntries ?? 0;
+    const unscheduled = Math.max(0, approved - scheduled);
+    if (unscheduled > 0) {
+      result.push({
+        id: "unscheduled-keywords",
+        icon: <PenLine className="h-4 w-4" />,
+        iconBg: "bg-brand-violet/15 text-brand-violet",
+        title: `${unscheduled} keyword${unscheduled > 1 ? "s" : ""} ready to schedule`,
+        body: `You've approved ${unscheduled} keyword${unscheduled > 1 ? "s" : ""} but ${unscheduled > 1 ? "they haven't" : "it hasn't"} been added to your calendar yet.`,
+        cta: "Schedule now",
+        href: `/projects/${projectId}/keywords`,
+        priority: "high",
+      });
+    }
+
+    // 2. Calendar entries with no blog (scheduled but not generated)
+    const unwrittenCount = allEntries.filter(e => e.status === "scheduled" && !e.blog).length;
+    if (unwrittenCount > 0) {
+      result.push({
+        id: "unwritten-content",
+        icon: <Wand2 className="h-4 w-4" />,
+        iconBg: "bg-status-success/15 text-status-success",
+        title: `${unwrittenCount} piece${unwrittenCount > 1 ? "s" : ""} ready to write`,
+        body: `${unwrittenCount > 1 ? `${unwrittenCount} pieces are` : "A piece is"} scheduled but not generated yet. Writing them now keeps your calendar on track.`,
+        cta: "Open calendar",
+        href: `/projects/${projectId}/content-calendar`,
+        priority: "high",
+      });
+    }
+
+    // 3. Generated content not yet downloaded/published
+    const readyCount = allEntries.filter(e => e.status === "generated" && e.blog).length;
+    if (readyCount > 0) {
+      result.push({
+        id: "ready-to-publish",
+        icon: <Send className="h-4 w-4" />,
+        iconBg: "bg-status-info/15 text-status-info",
+        title: `${readyCount} article${readyCount > 1 ? "s" : ""} ready to publish`,
+        body: `${readyCount > 1 ? `${readyCount} articles are` : "An article is"} generated and waiting. Download or publish ${readyCount > 1 ? "them" : "it"} to complete your content pipeline.`,
+        cta: "View library",
+        href: `/projects/${projectId}/content-history`,
+        priority: "medium",
+      });
+    }
+
+    // 4. No keywords discovered yet
+    if ((stats?.totalKeywords ?? 0) === 0) {
+      result.push({
+        id: "no-keywords",
+        icon: <Search className="h-4 w-4" />,
+        iconBg: "bg-status-warning/15 text-status-warning",
+        title: "Discover your first keywords",
+        body: "Keyword research is the foundation of your SEO strategy. Find what your audience is searching for.",
+        cta: "Start keyword research",
+        href: `/projects/${projectId}/keywords`,
+        priority: "high",
+      });
+    }
+
+    // 5. Has keywords but nothing scheduled
+    if ((stats?.totalKeywords ?? 0) > 0 && (stats?.calendarEntries ?? 0) === 0) {
+      result.push({
+        id: "empty-calendar",
+        icon: <Calendar className="h-4 w-4" />,
+        iconBg: "bg-status-warning/15 text-status-warning",
+        title: "Your content calendar is empty",
+        body: "You have keywords but nothing on the calendar. Schedule a keyword to start building your editorial pipeline.",
+        cta: "Schedule keywords",
+        href: `/projects/${projectId}/keywords`,
+        priority: "high",
+      });
+    }
+
+    // 6. Try competitor benchmarking
+    if ((stats?.totalKeywords ?? 0) > 5 && (stats?.calendarEntries ?? 0) > 0) {
+      result.push({
+        id: "run-competitors",
+        icon: <TrendingUp className="h-4 w-4" />,
+        iconBg: "bg-rose-500/15 text-rose-400",
+        title: "Benchmark your competitors",
+        body: "See which keywords your competitors rank for that you don't — then publish content to close the gap.",
+        cta: "Run benchmark",
+        href: `/projects/${projectId}/competitors`,
+        priority: "low",
+      });
+    }
+
+    // Sort by priority and return top 3
+    const order: Record<string, number> = { high: 0, medium: 1, low: 2 };
+    return result.sort((a, b) => order[a.priority] - order[b.priority]).slice(0, 3);
+  }, [projectId, stats, allEntries]);
+
+  if (wins.length === 0) return null;
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <Lightbulb className="h-3.5 w-3.5 text-status-warning" />
+        <h2 className="text-[13px] font-semibold text-text-primary">Quick wins</h2>
+        <span className="text-[11px] text-text-tertiary">— actionable next steps for your project</span>
+      </div>
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+        {wins.map((win, i) => (
+          <motion.div
+            key={win.id}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25, delay: i * 0.06, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <ProjectNavLink
+              href={win.href}
+              className="group flex h-full flex-col gap-3 rounded-xl border border-border-subtle bg-surface-elevated p-4 transition-all hover:-translate-y-0.5 hover:border-border-default hover:shadow-sm"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${win.iconBg}`}>
+                  {win.icon}
+                </span>
+                {win.priority === "high" && (
+                  <span className="inline-flex items-center rounded-full bg-status-danger/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-status-danger">
+                    Now
+                  </span>
+                )}
+              </div>
+              <div className="flex-1">
+                <div className="text-[13px] font-semibold text-text-primary leading-snug">{win.title}</div>
+                <p className="mt-1 text-[11.5px] text-text-tertiary leading-relaxed">{win.body}</p>
+              </div>
+              <div className="flex items-center gap-1 text-[12px] font-medium text-brand-violet transition-all group-hover:gap-1.5">
+                {win.cta}
+                <ArrowRight className="h-3.5 w-3.5" />
+              </div>
+            </ProjectNavLink>
+          </motion.div>
+        ))}
+      </div>
     </section>
   );
 }

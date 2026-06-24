@@ -90,6 +90,7 @@ export default function WhitepaperGeneratorPage() {
     "Position the brand as the authoritative reference and convert qualified buyers.",
   );
   const [depth, setDepth] = useState<(typeof WP_DEPTH_OPTIONS)[number]["id"]>("analyst");
+  const [customWordCount, setCustomWordCount] = useState<string>("");
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
@@ -166,6 +167,7 @@ export default function WhitepaperGeneratorPage() {
       industry,
       problemStatement: problem,
       technicalDepth: depth,
+      customWordCount: customWordCount ? parseInt(customWordCount, 10) : undefined,
       researchAngle: angle,
       businessObjective: objective,
       region,
@@ -413,6 +415,23 @@ export default function WhitepaperGeneratorPage() {
                     value={depth}
                     onChange={setDepth}
                     ariaLabel="Technical depth"
+                  />
+                </Field>
+                <Field
+                  label="Custom word count (optional)"
+                  description="Override the depth preset with an exact word count. Leave blank to use the depth preset above."
+                  htmlFor="wp-word-count"
+                >
+                  <Input
+                    id="wp-word-count"
+                    type="number"
+                    inputSize="lg"
+                    min={2500}
+                    max={12000}
+                    step={500}
+                    placeholder={`e.g. 5000 — or leave blank to use ${WP_DEPTH_OPTIONS.find(d => d.id === depth)?.label ?? depth} preset`}
+                    value={customWordCount}
+                    onChange={e => setCustomWordCount(e.target.value)}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>

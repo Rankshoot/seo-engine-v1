@@ -396,7 +396,7 @@ export function CalendarDatePicker({
             open
               ? "border-brand-action/40 bg-brand-action/10 text-brand-action"
               : variant === "change"
-                ? "border-border-subtle bg-surface-elevated text-text-secondary hover:border-[#f59e0b]/40 hover:text-[#f59e0b] hover:bg-[#f59e0b]/5"
+                ? "border-border-subtle bg-surface-elevated text-text-secondary hover:border-status-warning/40 hover:text-status-warning hover:bg-status-warning/5"
                 : "border-border-subtle bg-surface-elevated text-text-secondary hover:border-brand-action/40 hover:text-brand-action hover:bg-brand-action/5",
           ].join(" ")}
         >

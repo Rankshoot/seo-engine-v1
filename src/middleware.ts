@@ -65,6 +65,7 @@ const clerkEnabled = isClerkKeyValid(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_K
 
 const isPublicRoute = createRouteMatcher([
   "/",
+  "/blog(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/pending-approval(.*)",

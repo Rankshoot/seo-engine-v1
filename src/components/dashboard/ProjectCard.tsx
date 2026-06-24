@@ -61,7 +61,7 @@ function ProjectDomainLogo({
 
   return (
     <div
-      className="relative flex h-[48px] w-[48px] shrink-0 items-center justify-center overflow-hidden rounded-[8px] bg-white border border-[#e5e7eb]"
+      className="relative flex h-[48px] w-[48px] shrink-0 items-center justify-center overflow-hidden rounded-[8px] bg-surface-elevated border border-border-subtle"
       aria-hidden
     >
       <img

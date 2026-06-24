@@ -8,7 +8,7 @@
 
 import type { StrapiPublishPayload, StrapiSingleResponse, StrapiArticle, StrapiListResponse } from "./types";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 35_000;
 const MAX_RETRIES        = 3;
 
 export class StrapiUserClientError extends Error {
@@ -36,7 +36,7 @@ async function withRetry<T>(
       return await fn();
     } catch (err) {
       lastError = err;
-      const isNetwork  = err instanceof TypeError;
+      const isNetwork = err instanceof TypeError || (err instanceof Error && err.name === "AbortError") || (err instanceof StrapiUserClientError && err.status === 408);
       const isStatusErr = err instanceof StrapiUserClientError && isRetryable(err.status);
       if (!isNetwork && !isStatusErr) throw err;
       if (attempt < retries) {
@@ -56,7 +56,11 @@ async function request<T>(
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-  const url = `${baseUrl.replace(/\/$/, "")}/api${path}`;
+  let cleanBaseUrl = baseUrl.replace(/\/$/, "");
+  if (cleanBaseUrl.endsWith("/admin")) {
+    cleanBaseUrl = cleanBaseUrl.slice(0, -6);
+  }
+  const url = `${cleanBaseUrl}/api${path}`;
 
   try {
     const res = await fetch(url, {
@@ -67,15 +71,57 @@ async function request<T>(
       },
       body: body !== undefined ? JSON.stringify({ data: body }) : undefined,
       signal: controller.signal,
+    }).catch(err => {
+      if (err.name === "AbortError") {
+        throw new StrapiUserClientError(
+          408,
+          `Request timed out after ${DEFAULT_TIMEOUT_MS / 1000}s. The Strapi server might be waking up or unreachable.`
+        );
+      }
+      throw err;
     });
 
-    const json = await res.json();
+    const contentType = res.headers.get("content-type") || "";
+    const isJson = contentType.toLowerCase().includes("application/json");
+    let json: any = null;
+    let parseError = false;
+
+    if (isJson) {
+      try {
+        json = await res.json();
+      } catch {
+        parseError = true;
+      }
+    }
 
     if (!res.ok) {
-      const errBody = json as { error?: { message?: string } };
+      if (isJson && !parseError && json && typeof json === "object") {
+        const errBody = json as { error?: { message?: string } };
+        throw new StrapiUserClientError(
+          res.status,
+          errBody?.error?.message ?? `HTTP ${res.status}`
+        );
+      } else {
+        const text = await res.text().catch(() => "");
+        throw new StrapiUserClientError(
+          res.status,
+          `HTTP ${res.status}: ${text.slice(0, 100) || "Non-JSON response"}`
+        );
+      }
+    }
+
+    if (!isJson) {
+      const text = await res.text().catch(() => "");
       throw new StrapiUserClientError(
         res.status,
-        errBody?.error?.message ?? `HTTP ${res.status}`
+        `Expected JSON response from Strapi, but received "${contentType}". Body: ${text.slice(0, 100) || "empty"}`
+      );
+    }
+
+    if (parseError) {
+      throw new StrapiUserClientError(
+        res.status,
+        "Failed to parse JSON response from Strapi"
       );
     }
 
@@ -85,65 +131,116 @@ async function request<T>(
   }
 }
 
-const COLLECTION = "articles";
+export function createUserStrapiClient(baseUrl: string, token: string, collectionName = "articles") {
+  const collection = (collectionName || "articles").trim().toLowerCase();
 
-export function createUserStrapiClient(baseUrl: string, token: string) {
   return {
-    /** Verify credentials by hitting /api/users/me */
+    /** Verify credentials by hitting the configured collection endpoint */
     async testConnection(): Promise<{ ok: boolean; error?: string }> {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8_000);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8_000);
-        const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/users/me`, {
+        let cleanBaseUrl = baseUrl.replace(/\/$/, "");
+        if (cleanBaseUrl.endsWith("/admin")) {
+          cleanBaseUrl = cleanBaseUrl.slice(0, -6);
+        }
+        const res = await fetch(`${cleanBaseUrl}/api/${collection}?pagination[limit]=1`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: controller.signal,
-        }).finally(() => clearTimeout(timer));
+        });
         if (res.ok) return { ok: true };
         const j = await res.json().catch(() => ({})) as { error?: { message?: string } };
         return { ok: false, error: j?.error?.message ?? `HTTP ${res.status}` };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : "Connection failed" };
+      } finally {
+        clearTimeout(timer);
       }
     },
 
     /**
      * Publish or update an article in the user's Strapi.
-     * Idempotent: finds existing by source_blog_id and updates, or creates.
+     * Idempotent: finds existing by slug and updates, or creates.
+     * Automatically attempts fallback payloads if user's Strapi schema lacks custom fields.
      */
     async publishArticle(payload: StrapiPublishPayload): Promise<{ documentId: string; slug: string }> {
-      const qs = new URLSearchParams({
-        "filters[source_blog_id][$eq]": payload.source_blog_id,
-      });
-
-      const existing = await withRetry(() =>
-        request<StrapiListResponse<StrapiArticle>>(
-          baseUrl, token, "GET", `/${COLLECTION}?${qs}`
-        )
-      );
-
-      if (existing.data.length > 0) {
-        const art = existing.data[0];
-        const idParam = art.documentId ?? String(art.id);
-        const updated = await withRetry(() =>
-          request<StrapiSingleResponse<StrapiArticle>>(
-            baseUrl, token, "PUT", `/${COLLECTION}/${idParam}`, payload
+      const { source_blog_id, ...fullPayload } = payload;
+      
+      let existing: StrapiListResponse<StrapiArticle> | null = null;
+      try {
+        existing = await withRetry(() =>
+          request<StrapiListResponse<StrapiArticle>>(
+            baseUrl, token, "GET", `/${collection}?filters[slug][$eq]=${payload.slug}`
           )
         );
-        return {
-          documentId: updated.data.documentId ?? String(updated.data.id),
-          slug: (updated.data.attributes?.slug ?? updated.data.slug) ?? payload.slug,
-        };
+      } catch (err) {
+        // If GET fails with a 400, it means filtering by slug is not supported/configured.
+        // We assume no existing article so we attempt creation.
+        const is400 = err instanceof StrapiUserClientError && err.status === 400;
+        if (!is400) throw err;
+        console.warn("GET filters[slug] failed with 400, assuming no existing article.", err.strapiError);
       }
 
-      const created = await withRetry(() =>
-        request<StrapiSingleResponse<StrapiArticle>>(
-          baseUrl, token, "POST", `/${COLLECTION}`, payload
-        )
-      );
-      return {
-        documentId: created.data.documentId ?? String(created.data.id),
-        slug: (created.data.attributes?.slug ?? created.data.slug) ?? payload.slug,
+      const isUpdate = existing !== null && Array.isArray(existing.data) && existing.data.length > 0;
+      const art = isUpdate && existing ? existing.data[0] : null;
+      const idParam = art ? (art.documentId ?? String(art.id)) : null;
+
+      // Helper to attempt the POST or PUT request
+      const executeRequest = async (data: any) => {
+        if (isUpdate && idParam) {
+          return await request<StrapiSingleResponse<StrapiArticle>>(
+            baseUrl, token, "PUT", `/${collection}/${idParam}`, data
+          );
+        } else {
+          return await request<StrapiSingleResponse<StrapiArticle>>(
+            baseUrl, token, "POST", `/${collection}`, data
+          );
+        }
       };
+
+      // Payload variants in decreasing order of custom fields
+      const payloads = [
+        fullPayload, // Attempt 1: All fields (minus source_blog_id)
+        {            // Attempt 2: Standard blog fields
+          title:            payload.title,
+          slug:             payload.slug,
+          content:          payload.content,
+          excerpt:          payload.excerpt,
+          meta_description: payload.meta_description,
+          cover_image_url:  payload.cover_image_url,
+        },
+        {            // Attempt 3: Bare minimum fields
+          title:   payload.title,
+          slug:    payload.slug,
+          content: payload.content,
+        }
+      ];
+
+      let lastErr: any = null;
+      for (let i = 0; i < payloads.length; i++) {
+        try {
+          const res = await withRetry(() => executeRequest(payloads[i]));
+          if (!res || !res.data) {
+            throw new StrapiUserClientError(
+              200,
+              `Unexpected response structure from Strapi (missing "data" object)`
+            );
+          }
+          return {
+            documentId: res.data.documentId ?? String(res.data.id),
+            slug: (res.data.attributes?.slug ?? res.data.slug) ?? payload.slug,
+          };
+        } catch (err: any) {
+          lastErr = err;
+          // Only fallback on 400 Bad Request (which indicates schema/validation error)
+          const is400 = err instanceof StrapiUserClientError && err.status === 400;
+          if (!is400 || i === payloads.length - 1) {
+            throw err;
+          }
+          console.warn(`Publish attempt ${i + 1} failed with 400, trying fallback payload...`, err.strapiError);
+        }
+      }
+      throw lastErr;
     },
   };
 }

@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules/
+/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -43,9 +44,12 @@ next-env.d.ts
 # graphify
 graphify-out/
 
-.claude/
-
 # Strapi
+/rankshoot/dist/
+/rankshoot/.strapi/
 .strapi/
 .strapi-updater.json
 dist/
+
+# Claude Code worktrees
+.claude/worktrees/

@@ -45,7 +45,9 @@ export async function POST(req: Request) {
     return apiJson({ success: false, error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { base_url, api_token, collection_name = "articles" } = body;
+  const { base_url, api_token, collection_name } = body;
+  const targetCollection = (collection_name || "articles").trim();
+
   if (!base_url || !api_token) {
     return apiJson(
       { success: false, error: "base_url and api_token are required" },
@@ -53,15 +55,20 @@ export async function POST(req: Request) {
     );
   }
 
+  let cleanUrl = base_url.trim().replace(/\/$/, "");
+  if (cleanUrl.endsWith("/admin")) {
+    cleanUrl = cleanUrl.slice(0, -6);
+  }
+
   // Validate URL format
   try {
-    new URL(base_url);
+    new URL(cleanUrl);
   } catch {
     return apiJson({ success: false, error: "base_url must be a valid URL" }, { status: 400 });
   }
 
   // Test connection before saving
-  const client = createUserStrapiClient(base_url, api_token);
+  const client = createUserStrapiClient(cleanUrl, api_token, targetCollection);
   const test = await client.testConnection();
   if (!test.ok) {
     return apiJson(
@@ -76,10 +83,10 @@ export async function POST(req: Request) {
       {
         user_id:         user.id,
         cms_type:        "strapi",
-        base_url:        base_url.replace(/\/$/, ""),
+        base_url:        cleanUrl,
         api_token,
         masked_token:    maskToken(api_token),
-        collection_name,
+        collection_name: targetCollection,
         updated_at:      new Date().toISOString(),
       },
       { onConflict: "user_id,cms_type" }

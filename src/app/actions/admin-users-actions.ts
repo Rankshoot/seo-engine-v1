@@ -48,7 +48,13 @@ export async function listAdminUsers(
     const db = getSupabaseAdmin();
     const since30d = daysAgoIso(30);
 
-    const [{ data: projects, error: projErr }, { data: approvalUsers }] = await Promise.all([
+    const [
+      { data: projects, error: projErr },
+      { data: approvalUsers },
+      { data: blogDates },
+      { data: keywordDates },
+      { data: calendarDates },
+    ] = await Promise.all([
       db
         .from("projects")
         .select("id, user_id, created_at, updated_at")
@@ -57,9 +63,49 @@ export async function listAdminUsers(
         .from("user_approvals")
         .select("clerk_user_id, requested_at")
         .returns<{ clerk_user_id: string; requested_at: string }[]>(),
+      db
+        .from("blogs")
+        .select("project_id, updated_at, created_at")
+        .returns<{ project_id: string; updated_at: string; created_at: string }[]>(),
+      db
+        .from("keywords")
+        .select("project_id, updated_at, created_at")
+        .returns<{ project_id: string; updated_at: string; created_at: string }[]>(),
+      db
+        .from("calendar_entries")
+        .select("project_id, created_at")
+        .returns<{ project_id: string; created_at: string }[]>(),
     ]);
 
     if (projErr) throw new Error(projErr.message);
+
+    const projectLastActive = new Map<string, number>();
+    const registerDate = (projectId: string, dateStr?: string | null) => {
+      if (!dateStr) return;
+      const t = new Date(dateStr).getTime();
+      if (!isNaN(t)) {
+        const cur = projectLastActive.get(projectId) ?? 0;
+        if (t > cur) {
+          projectLastActive.set(projectId, t);
+        }
+      }
+    };
+
+    for (const p of projects ?? []) {
+      registerDate(p.id, p.updated_at);
+      registerDate(p.id, p.created_at);
+    }
+    for (const b of blogDates ?? []) {
+      registerDate(b.project_id, b.updated_at);
+      registerDate(b.project_id, b.created_at);
+    }
+    for (const k of keywordDates ?? []) {
+      registerDate(k.project_id, k.updated_at);
+      registerDate(k.project_id, k.created_at);
+    }
+    for (const c of calendarDates ?? []) {
+      registerDate(c.project_id, c.created_at);
+    }
 
     const byUser = new Map<string, UserAgg>();
 
@@ -88,7 +134,9 @@ export async function listAdminUsers(
       };
       cur.projectCount += 1;
       cur.projectIds.push(p.id);
-      const active = p.updated_at ?? p.created_at;
+      
+      const activeTime = projectLastActive.get(p.id);
+      const active = activeTime ? new Date(activeTime).toISOString() : (p.updated_at ?? p.created_at);
       const created = p.created_at;
       if (active && (!cur.lastActiveAt || active > cur.lastActiveAt)) {
         cur.lastActiveAt = active;

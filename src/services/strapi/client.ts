@@ -17,14 +17,16 @@ import type {
   StrapiSingleResponse,
 } from "./types";
 
-// ─── Config ──────────────────────────────────────────────────────────────────
-
-const STRAPI_URL   = (process.env.STRAPI_URL   ?? "").replace(/\/$/, "");
+let rawUrl = (process.env.STRAPI_URL ?? "").replace(/\/$/, "");
+if (rawUrl.endsWith("/admin")) {
+  rawUrl = rawUrl.slice(0, -6);
+}
+const STRAPI_URL   = rawUrl;
 const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN ?? "";
 
 const COLLECTION = "articles";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RETRIES        = 3;
 
 // ─── Retry logic ──────────────────────────────────────────────────────────────
@@ -45,8 +47,9 @@ async function withRetry<T>(
     } catch (err) {
       lastError = err;
       const isNetwork = err instanceof TypeError; // fetch network error
+      const isTimeout = err instanceof Error && err.name === "AbortError";
       const isStatusErr = err instanceof StrapiApiError && isRetryable(err.status);
-      if (!isNetwork && !isStatusErr) throw err;
+      if (!isNetwork && !isTimeout && !isStatusErr) throw err;
       if (attempt < retries) {
         await new Promise(r => setTimeout(r, delayMs * 2 ** attempt));
       }
@@ -93,14 +96,48 @@ async function strapiRequest<T>(
       signal: controller.signal,
     });
 
-    const json = await res.json();
+    const contentType = res.headers.get("content-type") || "";
+    const isJson = contentType.toLowerCase().includes("application/json");
+    let json: any = null;
+    let parseError = false;
+
+    if (isJson) {
+      try {
+        json = await res.json();
+      } catch {
+        parseError = true;
+      }
+    }
 
     if (!res.ok) {
-      const errBody = json as { error?: { message?: string; details?: unknown } };
+      if (isJson && !parseError && json && typeof json === "object") {
+        const errBody = json as { error?: { message?: string; details?: unknown } };
+        throw new StrapiApiError(
+          res.status,
+          errBody?.error?.message ?? `HTTP ${res.status}`,
+          errBody?.error?.details
+        );
+      } else {
+        const text = await res.text().catch(() => "");
+        throw new StrapiApiError(
+          res.status,
+          `HTTP ${res.status}: ${text.slice(0, 100) || "Non-JSON response"}`
+        );
+      }
+    }
+
+    if (!isJson) {
+      const text = await res.text().catch(() => "");
       throw new StrapiApiError(
         res.status,
-        errBody?.error?.message ?? `HTTP ${res.status}`,
-        errBody?.error?.details
+        `Expected JSON response from Strapi, but received "${contentType}". Body: ${text.slice(0, 100) || "empty"}`
+      );
+    }
+
+    if (parseError) {
+      throw new StrapiApiError(
+        res.status,
+        "Failed to parse JSON response from Strapi"
       );
     }
 

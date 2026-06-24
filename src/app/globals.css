@@ -96,15 +96,15 @@
     /* Light Mode — Rankshoot, refined Linear/Notion-inspired neutrals
        Background uses a warm-grey wash so white-elevated cards pop visually.
        Border tokens are stronger to create clear delineation in forms & cards. */
-    --surface-primary: #f4f4f8;
-    --surface-secondary: #ececf2;
-    --surface-tertiary: #e2e2ea;
+    --surface-primary: #f5f5fa;
+    --surface-secondary: #ededf3;
+    --surface-tertiary: #e4e4ed;
     --surface-elevated: #ffffff;
-    --surface-hover: #e8e8f0;
+    --surface-hover: #e8e8f2;
 
-    --border-subtle: #d0d0dc;
-    --border-default: #b8b8c8;
-    --border-strong: #8888a0;
+    --border-subtle: #d4d4e0;
+    --border-default: #bcbccc;
+    --border-strong: #8a8aaa;
 
     --text-primary: #0d0d12;
     --text-secondary: #2a2a35;
@@ -131,48 +131,49 @@
   }
 
   :root[class~="dark"] {
-    /* Dark Mode — graphite surfaces, blue-violet accents */
-    --surface-primary: #07080d;
-    --surface-secondary: #0d0e15;
-    --surface-tertiary: #15161f;
-    --surface-elevated: #16171f;
-    --surface-hover: #1c1d27;
+    /* Dark Mode — deep navy/slate (not pure black), indigo-tinted surfaces.
+       Inspired by GitHub dark, Vercel, Linear — proven readable at scale.
+       Cards stand clearly above background; borders create depth, not noise. */
+    --surface-primary: #0d1117;
+    --surface-secondary: #131a26;
+    --surface-tertiary: #1a2233;
+    --surface-elevated: #1e2840;
+    --surface-hover: #253047;
 
-    --border-subtle: #20212c;
-    --border-default: #2a2b38;
-    --border-strong: #4a4b5e;
+    --border-subtle: #222d44;
+    --border-default: #2d3d58;
+    --border-strong: #4a5f80;
 
-    --text-primary: #f4f4f7;
-    --text-secondary: #c9c9d4;
-    --text-tertiary: #7c7d8e;
+    --text-primary: #e8edf5;
+    --text-secondary: #a8b4cc;
+    --text-tertiary: #5e7096;
 
-    --brand-primary: #ffffff;
-    --brand-on-primary: #0d0d12;
-    --brand-action: #7c7eff;
-    --brand-action-hover: #9b9dff;
-    --brand-coral: #ffad9b;
-    --brand-deep-green: #003c33;
+    --brand-primary: #e8edf5;
+    --brand-on-primary: #0d1117;
+    --brand-action: #818cf8;
+    --brand-action-hover: #a5b4fc;
+    --brand-coral: #f87171;
+    --brand-deep-green: #064e3b;
     --brand-dark-navy: #071829;
 
-    --brand-violet: #8284ff;
-    --brand-violet-soft: #a5a7ff;
-    --brand-aqua: #67e8f9;
-    --brand-glow: rgba(124, 126, 255, 0.40);
+    --brand-violet: #818cf8;
+    --brand-violet-soft: #a5b4fc;
+    --brand-aqua: #22d3ee;
+    --brand-glow: rgba(129, 140, 248, 0.35);
 
-    --status-success: #22c55e;
-    --status-warning: #f59e0b;
-    --status-danger: #ef4444;
-    --status-info: #3b82f6;
+    --status-success: #34d399;
+    --status-warning: #fbbf24;
+    --status-danger: #f87171;
+    --status-info: #60a5fa;
 
-    /* Deeper shadows feel right against true black */
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
-    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.45);
-    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.50);
-    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
-    --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.65);
-    --shadow-ring-action: 0 0 0 3px rgba(124, 126, 255, 0.34);
-    --shadow-glow-sm: 0 0 28px rgba(124, 126, 255, 0.32);
-    --shadow-glow-md: 0 0 56px rgba(124, 126, 255, 0.40);
+    --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.40);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.50);
+    --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.60);
+    --shadow-ring-action: 0 0 0 3px rgba(129, 140, 248, 0.30);
+    --shadow-glow-sm: 0 0 28px rgba(129, 140, 248, 0.28);
+    --shadow-glow-md: 0 0 56px rgba(129, 140, 248, 0.36);
   }
 
   html {
@@ -226,6 +227,47 @@
   .input-field option {
     background: var(--surface-elevated);
     color: var(--text-primary);
+  }
+
+  /* ── Global button utilities ────────────────────────────────────────────── */
+
+  /* Primary CTA — always brand-violet */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-[10px] bg-brand-violet px-5 py-2.5 text-[13px] font-semibold text-white shadow-sm transition-opacity duration-150 hover:opacity-90 active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Secondary — elevated surface with border */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-[10px] border border-border-subtle bg-surface-elevated px-5 py-2.5 text-[13px] font-medium text-text-secondary shadow-sm transition-colors duration-150 hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Ghost — no background */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-[10px] px-4 py-2 text-[13px] font-medium text-text-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Pill variants */
+  .btn-primary-pill {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-brand-violet px-5 py-2.5 text-[13px] font-semibold text-white shadow-sm transition-opacity duration-150 hover:opacity-90 active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary-pill {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-5 py-2.5 text-[13px] font-medium text-text-secondary shadow-sm transition-colors duration-150 hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* ── Card utilities ──────────────────────────────────────────────────── */
+  .card {
+    @apply rounded-[16px] border border-border-subtle bg-surface-elevated;
+  }
+  .card-hover {
+    @apply rounded-[16px] border border-border-subtle bg-surface-elevated transition-colors duration-150 hover:bg-surface-hover;
+  }
+  .card-elevated {
+    @apply rounded-[20px] border border-border-subtle bg-surface-elevated shadow-sm;
+  }
+
+  /* ── Page layout ─────────────────────────────────────────────────────── */
+  .page-content {
+    @apply space-y-6 pb-20;
   }
 
   /* Rankshoot gradient text — AI-native blue→violet→aqua. */

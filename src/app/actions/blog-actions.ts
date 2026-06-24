@@ -680,10 +680,13 @@ function sanitizeBlogMarkdown(markdown: string): string {
   // JSON (e.g. `{"title":"...","contentMarkdown":"# H1\n\n...","..."}`)
   // extract contentMarkdown before any other processing.
   const rescued = rescueJsonBlogContent(markdown);
+
+  // Clean up any newlines or spaces between markdown image brackets and parentheses
+  const healed = rescued.replace(/!\[([^\]]*?)\]\s+\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, '![$1]($2)');
   
   // Mask ```youtube\n...\n``` blocks
   const youtubeBlocks: string[] = [];
-  let masked = rescued.replace(/```youtube\r?\n([\s\S]*?)\r?\n```/g, (match) => {
+  let masked = healed.replace(/```youtube\r?\n([\s\S]*?)\r?\n```/g, (match) => {
     youtubeBlocks.push(match);
     return `__YOUTUBE_BLOCK_PLACEHOLDER_${youtubeBlocks.length - 1}__`;
   });
@@ -917,6 +920,15 @@ export async function updateBlogContent(
     return { success: false, error: 'Blog content is too short to save.', data: null };
   }
 
+  // Upload any inline base64 images to Supabase Storage
+  let uploadedContent = cleaned;
+  try {
+    const { uploadBase64Images } = await import('@/lib/server/blog-images');
+    uploadedContent = await uploadBase64Images(cleaned, blogId);
+  } catch (err) {
+    console.error('[blog-actions] failed to process and upload inline images during update', err);
+  }
+
   const { data: blog, error: bErr } = await supabaseAdmin
     .from('blogs')
     .select('id, project_id')
@@ -934,10 +946,10 @@ export async function updateBlogContent(
 
   if (pErr || !project) return { success: false, error: 'Not authorized', data: null };
 
-  const { externalLinks, internalLinks } = extractMarkdownLinks(cleaned, project.domain as string);
+  const { externalLinks, internalLinks } = extractMarkdownLinks(uploadedContent, project.domain as string);
   const patch: Record<string, unknown> = {
-    content: cleaned,
-    word_count: countWords(cleaned),
+    content: uploadedContent,
+    word_count: countWords(uploadedContent),
     external_links: externalLinks,
     internal_links: internalLinks,
     updated_at: new Date().toISOString(),
@@ -2600,7 +2612,7 @@ Rules — read carefully:
 - Include 1-4 quick_wins.
 - Be specific. Reference actual text from the article when relevant.
 - Do NOT fabricate keyword volume data. Focus purely on content quality.
-- Respect PDF downloads: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides), do NOT flag this as an issue (such as 'content hidden in PDF' or 'locked value proposition'). Respect the PDF download as a premium feature/downloadable asset and focus your audit purely on the on-page text content.`;
+- Respect PDF downloads & promised content: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides) and the title/H1 promises a specific number or list of items (e.g., "60+ questions", "100+ templates"), do NOT flag this as an issue (such as 'content hidden in PDF', 'locked value proposition', 'items/questions not listed on-page', or 'thin content'). Respect that the PDF download serves as the premium delivery mechanism for the full list/assets, and focus your audit purely on the supporting on-page text content without demanding that the full set be pasted onto the page.`;
 
   try {
     const raw = await geminiGenerate(prompt, 2);
@@ -2610,6 +2622,57 @@ Rules — read carefully:
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : "Analysis failed" };
   }
+}
+
+export async function updateBlogCoverImage(blogId: string, imageUrl: string | null) {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null };
+
+  const { data: blog, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, project_id, content_data')
+    .eq('id', blogId)
+    .single();
+
+  if (bErr || !blog) return { success: false, error: 'Blog not found', data: null };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Not authorized', data: null };
+
+  let finalUrl = imageUrl;
+  if (imageUrl && imageUrl.startsWith('data:image/')) {
+    try {
+      const { uploadSingleBase64Image } = await import('@/lib/server/blog-images');
+      finalUrl = await uploadSingleBase64Image(imageUrl, blogId);
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to upload cover image', data: null };
+    }
+  }
+
+  const currentContentData = (blog.content_data ?? {}) as Record<string, any>;
+  const nextContentData = { ...currentContentData, cover_image_url: finalUrl || undefined };
+  if (!finalUrl) {
+    delete nextContentData.cover_image_url;
+  }
+
+  const { data: updated, error: uErr } = await supabaseAdmin
+    .from('blogs')
+    .update({
+      content_data: nextContentData,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', blogId)
+    .select()
+    .single();
+
+  if (uErr) return { success: false, error: uErr.message, data: null };
+  return { success: true, data: updated as Blog };
 }
 
 function preservePdfLinks(originalMarkdown: string, generatedMarkdown: string): string {

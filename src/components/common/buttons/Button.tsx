@@ -10,7 +10,8 @@ export type ButtonVariant =
   | "ghost"
   | "outline"
   | "destructive"
-  | "action";
+  | "action"
+  | "violet";
 
 export type ButtonSize = "xs" | "sm" | "md" | "lg";
 export type ButtonShape = "rounded" | "pill";
@@ -29,7 +30,9 @@ const shapeClass: Record<ButtonShape, Record<ButtonSize, string>> = {
 
 const variantClass: Record<ButtonVariant, string> = {
   primary:
-    "bg-text-primary text-surface-primary hover:opacity-90 active:opacity-80 disabled:opacity-50",
+    "bg-brand-violet text-white hover:opacity-90 active:opacity-80 disabled:opacity-50 shadow-sm",
+  violet:
+    "bg-brand-violet text-white hover:opacity-90 active:opacity-80 disabled:opacity-50 shadow-sm",
   secondary:
     "bg-surface-elevated text-text-primary border border-border-subtle hover:border-border-strong hover:bg-surface-hover disabled:opacity-50",
   outline:
@@ -37,9 +40,9 @@ const variantClass: Record<ButtonVariant, string> = {
   ghost:
     "bg-transparent text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50",
   destructive:
-    "bg-rose-500/10 text-rose-400 border border-rose-500/30 hover:bg-rose-500/20 disabled:opacity-50",
+    "bg-status-danger/10 text-status-danger border border-status-danger/30 hover:bg-status-danger/20 disabled:opacity-50",
   action:
-    "bg-brand-action text-white hover:bg-brand-action-hover active:brightness-95 disabled:opacity-50",
+    "bg-brand-action text-white hover:bg-brand-action-hover active:brightness-95 disabled:opacity-50 shadow-sm",
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

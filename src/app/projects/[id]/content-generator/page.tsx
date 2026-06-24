@@ -3,8 +3,9 @@
 import { useMemo, Suspense } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useSuspenseQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
-import { PageTitle } from "@/components/common";
+import { Button, PageHeader } from "@/components/common";
 import { contentGeneratorApi } from "@/frontend/api/content-generator";
 import { qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import type { ContentType } from "@/lib/types";
@@ -78,43 +79,38 @@ export default function ContentGeneratorHubPage() {
   const studioBase = `${base}/content-generator`;
 
   return (
-    <div className="relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8">
-      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div className="min-w-0 max-w-3xl">
-            <PageTitle>What are you writing today?</PageTitle>
-            <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">
-              Pick a content type. Every studio uses your project brief, approved keywords, and live research —
-              so the draft sounds like your business, not a template.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
+    <div className="space-y-8 pb-16">
+      <PageHeader
+        title="What are you writing today?"
+        description="Pick a content type. Every studio uses your project brief, approved keywords, and live research — so the draft sounds like your business, not a template."
+        actions={
+          <>
             <ProjectNavLink
               href={`${studioBase}/history`}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-border-default bg-surface-elevated px-5 text-[14px] font-medium text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary"
+              className="btn-secondary h-9 px-4 text-[13px]"
             >
-              View content history
+              Content history
             </ProjectNavLink>
-            <button
-              onClick={() => router.push(`${studioBase}/blogs`)}
-              className="inline-flex h-10 items-center justify-center rounded-full bg-brand-action px-5 text-[14px] font-semibold text-white transition-opacity hover:opacity-90"
-            >
+            <Button variant="primary" size="sm" onClick={() => router.push(`${studioBase}/blogs`)}>
               Start writing
-            </button>
-          </div>
-        </div>
-      </div>
+            </Button>
+          </>
+        }
+      />
 
       {/* Cards */}
-      <div>
-        <h2 className="mb-5 font-mono text-[11px] font-normal uppercase tracking-widest text-text-secondary">
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <h2 className="mb-5 font-mono text-[11px] font-normal uppercase tracking-widest text-text-tertiary">
           Choose your content type
         </h2>
         <Suspense fallback={<ContentCardsSkeleton />}>
           <ContentStudioCards projectId={projectId} studioBase={studioBase} />
         </Suspense>
-      </div>
+      </motion.div>
     </div>
   );
 }
@@ -197,8 +193,15 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {cards.map(card => (
-        <ContentCard key={card.id} card={card} />
+      {cards.map((card, i) => (
+        <motion.div
+          key={card.id}
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, delay: i * 0.06, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <ContentCard card={card} />
+        </motion.div>
       ))}
     </div>
   );
@@ -206,7 +209,7 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
 
 function ContentCard({ card }: { card: ContentTypeCard }) {
   return (
-    <article className="flex h-full flex-col overflow-hidden rounded-[14px] border border-border-subtle bg-surface-elevated transition-all duration-200 ease-out hover:border-border-strong hover:shadow-(--shadow-sm)">
+    <article className="flex h-full flex-col overflow-hidden rounded-[14px] border border-border-subtle bg-surface-elevated transition-all duration-200 ease-out hover:border-border-strong hover:shadow-sm">
       {/* Art area */}
       <div className={`relative ${card.artBg} px-4 pb-3 pt-6`}>
         {card.badge ? (

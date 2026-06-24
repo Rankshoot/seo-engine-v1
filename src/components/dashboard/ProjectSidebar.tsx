@@ -289,19 +289,16 @@ export default function ProjectSidebar({
 
   return (
     <aside
-      className={`h-screen fixed left-0 top-0 border-r border-border-subtle/60 bg-surface-primary flex flex-col z-60 transition-all duration-300 ease-in-out ${
+      className={`h-screen fixed left-0 top-0 border-r border-border-subtle bg-surface-secondary flex flex-col z-60 transition-[width] duration-300 ease-out ${
         isCollapsed ? "w-[68px]" : "w-[260px]"
       }`}
-      style={{
-        background: "color-mix(in srgb, var(--surface-primary) 96%, var(--brand-violet) 4%)",
-      }}
     >
-      {/* Subtle top glow */}
+      {/* Subtle violet top glow */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-[200px] opacity-40"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[160px] opacity-30"
         style={{
-          background: "radial-gradient(ellipse at 50% -30%, rgba(99,102,241,0.18) 0%, transparent 70%)",
+          background: "radial-gradient(ellipse at 50% -40%, var(--brand-glow) 0%, transparent 70%)",
         }}
       />
 

@@ -23,8 +23,8 @@ function fmtVol(n: number | undefined | null): string {
 
 function kdLabel(kd: number | undefined | null): { text: string; cls: string } {
   if (!kd || kd === 0) return { text: "—", cls: "text-text-tertiary" };
-  if (kd < 30) return { text: "Easy", cls: "text-[#10b981]" };
-  if (kd < 60) return { text: "Med", cls: "text-[#f59e0b]" };
+  if (kd < 30) return { text: "Easy", cls: "text-status-success" };
+  if (kd < 60) return { text: "Med", cls: "text-status-warning" };
   return { text: "Hard", cls: "text-brand-coral" };
 }
 
@@ -190,7 +190,7 @@ export function MiniCalendar({
         <div>
           <h3 className="text-[18px] font-medium tracking-[-0.18px] text-text-primary">Content Calendar</h3>
           {schedulingKeywordId ? (
-            <p className="mt-0.5 text-[13px] text-[#f59e0b]">
+            <p className="mt-0.5 text-[13px] text-status-warning">
               {schedulingKeywordCurrentDate ? (
                 <>
                   Rescheduling &ldquo;<span className="font-semibold">{schedulingKeywordPhrase}</span>&rdquo; — pick a
@@ -316,15 +316,15 @@ export function MiniCalendar({
             return (
               <div
                 key={idx}
-                className={`flex min-h-[120px] flex-col rounded-[8px] border border-dashed border-[#f59e0b]/50 bg-[#f59e0b]/[0.06] p-1.5 ${
-                  isToday ? "ring-1 ring-[#f59e0b]/40" : ""
+                className={`flex min-h-[120px] flex-col rounded-[8px] border border-dashed border-status-warning/50 bg-status-warning/[0.06] p-1.5 ${
+                  isToday ? "ring-1 ring-status-warning/40" : ""
                 }`}
               >
-                <span className="self-end text-[10px] font-bold leading-none text-[#f59e0b]/60">{dayNum}</span>
-                <p className="line-clamp-2 flex flex-1 items-center justify-center px-1 text-center text-[11px] font-medium text-[#f59e0b]">
+                <span className="self-end text-[10px] font-bold leading-none text-status-warning/60">{dayNum}</span>
+                <p className="line-clamp-2 flex flex-1 items-center justify-center px-1 text-center text-[11px] font-medium text-status-warning">
                   {schedulingEntry?.focus_keyword}
                 </p>
-                <span className="pb-0.5 text-center text-[9px] text-[#f59e0b]/60">current date</span>
+                <span className="pb-0.5 text-center text-[9px] text-status-warning/60">current date</span>
               </div>
             );
           }
@@ -468,7 +468,7 @@ export function MiniCalendar({
                         {isGenerated ? (
                           <ProjectNavLink
                             href={getContentPreviewUrl(projectId, resolvedBlogId || entry.blog?.id || entry.id, historyEntry?.contentType || entry.article_type)}
-                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-[#10b981]/15 text-[#10b981] hover:bg-[#10b981]/25"
+                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-status-success/15 text-status-success hover:bg-status-success/25"
                           >
                             View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
                           </ProjectNavLink>
@@ -476,7 +476,7 @@ export function MiniCalendar({
                           <button
                             type="button"
                             disabled
-                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide select-none border border-[#f59e0b]/20 text-[#f59e0b]/70 sm:py-1 sm:text-[9px]"
+                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide select-none border border-status-warning/20 text-status-warning/70 sm:py-1 sm:text-[9px]"
                           >
                             Generating…
                           </button>
@@ -522,13 +522,13 @@ export function MiniCalendar({
                 key={idx}
                 type="button"
                 onClick={() => onDatePick(iso)}
-                className={`flex min-h-[90px] flex-col items-center justify-between rounded-[8px] border border-dashed border-[#f59e0b]/40 bg-[#f59e0b]/[0.04] px-1 py-1.5 transition-all hover:border-[#f59e0b]/70 hover:bg-[#f59e0b]/10 ${
-                  isToday ? "ring-1 ring-[#f59e0b]/40" : ""
+                className={`flex min-h-[90px] flex-col items-center justify-between rounded-[8px] border border-dashed border-status-warning/40 bg-status-warning/[0.04] px-1 py-1.5 transition-all hover:border-status-warning/70 hover:bg-status-warning/10 ${
+                  isToday ? "ring-1 ring-status-warning/40" : ""
                 }`}
               >
-                <span className="self-end text-[10px] font-bold leading-none text-[#f59e0b]/50">{dayNum}</span>
-                <span className="text-[20px] text-[#f59e0b]/40">+</span>
-                <span className="text-[9px] font-medium text-[#f59e0b]/60">Pick</span>
+                <span className="self-end text-[10px] font-bold leading-none text-status-warning/50">{dayNum}</span>
+                <span className="text-[20px] text-status-warning/40">+</span>
+                <span className="text-[9px] font-medium text-status-warning/60">Pick</span>
               </button>
             );
           }
@@ -597,12 +597,12 @@ export function MiniCalendar({
         {schedulingKeywordId ? (
           <>
             <span className="flex items-center gap-1.5">
-              <span className="h-3 w-3 rounded-[3px] border border-dashed border-[#f59e0b]/50 bg-[#f59e0b]/[0.04]" />
+              <span className="h-3 w-3 rounded-[3px] border border-dashed border-status-warning/50 bg-status-warning/[0.04]" />
               Click to schedule here
             </span>
             {schedulingKeywordCurrentDate ? (
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-[3px] border border-dashed border-[#f59e0b]/50 bg-[#f59e0b]/[0.06]" />
+                <span className="h-3 w-3 rounded-[3px] border border-dashed border-status-warning/50 bg-status-warning/[0.06]" />
                 Current date (pick a different one to move)
               </span>
             ) : null}

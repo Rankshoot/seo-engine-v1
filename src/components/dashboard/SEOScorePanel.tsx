@@ -18,11 +18,11 @@ const V = {
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
 
 const GRADE_CONFIG = {
-  A: { color: "#16a34a", ring: "#16a34a33", bg: "#16a34a12", bar: "#16a34a", label: "Excellent" },
-  B: { color: "var(--brand-action)", ring: "var(--brand-action)", bg: "color-mix(in srgb, var(--brand-action) 10%, transparent)", bar: "var(--brand-action)", label: "Good" },
-  C: { color: "#d97706", ring: "#d9770633", bg: "#d9770612", bar: "#d97706", label: "Needs Work" },
-  D: { color: "var(--brand-coral)", ring: "var(--brand-coral)", bg: "color-mix(in srgb, var(--brand-coral) 10%, transparent)", bar: "var(--brand-coral)", label: "Poor" },
-  F: { color: "#b91c1c", ring: "#b91c1c33", bg: "#b91c1c12", bar: "#b91c1c", label: "Critical" },
+  A: { color: "var(--status-success)", ring: "color-mix(in srgb, var(--status-success) 20%, transparent)", bg: "color-mix(in srgb, var(--status-success) 8%, transparent)", bar: "var(--status-success)", label: "Excellent" },
+  B: { color: "var(--brand-action)", ring: "color-mix(in srgb, var(--brand-action) 20%, transparent)", bg: "color-mix(in srgb, var(--brand-action) 10%, transparent)", bar: "var(--brand-action)", label: "Good" },
+  C: { color: "var(--status-warning)", ring: "color-mix(in srgb, var(--status-warning) 20%, transparent)", bg: "color-mix(in srgb, var(--status-warning) 8%, transparent)", bar: "var(--status-warning)", label: "Needs Work" },
+  D: { color: "var(--brand-coral)", ring: "color-mix(in srgb, var(--brand-coral) 20%, transparent)", bg: "color-mix(in srgb, var(--brand-coral) 10%, transparent)", bar: "var(--brand-coral)", label: "Poor" },
+  F: { color: "var(--status-danger)", ring: "color-mix(in srgb, var(--status-danger) 20%, transparent)", bg: "color-mix(in srgb, var(--status-danger) 8%, transparent)", bar: "var(--status-danger)", label: "Critical" },
 };
 
 export default function SEOScorePanel({
@@ -83,14 +83,14 @@ export default function SEOScorePanel({
           <div key={check.key} className="flex items-start gap-2.5">
             <div
               className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 mt-0.5"
-              style={{ background: check.pass ? "#16a34a18" : "#b91c1c12" }}
+              style={{ background: check.pass ? "color-mix(in srgb, var(--status-success) 8%, transparent)" : "color-mix(in srgb, var(--status-danger) 8%, transparent)" }}
             >
               {check.pass ? (
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="#16a34a" strokeWidth={3}>
+                <svg className="w-2.5 h-2.5 text-status-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
                 </svg>
               ) : (
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="#b91c1c" strokeWidth={3}>
+                <svg className="w-2.5 h-2.5 text-status-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                 </svg>
               )}

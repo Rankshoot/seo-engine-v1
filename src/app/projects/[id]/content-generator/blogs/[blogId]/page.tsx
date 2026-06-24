@@ -84,7 +84,7 @@ const FORMATS: { key: ExportFormat; label: string; ext: string }[] = [
 const BLOG_STATUSES: Array<{ value: BlogStatus; label: string; hint: string; color: string }> = [
   { value: "generated", label: "Generated", hint: "Draft written and ready for review.",   color: V.txtMute },
   { value: "approved",  label: "Approved",  hint: "Reviewed and approved for publishing.", color: V.action  },
-  { value: "published", label: "Published", hint: "Marked live on your website or CMS.",   color: "#16a34a" },
+  { value: "published", label: "Published", hint: "Marked live on your website or CMS.",   color: "var(--status-success)" },
 ];
 
 // ─── Utilities ─────────────────────────────────────────────────────────────
@@ -905,7 +905,7 @@ export default function BlogViewerPage() {
           onClick={handleDirectSchedule}
           disabled={scheduling || !nextVacantDate}
           className="rounded-full px-4 py-1.5 text-[12px] font-semibold transition-all disabled:opacity-40"
-          style={{ background: V.action, color: "#ffffff" }}
+          style={{ background: V.action, color: "var(--brand-on-primary)" }}
         >
           {scheduling ? "Scheduling..." : "Schedule"}
         </button>
@@ -1169,8 +1169,8 @@ export default function BlogViewerPage() {
           <span
             className="text-[9px] font-semibold tabular-nums rounded-full px-1.5 py-0.5"
             style={{
-              background: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a18" : "#b91c1c14",
-              color:      currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "#16a34a"   : "#b91c1c",
+              background: currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "color-mix(in srgb, var(--status-success) 8%, transparent)" : "color-mix(in srgb, var(--status-danger) 8%, transparent)",
+              color:      currentBlog.meta_description.length >= 140 && currentBlog.meta_description.length <= 165 ? "var(--status-success)"   : "var(--status-danger)",
             }}
           >
             {currentBlog.meta_description.length}/160

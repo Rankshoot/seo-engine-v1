@@ -89,6 +89,7 @@ export default function EbookGeneratorPage() {
     "Book a demo or download a deeper resource on our site.",
   );
   const [chapterDepth, setChapterDepth] = useState<(typeof EBOOK_DEPTH_OPTIONS)[number]["id"]>("standard");
+  const [customWordCount, setCustomWordCount] = useState<string>("");
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
@@ -167,6 +168,7 @@ export default function EbookGeneratorPage() {
       goal,
       ctaObjective,
       chapterDepth,
+      customWordCount: customWordCount ? parseInt(customWordCount, 10) : undefined,
       region,
       language,
       semanticKeywords: secondaryKeywords,
@@ -377,6 +379,23 @@ export default function EbookGeneratorPage() {
                     value={chapterDepth}
                     onChange={setChapterDepth}
                     ariaLabel="Chapter depth"
+                  />
+                </Field>
+                <Field
+                  label="Custom word count (optional)"
+                  description="Override the depth preset with an exact word count. Leave blank to use the depth preset above."
+                  htmlFor="ebook-word-count"
+                >
+                  <Input
+                    id="ebook-word-count"
+                    type="number"
+                    inputSize="lg"
+                    min={2000}
+                    max={25000}
+                    step={500}
+                    placeholder={`e.g. 8000 — or leave blank to use ${EBOOK_DEPTH_OPTIONS.find(d => d.id === chapterDepth)?.label ?? chapterDepth} preset`}
+                    value={customWordCount}
+                    onChange={e => setCustomWordCount(e.target.value)}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>

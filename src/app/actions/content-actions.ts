@@ -275,6 +275,7 @@ export async function generateEbookAction(
     goal: string;
     ctaObjective: string;
     chapterDepth: 'concise' | 'standard' | 'deep';
+    customWordCount?: number;
     region?: string;
     language?: string;
     semanticKeywords?: string[];
@@ -352,6 +353,7 @@ export async function generateEbookAction(
         goal: payload.goal,
         ctaObjective: payload.ctaObjective,
         chapterDepth: payload.chapterDepth,
+        customWordCount: payload.customWordCount,
         regionLabel: regionLabel(region),
         languageLabel: languageLabel(language),
         companyName: project.company,
@@ -433,6 +435,7 @@ export async function generateWhitepaperAction(
     audience: string;
     problemStatement: string;
     technicalDepth: 'executive' | 'analyst' | 'engineering';
+    customWordCount?: number;
     researchAngle: string;
     businessObjective: string;
     region?: string;
@@ -508,6 +511,7 @@ export async function generateWhitepaperAction(
         audience: payload.audience,
         problemStatement: payload.problemStatement.trim(),
         technicalDepth: payload.technicalDepth,
+        customWordCount: payload.customWordCount,
         researchAngle: payload.researchAngle,
         businessObjective: payload.businessObjective,
         regionLabel: regionLabel(region),

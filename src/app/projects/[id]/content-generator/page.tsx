@@ -111,6 +111,35 @@ export default function ContentGeneratorHubPage() {
           <ContentStudioCards projectId={projectId} studioBase={studioBase} />
         </Suspense>
       </motion.div>
+
+      {/* Campaign Mode CTA */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.28, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <ProjectNavLink
+          href={`${studioBase}/campaign`}
+          className="group flex items-center justify-between gap-4 rounded-[14px] border border-dashed border-border-default bg-surface-elevated/60 px-6 py-5 transition-all hover:border-brand-violet/50 hover:bg-surface-elevated"
+        >
+          <div className="flex items-center gap-4">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-brand-violet/10 text-brand-violet">
+              <svg viewBox="0 0 20 20" fill="none" className="w-5 h-5" aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" stroke="currentColor" d="M15.59 14.37a6 6 0 0 1-5.84 7.38v-4.82m5.84-2.56a14.98 14.98 0 0 0 6.16-12.12A14.98 14.98 0 0 0 9.631 8.41m5.96 5.96a14.926 14.926 0 0 1-5.841 2.58m-.119-8.54a6 6 0 0 0-7.381 5.84h4.818m2.564-5.84a14.927 14.927 0 0 0-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 0 1-2.448-2.448 14.9 14.9 0 0 1 .06-.312m-2.24 2.39a4.493 4.493 0 0 0-1.757 4.306 4.493 4.493 0 0 0 4.306-1.758M16.5 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z" />
+              </svg>
+            </span>
+            <div>
+              <p className="text-[14px] font-semibold text-text-primary">Campaign Mode</p>
+              <p className="text-[12px] text-text-tertiary mt-0.5">
+                One topic → blog, ebook, whitepaper, and LinkedIn post — all at once.
+              </p>
+            </div>
+          </div>
+          <svg className="w-5 h-5 text-text-tertiary shrink-0 transition-transform group-hover:translate-x-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="m9 18 6-6-6-6" />
+          </svg>
+        </ProjectNavLink>
+      </motion.div>
     </div>
   );
 }

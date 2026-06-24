@@ -247,8 +247,12 @@
   }
 
   /* Pill variants */
-  .btn-primary-pill { @apply btn-primary rounded-full; }
-  .btn-secondary-pill { @apply btn-secondary rounded-full; }
+  .btn-primary-pill {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-brand-violet px-5 py-2.5 text-[13px] font-semibold text-white shadow-sm transition-opacity duration-150 hover:opacity-90 active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary-pill {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-5 py-2.5 text-[13px] font-medium text-text-secondary shadow-sm transition-colors duration-150 hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed;
+  }
 
   /* ── Card utilities ──────────────────────────────────────────────────── */
   .card {

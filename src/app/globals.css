@@ -259,7 +259,7 @@
     @apply rounded-[16px] border border-border-subtle bg-surface-elevated;
   }
   .card-hover {
-    @apply card transition-colors duration-150 hover:bg-surface-hover;
+    @apply rounded-[16px] border border-border-subtle bg-surface-elevated transition-colors duration-150 hover:bg-surface-hover;
   }
   .card-elevated {
     @apply rounded-[20px] border border-border-subtle bg-surface-elevated shadow-sm;

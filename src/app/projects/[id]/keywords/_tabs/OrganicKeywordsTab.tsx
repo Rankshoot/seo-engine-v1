@@ -271,6 +271,7 @@ function ColumnToggleDropdown({
 }
 
 type FilterTab = "all" | "unscheduled" | "scheduled" | "generated";
+type IntentFilter = "all" | "informational" | "commercial" | "transactional" | "navigational";
 
 type SourceTab = "industry" | "domain";
 
@@ -318,6 +319,138 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
     default:
       return 0;
   }
+}
+
+// ── Keyword status pill — approve / reject toggle ─────────────────────────────
+
+const NEXT_STATUS: Record<KeywordStatus, KeywordStatus> = {
+  pending: "approved",
+  approved: "rejected",
+  rejected: "pending",
+};
+
+function KeywordStatusPill({
+  keywordId,
+  status,
+  projectId: pid,
+  disabled,
+}: {
+  keywordId: string;
+  status: KeywordStatus;
+  projectId: string;
+  disabled?: boolean;
+}) {
+  const dispatch = useAppDispatch();
+  const queryClient = useQueryClient();
+  const [mutating, setMutating] = useState(false);
+
+  const cycle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (mutating || disabled) return;
+    const next = NEXT_STATUS[status];
+    setMutating(true);
+    dispatch(keywordStatusChanged({ projectId: pid, keywordId, previousStatus: status, nextStatus: next }));
+    try {
+      await keywordsApi.bulkStatus(pid, [keywordId], next);
+      void queryClient.invalidateQueries({ queryKey: qk.keywords(pid) });
+    } catch {
+      dispatch(keywordStatusChanged({ projectId: pid, keywordId, previousStatus: next, nextStatus: status }));
+    } finally {
+      setMutating(false);
+    }
+  };
+
+  const spinner = (color: string) => (
+    <span className={`h-2.5 w-2.5 rounded-full border-2 ${color} animate-spin`} />
+  );
+
+  if (status === "approved") return (
+    <button type="button" onClick={cycle} disabled={disabled}
+      title="Approved — click to reject"
+      className="inline-flex items-center gap-1 h-6 px-2.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-[11px] font-semibold transition-all hover:border-rose-500/30 hover:bg-rose-500/10 hover:text-rose-400 group disabled:opacity-40 disabled:cursor-not-allowed"
+    >
+      {mutating ? spinner("border-emerald-400/30 border-t-emerald-400") : (
+        <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="none" aria-hidden>
+          <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      <span className="group-hover:hidden">Approved</span>
+      <span className="hidden group-hover:inline">Reject?</span>
+    </button>
+  );
+
+  if (status === "rejected") return (
+    <button type="button" onClick={cycle} disabled={disabled}
+      title="Rejected — click to reset to pending"
+      className="inline-flex items-center gap-1 h-6 px-2.5 rounded-full border border-rose-500/30 bg-rose-500/10 text-rose-400 text-[11px] font-semibold transition-all hover:border-border-subtle hover:bg-surface-secondary hover:text-text-tertiary group disabled:opacity-40 disabled:cursor-not-allowed"
+    >
+      {mutating ? spinner("border-rose-400/30 border-t-rose-400") : (
+        <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="none" aria-hidden>
+          <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      )}
+      <span className="group-hover:hidden">Rejected</span>
+      <span className="hidden group-hover:inline">Reset?</span>
+    </button>
+  );
+
+  return (
+    <button type="button" onClick={cycle} disabled={disabled}
+      title="Click to approve"
+      className="inline-flex items-center gap-1 h-6 px-2.5 rounded-full border border-border-subtle bg-surface-secondary text-text-tertiary text-[11px] font-medium transition-all hover:border-emerald-500/40 hover:bg-emerald-500/[0.08] hover:text-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed"
+    >
+      {mutating ? spinner("border-text-tertiary/30 border-t-text-tertiary") : (
+        <span className="h-1.5 w-1.5 rounded-full bg-text-tertiary/50" />
+      )}
+      Pending
+    </button>
+  );
+}
+
+// ── Floating "Schedule all approved" bar ──────────────────────────────────────
+
+function ApprovedFloatingBar({
+  count,
+  onScheduleAll,
+  scheduling,
+}: {
+  count: number;
+  onScheduleAll: () => void;
+  scheduling: boolean;
+}) {
+  if (count === 0) return null;
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none animate-in fade-in slide-in-from-bottom-3 duration-200">
+      <div className="pointer-events-auto flex items-center gap-3 rounded-[16px] border border-border-default bg-surface-elevated/95 backdrop-blur-md px-4 py-3 shadow-xl shadow-black/20 min-w-[300px]">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 border border-emerald-500/25">
+          <svg className="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 12 12" fill="none" aria-hidden>
+            <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] font-semibold text-text-primary leading-none">
+            {count} approved
+          </p>
+          <p className="text-[11px] text-text-tertiary mt-0.5">Ready to add to your calendar</p>
+        </div>
+        <button
+          type="button"
+          onClick={onScheduleAll}
+          disabled={scheduling}
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-brand-violet px-4 py-2 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {scheduling ? (
+            <span className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+          ) : (
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+            </svg>
+          )}
+          {scheduling ? "Scheduling…" : "Schedule all →"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function OrganicKeywordsTab({ projectId }: { projectId: string }) {
@@ -392,8 +525,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_organic");
 
   const [bulkScheduling, setBulkScheduling] = useState(false);
+  const [schedulingAllApproved, setSchedulingAllApproved] = useState(false);
   const [aiScoring, setAiScoring] = useState(false);
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
+  const [intentFilter, setIntentFilter] = useState<IntentFilter>("all");
 
   const handleLoadMoreFromAhrefs = async () => {
     setLoadingMoreAhrefs(true);
@@ -433,6 +568,35 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       ),
     [serverKeywords, keywordStatuses]
   );
+
+  // Approved keywords not yet on calendar — drives the floating bar
+  const approvedUnscheduledIds = useMemo(
+    () => keywords
+      .filter(kw => kw.status === "approved" && !calendarMap.has(kw.id) && !calendarMap.has(kw.keyword.toLowerCase()))
+      .map(kw => kw.id),
+    [keywords, calendarMap]
+  );
+
+  const handleScheduleAllApproved = async () => {
+    if (!approvedUnscheduledIds.length || schedulingAllApproved) return;
+    setSchedulingAllApproved(true);
+    try {
+      const res = await keywordsApi.bulkStatus(projectId, approvedUnscheduledIds, "approved");
+      if (res.success) {
+        toast.success(`Scheduled ${res.calendarScheduled ?? approvedUnscheduledIds.length} keyword${approvedUnscheduledIds.length !== 1 ? "s" : ""} to calendar`);
+        void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      } else {
+        toast.error(res.error ?? "Failed to schedule keywords");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to schedule keywords");
+    } finally {
+      setSchedulingAllApproved(false);
+    }
+  };
+
   useEffect(() => {
     if (serverKeywords.length === 0) return;
     dispatch(
@@ -558,8 +722,16 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
 
 
   // State calculations with Hook consolidation
+  const intentFilteredKeywords = useMemo(() => {
+    if (intentFilter === "all") return keywords;
+    return keywords.filter(kw => {
+      const norm = (kw.intent ?? "").toLowerCase();
+      return norm.includes(intentFilter);
+    });
+  }, [keywords, intentFilter]);
+
   const tableState = useKeywordTableState<Keyword>({
-    data: keywords,
+    data: intentFilteredKeywords,
     filter,
     keyExtractor: kw => kw.id,
     checkScheduled: kw => calendarMap.has(kw.id) || calendarMap.has(kw.keyword.toLowerCase()),
@@ -842,16 +1014,47 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       }
     },
     {
-      id: "content_type",
-      header: "Content Type",
+      id: "status",
+      header: "Status",
       align: "center",
-      cell: (kw: Keyword) =>
-        renderContentTypeSelect(
-          kw.keyword,
-          kw.id,
-          kw.ai_eval_data as { recommended_content_type?: string } | null,
-          tableState
-        )
+      sortable: true,
+      tooltip: "Approve keywords you want to write content for. Rejected keywords are hidden from the calendar.",
+      cell: (kw: Keyword) => {
+        const isScheduled = calendarMap.has(kw.id) || calendarMap.has(kw.keyword.toLowerCase());
+        const entry = calendarMap.get(kw.id) || calendarMap.get(kw.keyword.toLowerCase());
+        const isGenerated = !!entry?.blog;
+
+        if (isGenerated) {
+          return (
+            <span className="inline-flex items-center gap-1 h-6 px-2.5 rounded-full border border-brand-violet/30 bg-brand-violet/10 text-brand-violet text-[11px] font-semibold">
+              <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="none" aria-hidden>
+                <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Generated
+            </span>
+          );
+        }
+        if (isScheduled) {
+          const fmtDate = (iso: string) => new Date(iso + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+          return (
+            <span className="inline-flex items-center gap-1 h-6 px-2.5 rounded-full border border-border-subtle bg-surface-secondary text-text-secondary text-[11px] font-medium">
+              <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+                <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+              </svg>
+              {entry?.scheduled_date ? fmtDate(entry.scheduled_date) : "Scheduled"}
+            </span>
+          );
+        }
+        return (
+          <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+            <KeywordStatusPill
+              keywordId={kw.id}
+              status={kw.status as KeywordStatus}
+              projectId={projectId}
+            />
+          </div>
+        );
+      }
     },
     {
       id: "action",
@@ -871,10 +1074,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           kw.intent || undefined
         )
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, project, tableState]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, calendarMap, project, tableState, projectId]);
 
   const visibleColumns = useMemo(
-    () => industryColumns.filter(c => !hiddenCols.has(c.id) || c.id === "keyword" || c.id === "action"),
+    () => industryColumns.filter(c => !hiddenCols.has(c.id) || c.id === "keyword" || c.id === "action" || c.id === "status"),
     [industryColumns, hiddenCols]
   );
 
@@ -1112,6 +1315,40 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           </div>
         )}
 
+        {/* ── Intent filter chips ── */}
+        {keywords.length > 0 && (() => {
+          const INTENTS: { id: IntentFilter; label: string; color: string }[] = [
+            { id: "all", label: "All intent", color: "" },
+            { id: "informational", label: "Informational", color: "text-status-info" },
+            { id: "commercial", label: "Commercial", color: "text-status-warning" },
+            { id: "transactional", label: "Transactional", color: "text-status-success" },
+            { id: "navigational", label: "Navigational", color: "text-brand-violet-soft" },
+          ];
+          return (
+            <div className="mb-3 flex flex-wrap gap-1.5 shrink-0">
+              {INTENTS.map(({ id, label, color }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setIntentFilter(id)}
+                  className={`h-7 px-3 rounded-full text-[11px] font-medium transition-all ${
+                    intentFilter === id
+                      ? "bg-surface-elevated border border-border-default text-text-primary shadow-sm"
+                      : `border border-border-subtle bg-surface-secondary text-text-tertiary hover:text-text-secondary ${color}`
+                  }`}
+                >
+                  {label}
+                  {id !== "all" && (
+                    <span className="ml-1.5 tabular-nums text-text-tertiary">
+                      {keywords.filter(kw => (kw.intent ?? "").toLowerCase().includes(id)).length}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          );
+        })()}
+
         <Suspense fallback={<KeywordTableSkeleton />}>
           <SharedKeywordTable<Keyword>
             data={tableState.displayedData}
@@ -1223,6 +1460,13 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         projectId={projectId}
         keyword={modalKeyword}
         onClose={() => setModalKeywordId(null)}
+      />
+
+      {/* Floating schedule bar — appears when approved keywords exist */}
+      <ApprovedFloatingBar
+        count={approvedUnscheduledIds.length}
+        onScheduleAll={handleScheduleAllApproved}
+        scheduling={schedulingAllApproved}
       />
     </div>
   );

@@ -29,7 +29,7 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordModal";
-import { PageHeader, Button } from "@/components/common";
+import { PageHeader, Button, EmptyState } from "@/components/common";
 import { motion } from "framer-motion";
 import { Dialog } from "@/components/common/dialogs/Dialog";
 import { toast } from "react-hot-toast";
@@ -669,37 +669,57 @@ export default function CalendarPage() {
             <TableSkeleton rows={6} columns={8} />
           </div>
         ) : approvedKeywords.length === 0 && entries.length === 0 ? (
-          <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-16 text-center">
-            <div className="mb-4 flex justify-center">
-              <div className="w-14 h-14 rounded-[14px] bg-surface-tertiary flex items-center justify-center border border-border-subtle">
-                <svg className="w-7 h-7 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
-                  <line x1="16" x2="16" y1="2" y2="6" />
-                  <line x1="8" x2="8" y1="2" y2="6" />
-                  <line x1="3" x2="21" y1="10" y2="10" />
+          <EmptyState
+            illustration={
+              <svg viewBox="0 0 160 96" className="w-40 h-24" fill="none" aria-hidden>
+                <rect x="8" y="8" width="144" height="80" rx="10" stroke="var(--border-subtle)" strokeWidth="1.5" />
+                <rect x="8" y="8" width="144" height="22" rx="10" stroke="var(--border-subtle)" strokeWidth="1.5" fill="var(--surface-secondary)" />
+                <line x1="8" y1="30" x2="152" y2="30" stroke="var(--border-subtle)" strokeWidth="1" />
+                {[0,1,2,3].map(col => (
+                  <line key={col} x1={8 + col * 36} y1="30" x2={8 + col * 36} y2="88" stroke="var(--border-subtle)" strokeWidth="1" />
+                ))}
+                {[0,1,2].map(row => (
+                  <line key={row} x1="8" y1={45 + row * 14} x2="152" y2={45 + row * 14} stroke="var(--border-subtle)" strokeWidth="1" />
+                ))}
+                <rect x="80" y="50" width="28" height="10" rx="3" fill="var(--brand-violet)" opacity="0.5" />
+                <rect x="44" y="64" width="28" height="10" rx="3" fill="var(--brand-violet)" opacity="0.3" />
+                <text x="22" y="22" fontSize="8" fill="var(--text-tertiary)" fontFamily="sans-serif">Mon</text>
+                <text x="58" y="22" fontSize="8" fill="var(--text-tertiary)" fontFamily="sans-serif">Tue</text>
+                <text x="94" y="22" fontSize="8" fill="var(--text-tertiary)" fontFamily="sans-serif">Wed</text>
+                <text x="130" y="22" fontSize="8" fill="var(--text-tertiary)" fontFamily="sans-serif">Thu</text>
+              </svg>
+            }
+            title="Your content calendar is empty"
+            body="Approve keywords from the Keywords page — they'll be automatically scheduled here with dates, content types, and generation status."
+            hints={[
+              "Discover keywords for your niche",
+              "Approve the best ones — they appear here instantly",
+              "Generate the content directly from the calendar",
+            ]}
+            action={
+              <ProjectNavLink
+                href={`/projects/${projectId}/keywords`}
+                className="inline-flex items-center gap-1.5 rounded-full bg-brand-violet px-5 py-2.5 text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
+              >
+                Discover keywords
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m9 18 6-6-6-6" />
                 </svg>
-              </div>
-            </div>
-            <p className="text-[15px] font-medium text-text-secondary">No calendar content yet</p>
-            <p className="mt-1 text-[13px] text-text-tertiary">
-              Approve keywords or queue content from the audit flow — dates are assigned automatically.
-            </p>
-            <ProjectNavLink
-              href={`/projects/${projectId}/keywords`}
-              className="mt-5 inline-flex items-center justify-center rounded-[32px] bg-brand-primary px-6 py-2.5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-            >
-              Go to Keywords
-            </ProjectNavLink>
-          </div>
+              </ProjectNavLink>
+            }
+          />
         ) : calendarView === "list" ? (
           sortedEntries.length === 0 ? (
-            <div className="rounded-[16px] border border-border-subtle bg-surface-secondary/50 px-6 py-12 text-center">
-              <p className="text-[15px] font-medium text-text-secondary">Nothing on the calendar yet</p>
-              <p className="mt-2 text-[13px] text-text-tertiary max-w-md mx-auto leading-relaxed">
-                Approved keywords get a date automatically. To place remaining keywords on specific days, switch to{" "}
-                <span className="font-medium text-text-secondary">Grid</span> view.
-              </p>
-            </div>
+            <EmptyState
+              variant="card"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+                </svg>
+              }
+              title="Nothing scheduled yet"
+              body="Approved keywords are placed on the calendar automatically. Switch to Grid view to pin keywords to specific days."
+            />
           ) : (
             <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
               {sortedEntries.map((entry, idx) => (

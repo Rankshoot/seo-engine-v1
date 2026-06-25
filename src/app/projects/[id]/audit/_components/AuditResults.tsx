@@ -51,35 +51,260 @@ export function AuditResults({
     return null;
   }, [scheduledDates]);
 
+  const getMetricValue = (key: ScoreDim["key"]) => {
+    const getRubricRow = (id: string) => report.quality_rubric.find(r => r.id === id);
+    if (key === "seo") {
+      const linkRow = getRubricRow("internal_links");
+      const count = linkRow?.detail.match(/^\d+/)?.[0] || "0";
+      return `${count} Int. Links`;
+    }
+    if (key === "geo") {
+      const citeRow = getRubricRow("external_citations");
+      const count = citeRow?.detail.match(/^\d+/)?.[0] || "0";
+      return `${count} Citations`;
+    }
+    if (key === "aeo") {
+      const faqRow = getRubricRow("faq_section");
+      return faqRow?.status === "pass" ? "FAQ Schema OK" : "No FAQ Schema";
+    }
+    if (key === "content_quality") {
+      return `${report.word_count.toLocaleString()} Words`;
+    }
+    if (key === "keyword_relevance") {
+      if (report.keyword_data) {
+        const vol = report.keyword_data.volume;
+        return vol >= 1000 ? `${(vol / 1000).toFixed(1)}k/mo Vol` : `${vol}/mo Vol`;
+      }
+      return "No Keyword";
+    }
+    if (key === "freshness") {
+      return report.publish_date_detected || "No Publish Date";
+    }
+    return undefined;
+  };
+
+  const getDimensionExplanation = (key: ScoreDim["key"], score: number) => {
+    const categoryIssues = report.issues.filter(issue => {
+      const cat = issue.category.toLowerCase();
+      if (key === "seo") return cat === "seo" || cat === "technical";
+      if (key === "geo") return cat === "geo";
+      if (key === "aeo") return cat === "aeo";
+      if (key === "content_quality") return cat === "content" || cat === "quality";
+      if (key === "keyword_relevance") return cat === "keyword";
+      if (key === "freshness") return cat === "freshness";
+      return false;
+    });
+
+    const rubricWarnings = report.quality_rubric.filter(row => {
+      const rowId = row.id;
+      const status = row.status;
+      if (status === "pass") return false;
+      if (key === "seo") return rowId === "heading_structure" || rowId === "article_schema" || rowId === "internal_links";
+      if (key === "geo") return rowId === "direct_answer" || rowId === "external_citations";
+      if (key === "aeo") return rowId === "faq_section" || rowId === "question_headings";
+      if (key === "content_quality") return rowId === "content_depth";
+      return false;
+    });
+
+    if (score >= 90) {
+      if (categoryIssues.length === 0) {
+        if (key === "seo") return "Fully optimized: headings, internal links, and schemas are perfect.";
+        if (key === "geo") return "Perfect for AI Search: has direct answers and citation opportunities.";
+        if (key === "aeo") return "Perfect for Answer Engines: features FAQs and question-style headers.";
+        if (key === "content_quality") return "Exceptional depth: comprehensive coverage, high readability, and word count.";
+        if (key === "keyword_relevance") return "Strong targeting: aligned with highly active, stable/trending search demand.";
+        if (key === "freshness") return "Fresh content: current information and up-to-date publishing signals.";
+        return "Excellent score! Fully optimized for this criteria.";
+      }
+    }
+
+    if (categoryIssues.length > 0) {
+      const topIssue = categoryIssues.find(i => i.severity === "critical") || 
+                       categoryIssues.find(i => i.severity === "high") || 
+                       categoryIssues[0];
+      const restCount = categoryIssues.length - 1;
+      const restText = restCount > 0 ? ` (+${restCount} more)` : "";
+      return `Fix: ${topIssue.title}${restText}`;
+    }
+
+    if (rubricWarnings.length > 0) {
+      const firstWarn = rubricWarnings[0];
+      return `Improvement: ${firstWarn.label.replace(/\s*\(AEO\)|\s*\(GEO\)/g, "")}`;
+    }
+
+    if (key === "seo") {
+      if (score < 60) return "Needs heading structure, schemas, and more internal linking.";
+      if (score < 80) return "Good schema tags, but heading structure or link counts can be improved.";
+      return "Optimized SEO: basic heading hierarchy and metadata are in order.";
+    }
+    if (key === "geo") {
+      if (score < 60) return "Needs direct answers at the top and source citations.";
+      if (score < 80) return "Add concise introductory answers to target AI Overviews.";
+      return "Optimized GEO: clear structuring with source references.";
+    }
+    if (key === "aeo") {
+      if (score < 60) return "Add an FAQ section and question-based H2/H3 headings.";
+      if (score < 80) return "Consider adding an FAQ schema to improve search visibility.";
+      return "Optimized AEO: ready for voice searches and featured snippets.";
+    }
+    if (key === "content_quality") {
+      if (score < 60) return "Lacks comprehensive depth. Expand length and readability.";
+      if (score < 80) return "Good content base, but needs more detailed subheadings and depth.";
+      return "Solid content quality with adequate formatting and length.";
+    }
+    if (key === "keyword_relevance") {
+      if (score < 60) return "Target keyword has very low volume or poor alignment.";
+      if (score < 80) return "Check keyword target; relevance could be improved for search volume.";
+      return "Good keyword relevance and current search intent matching.";
+    }
+    if (key === "freshness") {
+      if (score < 60) return "Content appears outdated. Update statistics and references.";
+      if (score < 80) return "Publish date is older. Consider refreshing the copy.";
+      return "Freshly published or timeless content format.";
+    }
+
+    return "Meets general standards for this category.";
+  };
+
   const tooltipFor = (key: ScoreDim["key"]) => {
+    const getRubricRow = (id: string) => report.quality_rubric.find(r => r.id === id);
+
+    if (key === "seo") {
+      const headingRow = getRubricRow("heading_structure");
+      const schemaRow = getRubricRow("article_schema");
+      const linkRow = getRubricRow("internal_links");
+
+      return (
+        <div className="space-y-2 text-[11px]">
+          <p className="text-[12px] font-semibold text-text-primary">SEO Metrics (Scraped)</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <span className="text-text-tertiary font-medium">Schema Types:</span>
+            <span className="text-text-primary text-right truncate max-w-[120px]" title={schemaRow?.detail}>
+              {schemaRow?.status === "pass" ? "Detected" : "Missing / Warning"}
+            </span>
+            <span className="text-text-tertiary font-medium">Internal Links:</span>
+            <span className="text-text-primary text-right">
+              {linkRow?.detail.match(/^\d+/)?.[0] || "0"} links
+            </span>
+            <span className="text-text-tertiary font-medium">H2 / H3 Count:</span>
+            <span className="text-text-primary text-right font-mono">
+              {headingRow?.detail.split(".")[0] || "N/A"}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    if (key === "geo") {
+      const answerRow = getRubricRow("direct_answer");
+      const citeRow = getRubricRow("external_citations");
+
+      return (
+        <div className="space-y-2 text-[11px]">
+          <p className="text-[12px] font-semibold text-text-primary">GEO Metrics (Generative Engines)</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <span className="text-text-tertiary font-medium">Direct Answer:</span>
+            <span className={`text-right font-medium ${answerRow?.status === "pass" ? "text-status-success" : "text-status-danger"}`}>
+              {answerRow?.status === "pass" ? "Present" : "Missing"}
+            </span>
+            <span className="text-text-tertiary font-medium">Outbound Citations:</span>
+            <span className="text-text-primary text-right">
+              {citeRow?.detail.match(/^\d+/)?.[0] || "0"} links
+            </span>
+            <span className="text-text-tertiary font-medium">Competitors Scanned:</span>
+            <span className="text-text-primary text-right">
+              {report.competitor_insights.length} domains
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    if (key === "aeo") {
+      const faqRow = getRubricRow("faq_section");
+      const questRow = getRubricRow("question_headings");
+
+      return (
+        <div className="space-y-2 text-[11px]">
+          <p className="text-[12px] font-semibold text-text-primary">AEO Metrics (Answer Engines)</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <span className="text-text-tertiary font-medium">FAQ Section:</span>
+            <span className={`text-right font-medium ${faqRow?.status === "pass" ? "text-status-success" : faqRow?.status === "warn" ? "text-status-warning" : "text-status-danger"}`}>
+              {faqRow?.status === "pass" ? "Pass" : faqRow?.status === "warn" ? "Needs Schema" : "Missing"}
+            </span>
+            <span className="text-text-tertiary font-medium">Question Headings:</span>
+            <span className={`text-right font-medium ${questRow?.status === "pass" ? "text-status-success" : "text-status-danger"}`}>
+              {questRow?.status === "pass" ? "Detected" : "Missing"}
+            </span>
+            <span className="text-text-tertiary font-medium">FAQ Questions:</span>
+            <span className="text-text-primary text-right">
+              {report.revamp_brief?.faq_questions.length || 0} suggested
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    if (key === "content_quality") {
+      return (
+        <div className="space-y-2 text-[11px]">
+          <p className="text-[12px] font-semibold text-text-primary">Content Quality Metrics</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <span className="text-text-tertiary font-medium">Word Count:</span>
+            <span className="text-text-primary text-right font-medium">
+              {report.word_count.toLocaleString()} words
+            </span>
+            <span className="text-text-tertiary font-medium">Recommended:</span>
+            <span className="text-text-primary text-right">
+              {report.revamp_brief?.recommended_word_count || 1500} words
+            </span>
+            <span className="text-text-tertiary font-medium">Gap Topics:</span>
+            <span className="text-text-primary text-right">
+              {report.revamp_brief?.missing_topics.length || 0} identified
+            </span>
+          </div>
+        </div>
+      );
+    }
+
     if (key === "keyword_relevance" && report.keyword_data) {
       const k = report.keyword_data;
       return (
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 text-[11px]">
           <p className="text-[12px] font-semibold text-text-primary">{k.keyword}</p>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-            <span className="text-text-tertiary">Volume</span>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <span className="text-text-tertiary font-medium">Search Volume (API)</span>
             <span className="text-text-primary text-right tabular-nums">{k.volume ? `${k.volume.toLocaleString()}/mo` : "—"}</span>
-            <span className="text-text-tertiary">Trend</span>
+            <span className="text-text-tertiary font-medium">Trend (12-mo)</span>
             <span className={`text-right tabular-nums ${k.trend_pct >= 0 ? "text-status-success" : "text-status-danger"}`}>{k.trend_pct >= 0 ? "+" : ""}{k.trend_pct}%</span>
-            <span className="text-text-tertiary">Demand</span>
+            <span className="text-text-tertiary font-medium">Demand Verdict</span>
             <span className="text-text-primary text-right capitalize">{k.verdict}</span>
           </div>
           {k.monthly_searches?.length > 1 && (
-            <p className="text-[10px] text-text-tertiary pt-1">12-month search trend from DataForSEO.</p>
+            <p className="text-[10px] text-text-tertiary pt-1 border-t border-border-subtle/50 mt-1">12-month search trend from DataForSEO.</p>
           )}
         </div>
       );
     }
+
     if (key === "freshness") {
       return (
-        <div className="space-y-1 text-[11px]">
-          <p className="text-[12px] font-semibold text-text-primary">Freshness signals</p>
-          <p className="text-text-tertiary">Detected publish date: <span className="text-text-primary">{report.publish_date_detected || "not found"}</span></p>
-          <p className="text-text-tertiary">Word count: <span className="text-text-primary">{report.word_count.toLocaleString()}</span></p>
+        <div className="space-y-2 text-[11px]">
+          <p className="text-[12px] font-semibold text-text-primary">Freshness & Stale Signals</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <span className="text-text-tertiary font-medium">Detected Date:</span>
+            <span className="text-text-primary text-right font-medium">
+              {report.publish_date_detected || "Not detected"}
+            </span>
+            <span className="text-text-tertiary font-medium">Timeliness Check:</span>
+            <span className="text-text-primary text-right">
+              {report.publish_date_detected ? "Checks metadata" : "No publish date tag"}
+            </span>
+          </div>
         </div>
       );
     }
+
     return null;
   };
 
@@ -200,9 +425,10 @@ export function AuditResults({
             key={dim.key}
             label={dim.label}
             score={report.scores[dim.key]}
-            description={dim.description}
+            description={getDimensionExplanation(dim.key, report.scores[dim.key])}
             icon={dim.icon}
             tooltip={tooltipFor(dim.key)}
+            metricValue={getMetricValue(dim.key)}
           />
         ))}
       </div>

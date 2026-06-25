@@ -184,7 +184,7 @@ export function Spinner({ size = 16, className = "" }: { size?: number; classNam
 // ─── Score card ───────────────────────────────────────────────────────────────
 
 export function ScoreCard({
-  label, score, description, icon, tooltip,
+  label, score, description, icon, tooltip, metricValue,
 }: {
   label: string;
   score: number;
@@ -192,40 +192,41 @@ export function ScoreCard({
   icon: ReactNode;
   /** Optional rich data shown on hover (e.g. keyword volume / trend). */
   tooltip?: ReactNode;
+  metricValue?: string;
 }) {
   const color = scoreColor(score);
   const grade = scoreGrade(score);
   return (
-    <div className="group relative rounded-[14px] border border-border-subtle bg-surface-elevated p-4 flex flex-col gap-3 transition-colors hover:border-border-strong">
+    <div className="group relative rounded-[12px] border border-border-subtle bg-surface-elevated p-3.5 flex flex-col gap-2 transition-colors hover:border-border-strong">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-text-tertiary">{icon}</span>
           <span className="text-[12px] font-semibold text-text-secondary">{label}</span>
         </div>
         <span
-          className="text-[11px] font-bold px-2 py-0.5 rounded-full border"
+          className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
           style={{ color, borderColor: `${color}40`, background: `${color}15` }}
         >
           {grade}
         </span>
       </div>
-      <div className="flex items-end gap-3">
-        <span className="text-[36px] font-bold tabular-nums leading-none" style={{ color }}>
-          {score}
-        </span>
-        <span className="text-[11px] text-text-tertiary mb-1">/100</span>
-        {tooltip && (
-          <span className="ml-auto mb-1 text-text-tertiary/60" aria-hidden>
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
-              <circle cx="12" cy="12" r="9" /><path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
-            </svg>
+      <div className="flex items-end justify-between">
+        <div className="flex items-baseline gap-1">
+          <span className="text-[28px] font-bold tabular-nums leading-none" style={{ color }}>
+            {score}
+          </span>
+          <span className="text-[10px] text-text-tertiary">/100</span>
+        </div>
+        {metricValue && (
+          <span className="text-[10px] font-semibold text-text-secondary bg-surface-secondary px-2 py-0.5 rounded-[6px] border border-border-subtle select-none">
+            {metricValue}
           </span>
         )}
       </div>
-      <div className="h-1.5 rounded-full bg-surface-tertiary overflow-hidden">
+      <div className="h-1 rounded-full bg-surface-tertiary overflow-hidden">
         <div className="h-full rounded-full transition-all duration-700" style={{ width: `${score}%`, background: color }} />
       </div>
-      <p className="text-[11px] text-text-tertiary leading-relaxed">{description}</p>
+      <p className="text-[11px] text-text-tertiary leading-relaxed line-clamp-2 min-h-[32px]">{description}</p>
 
       {tooltip && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-30 w-[min(280px,90vw)] -translate-x-1/2 -translate-y-full rounded-[12px] border border-border-strong bg-surface-primary p-3 text-left opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100">

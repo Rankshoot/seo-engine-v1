@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -321,7 +321,7 @@ export function HistoryTab() {
     return () => clearTimeout(handler);
   }, [search]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       ...qk.contentStudioHistory(projectId),
       {
@@ -344,9 +344,75 @@ export function HistoryTab() {
     ...DEFAULT_QUERY_OPTIONS,
   });
 
-  const allRows: ContentStudioHistoryRow[] = data?.success ? data.data : [];
+  const [allRows, setAllRows] = useState<ContentStudioHistoryRow[]>([]);
+
+  // Reset page and clear rows when filters change
+  useEffect(() => {
+    setPage(1);
+    setAllRows([]);
+  }, [activeType, debouncedSearch]);
+
+  // Accumulate pages of history rows
+  useEffect(() => {
+    if (data?.success) {
+      if (page === 1) {
+        setAllRows(data.data);
+      } else {
+        setAllRows((prev) => {
+          const existingIds = new Set(prev.map((r) => r.id));
+          const newRows = data.data.filter((r) => !existingIds.has(r.id));
+          return [...prev, ...newRows];
+        });
+      }
+    }
+  }, [data, page]);
+
   const totalCount = data?.success ? data.total : 0;
   const counts = data?.success ? data.counts : { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const stateRef = useRef({ page, totalPages, isFetching });
+
+  // Keep stateRef up to date on every render
+  useEffect(() => {
+    stateRef.current = { page, totalPages, isFetching };
+  }, [page, totalPages, isFetching]);
+
+  // Clean up observer on unmount
+  useEffect(() => {
+    return () => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+    };
+  }, []);
+
+  // Use callback ref to handle conditional rendering of the sentinel element
+  const loadMoreCallbackRef = useCallback((node: HTMLDivElement | null) => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const { page: currentPage, totalPages: maxPages, isFetching: activeFetch } = stateRef.current;
+        if (entries[0].isIntersecting && !activeFetch && currentPage < maxPages) {
+          setPage((p) => p + 1);
+        }
+      },
+      {
+        threshold: 0,
+        rootMargin: "150px",
+      }
+    );
+
+    observer.observe(node);
+    observerRef.current = observer;
+  }, []);
 
   const handleTypeChange = (t: TypeFilter) => {
     setActiveType(t);
@@ -363,10 +429,6 @@ export function HistoryTab() {
 
   const hasActiveFilters = activeType !== "all" || search.trim() !== "";
   const isEmptyStateForNoContent = totalCount === 0 && !hasActiveFilters;
-
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-  const fromRecord = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const toRecord = Math.min(page * PAGE_SIZE, totalCount);
 
   return (
     <div className="flex flex-col h-full gap-4 pb-4">
@@ -447,7 +509,7 @@ export function HistoryTab() {
 
       </div>
 
-      {isLoading ? (
+      {isLoading || (allRows.length === 0 && isFetching) ? (
         <div className="flex-1 min-h-0 rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <TableSkeleton rows={8} columns={6} />
         </div>
@@ -473,7 +535,7 @@ export function HistoryTab() {
         <div className="flex-1 min-h-0 flex flex-col rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
             <table className="w-full min-w-[840px] text-left border-collapse">
-              <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+              <thead className="sticky top-0 z-10 bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
                   <th className="px-3 py-3 w-12 text-center">#</th>
                   <th className="px-4 py-3 w-32">Type</th>
@@ -487,7 +549,7 @@ export function HistoryTab() {
               </thead>
               <HistoryTableBody
                 rows={allRows}
-                offset={(page - 1) * PAGE_SIZE}
+                offset={0}
                 viewerHref={viewerHref}
                 calendarEntries={calendarEntries}
                 scheduledDatesSet={scheduledDatesSet}
@@ -496,44 +558,21 @@ export function HistoryTab() {
                 onUnschedule={handleUnschedule}
               />
             </table>
+            {/* Sentinel element for infinite scroll */}
+            <div ref={loadMoreCallbackRef} className="h-6" />
           </div>
 
-          {/* Pagination */}
-          <div className="shrink-0 flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/20">
+          {/* Infinite Scroll Footer */}
+          <div className="shrink-0 flex items-center justify-between gap-3 px-6 py-3.5 border-t border-border-subtle bg-surface-secondary/20">
             <p className="text-[12px] text-text-tertiary tabular-nums">
-              {totalCount === 0 ? "No results" : `Showing ${fromRecord}–${toRecord} of ${totalCount}`}
+              {totalCount === 0 ? "No results" : `Showing ${allRows.length} of ${totalCount} assets`}
             </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={page <= 1}
-                onClick={() => setPage(page - 1)}
-                className={cn(
-                  "h-8 px-3 rounded-md text-[12px] font-medium border border-border-subtle transition-colors",
-                  page <= 1
-                    ? "opacity-40 cursor-not-allowed text-text-tertiary"
-                    : "text-text-secondary bg-surface-secondary hover:bg-surface-hover hover:text-text-primary"
-                )}
-              >
-                Previous
-              </button>
-              <span className="text-[12px] text-text-tertiary tabular-nums px-1">
-                Page {page} / {totalPages}
-              </span>
-              <button
-                type="button"
-                disabled={page >= totalPages}
-                onClick={() => setPage(page + 1)}
-                className={cn(
-                  "h-8 px-3 rounded-md text-[12px] font-medium border border-border-subtle transition-colors",
-                  page >= totalPages
-                    ? "opacity-40 cursor-not-allowed text-text-tertiary"
-                    : "text-text-secondary bg-surface-secondary hover:bg-surface-hover hover:text-text-primary"
-                )}
-              >
-                Next
-              </button>
-            </div>
+            {isFetching && page > 1 && (
+              <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
+                <span className="w-3.5 h-3.5 animate-spin rounded-full border-[2px] border-border-subtle border-t-text-secondary" />
+                <span>Loading more...</span>
+              </div>
+            )}
           </div>
         </div>
       )}

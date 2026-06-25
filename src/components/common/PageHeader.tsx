@@ -29,7 +29,7 @@ export function PageHeader({
     <div
       className={cn(
         "shrink-0 bg-surface-primary/98 backdrop-blur-md pb-4 sm:pb-5",
-        sticky && "sticky top-0 z-30",
+        sticky && "sticky -top-4 sm:-top-6 lg:-top-8 z-30 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 -mt-4 sm:-mt-6 lg:-mt-8 pt-4 sm:pt-6 lg:pt-8",
         className,
       )}
     >

@@ -87,7 +87,7 @@ const HistoryRow = memo(function HistoryRow({
   }, [scheduledDatesSet]);
 
   return (
-    <tr className="hover:bg-surface-hover/50 transition-colors">
+    <tr className="hover:bg-surface-hover/50 transition-colors animate-slide-up-bounce">
       <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
         {index}
       </td>
@@ -177,6 +177,38 @@ const HistoryRow = memo(function HistoryRow({
   );
 });
 
+const SkeletonRow = memo(function SkeletonRow() {
+  return (
+    <tr className="animate-pulse bg-surface-secondary/10">
+      <td className="px-3 py-3.5 text-center align-middle">
+        <div className="h-3 w-4 bg-surface-tertiary rounded mx-auto" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-5.5 w-16 bg-surface-tertiary rounded-full" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-4 w-3/4 bg-surface-tertiary rounded" />
+        <div className="h-3 w-1/2 bg-surface-tertiary rounded mt-1.5" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-4 w-24 bg-surface-tertiary rounded" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-5.5 w-16 bg-surface-tertiary rounded-full" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-4 w-10 bg-surface-tertiary rounded" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-5.5 w-24 bg-surface-tertiary rounded-full" />
+      </td>
+      <td className="px-4 py-3.5 align-middle text-right">
+        <div className="h-8.5 w-16 bg-surface-tertiary rounded-full ml-auto" />
+      </td>
+    </tr>
+  );
+});
+
 interface HistoryTableBodyProps {
   rows: ContentStudioHistoryRow[];
   offset: number;
@@ -186,6 +218,7 @@ interface HistoryTableBodyProps {
   savingRowId: string | null;
   onScheduleConfirm: (row: ContentStudioHistoryRow, date: string) => Promise<void>;
   onUnschedule: (row: ContentStudioHistoryRow) => Promise<void>;
+  isLoadingMore?: boolean;
 }
 
 const HistoryTableBody = memo(function HistoryTableBody({
@@ -197,6 +230,7 @@ const HistoryTableBody = memo(function HistoryTableBody({
   savingRowId,
   onScheduleConfirm,
   onUnschedule,
+  isLoadingMore,
 }: HistoryTableBodyProps) {
   return (
     <tbody className="divide-y divide-border-subtle">
@@ -213,6 +247,12 @@ const HistoryTableBody = memo(function HistoryTableBody({
           onUnschedule={onUnschedule}
         />
       ))}
+      {isLoadingMore && (
+        <>
+          <SkeletonRow />
+          <SkeletonRow />
+        </>
+      )}
     </tbody>
   );
 });
@@ -434,13 +474,32 @@ export function HistoryTab() {
     <div className="flex flex-col h-full gap-4 pb-4">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3">
+                <div className="relative">
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); }}
+            placeholder="Search title, keyword, type…"
+            className="h-9 w-[260px] rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action focus:ring-1 focus:ring-brand-action/40"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
+        </div>
         {/* Content type dropdown */}
         <div className="relative" ref={typeDropdownRef}>
           <button
             type="button"
             onClick={() => setTypeDropdownOpen(o => !o)}
             className={cn(
-              "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
+              "inline-flex h-9 items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
               typeDropdownOpen
                 ? "border-border-strong bg-surface-hover text-text-primary"
                 : "border-border-subtle bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary",
@@ -487,25 +546,7 @@ export function HistoryTab() {
           )}
         </div>
 
-        <div className="relative">
-          <input
-            value={search}
-            onChange={e => { setSearch(e.target.value); }}
-            placeholder="Search title, keyword, type…"
-            className="h-9 w-[260px] rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action focus:ring-1 focus:ring-brand-action/40"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary transition-colors"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </button>
-          )}
-        </div>
+
 
       </div>
 
@@ -556,6 +597,7 @@ export function HistoryTab() {
                 savingRowId={savingRowId}
                 onScheduleConfirm={handleScheduleConfirm}
                 onUnschedule={handleUnschedule}
+                isLoadingMore={isFetching && page > 1}
               />
             </table>
             {/* Sentinel element for infinite scroll */}

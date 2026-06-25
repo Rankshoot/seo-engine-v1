@@ -86,9 +86,9 @@ const KD_COLOR = (kd: number) =>
   kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function AI_SCORE_CATEGORY(score: number): { icon: string; cls: string; label: string } {
-  if (score >= 75) return { icon: "★", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400", label: "High opportunity" };
+  if (score >= 75) return { icon: "★", cls: "border-status-success/30 bg-status-success/10 text-status-success", label: "High opportunity" };
   if (score >= 55) return { icon: "◆", cls: "border-brand-action/30 bg-brand-action/10 text-brand-action", label: "Good fit" };
-  if (score >= 35) return { icon: "●", cls: "border-amber-500/30 bg-amber-500/10 text-amber-400", label: "Moderate" };
+  if (score >= 35) return { icon: "●", cls: "border-status-warning/30 bg-status-warning/10 text-status-warning", label: "Moderate" };
   return { icon: "▼", cls: "border-border-subtle bg-surface-tertiary text-text-tertiary", label: "Low priority" };
 }
 
@@ -133,11 +133,11 @@ function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
         <p className="text-[11px] text-text-secondary leading-relaxed">{data.reasoning.summary}</p>
         {data.reasoning.strengths?.length > 0 && (
           <div>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 mb-1">Strengths</p>
+            <p className="text-[9px] font-bold uppercase tracking-wider text-status-success mb-1">Strengths</p>
             <ul className="space-y-0.5">
               {data.reasoning.strengths.slice(0, 2).map((s, i) => (
                 <li key={i} className="flex items-start gap-1 text-[10px] text-text-secondary">
-                  <span className="text-emerald-400 shrink-0 mt-0.5">+</span>{s}
+                  <span className="text-status-success shrink-0 mt-0.5">+</span>{s}
                 </li>
               ))}
             </ul>
@@ -145,11 +145,11 @@ function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
         )}
         {data.reasoning.weaknesses?.length > 0 && (
           <div>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-rose-400 mb-1">Weaknesses</p>
+            <p className="text-[9px] font-bold uppercase tracking-wider text-status-danger mb-1">Weaknesses</p>
             <ul className="space-y-0.5">
               {data.reasoning.weaknesses.slice(0, 2).map((w, i) => (
                 <li key={i} className="flex items-start gap-1 text-[10px] text-text-secondary">
-                  <span className="text-rose-400 shrink-0 mt-0.5">−</span>{w}
+                  <span className="text-status-danger shrink-0 mt-0.5">−</span>{w}
                 </li>
               ))}
             </ul>
@@ -962,7 +962,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           >
             {aiScoring ? (
               <>
-                <div className="h-3 w-3 rounded-full border-2 border-brand-violet/30 border-t-[#8b5cf6] animate-spin" />
+                <div className="h-3 w-3 rounded-full border-2 border-brand-violet/30 border-t-brand-violet animate-spin" />
                 <span>Scoring…</span>
               </>
             ) : (
@@ -1048,14 +1048,14 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
     <div className="flex-1 flex flex-col min-h-0 relative animate-slide-in-left">
       <div className="flex-1 flex flex-col min-h-0">
         {showOrgWarning && (
-          <div className="mb-4 shrink-0 flex items-start gap-3.5 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5">
-            <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10">
-              <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <div className="mb-4 shrink-0 flex items-start gap-3.5 rounded-2xl border border-status-warning/25 bg-status-warning/[0.07] px-4 py-3.5">
+            <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-full border border-status-warning/30 bg-status-warning/10">
+              <svg className="h-4 w-4 text-status-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
               </svg>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[13px] font-semibold text-amber-400">Project details have changed</p>
+              <p className="text-[13px] font-semibold text-status-warning">Project details have changed</p>
               <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
                 Your niche, domain, or region was updated since the last keyword discovery. Rediscover to get keywords matching your current settings.
               </p>
@@ -1065,7 +1065,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
                 type="button"
                 onClick={() => { setOrgWarnDismissed(true); void handleDiscover(); }}
                 disabled={discovering}
-                className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3.5 py-1.5 text-[12px] font-semibold text-amber-400 transition-colors hover:bg-amber-500/25 disabled:opacity-50 disabled:pointer-events-none"
+                className="inline-flex items-center gap-1.5 rounded-full border border-status-warning/40 bg-status-warning/15 px-3.5 py-1.5 text-[12px] font-semibold text-status-warning transition-colors hover:bg-status-warning/25 disabled:opacity-50 disabled:pointer-events-none"
               >
                 {discovering ? "Discovering…" : "Rediscover"}
               </button>

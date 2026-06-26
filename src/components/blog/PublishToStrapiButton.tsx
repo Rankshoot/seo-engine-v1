@@ -33,7 +33,7 @@ export function PublishToCmsButton({ blogId, hasCmsIntegration, projectId, disab
           onClick={() => router.push(`/projects/${projectId}/settings`)}
           className="text-[11px] font-semibold text-brand-action hover:underline underline-offset-2 transition-colors"
         >
-          Connect Strapi in Settings →
+          Connect a CMS in Settings →
         </button>
       </div>
     );

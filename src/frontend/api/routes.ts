@@ -81,6 +81,9 @@ export const V1Routes = {
   strapiPublish:       "/integrations/strapi/publish",
   userStrapiIntegration: "/integrations/user-strapi",
   userStrapiTest:      "/integrations/user-strapi/test",
+  userWordPressIntegration: "/integrations/user-wordpress",
+  userWordPressTest:        "/integrations/user-wordpress/test",
+  userCmsIntegration:       "/integrations/user-cms",
   blogPublishCms: (blogId: string) => `/blogs/${blogId}/publish-cms`,
 
   // ── Admin (platform) ─────────────────────────────────────────────────────

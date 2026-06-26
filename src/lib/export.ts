@@ -616,7 +616,7 @@ export function triggerDownload(blob: Blob, filename: string) {
  * images, blockquotes, code, hr, and tables to render properly in the
  * downloaded `.html` file.
  */
-function renderMarkdownToHtml(markdown: string): string {
+export function renderMarkdownToHtml(markdown: string): string {
   const lines = markdown.split('\n');
   const out: string[] = [];
 

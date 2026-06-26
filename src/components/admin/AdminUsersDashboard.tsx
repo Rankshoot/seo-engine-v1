@@ -26,9 +26,9 @@ const USER_SORT_OPTIONS = [
 ];
 
 const STATUS_CONFIG: Record<ApprovalStatus, { label: string; className: string }> = {
-  approved: { label: "Approved", className: "bg-emerald-500/10 text-emerald-400" },
-  pending:  { label: "Pending",  className: "bg-amber-500/10 text-amber-400" },
-  denied:   { label: "Denied",   className: "bg-red-500/10 text-red-400" },
+  approved: { label: "Approved", className: "bg-status-success/10 text-status-success" },
+  pending:  { label: "Pending",  className: "bg-status-warning/10 text-status-warning" },
+  denied:   { label: "Denied",   className: "bg-status-danger/10 text-status-danger" },
   revoked:  { label: "Revoked",  className: "bg-zinc-500/10 text-zinc-400" },
 };
 
@@ -87,7 +87,7 @@ function NotesModal({ open, action, onConfirm, onClose, isPending }: NotesModalP
             onClick={() => { onConfirm(notes); setNotes(""); }}
             className={cn(
               "h-8 px-4 rounded-md text-[13px] font-medium text-white transition-opacity",
-              action === "deny" ? "bg-red-500 hover:opacity-90" : "bg-zinc-600 hover:opacity-90",
+              action === "deny" ? "bg-status-danger hover:opacity-90" : "bg-zinc-600 hover:opacity-90",
               isPending && "opacity-50 cursor-not-allowed"
             )}
           >
@@ -215,7 +215,7 @@ export function AdminUsersDashboard() {
                 type="button"
                 onClick={() => handleApprovalAction(row.userId, "approve")}
                 disabled={updateApproval.isPending}
-                className="h-7 px-2.5 rounded-md text-[12px] font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                className="h-7 px-2.5 rounded-md text-[12px] font-medium bg-status-success/10 text-status-success hover:bg-status-success/20 transition-colors disabled:opacity-50"
               >
                 Approve
               </button>
@@ -225,7 +225,7 @@ export function AdminUsersDashboard() {
                 type="button"
                 onClick={() => setNotesModal({ userId: row.userId, action: "deny" })}
                 disabled={updateApproval.isPending}
-                className="h-7 px-2.5 rounded-md text-[12px] font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                className="h-7 px-2.5 rounded-md text-[12px] font-medium bg-status-danger/10 text-status-danger hover:bg-status-danger/20 transition-colors disabled:opacity-50"
               >
                 Deny
               </button>

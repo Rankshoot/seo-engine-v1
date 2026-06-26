@@ -34,7 +34,7 @@ export interface AnalyzeResponse {
 }
 
 export const contentAuditApi = {
-  analyze(projectId: string, url: string, opts?: { uploadedContent?: string; uploadedTitle?: string }): Promise<AnalyzeResponse> {
+  analyze(projectId: string, url: string, opts?: { uploadedContent?: string; uploadedTitle?: string; focusKeyword?: string }): Promise<AnalyzeResponse> {
     return apiPost(V1Routes.contentAuditAnalyze(projectId), { url, ...opts });
   },
 

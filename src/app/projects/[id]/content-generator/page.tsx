@@ -35,8 +35,8 @@ function ArtInstant() {
   return (
     <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
       <rect x="20" y="8" width="80" height="56" rx="8" className="stroke-text-tertiary/25" strokeWidth="1.5" />
-      <circle cx="60" cy="36" r="14" className="stroke-violet-500/60 dark:stroke-violet-400/60" strokeWidth="2" />
-      <circle cx="60" cy="36" r="5" className="fill-violet-500/20 stroke-violet-500 dark:fill-violet-400/20 dark:stroke-violet-400" strokeWidth="1.5" />
+      <circle cx="60" cy="36" r="14" className="stroke-brand-violet/60" strokeWidth="2" />
+      <circle cx="60" cy="36" r="5" className="fill-brand-violet/20 stroke-brand-violet" strokeWidth="1.5" />
     </svg>
   );
 }
@@ -44,9 +44,9 @@ function ArtInstant() {
 function ArtEbook() {
   return (
     <svg viewBox="0 0 120 72" className="h-full w-full max-h-[72px]" fill="none" aria-hidden>
-      <rect x="16" y="6" width="36" height="60" rx="4" className="stroke-violet-500/60 dark:stroke-violet-400/60 fill-violet-500/8 dark:fill-violet-400/10" strokeWidth="1.5" />
-      <rect x="54" y="6" width="36" height="60" rx="4" className="stroke-violet-400/40 dark:stroke-violet-300/40" strokeWidth="1.5" />
-      <path d="M22 18h24M22 26h18M22 34h24M22 42h14" className="stroke-violet-500/70 dark:stroke-violet-300/70" strokeWidth="1.5" strokeLinecap="round" />
+      <rect x="16" y="6" width="36" height="60" rx="4" className="stroke-brand-violet/60 fill-brand-violet/8" strokeWidth="1.5" />
+      <rect x="54" y="6" width="36" height="60" rx="4" className="stroke-brand-violet/40" strokeWidth="1.5" />
+      <path d="M22 18h24M22 26h18M22 34h24M22 42h14" className="stroke-brand-violet/70" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -143,7 +143,7 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
         `${counts.blog} blog${counts.blog === 1 ? "" : "s"} in this project`,
       ],
       art: <ArtInstant />,
-      artBg: "bg-violet-100/80 dark:bg-violet-500/10",
+      artBg: "bg-brand-violet/10",
     },
     {
       id: "ebook",
@@ -158,7 +158,7 @@ function ContentStudioCards({ projectId, studioBase }: { projectId: string; stud
         `${counts.ebook} in this project`,
       ],
       art: <ArtEbook />,
-      artBg: "bg-violet-200/80 dark:bg-violet-500/15",
+      artBg: "bg-brand-violet/15",
     },
     {
       id: "whitepaper",

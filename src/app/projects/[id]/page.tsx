@@ -179,9 +179,9 @@ export default function ProjectOverviewPage() {
   }
 
   return (
-    <div className="pb-20 px-4">
+    <div className="pb-20">
       {/* ── Header ── */}
-      <div className="mb-6">
+      <div className="sticky top-0 z-30 bg-surface-primary/98 backdrop-blur-md mb-6">
         <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary mb-3">
           <Link href="/projects" className="hover:text-text-secondary transition-colors">Projects</Link>
           <ChevronRight className="h-3 w-3 opacity-40" />
@@ -208,7 +208,11 @@ export default function ProjectOverviewPage() {
             </>
           }
           borderless
+          sticky={false}
+          className="pb-0"
         />
+        <div className="mt-4 h-px bg-gradient-to-r from-transparent via-border-subtle to-transparent" />
+        <div className="h-px bg-gradient-to-r from-transparent via-brand-action/20 to-transparent" />
       </div>
 
       <motion.div

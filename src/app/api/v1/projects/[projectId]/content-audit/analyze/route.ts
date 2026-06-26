@@ -52,11 +52,13 @@ export async function POST(
   let url: string;
   let uploadedContent: string | undefined;
   let uploadedTitle: string | undefined;
+  let focusKeyword: string | undefined;
   try {
-    const body = await req.json() as { url?: unknown; uploadedContent?: unknown; uploadedTitle?: unknown };
+    const body = await req.json() as { url?: unknown; uploadedContent?: unknown; uploadedTitle?: unknown; focusKeyword?: unknown };
     url = typeof body.url === 'string' ? body.url.trim() : '';
     uploadedContent = typeof body.uploadedContent === 'string' ? body.uploadedContent.trim() : undefined;
     uploadedTitle = typeof body.uploadedTitle === 'string' ? body.uploadedTitle.trim() : undefined;
+    focusKeyword = typeof body.focusKeyword === 'string' ? body.focusKeyword.trim() : undefined;
   } catch {
     return apiJson({ success: false, error: 'Invalid request body' }, { status: 400 });
   }
@@ -77,6 +79,7 @@ export async function POST(
     language: (project.target_language as string) ?? 'en',
     uploadedContent,
     uploadedTitle,
+    focusKeyword: focusKeyword || undefined,
   });
 
   const dbError = await upsertAudit(projectId, record, uploadedContent ? 'upload' : 'url');

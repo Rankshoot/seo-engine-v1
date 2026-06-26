@@ -23,7 +23,7 @@ export default function ContentHistoryError({
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-[14px] bg-rose-500/10 text-rose-400">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-[14px] bg-status-danger/10 text-status-danger">
         <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0zm-9 3.75h.008v.008H12v-.008z" />
         </svg>

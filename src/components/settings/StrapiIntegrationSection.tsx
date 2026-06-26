@@ -19,8 +19,8 @@ function StrapiIcon() {
 
 function ConnectedBadge() {
   return (
-    <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+    <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-status-success bg-status-success/10 border border-status-success/20 px-2 py-0.5 rounded-full">
+      <span className="w-1.5 h-1.5 rounded-full bg-status-success" />
       Connected
     </span>
   );
@@ -52,7 +52,7 @@ function IntegrationCard({
   return (
     <div className={`rounded-xl border transition-all ${
       connected
-        ? "border-emerald-500/30 bg-emerald-500/5"
+        ? "border-status-success/30 bg-status-success/5"
         : "border-border-subtle bg-surface-primary hover:border-border-strong hover:bg-surface-secondary/50"
     }`}>
       <div className="p-4">
@@ -86,7 +86,7 @@ function IntegrationCard({
               <button
                 onClick={onDelete}
                 disabled={deleting}
-                className="w-7 h-7 flex items-center justify-center rounded-[6px] border border-border-subtle text-text-tertiary hover:text-rose-500 hover:border-rose-500/30 hover:bg-rose-500/5 transition-all disabled:opacity-50"
+                className="w-7 h-7 flex items-center justify-center rounded-[6px] border border-border-subtle text-text-tertiary hover:text-status-danger hover:border-status-danger/30 hover:bg-status-danger/5 transition-all disabled:opacity-50"
                 title="Disconnect"
               >
                 {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
@@ -98,7 +98,7 @@ function IntegrationCard({
         </div>
 
         {connected && baseUrl && (
-          <div className="mt-3 pt-3 border-t border-emerald-500/15 grid grid-cols-3 gap-3">
+          <div className="mt-3 pt-3 border-t border-status-success/15 grid grid-cols-3 gap-3">
             <div>
               <p className="text-[9px] font-semibold uppercase tracking-widest text-text-tertiary mb-0.5" style={{ fontFamily: "CohereMono, monospace" }}>URL</p>
               <p className="text-[11px] text-text-secondary truncate font-mono">{baseUrl}</p>
@@ -205,7 +205,7 @@ function StrapiForm({
         <div className="p-5 space-y-4">
           <div>
             <label className="text-[12px] font-semibold text-text-secondary block mb-1.5">
-              Strapi URL <span className="text-rose-500">*</span>
+              Strapi URL <span className="text-status-danger">*</span>
             </label>
             <input
               type="url"
@@ -219,7 +219,7 @@ function StrapiForm({
 
           <div>
             <label className="text-[12px] font-semibold text-text-secondary block mb-1.5">
-              API Token <span className="text-rose-500">*</span>
+              API Token <span className="text-status-danger">*</span>
             </label>
             <input
               type="password"
@@ -235,7 +235,7 @@ function StrapiForm({
 
           <div>
             <label className="text-[12px] font-semibold text-text-secondary block mb-1.5">
-              Collection Name <span className="text-rose-500">*</span>
+              Collection Name <span className="text-status-danger">*</span>
             </label>
             <input
               type="text"
@@ -252,8 +252,8 @@ function StrapiForm({
           {message && (
             <div className={`flex items-start gap-2 text-[12px] rounded-[8px] px-3 py-2.5 ${
               status === "success"
-                ? "bg-emerald-500/10 text-emerald-700 border border-emerald-500/20"
-                : "bg-rose-500/10 text-rose-700 border border-rose-500/20"
+                ? "bg-status-success/10 text-status-success border border-status-success/20"
+                : "bg-status-danger/10 text-status-danger border border-status-danger/20"
             }`}>
               {status === "success"
                 ? <Check className="w-3.5 h-3.5 shrink-0 mt-0.5" />

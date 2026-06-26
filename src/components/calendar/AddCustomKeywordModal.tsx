@@ -130,7 +130,7 @@ export function AddCustomKeywordModal({
         </Field>
 
         {error && (
-          <p className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[13px] text-rose-400">
+          <p className="rounded-md border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-[13px] text-status-danger">
             {error}
           </p>
         )}

@@ -159,20 +159,17 @@ export function AuditHistory({
                         <p className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary">
                           Top issues ({sortedIssues.length})
                         </p>
-                        {sortedIssues.slice(0, 6).map((issue, i) => (
-                          <div key={i} className="flex items-start gap-2 rounded-[8px] border border-border-subtle/50 bg-surface-secondary/30 px-3 py-2">
-                            <SeverityChip severity={issue.severity} />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-[12px] font-semibold text-text-primary leading-snug">{issue.title}</p>
-                              {issue.fix && (
-                                <p className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed line-clamp-2">{issue.fix}</p>
-                              )}
+                        <div className="grid gap-1">
+                          {sortedIssues.slice(0, 3).map((issue, i) => (
+                            <div key={i} className="flex items-center gap-2 rounded-[8px] border border-border-subtle/50 bg-surface-secondary/30 px-3 py-1.5 min-w-0">
+                              <SeverityChip severity={issue.severity} />
+                              <span className="text-[12px] font-medium text-text-primary truncate">{issue.title}</span>
                             </div>
-                          </div>
-                        ))}
-                        {sortedIssues.length > 6 && (
-                          <p className="text-[11px] text-text-tertiary text-center py-1">
-                            +{sortedIssues.length - 6} more — click &quot;View full audit&quot; to see all
+                          ))}
+                        </div>
+                        {sortedIssues.length > 3 && (
+                          <p className="text-[11px] text-text-tertiary text-center py-0.5">
+                            +{sortedIssues.length - 3} more — click &quot;View full audit&quot; to see details
                           </p>
                         )}
                       </div>

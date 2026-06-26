@@ -6,9 +6,9 @@ import type { BlogContentAnalysis } from "@/app/actions/blog-actions";
 // ─── Constants ─────────────────────────────────────────────────────────────
 
 const ISSUE_SEVERITY_COLORS: Record<"high" | "medium" | "low", string> = {
-  high:   "border-rose-500/30 bg-rose-500/10 text-rose-400",
-  medium: "border-amber-500/30 bg-amber-500/10 text-amber-400",
-  low:    "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+  high:   "border-status-danger/30 bg-status-danger/10 text-status-danger",
+  medium: "border-status-warning/30 bg-status-warning/10 text-status-warning",
+  low:    "border-status-success/30 bg-status-success/10 text-status-success",
 };
 
 const ISSUE_CATEGORY_META: Record<string, { label: string; icon: string; color: string }> = {
@@ -19,29 +19,29 @@ const ISSUE_CATEGORY_META: Record<string, { label: string; icon: string; color: 
 };
 
 const RUBRIC_STATUS_META: Record<string, { label: string; cls: string }> = {
-  pass: { label: "Pass", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" },
-  warn: { label: "Warn", cls: "border-amber-500/40 bg-amber-500/10 text-amber-400"       },
-  fail: { label: "Fail", cls: "border-rose-500/40 bg-rose-500/10 text-rose-400"          },
+  pass: { label: "Pass", cls: "border-status-success/40 bg-status-success/10 text-status-success" },
+  warn: { label: "Warn", cls: "border-status-warning/40 bg-status-warning/10 text-status-warning"  },
+  fail: { label: "Fail", cls: "border-status-danger/40 bg-status-danger/10 text-status-danger"     },
 };
 
 export const CONCLUSION_META = {
   ready_to_publish: {
     label: "Ready to publish",
     icon: "✓",
-    cls: "border-emerald-500/30 bg-emerald-500/8 text-emerald-400",
-    dot: "bg-emerald-400",
+    cls: "border-status-success/30 bg-status-success/8 text-status-success",
+    dot: "bg-status-success",
   },
   needs_minor_fixes: {
     label: "Needs minor fixes",
     icon: "⚠",
-    cls: "border-amber-500/30 bg-amber-500/8 text-amber-400",
-    dot: "bg-amber-400",
+    cls: "border-status-warning/30 bg-status-warning/8 text-status-warning",
+    dot: "bg-status-warning",
   },
   needs_major_work: {
     label: "Needs major work",
     icon: "✕",
-    cls: "border-rose-500/30 bg-rose-500/8 text-rose-400",
-    dot: "bg-rose-400",
+    cls: "border-status-danger/30 bg-status-danger/8 text-status-danger",
+    dot: "bg-status-danger",
   },
 } as const;
 
@@ -124,7 +124,7 @@ export function BlogContentAnalysisModal({
                 disabled={busy}
                 className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-semibold transition-all disabled:opacity-40 ${
                   isStale
-                    ? "border-amber-500/40 bg-amber-500/8 text-amber-400 hover:bg-amber-500/15"
+                    ? "border-status-warning/40 bg-status-warning/8 text-status-warning hover:bg-status-warning/15"
                     : "border-border-subtle bg-surface-elevated text-text-secondary hover:text-text-primary hover:border-border-strong"
                 }`}
               >
@@ -137,7 +137,7 @@ export function BlogContentAnalysisModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary shadow-sm transition-all hover:border-rose-400/35 hover:bg-rose-500/10 hover:text-rose-300"
+              className="rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary shadow-sm transition-all hover:border-status-danger/35 hover:bg-status-danger/10 hover:text-status-danger"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -155,7 +155,7 @@ export function BlogContentAnalysisModal({
             </div>
           )}
           {error && !busy && (
-            <div className="m-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-[13px] text-rose-400">
+            <div className="m-5 rounded-xl border border-status-danger/30 bg-status-danger/10 p-4 text-[13px] text-status-danger">
               {error}
             </div>
           )}
@@ -185,12 +185,12 @@ export function BlogContentAnalysisModal({
 
               {/* Quick wins */}
               {analysis.quick_wins?.length > 0 && (
-                <div className="mx-5 mt-3 mb-1 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 mb-2">Quick wins</p>
+                <div className="mx-5 mt-3 mb-1 rounded-xl border border-status-success/20 bg-status-success/5 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-status-success mb-2">Quick wins</p>
                   <ul className="space-y-1">
                     {analysis.quick_wins.map((w, i) => (
                       <li key={i} className="flex items-start gap-2 text-[12px] text-text-secondary">
-                        <svg className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <svg className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                         </svg>
                         {w}
@@ -230,7 +230,7 @@ export function BlogContentAnalysisModal({
                     {tab === "issues" && (
                       <ul className="max-h-[min(48vh,460px)] space-y-2 overflow-y-auto pr-1">
                         {analysis.issues.length === 0 ? (
-                          <li className="flex items-center gap-2 py-4 text-sm text-emerald-400">
+                          <li className="flex items-center gap-2 py-4 text-sm text-status-success">
                             <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                             </svg>
@@ -249,7 +249,7 @@ export function BlogContentAnalysisModal({
                                 </div>
                                 {issue.detail && <p className="mt-1.5 text-[12px] text-text-secondary leading-relaxed">{issue.detail}</p>}
                                 {issue.fix && (
-                                  <p className="mt-1.5 text-[12px] text-emerald-400 leading-relaxed">
+                                  <p className="mt-1.5 text-[12px] text-status-success leading-relaxed">
                                     <span className="font-bold text-text-secondary">Fix · </span>{issue.fix}
                                   </p>
                                 )}

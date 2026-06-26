@@ -292,7 +292,7 @@ export function TipTapFormatToolbar({
               onClick={() => editor.chain().focus().deleteTable().run()}
               active={false}
               title="Delete table"
-              className="text-rose-500 hover:bg-rose-500/10"
+              className="text-status-danger hover:bg-status-danger/10"
             >
               <span className="text-[13px]">Del table</span>
             </ToolBtn>

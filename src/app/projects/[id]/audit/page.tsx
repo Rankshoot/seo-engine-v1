@@ -26,6 +26,7 @@ export default function ContentAuditStudioPage() {
   const [url, setUrl] = useState("");
   const [uploadedContent, setUploadedContent] = useState("");
   const [uploadedName, setUploadedName] = useState("");
+  const [targetKeyword, setTargetKeyword] = useState("");
 
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(-1);
@@ -52,6 +53,7 @@ export default function ContentAuditStudioPage() {
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   const loadHistory = useCallback(async () => {
     if (!projectId) return;
@@ -88,6 +90,15 @@ export default function ContentAuditStudioPage() {
       } catch { /* non-fatal */ }
     })();
   }, [report?.url, projectId]);
+
+  useEffect(() => {
+    if (report) {
+      const timer = setTimeout(() => {
+        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+      return () => clearTimeout(timer);
+    }
+  }, [report]);
 
   const startStepAnimation = () => {
     setAnalysisStep(0);
@@ -131,6 +142,7 @@ export default function ContentAuditStudioPage() {
         const res = await contentAuditApi.analyze(projectId, syntheticUrl, {
           uploadedContent: uploadedContent.trim(),
           uploadedTitle: uploadedName || undefined,
+          focusKeyword: targetKeyword.trim() || undefined,
         });
         if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
         setReport(res.report);
@@ -331,48 +343,87 @@ export default function ContentAuditStudioPage() {
   const openHistoryItem = (item: ContentAuditHistoryItem) => {
     if (!item.report) { setUrl(item.url); setInputMode("url"); void handleAnalyze(item.url); return; }
     resetPostAuditState();
-    setUrl(item.url);
     setReport(item.report as unknown as ContentAuditReport);
     setReportSource(item.source ?? "url");
     setActiveTab("issues");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleGenerateFromHistory = (item: ContentAuditHistoryItem) => { openHistoryItem(item); };
   const handleScheduleFromHistory = (item: ContentAuditHistoryItem) => { openHistoryItem(item); setScheduleOpen(true); };
-
-  return (
-    <div className="relative space-y-6 pb-20">
-      <PageHeader
-        title="Content Audit Studio"
-        description="Audit any blog by URL or uploaded content — SEO, GEO, AEO scores, competitor insights, and one-click enhanced regeneration."
+  const headerActions = (
+    <div
+      className="relative grid grid-cols-2 w-[340px] sm:w-[360px] rounded-[12px] border border-border-subtle bg-surface-secondary/60 p-1 gap-0.5 backdrop-blur-sm shadow-sm"
+      role="tablist"
+      aria-label="Audit input views"
+    >
+      {/* Sliding background pill */}
+      <div
+        className="absolute top-1 bottom-1 rounded-[9px] bg-surface-elevated shadow-sm ring-1 ring-border-subtle/80 transition-all duration-300 ease-out"
+        style={{
+          width: "calc(50% - 5px)",
+          left: inputMode === "upload" ? "calc(50% + 1px)" : "4px",
+        }}
       />
 
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }} className="mx-auto max-w-4xl space-y-6">
-        {/* ── Input card ── */}
-        <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
-          <div className="mb-4 inline-flex rounded-[10px] border border-border-subtle bg-surface-secondary p-0.5">
-            {(["url", "upload"] as const).map(m => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => { setInputMode(m); setError(""); }}
-                className={`h-8 px-4 rounded-[8px] text-[12px] font-semibold transition-all ${
-                  inputMode === m ? "bg-surface-elevated text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-primary"
-                }`}
-              >
-                {m === "url" ? "Audit a URL" : "Upload content"}
-              </button>
-            ))}
-          </div>
+      {(["url", "upload"] as const).map(m => {
+        const isActive = inputMode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => { setInputMode(m); setError(""); }}
+            className={`relative flex items-center justify-center gap-2 rounded-[9px] px-3 py-2 text-[13px] font-semibold transition-all duration-200 select-none ${
+              isActive ? "text-text-primary" : "text-text-tertiary hover:text-text-secondary"
+            }`}
+          >
+            <span className={`transition-colors duration-200 ${isActive ? "text-brand-action" : "opacity-60"}`}>
+              {m === "url" ? (
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 7.5 12 3m0 0L7.5 7.5M12 3v13.5" />
+                </svg>
+              )}
+            </span>
+            <span className="whitespace-nowrap">{m === "url" ? "Audit a URL" : "Upload content"}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 
+  return (
+    <div className="relative space-y-10 pb-20">
+      <PageHeader
+        title={
+          <div className="flex items-center gap-2">
+            <span>Content Audit Studio</span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-brand-violet/15 text-brand-violet border border-brand-violet/20 tracking-normal uppercase">
+              Beta
+            </span>
+          </div>
+        }
+        description="Audit any blog by URL or uploaded content — SEO, GEO, AEO scores, competitor insights, and one-click enhanced regeneration."
+        actions={headerActions}
+        className="[&_h1]:text-[28px] [&_h1]:sm:text-[34px]"
+      />
+
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }} className="mx-auto max-w-5xl space-y-12">
+        {/* ── Input card ── */}
+        <div className="mx-auto max-w-3xl w-full rounded-[24px] border border-brand-violet/20 hover:border-brand-violet/35 bg-gradient-to-b from-surface-elevated to-surface-elevated/60 p-8 sm:p-10 shadow-[0_0_50px_-12px_rgba(99,102,241,0.15)] hover:shadow-[0_0_55px_-10px_rgba(99,102,241,0.18)] transition-all">
           {inputMode === "url" ? (
-            <>
-              <label className="block text-[13px] font-semibold text-text-secondary mb-3">Blog or article URL to audit</label>
-              <div className="flex gap-3">
+            <div className="flex flex-col items-center text-center">
+              <label className="block text-[18px] sm:text-[20px] font-semibold text-text-primary mb-4">
+                Enter any blog or article URL to audit
+              </label>
+              <div className="flex gap-3 w-full max-w-2xl">
                 <div className="relative flex-1">
-                  <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none">
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
                     </svg>
                   </div>
@@ -384,73 +435,91 @@ export default function ContentAuditStudioPage() {
                     onKeyDown={e => { if (e.key === "Enter" && !analyzing) void handleAnalyze(); }}
                     placeholder="https://yoursite.com/blog/your-post"
                     disabled={analyzing}
-                    className="w-full h-11 pl-10 pr-4 rounded-[12px] border border-border-subtle bg-surface-primary text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.08)] disabled:opacity-50 transition-all"
+                    className="w-full h-12 pl-12 pr-4 rounded-[14px] border border-border-subtle bg-surface-primary text-[15px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] disabled:opacity-50 transition-all shadow-inner"
                   />
                 </div>
                 <button
                   type="button"
                   onClick={() => void handleAnalyze()}
                   disabled={analyzing || !url.trim()}
-                  className="h-11 px-6 rounded-[12px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all shrink-0 flex items-center gap-2"
+                  className="h-12 px-6 rounded-[14px] bg-brand-violet text-white text-[14px] font-semibold hover:bg-brand-violet/90 active:scale-[0.98] disabled:opacity-50 transition-all shrink-0 flex items-center gap-2 shadow-md shadow-brand-violet/20"
                 >
-                  {analyzing ? <><Spinner size={14} /> Analyzing…</> : "Audit this page"}
+                  {analyzing ? <><Spinner size={15} /> Analyzing…</> : "Audit this page"}
                 </button>
               </div>
-            </>
+            </div>
           ) : (
-            <>
-              <label className="block text-[13px] font-semibold text-text-secondary mb-3">Upload or paste your content</label>
-              {!uploadedContent ? (
-                <div
-                  onClick={() => fileRef.current?.click()}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) void handleFile(f); }}
-                  className="cursor-pointer rounded-[12px] border-2 border-dashed border-border-strong bg-surface-secondary/40 px-6 py-10 text-center hover:border-brand-violet/50 transition-colors"
-                >
-                  <svg className="mx-auto mb-3 w-8 h-8 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
-                  </svg>
-                  <p className="text-[13px] font-medium text-text-primary">Drop a file or click to upload</p>
-                  <p className="mt-1 text-[11px] text-text-tertiary">Supports .txt, .md, .html, .markdown — or paste below</p>
-                </div>
-              ) : (
-                <div className="rounded-[12px] border border-border-subtle bg-surface-secondary/40 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <svg className="w-4 h-4 text-brand-violet shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9z" />
-                      </svg>
-                      <span className="text-[12px] font-medium text-text-primary truncate">{uploadedName || "Pasted content"}</span>
-                      <span className="text-[11px] text-text-tertiary shrink-0">· {uploadedContent.length.toLocaleString()} chars</span>
-                    </div>
-                    <button type="button" onClick={() => { setUploadedContent(""); setUploadedName(""); }} className="text-[11px] text-text-tertiary hover:text-status-danger transition-colors shrink-0">Clear</button>
+            <div className="flex flex-col items-center text-center">
+              <label className="block text-[18px] sm:text-[20px] font-semibold text-text-primary mb-4">
+                Upload or paste your content to audit
+              </label>
+              <div className="w-full max-w-2xl text-left mb-4">
+                <label className="block text-[13px] font-semibold text-text-secondary mb-1.5">
+                  Target Keyword (optional)
+                </label>
+                <input
+                  type="text"
+                  value={targetKeyword}
+                  onChange={e => setTargetKeyword(e.target.value)}
+                  placeholder="e.g. business development manager salary"
+                  className="w-full h-11 px-4 rounded-[12px] border border-border-subtle bg-surface-primary text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.08)] transition-all"
+                />
+              </div>
+              <div className="w-full max-w-2xl">
+                {!uploadedContent ? (
+                  <div
+                    onClick={() => fileRef.current?.click()}
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) void handleFile(f); }}
+                    className="cursor-pointer rounded-[14px] border-2 border-dashed border-border-strong hover:border-brand-violet/40 bg-surface-secondary/40 px-6 py-12 text-center hover:bg-surface-secondary/60 transition-all duration-200"
+                  >
+                    <svg className="mx-auto mb-3.5 w-9 h-9 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0L7.5 7.5M12 3v13.5" />
+                    </svg>
+                    <p className="text-[14px] font-medium text-text-primary">Drop a text file or click to upload</p>
+                    <p className="mt-1.5 text-[12px] text-text-tertiary">Supports .txt, .md, .html, .markdown — or paste below</p>
                   </div>
-                  <p className="mt-2 line-clamp-2 text-[11px] text-text-tertiary leading-relaxed">{uploadedContent.slice(0, 240)}</p>
+                ) : (
+                  <div className="rounded-[14px] border border-border-subtle bg-surface-secondary/40 p-4 text-left">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <svg className="w-4.5 h-4.5 text-brand-violet shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9z" />
+                        </svg>
+                        <span className="text-[13px] font-medium text-text-primary truncate">{uploadedName || "Pasted content"}</span>
+                        <span className="text-[12px] text-text-tertiary shrink-0">· {uploadedContent.length.toLocaleString()} chars</span>
+                      </div>
+                      <button type="button" onClick={() => { setUploadedContent(""); setUploadedName(""); }} className="text-[12px] text-text-tertiary hover:text-status-danger transition-colors shrink-0">Clear</button>
+                    </div>
+                    <p className="mt-2 text-[12px] text-text-tertiary leading-relaxed line-clamp-3">{uploadedContent.slice(0, 300)}</p>
+                  </div>
+                )}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".txt,.md,.markdown,.html,.htm,text/plain,text/markdown,text/html"
+                  className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) void handleFile(f); }}
+                />
+                <textarea
+                  value={uploadedContent}
+                  onChange={e => setUploadedContent(e.target.value.slice(0, MAX_UPLOAD_CHARS))}
+                  placeholder="…or paste your blog content / markdown here"
+                  rows={5}
+                  className="mt-4 w-full rounded-[14px] border border-border-subtle bg-surface-primary px-4 py-3 text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)] transition-all resize-y"
+                />
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => void handleAnalyze()}
+                    disabled={analyzing || uploadedContent.trim().length < 160}
+                    className="mt-4 h-12 px-8 rounded-[14px] bg-brand-violet text-white text-[14px] font-semibold hover:bg-brand-violet/90 active:scale-[0.98] disabled:opacity-50 transition-all flex items-center gap-2 shadow-md shadow-brand-violet/20"
+                  >
+                    {analyzing ? <><Spinner size={15} /> Analyzing…</> : "Audit this content"}
+                  </button>
                 </div>
-              )}
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".txt,.md,.markdown,.html,.htm,text/plain,text/markdown,text/html"
-                className="hidden"
-                onChange={e => { const f = e.target.files?.[0]; if (f) void handleFile(f); }}
-              />
-              <textarea
-                value={uploadedContent}
-                onChange={e => setUploadedContent(e.target.value.slice(0, MAX_UPLOAD_CHARS))}
-                placeholder="…or paste your blog content / markdown here"
-                rows={4}
-                className="mt-3 w-full rounded-[12px] border border-border-subtle bg-surface-primary px-3 py-2.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 transition-all resize-y"
-              />
-              <button
-                type="button"
-                onClick={() => void handleAnalyze()}
-                disabled={analyzing || uploadedContent.trim().length < 160}
-                className="mt-3 h-11 px-6 rounded-[12px] bg-brand-violet text-white text-[13px] font-semibold hover:bg-brand-violet/90 disabled:opacity-50 transition-all flex items-center gap-2"
-              >
-                {analyzing ? <><Spinner size={14} /> Analyzing…</> : "Audit this content"}
-              </button>
-            </>
+              </div>
+            </div>
           )}
 
           {error && (
@@ -481,24 +550,26 @@ export default function ContentAuditStudioPage() {
         )}
 
         {report && (
-          <AuditResults
-            report={report}
-            reportSource={reportSource}
-            projectId={projectId}
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-            generating={generating}
-            generatedBlogId={generatedBlogId}
-            generateError={generateError}
-            onGenerate={handleGenerate}
-            scheduleSaving={scheduleSaving}
-            scheduledDate={scheduledDate}
-            onSchedule={handleScheduleConfirm}
-            scheduleOpen={scheduleOpen}
-            setScheduleOpen={setScheduleOpen}
-            onReschedule={handleReschedule}
-            scheduledDates={scheduledDates}
-          />
+          <div ref={resultsRef} className="scroll-mt-28">
+            <AuditResults
+              report={report}
+              reportSource={reportSource}
+              projectId={projectId}
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              generating={generating}
+              generatedBlogId={generatedBlogId}
+              generateError={generateError}
+              onGenerate={handleGenerate}
+              scheduleSaving={scheduleSaving}
+              scheduledDate={scheduledDate}
+              onSchedule={handleScheduleConfirm}
+              scheduleOpen={scheduleOpen}
+              setScheduleOpen={setScheduleOpen}
+              onReschedule={handleReschedule}
+              scheduledDates={scheduledDates}
+            />
+          </div>
         )}
 
         {!analyzing && (

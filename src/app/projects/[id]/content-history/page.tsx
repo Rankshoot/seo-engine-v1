@@ -8,13 +8,14 @@ const pageAnim = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }
 
 export default function UnifiedContentHistoryPage() {
   return (
-    <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
+    <div className="flex flex-col h-full">
       <PageHeader
         title="Content History"
-        description="Track all generated content assets. Monitor status, details, and metrics for blogs, ebooks, whitepapers, and social posts."
+        description="Track all generated content assets — blogs, ebooks, whitepapers, and social posts."
+        actions={null}
       />
 
-      <motion.div {...pageAnim} className="mt-4">
+      <motion.div {...pageAnim} className="flex-1 min-h-0 mt-6">
         <HistoryTab />
       </motion.div>
     </div>

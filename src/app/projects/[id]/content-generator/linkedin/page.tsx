@@ -194,16 +194,16 @@ export default function LinkedInGeneratorPage() {
         : "Tell us the angle, the audience, and the kind of post. The engine handles the hook, structure, and CTA.";
 
   return (
-    <div className={`relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8 ${mounted ? "animate-slide-in-right" : ""}`}>
-      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
+    <div className={`relative space-y-10 pb-16 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 -mt-4 sm:-mt-6 lg:-mt-8 ${mounted ? "animate-slide-in-right" : ""}`}>
+      {/* Sticky header — negative margins/top cancel the scroll container's padding so the header sits flush at the top */}
+      <div className="sticky -top-4 sm:-top-6 lg:-top-8 z-20 -mx-4 sm:-mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8 pt-4 sm:pt-6 lg:pt-8 backdrop-blur-sm">
         <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="LinkedIn posts" />
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0 max-w-3xl">
             <PageTitle>{heroTitle}</PageTitle>
             <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
             {!canGenerateLinkedIn && quota && (
-              <div className="mt-3 text-[14px] text-rose-400 font-medium">
+              <div className="mt-3 text-[14px] text-status-danger font-medium">
                 LinkedIn post limit reached ({quota.linkedin.used}/{quota.linkedin.effectiveLimit}). Upgrade your plan to generate more LinkedIn posts.
               </div>
             )}

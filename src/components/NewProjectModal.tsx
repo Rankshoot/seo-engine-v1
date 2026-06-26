@@ -367,7 +367,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                     onClick={() => removeCompetitor(i)}
                     size="sm"
                     variant="ghost"
-                    className="hover:bg-rose-500/10 hover:text-rose-400"
+                    className="hover:bg-status-danger/10 hover:text-status-danger"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -465,7 +465,7 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
         </div>
 
         {error && (
-          <div className="flex items-start gap-2.5 rounded-md border border-rose-500/20 bg-rose-500/10 px-3.5 py-3 text-[13px] text-rose-400">
+          <div className="flex items-start gap-2.5 rounded-md border border-status-danger/20 bg-status-danger/10 px-3.5 py-3 text-[13px] text-status-danger">
             <svg
               className="mt-0.5 h-4 w-4 shrink-0"
               fill="none"
@@ -486,13 +486,13 @@ export function NewProjectModal({ open, onClose, editProject, onSaved }: NewProj
                 <div className="mt-2.5 flex items-center gap-2">
                   <a
                     href="/pricing"
-                    className="inline-flex items-center justify-center rounded-md bg-rose-500/20 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-rose-300 hover:bg-rose-500/35 transition-all duration-150 shadow-sm"
+                    className="inline-flex items-center justify-center rounded-md bg-status-danger/20 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-status-danger hover:bg-status-danger/35 transition-all duration-150 shadow-sm"
                   >
                     Upgrade Plan
                   </a>
                   <a
                     href="mailto:support@seoengine.com?subject=Quota Limit Increase Request"
-                    className="inline-flex items-center justify-center rounded-md border border-rose-500/20 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-rose-300 hover:bg-rose-500/10 transition-all duration-150 shadow-sm"
+                    className="inline-flex items-center justify-center rounded-md border border-status-danger/20 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-status-danger hover:bg-status-danger/10 transition-all duration-150 shadow-sm"
                   >
                     Contact Support
                   </a>

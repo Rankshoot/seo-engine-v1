@@ -108,7 +108,7 @@ export function BlogImageEditOverlay({
       <button
         onClick={() => { onRemove(targetImg); setTargetImg(null); }}
         disabled={isRegenerating}
-        className="px-2 py-1 text-[11px] font-medium rounded hover:bg-surface-hover text-rose-500 transition-colors disabled:opacity-50"
+        className="px-2 py-1 text-[11px] font-medium rounded hover:bg-surface-hover text-status-danger transition-colors disabled:opacity-50"
       >
         Remove
       </button>

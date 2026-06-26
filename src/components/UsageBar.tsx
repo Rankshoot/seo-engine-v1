@@ -19,9 +19,9 @@ function getBarColor(item: QuotaItem, zeroMeansUnlimited?: boolean): {
     return { bar: "bg-text-tertiary/30", text: "text-text-tertiary", badge: "bg-surface-tertiary text-text-tertiary border-border-subtle" };
   }
   const pct = item.used / item.effectiveLimit;
-  if (pct >= 1) return { bar: "bg-red-500", text: "text-red-400", badge: "bg-red-500/10 text-red-400 border-red-500/20" };
-  if (pct >= 0.85) return { bar: "bg-amber-400", text: "text-amber-400", badge: "bg-amber-500/10 text-amber-400 border-amber-500/20" };
-  return { bar: "bg-emerald-500", text: "text-emerald-400", badge: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" };
+  if (pct >= 1) return { bar: "bg-status-danger", text: "text-status-danger", badge: "bg-status-danger/10 text-status-danger border-status-danger/20" };
+  if (pct >= 0.85) return { bar: "bg-status-warning", text: "text-status-warning", badge: "bg-status-warning/10 text-status-warning border-status-warning/20" };
+  return { bar: "bg-status-success", text: "text-status-success", badge: "bg-status-success/10 text-status-success border-status-success/20" };
 }
 
 export function UsageBar({ label, item, icon, zeroMeansUnlimited, className = "" }: UsageBarProps) {

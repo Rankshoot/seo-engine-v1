@@ -108,6 +108,9 @@ export interface ContentAuditReport {
   plain_language_verdict: string;
   summary: string;
   analyzed_at: string;
+  is_blog_post?: boolean;
+  content_type_verdict?: string;
+  non_blog_warning?: string;
 }
 
 export interface PersistedContentAudit {
@@ -134,6 +137,8 @@ export interface AuditStudioInput {
   uploadedContent?: string;
   /** Display title when content is uploaded rather than scraped */
   uploadedTitle?: string;
+  /** Optional pre-entered keyword by user */
+  focusKeyword?: string;
 }
 
 export interface AuditStudioResult {
@@ -362,29 +367,36 @@ function computeSeoScore(signals: StructuralSignals, rawHtml: RawHtmlSignals, pr
   let score = 0;
   const kw = primaryKeyword.toLowerCase();
 
-  if (kw && signals.title.toLowerCase().includes(kw)) score += 20;
-  else if (kw && signals.title) score += 5; // title exists but no keyword
-  else if (signals.title) score += 8;
+  // Title Focus Keyword: 25 points
+  if (kw && signals.title.toLowerCase().includes(kw)) score += 25;
+  else if (kw && signals.title) score += 8;
+  else if (signals.title) score += 10;
 
+  // Meta Description: 15 points
   if (rawHtml.metaDescription) {
     const metaLen = rawHtml.metaDescription.length;
-    if (kw && rawHtml.metaDescription.toLowerCase().includes(kw)) score += 15;
+    if (kw && rawHtml.metaDescription.toLowerCase().includes(kw)) score += 10;
     else score += 5;
     if (metaLen >= 140 && metaLen <= 165) score += 5;
   }
 
-  if (signals.h2_count >= 4 && signals.h3_count >= 2) score += 15;
-  else if (signals.h2_count >= 2) score += 8;
-  else if (signals.h2_count >= 1) score += 4;
+  // Heading Structure (H2/H3 counts): 20 points
+  if (signals.h2_count >= 4 && signals.h3_count >= 2) score += 20;
+  else if (signals.h2_count >= 2) score += 10;
+  else if (signals.h2_count >= 1) score += 5;
 
-  if (signals.has_schema_hints) score += 10;
+  // Internal links: 10 points
   if (signals.internal_link_count >= 2) score += 10;
   else if (signals.internal_link_count >= 1) score += 5;
+
+  // External links: 10 points
   if (signals.external_link_count >= 2) score += 10;
   else if (signals.external_link_count >= 1) score += 5;
-  if (signals.word_count >= 1500) score += 15;
-  else if (signals.word_count >= 800) score += 8;
-  else if (signals.word_count >= 400) score += 4;
+
+  // Word count: 20 points
+  if (signals.word_count >= 1500) score += 20;
+  else if (signals.word_count >= 800) score += 10;
+  else if (signals.word_count >= 400) score += 5;
 
   return Math.min(100, score);
 }
@@ -405,12 +417,12 @@ function computeGeoScore(signals: StructuralSignals): number {
 
 function computeAeoScore(signals: StructuralSignals, rawHtml: RawHtmlSignals): number {
   let score = 0;
-  if (signals.faq_section) score += 30;
-  if (rawHtml.schemaTypes.includes('FAQPage')) score += 25;
-  else if (rawHtml.hasSchema) score += 10;
-  if (signals.has_question_headings) score += 25;
-  if (rawHtml.schemaTypes.includes('Article') || rawHtml.schemaTypes.includes('BlogPosting')) score += 10;
-  if (signals.answer_first) score += 10;
+  // FAQ Section: 45 points (removed FAQPage schema check)
+  if (signals.faq_section) score += 45;
+  // Question Headings: 35 points
+  if (signals.has_question_headings) score += 35;
+  // Direct answer first: 20 points (removed Article schema check)
+  if (signals.answer_first) score += 20;
   return Math.min(100, score);
 }
 
@@ -499,22 +511,24 @@ function buildQualityRubric(signals: StructuralSignals, rawHtml: RawHtmlSignals)
     detail: `${signals.h2_count} H2 headings, ${signals.h3_count} H3 headings. ${signals.h2_count >= 4 ? 'Good hierarchy.' : 'Add more sub-sections for better scannability.'}`,
   });
 
-  // 3. FAQ section
+  // 3. FAQ section (content-only, no FAQPage schema)
   rows.push({
     id: 'faq_section',
-    label: 'FAQ section + FAQPage schema',
-    status: (signals.faq_section && rawHtml.schemaTypes.includes('FAQPage')) ? 'pass' : (signals.faq_section || rawHtml.schemaTypes.includes('FAQPage')) ? 'warn' : 'fail',
-    detail: `FAQ section: ${signals.faq_section ? 'yes' : 'no'} · FAQPage schema: ${rawHtml.schemaTypes.includes('FAQPage') ? 'yes' : 'no'}.`,
+    label: 'FAQ section in content (AEO)',
+    status: signals.faq_section ? 'pass' : 'fail',
+    detail: signals.faq_section
+      ? 'FAQ section found in content — readers can easily scan for key answers.'
+      : 'No FAQ section found in content. Consider adding 3–5 FAQ items at the end.',
   });
 
-  // 4. Article schema
+  // 4. Title Visibility Check (replaced Article / BlogPosting schema check)
   rows.push({
     id: 'article_schema',
-    label: 'Article / BlogPosting schema',
-    status: (rawHtml.schemaTypes.includes('Article') || rawHtml.schemaTypes.includes('BlogPosting')) ? 'pass' : rawHtml.hasSchema ? 'warn' : 'fail',
-    detail: rawHtml.hasSchema
-      ? `Schema types found: ${rawHtml.schemaTypes.join(', ') || 'generic'}.`
-      : 'No structured data found on this page.',
+    label: 'Title length (SERP visibility)',
+    status: (signals.title && signals.title.length >= 40 && signals.title.length <= 70) ? 'pass' : signals.title ? 'warn' : 'fail',
+    detail: signals.title
+      ? `Title length is ${signals.title.length} characters (optimal is 40–70 for Google results).`
+      : 'No title or heading found at the top of the content.',
   });
 
   // 5. Internal links
@@ -559,6 +573,9 @@ function buildQualityRubric(signals: StructuralSignals, rawHtml: RawHtmlSignals)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AuditAnalysisSchema = z.object({
+  is_blog_post: z.boolean(),
+  content_type_verdict: z.string(),
+  non_blog_warning: z.string().optional(),
   primary_keyword: z.string(),
   secondary_keywords: z.array(z.string()),
   summary: z.string(),
@@ -575,6 +592,7 @@ const AuditAnalysisSchema = z.object({
     fix: z.string(),
   })),
   competitor_insights: z.array(z.object({
+    id: z.string().optional(),
     url: z.string(),
     advantages: z.array(z.string()),
   })),
@@ -681,6 +699,9 @@ OUTPUT RULES:
 Return ONLY this JSON (no prose, no markdown fences):
 
 {
+  "is_blog_post": true,
+  "content_type_verdict": "Blog Post | Landing Page | Homepage | etc.",
+  "non_blog_warning": "Brief explanation of why this page is not an article/blog post (only supply if is_blog_post is false)",
   "primary_keyword": "the main keyword this post targets (2-5 words, lowercase)",
   "secondary_keywords": ["up to 8 supporting keywords visible in headings"],
   "summary": "one sentence: what this post is about and who it's for",
@@ -731,7 +752,7 @@ Return ONLY this JSON (no prose, no markdown fences):
 
 export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStudioResult> {
   const trace: { step: string; ok: boolean; detail?: string; ms?: number }[] = [];
-  const { url, projectId, projectDomain, region = 'us', language = 'en', uploadedContent, uploadedTitle } = input;
+  const { url, projectId, projectDomain, region = 'us', language = 'en', uploadedContent, uploadedTitle, focusKeyword } = input;
 
   let pageMarkdown: string;
   let rawHtml: RawHtmlSignals;
@@ -739,9 +760,9 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   if (uploadedContent && uploadedContent.trim().length >= 160) {
     // Uploaded content — skip preflight and scraping
     trace.push({ step: 'preflight', ok: true, detail: 'skipped (uploaded content)', ms: 0 });
-    pageMarkdown = uploadedContent;
+    pageMarkdown = cleanPastedContent(uploadedContent);
     rawHtml = { title: uploadedTitle ?? null, metaDescription: null, hasSchema: false, schemaTypes: [], publishDate: null };
-    trace.push({ step: 'scrape', ok: true, detail: `${pageMarkdown.length} chars (uploaded)`, ms: 0 });
+    trace.push({ step: 'scrape', ok: true, detail: `${pageMarkdown.length} chars (uploaded & cleaned)`, ms: 0 });
   } else {
     // 1. Preflight
     const t0 = Date.now();
@@ -780,18 +801,21 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   const locationCode = locationCodeFromTargetRegion(region);
   const t2 = Date.now();
   let vitals: KeywordVitals | undefined;
-  let primaryKeywordForSearch = '';
-  try {
-    // Extract keyword from URL slug (e.g. /ai-specialist/ → "ai specialist")
-    const urlPath = new URL(url).pathname;
-    const slug = urlPath.split('/').filter(Boolean).pop() ?? '';
-    primaryKeywordForSearch = slug
-      .replace(/\.[a-z0-9]{2,5}$/i, '') // strip extension
-      .replace(/[-_]/g, ' ')
-      .replace(/[^a-z0-9\s]/gi, '')
-      .trim()
-      .toLowerCase();
-  } catch { /* no keyword */ }
+  let primaryKeywordForSearch = (focusKeyword ?? '').trim().toLowerCase();
+  
+  if (!primaryKeywordForSearch) {
+    try {
+      // Extract keyword from URL slug (e.g. /ai-specialist/ → "ai specialist")
+      const urlPath = new URL(url).pathname;
+      const slug = urlPath.split('/').filter(Boolean).pop() ?? '';
+      primaryKeywordForSearch = slug
+        .replace(/\.[a-z0-9]{2,5}$/i, '') // strip extension
+        .replace(/[-_]/g, ' ')
+        .replace(/[^a-z0-9\s]/gi, '')
+        .trim()
+        .toLowerCase();
+    } catch { /* no keyword */ }
+  }
 
   let vitalsMap = new Map<string, KeywordVitals>();
   if (primaryKeywordForSearch) {
@@ -926,6 +950,9 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
     plain_language_verdict: aiResult.plain_language_verdict,
     summary: aiResult.summary,
     analyzed_at: new Date().toISOString(),
+    is_blog_post: aiResult.is_blog_post,
+    content_type_verdict: aiResult.content_type_verdict,
+    non_blog_warning: aiResult.non_blog_warning,
   };
 
   const severity = overall >= 70 ? 'low' : overall >= 45 ? 'medium' : 'high';
@@ -1070,3 +1097,41 @@ function errorRecord(url: string, signals: StructuralSignals, error: string): Pe
 
 // Re-export type for compatibility with dataforseo import
 export type { KeywordVitals };
+
+export function cleanPastedContent(content: string): string {
+  let text = content.trim();
+
+  // 1. Strip YAML frontmatter if present
+  if (text.startsWith("---")) {
+    const endIdx = text.indexOf("---", 3);
+    if (endIdx !== -1) {
+      text = text.slice(endIdx + 3).trim();
+    }
+  }
+
+  // 2. If it contains HTML tags, let's do a simple clean-up.
+  if (/<[a-z][\s\S]*>/i.test(text)) {
+    // Convert basic headings to markdown
+    text = text
+      .replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, "\n# $1\n")
+      .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, "\n## $1\n")
+      .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, "\n### $1\n")
+      .replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, "\n#### $1\n")
+      .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, "\n$1\n")
+      .replace(/<br\s*\/?>/gi, "\n")
+      // Remove all other HTML tags
+      .replace(/<[^>]+>/g, "")
+      // Decode common HTML entities
+      .replace(/&nbsp;/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+
+  // 3. Remove excessive duplicate empty lines
+  text = text.replace(/\n{3,}/g, "\n\n");
+
+  return text.trim();
+}

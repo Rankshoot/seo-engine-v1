@@ -19,10 +19,10 @@ const toneClass: Record<BadgeTone, string> = {
   neutral:
     "border-border-subtle bg-surface-elevated text-text-secondary",
   muted: "border-border-subtle bg-surface-tertiary text-text-tertiary",
-  info: "border-sky-500/30 bg-sky-500/10 text-sky-400",
-  positive: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
-  warning: "border-amber-500/30 bg-amber-500/10 text-amber-400",
-  critical: "border-rose-500/30 bg-rose-500/10 text-rose-400",
+  info: "border-status-info/30 bg-status-info/10 text-status-info",
+  positive: "border-status-success/30 bg-status-success/10 text-status-success",
+  warning: "border-status-warning/30 bg-status-warning/10 text-status-warning",
+  critical: "border-status-danger/30 bg-status-danger/10 text-status-danger",
   accent: "border-brand-action/40 bg-brand-action/10 text-brand-action",
 };
 
@@ -80,10 +80,10 @@ export function DotBadge({
   const dotColor: Record<BadgeTone, string> = {
     neutral: "bg-text-tertiary",
     muted: "bg-text-tertiary",
-    info: "bg-sky-400",
-    positive: "bg-emerald-400",
-    warning: "bg-amber-400",
-    critical: "bg-rose-400",
+    info: "bg-status-info",
+    positive: "bg-status-success",
+    warning: "bg-status-warning",
+    critical: "bg-status-danger",
     accent: "bg-brand-action",
   };
   return (

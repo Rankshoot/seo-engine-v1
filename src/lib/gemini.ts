@@ -18,6 +18,12 @@ import {
 import { computeSEOScore, openingPlainLower } from './seo-analyzer';
 
 import { aiGenerate, aiGenerateStructured } from '@/services/ai/providers';
+import {
+  validateGeneratedContent,
+  looksLikeRawJsonEnvelope,
+  recoverContentFromEnvelope,
+  summarizeValidation,
+} from '@/lib/content-validation';
 import { z } from 'zod';
 
 const ClassificationSchema = z.array(
@@ -948,7 +954,31 @@ REPAIR INSTRUCTIONS:
     repairAttempts
   }, null, 2));
 
-  return finalBlog;
+  // ── Content validation safety net (shared with streaming/render/export) ──
+  // Recover a leaked JSON envelope if one slipped through; refuse to return
+  // structurally-broken content so callers never persist a raw envelope.
+  let safeBlog = finalBlog;
+  if (looksLikeRawJsonEnvelope(safeBlog.content)) {
+    const recovered = recoverContentFromEnvelope(safeBlog.content);
+    if (recovered) {
+      safeBlog = { ...safeBlog, content: recovered, word_count: recovered.split(/\s+/).filter(Boolean).length };
+    }
+  }
+  const contentValidation = validateGeneratedContent(safeBlog.content, {
+    type: 'blog',
+    metaDescription: safeBlog.meta_description,
+  });
+  if (!contentValidation.ok) {
+    const blocking = contentValidation.fatalCodes.filter(
+      c => c === 'raw_json_envelope' || c === 'leaked_envelope_keys' || c === 'empty' || c === 'starts_with_code_fence',
+    );
+    if (blocking.length) {
+      throw new Error(`Generated blog failed content validation (${summarizeValidation(contentValidation)}).`);
+    }
+    console.warn('[blog-gen] final content has non-blocking validation issues:', summarizeValidation(contentValidation));
+  }
+
+  return safeBlog;
 }
 
 

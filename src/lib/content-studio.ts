@@ -23,6 +23,45 @@ import type {
   WhitepaperContentData,
   LinkedInContentData,
 } from '@/lib/types';
+import {
+  validateGeneratedContent,
+  looksLikeRawJsonEnvelope,
+  recoverContentFromEnvelope,
+  summarizeValidation,
+  type GeneratedContentType,
+} from '@/lib/content-validation';
+
+/**
+ * Shared studio content gate: recover a leaked JSON envelope if one slipped
+ * through, and throw on structurally-broken output so the server action never
+ * persists a raw envelope. Non-blocking issues (short, placeholder images) are
+ * left to the export/publish gates.
+ */
+function ensureValidStudioContent(
+  content: string,
+  type: GeneratedContentType,
+  metaDescription: string,
+): string {
+  let out = content;
+  if (looksLikeRawJsonEnvelope(out)) {
+    const recovered = recoverContentFromEnvelope(out);
+    if (recovered) out = recovered;
+  }
+  const v = validateGeneratedContent(out, { type, metaDescription });
+  if (!v.ok) {
+    const blocking = v.fatalCodes.filter(
+      c =>
+        c === 'raw_json_envelope' ||
+        c === 'leaked_envelope_keys' ||
+        c === 'empty' ||
+        c === 'starts_with_code_fence',
+    );
+    if (blocking.length) {
+      throw new Error(`Generated ${type} failed content validation (${summarizeValidation(v)}).`);
+    }
+  }
+  return out;
+}
 
 // ─── Shared utilities ───────────────────────────────────────────────────────
 
@@ -115,7 +154,11 @@ export async function generateEbook(
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
   const meta = parseLooseJson<Record<string, unknown>>(metaJson) ?? {};
-  const content = stripEmptyFragmentAnchorTags(bodyRaw);
+  const content = ensureValidStudioContent(
+    stripEmptyFragmentAnchorTags(bodyRaw),
+    'ebook',
+    typeof meta.meta_description === 'string' ? meta.meta_description : '',
+  );
 
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const fallbackTitle = (typeof meta.cover_title === 'string' && meta.cover_title.trim())
@@ -205,7 +248,11 @@ export async function generateWhitepaper(
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
   const meta = parseLooseJson<Record<string, unknown>>(metaJson) ?? {};
-  const content = stripEmptyFragmentAnchorTags(bodyRaw);
+  const content = ensureValidStudioContent(
+    stripEmptyFragmentAnchorTags(bodyRaw),
+    'whitepaper',
+    typeof meta.meta_description === 'string' ? meta.meta_description : '',
+  );
 
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const fallbackTitle = (typeof meta.cover_title === 'string' && meta.cover_title.trim())
@@ -314,6 +361,9 @@ export async function generateLinkedInPost(
 
   // Persist as Markdown so the existing previewer renders the structured layout.
   const markdownDoc = `# ${titleH1}\n\n## Hook\n${hook}\n\n## Body\n${body}\n\n## Call to Action\n${cta}\n\n## Hashtags\n${hashtags.join(' ')}`.trim();
+  // Structural gate — throws only on a leaked envelope / empty output, not on
+  // legitimately short social copy.
+  ensureValidStudioContent(markdownDoc, 'linkedin', '');
 
   const content_data: LinkedInContentData = {
     post_style: ctx.postStyle,

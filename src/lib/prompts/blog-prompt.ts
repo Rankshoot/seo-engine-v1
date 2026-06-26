@@ -344,10 +344,9 @@ AEO (ANSWER ENGINE OPTIMIZATION) — must satisfy all of these for voice search 
 ════════════════════════════════════════
 AEO-1. QUESTION HEADINGS: At least 3 of the H2 headings must be phrased as questions (e.g. "What is…?", "How do you…?", "Why does…?"). Answer engines pull these into "People Also Ask" boxes.
 AEO-2. SNIPPET PARAGRAPHS: Every question-phrased H2 must be followed immediately by a 40–55 word paragraph that fully answers the question — concise enough to be read aloud, factual enough to be trusted. Bold the first sentence.
-AEO-3. STRUCTURED DATA HINT: Add a comment line at the end of the markdown: <!-- Schema: FAQPage, Article --> listing the schema types this content maps to.
-AEO-4. NUMBERED / STEP-BASED ANSWERS: For process topics ("how to do X"), use a numbered list format under its own H2. Voice assistants read numbered lists verbatim for procedural queries.
-AEO-5. CONCISE FAQ ANSWERS: Each FAQ answer must be 40–60 words — long enough to be useful, short enough for voice playback. Start every answer with the key noun/verb (not "Yes," or "It depends,").
-AEO-6. CONVERSATIONAL LANGUAGE: Write at a Grade 8–9 reading level. Use contractions naturally ("you're", "it's", "don't") — this improves voice-search match rates significantly.
+AEO-3. NUMBERED / STEP-BASED ANSWERS: For process topics ("how to do X"), use a numbered list format under its own H2. Voice assistants read numbered lists verbatim for procedural queries.
+AEO-4. CONCISE FAQ ANSWERS: Each FAQ answer must be 40–60 words — long enough to be useful, short enough for voice playback. Start every answer with the key noun/verb (not "Yes," or "It depends,").
+AEO-5. CONVERSATIONAL LANGUAGE: Write at a Grade 8–9 reading level. Use contractions naturally ("you're", "it's", "don't") — this improves voice-search match rates significantly.
 
 Return JSON only.`;
 }

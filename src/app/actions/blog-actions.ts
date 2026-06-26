@@ -694,6 +694,7 @@ function sanitizeBlogMarkdown(markdown: string): string {
   let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(masked))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
+    .replace(/<!--\s*Schema:\s*[\s\S]*?-->/gi, '')
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
     .replace(/Regenerat(?:e|ing) with AI[^\n]*(?:illustration|visual)?/gi, '')

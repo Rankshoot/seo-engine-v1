@@ -624,6 +624,7 @@ function countWords(markdown: string): number {
 function sanitizeBlogMarkdown(markdown: string): string {
   let cleaned = markdown
     .replace(/^\s*```(?:markdown|md)?\s*/i, "").replace(/\s*```\s*$/i, "")
+    .replace(/<!--\s*Schema:\s*[\s\S]*?-->/gi, "")
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, "")
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, "");
 

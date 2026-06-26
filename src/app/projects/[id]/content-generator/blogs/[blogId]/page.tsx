@@ -205,8 +205,8 @@ export default function BlogViewerPage() {
 
   // ── CMS integration ────────────────────────────────────────────────────
   const { data: cmsIntegrationRes } = useQuery({
-    queryKey: ["user-cms-integration"],
-    queryFn:  () => integrationsApi.getUserStrapi(),
+    queryKey: ["user-cms-integration", "any"],
+    queryFn:  () => integrationsApi.getUserCms(),
     staleTime: 60_000,
   });
   const hasCmsIntegration = Boolean(cmsIntegrationRes?.success && cmsIntegrationRes?.data);

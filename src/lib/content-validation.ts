@@ -298,3 +298,45 @@ export function summarizeValidation(v: ContentValidation): string {
   if (v.ok && v.issues.length === 0) return "ok";
   return v.issues.map((i) => `${i.severity}:${i.code}`).join(", ");
 }
+
+export interface RenderPreparation {
+  /** False → the caller must show a fallback; do NOT render `content`. */
+  ok: boolean;
+  /** Safe markdown to render (possibly recovered from a leaked envelope + sanitized). */
+  content: string;
+  /** True when `content` was salvaged from a leaked JSON envelope. */
+  recovered: boolean;
+  validation: ContentValidation;
+}
+
+/**
+ * Render-time guard. Given stored content, returns markdown that is safe to
+ * render — transparently recovering from a leaked JSON envelope when possible —
+ * or `ok: false` so the caller renders a graceful fallback instead of raw JSON.
+ *
+ * This repairs already-persisted broken rows at view time without a DB write.
+ */
+export function prepareForRender(content: string, opts: ValidateOptions): RenderPreparation {
+  const base = (content ?? "").trim();
+  const v = validateGeneratedContent(base, opts);
+  if (v.ok) return { ok: true, content: base, recovered: false, validation: v };
+
+  // 1. Cheap recovery from a leaked JSON envelope.
+  if (looksLikeRawJsonEnvelope(base)) {
+    const recovered = recoverContentFromEnvelope(base);
+    if (recovered) {
+      const cleaned = sanitizeForExport(recovered);
+      const rv = validateGeneratedContent(cleaned, opts);
+      if (rv.ok) return { ok: true, content: cleaned, recovered: true, validation: rv };
+    }
+  }
+
+  // 2. Last resort: aggressive sanitize; use it only if it becomes valid.
+  const cleaned = sanitizeForExport(base);
+  if (cleaned && cleaned !== base) {
+    const cv = validateGeneratedContent(cleaned, opts);
+    if (cv.ok) return { ok: true, content: cleaned, recovered: true, validation: cv };
+  }
+
+  return { ok: false, content: "", recovered: false, validation: v };
+}

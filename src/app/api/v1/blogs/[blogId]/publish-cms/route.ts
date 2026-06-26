@@ -99,6 +99,22 @@ export async function POST(
     }
   }
 
+  // ── Validation gate: never publish broken content to the user's CMS ──
+  // Recover a leaked-envelope draft if possible; block when it can't be salvaged;
+  // strip placeholder images / leaked artifacts before pushing.
+  const { prepareForRender, sanitizeForExport } = await import("@/lib/content-validation");
+  const prepared = prepareForRender(contentForCms, { type: "blog", metaDescription: blog.meta_description });
+  if (!prepared.ok) {
+    return apiJson(
+      {
+        success: false,
+        error: `This draft can't be published — it failed validation (${prepared.validation.fatalCodes.join(", ") || "malformed content"}). Open it, regenerate a clean version, then publish again.`,
+      },
+      { status: 422 }
+    );
+  }
+  contentForCms = sanitizeForExport(prepared.content);
+
   const client = createUserStrapiClient(integration.base_url, integration.api_token, integration.collection_name);
 
   try {

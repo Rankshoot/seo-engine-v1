@@ -7,6 +7,19 @@ import {
   preprocessMarkdownForDocx,
   stripVisualPlaceholders,
 } from './visual-export';
+import { prepareForRender, sanitizeForExport } from './content-validation';
+
+/**
+ * Make a blog safe to export: recover leaked-envelope content when possible and
+ * strip placeholder images / leaked JSON artifacts, so a broken draft can never
+ * be serialized into a downloaded file. Returns a shallow clone (or the original
+ * when nothing changed).
+ */
+function exportSafeBlog(blog: Blog): Blog {
+  const prepared = prepareForRender(blog.content ?? "", { type: "blog" });
+  const content = sanitizeForExport(prepared.ok ? prepared.content : (blog.content ?? ""));
+  return content === blog.content ? blog : { ...blog, content };
+}
 
 export function extractYouTubeId(url: string): string | null {
   try {
@@ -40,6 +53,7 @@ function cleanMarkdownForExport(markdown: string): string {
 // ─── Public API ────────────────────────────────────────────────────────────
 
 export function exportToMarkdown(blog: Blog, projectMeta?: ProjectMeta): Blob {
+  blog = exportSafeBlog(blog);
   const orgBlock =
     projectMeta?.company?.trim() ?
       `organization: "${escapeYaml(projectMeta.company.trim())}"
@@ -84,6 +98,7 @@ ${orgBlock}---
 }
 
 export function exportToHTML(blog: Blog, projectMeta?: ProjectMeta): Blob {
+  blog = exportSafeBlog(blog);
   // Render visual placeholders as inline HTML/SVG before line-by-line parsing.
   // Use 'paper' variant as a neutral default for standalone HTML export.
   const body = renderMarkdownToHtml(preprocessMarkdownForHtmlExport(blog.content, 'paper'));
@@ -156,6 +171,7 @@ export function exportToText(
   blog: Blog,
   opts?: { publisherLine?: string },
 ): Blob {
+  blog = exportSafeBlog(blog);
   const stripped = stripVisualPlaceholders(blog.content)
     // Drop image markdown — they make no sense in plain text.
     .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
@@ -188,6 +204,7 @@ export function exportToText(
 }
 
 export async function exportToDocx(blog: Blog): Promise<Blob> {
+  blog = exportSafeBlog(blog);
   const {
     Document, Packer, Paragraph, TextRun, ImageRun,
     HeadingLevel, ExternalHyperlink, AlignmentType,

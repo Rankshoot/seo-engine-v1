@@ -35,6 +35,7 @@ import type {
   WhitepaperContentData,
 } from './types';
 import { brandFaviconUrl, brandSiteUrl, displayDomain } from './studio-brand';
+import { sanitizeForExport } from './content-validation';
 
 // ─── Public format identifiers ─────────────────────────────────────────────
 
@@ -160,7 +161,7 @@ export async function exportEbook(blog: Blog, format: EbookExportFormat, project
   }
 
   if (format === 'chapters-txt') {
-    const chapters = splitMarkdownByH2(stripVisualPlaceholders(blog.content));
+    const chapters = splitMarkdownByH2(stripVisualPlaceholders(sanitizeForExport(blog.content)));
     const out = chapters
       .map((c, i) => `CHAPTER ${i + 1}: ${c.title}\n${'='.repeat(60)}\n\n${stripMarkdown(c.body)}`)
       .join('\n\n\n');
@@ -229,7 +230,7 @@ export async function exportWhitepaper(
     }
     lines.push('EXECUTIVE SUMMARY');
     lines.push('-'.repeat(60));
-    lines.push(data.executive_summary || extractExecSummary(blog.content) || '(no executive summary)');
+    lines.push(data.executive_summary || extractExecSummary(sanitizeForExport(blog.content)) || '(no executive summary)');
     if (data.recommendations?.length) {
       lines.push('');
       lines.push('RECOMMENDATIONS');
@@ -368,7 +369,7 @@ function buildEbookPrintHtml(
     .map(c => `<li><span class="toc-num">${String(c.number).padStart(2, '0')}</span> ${escapeHtml(c.title)}</li>`)
     .join('');
   // Pre-process visual placeholders → inline HTML/SVG before line-by-line rendering
-  const body = renderMarkdownToBookHtml(preprocessMarkdownForHtmlExport(blog.content, 'ebook'));
+  const body = renderMarkdownToBookHtml(preprocessMarkdownForHtmlExport(sanitizeForExport(blog.content), 'ebook'));
   const faqs = (data.faqs ?? [])
     .map(q => `<div class="faq"><h3>${escapeHtml(q.question)}</h3><p>${escapeHtml(q.answer)}</p></div>`)
     .join('');
@@ -458,7 +459,7 @@ function buildWhitepaperPrintHtml(
     .map((u, i) => `<li><span>[${i + 1}]</span> <a href="${escapeAttr(u)}">${escapeHtml(u)}</a></li>`)
     .join('');
   // Pre-process visual placeholders → inline HTML/SVG before line-by-line rendering
-  const body = renderMarkdownToBookHtml(preprocessMarkdownForHtmlExport(blog.content, 'paper'));
+  const body = renderMarkdownToBookHtml(preprocessMarkdownForHtmlExport(sanitizeForExport(blog.content), 'paper'));
 
   return `<!DOCTYPE html>
 <html lang="en"><head>

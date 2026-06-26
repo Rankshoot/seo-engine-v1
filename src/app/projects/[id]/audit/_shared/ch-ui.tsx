@@ -52,9 +52,9 @@ export function ScoreRing({
 }
 
 export function scoreColor(score: number): string {
-  if (score >= 75) return "#22c55e";
-  if (score >= 55) return "#f59e0b";
-  return "#ef4444";
+  if (score >= 75) return "var(--status-success)";
+  if (score >= 55) return "var(--status-warning)";
+  return "var(--status-danger)";
 }
 
 export function scoreGrade(score: number): string {
@@ -70,10 +70,10 @@ export function scoreGrade(score: number): string {
 
 export function SeverityChip({ severity }: { severity: string }) {
   const cls: Record<string, string> = {
-    critical: "bg-rose-500/15 text-rose-400 border-rose-500/20",
-    high: "bg-orange-500/15 text-orange-400 border-orange-500/20",
-    medium: "bg-amber-500/15 text-amber-400 border-amber-500/20",
-    low: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+    critical: "bg-status-danger/15 text-status-danger border-status-danger/25",
+    high: "bg-status-warning/20 text-status-warning border-status-warning/30",
+    medium: "bg-status-warning/10 text-status-warning border-status-warning/20",
+    low: "bg-status-success/15 text-status-success border-status-success/25",
   };
   const c = cls[severity] ?? "bg-surface-secondary text-text-tertiary border-border-subtle";
   return (
@@ -107,22 +107,22 @@ export function CategoryBadge({ category }: { category: string }) {
 
 export function RubricStatus({ status }: { status: "pass" | "warn" | "fail" }) {
   if (status === "pass") return (
-    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-500/15 flex items-center justify-center">
-      <svg className="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-status-success/15 flex items-center justify-center">
+      <svg className="w-3 h-3 text-status-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M20 6 9 17l-5-5" />
       </svg>
     </span>
   );
   if (status === "warn") return (
-    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-amber-500/15 flex items-center justify-center">
-      <svg className="w-3 h-3 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-status-warning/15 flex items-center justify-center">
+      <svg className="w-3 h-3 text-status-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M3.56 21h16.88a2 2 0 0 0 1.71-3.03L13.71 3.86a2 2 0 0 0-3.42 0L1.85 17.97A2 2 0 0 0 3.56 21z" />
       </svg>
     </span>
   );
   return (
-    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-rose-500/15 flex items-center justify-center">
-      <svg className="w-3 h-3 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-status-danger/15 flex items-center justify-center">
+      <svg className="w-3 h-3 text-status-danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M18 6 6 18M6 6l12 12" />
       </svg>
     </span>
@@ -253,7 +253,7 @@ export function StepIndicator({
         return (
           <div key={step.label} className="flex items-center gap-2">
             <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium transition-all ${
-              done ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+              done ? "bg-status-success/15 text-status-success border border-status-success/25"
                 : active ? "bg-brand-violet/15 text-brand-violet border border-brand-violet/20"
                 : "bg-surface-secondary text-text-tertiary border border-border-subtle"
             }`}>
@@ -269,7 +269,7 @@ export function StepIndicator({
               {step.label}
             </div>
             {i < steps.length - 1 && (
-              <div className={`w-4 h-px ${done ? "bg-emerald-500/40" : "bg-border-subtle"}`} />
+              <div className={`w-4 h-px ${done ? "bg-status-success/40" : "bg-border-subtle"}`} />
             )}
           </div>
         );
@@ -282,10 +282,10 @@ export function StepIndicator({
 
 export function KeywordVerdictChip({ verdict, volume }: { verdict: string; volume?: number }) {
   const map: Record<string, { cls: string; label: string }> = {
-    trending: { cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20", label: "📈 Trending" },
-    stable: { cls: "bg-blue-500/15 text-blue-400 border-blue-500/20", label: "→ Stable" },
-    declining: { cls: "bg-rose-500/15 text-rose-400 border-rose-500/20", label: "📉 Declining" },
-    niche: { cls: "bg-amber-500/15 text-amber-400 border-amber-500/20", label: "🎯 Niche" },
+    trending: { cls: "bg-status-success/15 text-status-success border-status-success/25", label: "📈 Trending" },
+    stable: { cls: "bg-status-info/15 text-status-info border-status-info/25", label: "→ Stable" },
+    declining: { cls: "bg-status-danger/15 text-status-danger border-status-danger/25", label: "📉 Declining" },
+    niche: { cls: "bg-status-warning/15 text-status-warning border-status-warning/25", label: "🎯 Niche" },
     unknown: { cls: "bg-surface-secondary text-text-tertiary border-border-subtle", label: "Unknown" },
   };
   const { cls, label } = map[verdict] ?? map.unknown;

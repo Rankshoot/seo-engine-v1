@@ -167,7 +167,7 @@ export function DropdownItem({
         "flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-[13px] transition-colors",
         "disabled:opacity-40 disabled:cursor-not-allowed",
         destructive
-          ? "text-rose-400 hover:bg-rose-500/10"
+          ? "text-status-danger hover:bg-status-danger/10"
           : "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
         className,
       )}

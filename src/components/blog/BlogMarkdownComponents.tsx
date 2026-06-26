@@ -188,7 +188,7 @@ function PlaceholderImageCard({
           )}
         </span>
         {error && (
-          <span className="text-[11px] text-rose-500">{error}</span>
+          <span className="text-[11px] text-status-danger">{error}</span>
         )}
       </span>
       {alt && (

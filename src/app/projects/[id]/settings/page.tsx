@@ -406,10 +406,10 @@ export default function ProjectSettingsPage() {
 
       {/* ── GSC alerts ──────────────────────────────────────────────────────── */}
       {gscError && (
-        <div className="rounded-[12px] border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-[13px] text-rose-300">{gscError}</div>
+        <div className="rounded-[12px] border border-status-danger/25 bg-status-danger/10 px-4 py-3 text-[13px] text-status-danger">{gscError}</div>
       )}
       {gscMessage && (
-        <div className="rounded-[12px] border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-[13px] text-emerald-300">{gscMessage}</div>
+        <div className="rounded-[12px] border border-status-success/25 bg-status-success/10 px-4 py-3 text-[13px] text-status-success">{gscMessage}</div>
       )}
 
       {/* ── Brand identity ───────────────────────────────────────────────────── */}
@@ -433,7 +433,7 @@ export default function ProjectSettingsPage() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] border border-border-subtle text-xs font-medium text-text-secondary hover:text-text-primary hover:border-brand-violet/40 hover:bg-surface-hover transition-all disabled:opacity-50"
             >
               {refreshStatus === "success" ? (
-                <Check className="w-3.5 h-3.5 text-emerald-500" />
+                <Check className="w-3.5 h-3.5 text-status-success" />
               ) : refreshStatus === "error" ? (
                 <AlertCircle className="w-3.5 h-3.5 text-brand-coral" />
               ) : (
@@ -526,8 +526,8 @@ export default function ProjectSettingsPage() {
             {gscLoading ? (
               <Spinner size={18} />
             ) : gscConnected ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-[12px] font-semibold text-emerald-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-status-success/25 bg-status-success/10 px-3 py-1 text-[12px] font-semibold text-status-success">
+                <span className="h-1.5 w-1.5 rounded-full bg-status-success" />
                 Connected
               </span>
             ) : (
@@ -558,7 +558,7 @@ export default function ProjectSettingsPage() {
                     "Surface low-CTR pages that need title/meta fixes",
                   ].map(item => (
                     <li key={item} className="flex items-start gap-2">
-                      <svg className="w-3.5 h-3.5 mt-0.5 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                      <svg className="w-3.5 h-3.5 mt-0.5 text-status-success shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
                       </svg>
                       {item}
@@ -586,7 +586,7 @@ export default function ProjectSettingsPage() {
                     type="button"
                     onClick={handleDisconnect}
                     disabled={gscActionBusy}
-                    className="inline-flex h-9 items-center gap-2 rounded-full border border-rose-500/20 bg-rose-500/8 px-4 text-[13px] font-medium text-rose-400 hover:bg-rose-500/15 disabled:opacity-40 transition-all"
+                    className="inline-flex h-9 items-center gap-2 rounded-full border border-status-danger/20 bg-status-danger/8 px-4 text-[13px] font-medium text-status-danger hover:bg-status-danger/15 disabled:opacity-40 transition-all"
                   >
                     Disconnect
                   </button>

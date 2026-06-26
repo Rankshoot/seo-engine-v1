@@ -180,8 +180,8 @@ export function AdminOverviewDashboard() {
       subtitle="Last 30 days for usage and cost · all-time for totals."
     >
       {data.instrumentationNote ? (
-        <Card className="mb-6 p-4 border border-amber-500/30 bg-amber-500/10">
-          <p className="text-[13px] text-amber-200/90">{data.instrumentationNote}</p>
+        <Card className="mb-6 p-4 border border-status-warning/30 bg-status-warning/10">
+          <p className="text-[13px] text-status-warning/90">{data.instrumentationNote}</p>
         </Card>
       ) : null}
 
@@ -259,7 +259,7 @@ export function AdminOverviewDashboard() {
                         className={cn(
                           "tabular-nums",
                           p.cacheHitRatePct >= 50
-                            ? "text-emerald-400"
+                            ? "text-status-success"
                             : "text-text-secondary"
                         )}
                       >
@@ -335,7 +335,7 @@ export function AdminOverviewDashboard() {
                 className={cn(
                   "capitalize text-[12px] font-medium",
                   e.severity === "critical" || e.severity === "high"
-                    ? "text-rose-400"
+                    ? "text-status-danger"
                     : "text-text-tertiary"
                 )}
               >

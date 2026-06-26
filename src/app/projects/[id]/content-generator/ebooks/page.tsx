@@ -212,7 +212,7 @@ export default function EbookGeneratorPage() {
             <PageTitle>{heroTitle}</PageTitle>
             <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
             {!canGenerateEbook && quota && (
-              <div className="mt-3 text-[14px] text-rose-400 font-medium">
+              <div className="mt-3 text-[14px] text-status-danger font-medium">
                 Ebook limit reached ({quota.ebooks.used}/{quota.ebooks.effectiveLimit}). Upgrade your plan to generate more ebooks.
               </div>
             )}

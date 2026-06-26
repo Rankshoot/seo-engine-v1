@@ -43,8 +43,8 @@ const AI_MODELS = [
 function StatusPill({ status }: { status: string }) {
   const tone =
     status === "success"
-      ? "bg-emerald-500/15 text-emerald-400"
-      : "bg-rose-500/15 text-rose-400";
+      ? "bg-status-success/15 text-status-success"
+      : "bg-status-danger/15 text-status-danger";
   return (
     <span
       className={cn(
@@ -295,7 +295,7 @@ export function AdminAiLogsDashboard() {
         ) : detail ? (
           <>
             {(detail.hasFullPrompt || detail.hasFullResponse) && (
-              <p className="mb-4 text-[12px] text-amber-400/90 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+              <p className="mb-4 text-[12px] text-status-warning/90 rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2">
                 Debug logging is on — full prompt/response may contain sensitive content.
               </p>
             )}

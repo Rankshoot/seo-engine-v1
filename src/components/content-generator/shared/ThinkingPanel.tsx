@@ -61,14 +61,14 @@ export function ThinkingPanel({ thinking, isStreaming, className }: ThinkingPane
           <span
             className={cn(
               "absolute inline-flex h-full w-full rounded-full opacity-40",
-              isStreaming ? "animate-ping bg-violet-500" : "bg-violet-700"
+              isStreaming ? "animate-ping bg-brand-violet" : "bg-brand-violet/70"
             )}
           />
           <span className="relative text-[14px]">🧠</span>
         </span>
 
         <span className="flex-1 flex items-center gap-2">
-          <span className="text-[12px] font-mono font-medium uppercase tracking-widest text-violet-300">
+          <span className="text-[12px] font-mono font-medium uppercase tracking-widest text-brand-violet">
             {isStreaming ? "AI is thinking" : "AI reasoning"}
           </span>
           {isStreaming && (
@@ -76,14 +76,14 @@ export function ThinkingPanel({ thinking, isStreaming, className }: ThinkingPane
               {[0, 0.15, 0.3].map((delay, i) => (
                 <span
                   key={i}
-                  className="inline-block w-[3px] h-[3px] rounded-full bg-violet-400 animate-bounce"
+                  className="inline-block w-[3px] h-[3px] rounded-full bg-brand-violet animate-bounce"
                   style={{ animationDelay: `${delay}s` }}
                 />
               ))}
             </span>
           )}
           {!isStreaming && wordCount > 0 && (
-            <span className="text-[10px] font-mono text-violet-500">
+            <span className="text-[10px] font-mono text-brand-violet">
               {wordCount.toLocaleString()} words
             </span>
           )}
@@ -92,7 +92,7 @@ export function ThinkingPanel({ thinking, isStreaming, className }: ThinkingPane
         {/* Expand / collapse chevron */}
         <span
           className={cn(
-            "text-violet-400 transition-transform duration-200 text-[10px]",
+            "text-brand-violet transition-transform duration-200 text-[10px]",
             expanded ? "rotate-180" : "rotate-0"
           )}
         >
@@ -106,21 +106,21 @@ export function ThinkingPanel({ thinking, isStreaming, className }: ThinkingPane
           ref={scrollRef}
           className={cn(
             "max-h-[320px] overflow-y-auto px-4 pb-4",
-            "scrollbar-thin scrollbar-thumb-violet-800 scrollbar-track-transparent"
+            "scrollbar-thin scrollbar-thumb-brand-violet/60 scrollbar-track-transparent"
           )}
         >
           <div
             className={cn(
               "font-mono text-[12px] leading-relaxed whitespace-pre-wrap",
-              "text-violet-200/80 selection:bg-violet-700/50"
+              "text-brand-violet/80 selection:bg-brand-violet/50"
             )}
           >
             {thinking || (
-              <span className="text-violet-400/50 italic">Waiting for thinking tokens…</span>
+              <span className="text-brand-violet/50 italic">Waiting for thinking tokens…</span>
             )}
             {isStreaming && (
               <span
-                className="inline-block w-[2px] h-[14px] ml-0.5 align-middle bg-violet-400 animate-pulse"
+                className="inline-block w-[2px] h-[14px] ml-0.5 align-middle bg-brand-violet animate-pulse"
                 aria-hidden
               />
             )}
@@ -132,7 +132,7 @@ export function ThinkingPanel({ thinking, isStreaming, className }: ThinkingPane
       {!expanded && thinking && (
         <div className="px-4 pb-3">
           <div className="relative h-8 overflow-hidden">
-            <p className="font-mono text-[11px] text-violet-300/50 truncate">{thinking.slice(0, 120)}…</p>
+            <p className="font-mono text-[11px] text-brand-violet/50 truncate">{thinking.slice(0, 120)}…</p>
             <div className="absolute inset-0 bg-gradient-to-r from-transparent to-[hsl(250,15%,8%)]" />
           </div>
         </div>

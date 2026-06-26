@@ -35,11 +35,11 @@ const ERROR_STATUS_FILTER = ["open", "resolved"] as const;
 function SeverityPill({ severity }: { severity: string }) {
   const tone =
     severity === "critical"
-      ? "bg-rose-500/20 text-rose-400"
+      ? "bg-status-danger/20 text-status-danger"
       : severity === "high"
-        ? "bg-orange-500/15 text-orange-400"
+        ? "bg-status-danger/15 text-status-danger"
         : severity === "medium"
-          ? "bg-amber-500/15 text-amber-400"
+          ? "bg-status-warning/15 text-status-warning"
           : "bg-surface-secondary text-text-tertiary";
   return (
     <span
@@ -59,7 +59,7 @@ function StatusPill({ status }: { status: string }) {
     <span
       className={cn(
         "inline-flex px-2 py-0.5 rounded text-[11px] font-medium capitalize",
-        open ? "bg-rose-500/15 text-rose-400" : "bg-emerald-500/15 text-emerald-400"
+        open ? "bg-status-danger/15 text-status-danger" : "bg-status-success/15 text-status-success"
       )}
     >
       {status}
@@ -211,7 +211,7 @@ export function AdminErrorsDashboard() {
       />
 
       {resolveError ? (
-        <p className="mb-4 text-[13px] text-rose-400">{resolveError}</p>
+        <p className="mb-4 text-[13px] text-status-danger">{resolveError}</p>
       ) : null}
 
       {isError ? (

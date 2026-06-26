@@ -32,10 +32,10 @@ function HealthBadge({ score }: { score: number | null }) {
   }
   const tone =
     score >= 70
-      ? "text-emerald-400"
+      ? "text-status-success"
       : score >= 50
-        ? "text-amber-400"
-        : "text-rose-400";
+        ? "text-status-warning"
+        : "text-status-danger";
   return <span className={cn("tabular-nums font-medium", tone)}>{score}</span>;
 }
 

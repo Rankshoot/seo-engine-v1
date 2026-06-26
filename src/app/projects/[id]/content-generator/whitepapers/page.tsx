@@ -207,7 +207,7 @@ export default function WhitepaperGeneratorPage() {
             <PageTitle>{heroTitle}</PageTitle>
             <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
             {!canGenerateWhitepaper && quota && (
-              <div className="mt-3 text-[14px] text-rose-400 font-medium">
+              <div className="mt-3 text-[14px] text-status-danger font-medium">
                 Whitepaper limit reached ({quota.whitepapers.used}/{quota.whitepapers.effectiveLimit}). Upgrade your plan to generate more whitepapers.
               </div>
             )}

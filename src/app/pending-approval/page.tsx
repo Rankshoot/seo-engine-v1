@@ -72,9 +72,9 @@ export default function PendingApprovalPage() {
       case "denied":
         return (
           <>
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-red-500/10">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-status-danger/10">
               <svg
-                className="h-7 w-7 text-red-500"
+                className="h-7 w-7 text-status-danger"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -93,9 +93,9 @@ export default function PendingApprovalPage() {
       case "revoked":
         return (
           <>
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-red-500/10">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-status-danger/10">
               <svg
-                className="h-7 w-7 text-red-500"
+                className="h-7 w-7 text-status-danger"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -114,9 +114,9 @@ export default function PendingApprovalPage() {
       case "not_found":
         return (
           <>
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-orange-500/10">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-status-warning/10">
               <svg
-                className="h-7 w-7 text-orange-400"
+                className="h-7 w-7 text-status-warning"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -135,9 +135,9 @@ export default function PendingApprovalPage() {
       case "db_error":
         return (
           <>
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-orange-500/10">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-status-warning/10">
               <svg
-                className="h-7 w-7 text-orange-400"
+                className="h-7 w-7 text-status-warning"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -157,9 +157,9 @@ export default function PendingApprovalPage() {
       default:
         return (
           <>
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/10">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-status-warning/10">
               <svg
-                className="h-7 w-7 text-amber-400"
+                className="h-7 w-7 text-status-warning"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"

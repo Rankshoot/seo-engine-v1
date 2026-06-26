@@ -43,9 +43,9 @@ function TypePill({ type }: { type: string }) {
 function StatusPill({ status }: { status: string }) {
   const tone =
     status === "published"
-      ? "bg-emerald-500/15 text-emerald-400"
+      ? "bg-status-success/15 text-status-success"
       : status === "approved"
-        ? "bg-sky-500/15 text-sky-400"
+        ? "bg-status-info/15 text-status-info"
         : "bg-surface-secondary text-text-secondary";
   return (
     <span className={cn("inline-flex px-2 py-0.5 rounded text-[11px] font-medium capitalize", tone)}>

@@ -12,21 +12,21 @@ const STAGES = [
 ] as const;
 
 const IMPACT_COLORS: Record<string, string> = {
-  High: "border-rose-500/40 bg-rose-500/10 text-rose-400",
-  Medium: "border-amber-500/40 bg-amber-500/10 text-amber-400",
+  High: "border-status-danger/40 bg-status-danger/10 text-status-danger",
+  Medium: "border-status-warning/40 bg-status-warning/10 text-status-warning",
   Low: "border-border-subtle bg-surface-elevated text-text-tertiary",
 };
 
 function scoreColor(score: number): string {
-  if (score >= 80) return "text-emerald-400";
-  if (score >= 60) return "text-amber-400";
-  return "text-rose-400";
+  if (score >= 80) return "text-status-success";
+  if (score >= 60) return "text-status-warning";
+  return "text-status-danger";
 }
 
 function paramBarColor(score: number): string {
-  if (score >= 80) return "bg-emerald-500";
-  if (score >= 60) return "bg-amber-500";
-  return "bg-rose-500";
+  if (score >= 80) return "bg-status-success";
+  if (score >= 60) return "bg-status-warning";
+  return "bg-status-danger";
 }
 
 function hostLabel(url: string): string {
@@ -302,7 +302,7 @@ export function BlogDeepAnalysisModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary hover:bg-rose-500/10 hover:text-rose-300 transition-colors"
+              className="rounded-xl border border-border-subtle bg-surface-elevated p-2 text-text-tertiary hover:bg-status-danger/10 hover:text-status-danger transition-colors"
               aria-label="Close"
             >
               <CloseIcon />
@@ -346,7 +346,7 @@ function ModalPanel({
 
 function ErrorBanner({ message }: { message: string }) {
   return (
-    <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-[13px] text-rose-400">
+    <div className="rounded-xl border border-status-danger/30 bg-status-danger/10 p-4 text-[13px] text-status-danger">
       {message}
     </div>
   );
@@ -383,7 +383,7 @@ function LoadingStages({ stageIndex }: { stageIndex: number }) {
                 active
                   ? "border-brand-action/40 bg-brand-action/10 text-text-primary"
                   : done
-                    ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-400"
+                    ? "border-status-success/25 bg-status-success/5 text-status-success"
                     : "border-border-subtle text-text-tertiary"
               }`}
             >

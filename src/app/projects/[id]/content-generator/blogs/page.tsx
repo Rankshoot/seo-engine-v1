@@ -514,12 +514,12 @@ export default function BlogGeneratorPage() {
   return (
     <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
       {isAuditFixMode && (
-        <div className="mb-4 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/8 px-4 py-3">
-          <span className="mt-0.5 shrink-0 rounded-full border border-yellow-500/40 bg-yellow-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-yellow-400">
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-status-warning/30 bg-status-warning/8 px-4 py-3">
+          <span className="mt-0.5 shrink-0 rounded-full border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-warning">
             Enhancing existing blog
           </span>
           <div className="min-w-0">
-            <p className="text-[12px] font-semibold text-yellow-300 leading-snug truncate">{auditTitle || auditUrl}</p>
+            <p className="text-[12px] font-semibold text-status-warning leading-snug truncate">{auditTitle || auditUrl}</p>
             <p className="text-[11px] text-text-tertiary mt-0.5">
               Applying surgical fixes from content audit — not a full rewrite.{" "}
               <a href={auditUrl} target="_blank" rel="noopener noreferrer" className="text-brand-action hover:underline underline-offset-2">
@@ -530,7 +530,7 @@ export default function BlogGeneratorPage() {
         </div>
       )}
       {!canGenerateBlog && quota && (
-        <div className="text-[14px] text-rose-400 font-medium">
+        <div className="text-[14px] text-status-danger font-medium">
           Blog limit reached ({quota.blogs.used}/{quota.blogs.effectiveLimit}). Upgrade your plan to generate more blogs.
         </div>
       )}
@@ -792,7 +792,7 @@ export default function BlogGeneratorPage() {
                         Fetching keyword data from Ahrefs…
                       </div>
                     ) : ahrefsError ? (
-                      <p className="text-[12px] text-rose-400">{ahrefsError}</p>
+                      <p className="text-[12px] text-status-danger">{ahrefsError}</p>
                     ) : (ahrefsH2s.length > 0 || ahrefsFaqs.length > 0) ? (
                       <div className="space-y-3 pt-1">
                         {ahrefsH2s.length > 0 && (
@@ -817,7 +817,7 @@ export default function BlogGeneratorPage() {
                             </p>
                             <div className="flex flex-wrap gap-1.5">
                               {ahrefsFaqs.map((k, i) => (
-                                <span key={i} className="inline-flex items-center gap-1 rounded-full border border-blue-500/20 bg-blue-500/5 px-2 py-0.5 text-[11px] text-blue-300">
+                                <span key={i} className="inline-flex items-center gap-1 rounded-full border border-status-info/20 bg-status-info/5 px-2 py-0.5 text-[11px] text-status-info">
                                   {k.keyword}
                                   <span className="text-[9px] opacity-60">vol {k.volume}</span>
                                 </span>
@@ -825,7 +825,7 @@ export default function BlogGeneratorPage() {
                             </div>
                           </div>
                         )}
-                        <p className="text-[10px] text-emerald-400">
+                        <p className="text-[10px] text-status-success">
                           ✓ These keywords will be woven into the blog's H2 headings and FAQ section.
                         </p>
                       </div>
@@ -851,7 +851,7 @@ export default function BlogGeneratorPage() {
                         Finding top-ranking pages via DataForSEO…
                       </div>
                     ) : competitorError ? (
-                      <p className="text-[12px] text-rose-400">{competitorError}</p>
+                      <p className="text-[12px] text-status-danger">{competitorError}</p>
                     ) : competitorPages.length > 0 ? (
                       <div className="space-y-2 pt-1">
                         <p className="text-[10px] font-bold uppercase tracking-wider text-text-tertiary">
@@ -870,7 +870,7 @@ export default function BlogGeneratorPage() {
                             </div>
                           ))}
                         </div>
-                        <p className="text-[10px] text-emerald-400">
+                        <p className="text-[10px] text-status-success">
                           ✓ At generation time we'll scrape these pages, find what they're missing, and use those gaps to make your blog rank higher.
                         </p>
                       </div>

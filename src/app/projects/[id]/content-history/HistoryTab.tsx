@@ -37,7 +37,7 @@ function fmtDate(iso: string): string {
 }
 
 function statusTone(status: string): string {
-  if (status === "published") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-400";
+  if (status === "published") return "border-status-success/30 bg-status-success/10 text-status-success";
   if (status === "approved") return "border-brand-action/30 bg-brand-action/10 text-brand-action";
   return "border-border-subtle bg-surface-secondary text-text-secondary";
 }

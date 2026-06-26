@@ -956,7 +956,7 @@ export default function BlogViewerPage() {
               disabled={editMode || savingContent}
               className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[12px] font-bold transition-all disabled:opacity-40 ${
                 analysisIsStale
-                  ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
+                  ? "bg-status-warning/15 border border-status-warning/30 text-status-warning hover:bg-status-warning/25"
                   : contentAnalysis
                     ? "bg-surface-elevated border border-border-subtle text-text-primary hover:bg-surface-hover hover:border-border-strong shadow-sm"
                     : "bg-brand-action text-brand-on-primary hover:opacity-90 shadow-md shadow-brand-action/20"
@@ -1021,7 +1021,7 @@ export default function BlogViewerPage() {
                 type="button"
                 onClick={handleRemoveCoverImage}
                 disabled={uploadingCoverImage || generatingCoverImage}
-                className="p-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/40 border border-rose-500/30 text-rose-200 transition-colors"
+                className="p-2.5 rounded-xl bg-status-danger/20 hover:bg-status-danger/40 border border-status-danger/30 text-status-danger transition-colors"
                 title="Remove cover"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1109,7 +1109,7 @@ export default function BlogViewerPage() {
           </p>
         </div>
       )}
-      {fixError && <div className="px-4 pb-3"><p className="text-[10px] text-rose-500">{fixError}</p></div>}
+      {fixError && <div className="px-4 pb-3"><p className="text-[10px] text-status-danger">{fixError}</p></div>}
 
       {/* Editorial metadata */}
       <Divider />
@@ -1138,7 +1138,7 @@ export default function BlogViewerPage() {
               <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusInfo.color }} />
               <p className="text-[10px] text-text-tertiary">{statusInfo.hint}</p>
             </div>
-            {statusError && <p className="mt-1 text-[10px] text-rose-500">{statusError}</p>}
+            {statusError && <p className="mt-1 text-[10px] text-status-danger">{statusError}</p>}
           </div>
         )}
 
@@ -1288,7 +1288,7 @@ export default function BlogViewerPage() {
       >
         <div ref={blogPanelRef} className="h-full overflow-y-auto">
           {editError && (
-            <div className="px-5 py-2.5 text-[12px] text-rose-500 bg-rose-500/5 border-b border-border-subtle">
+            <div className="px-5 py-2.5 text-[12px] text-status-danger bg-status-danger/5 border-b border-border-subtle">
               {editError}
             </div>
           )}

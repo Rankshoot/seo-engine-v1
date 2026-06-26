@@ -34,10 +34,10 @@ const SORT_OPTIONS = [
 function StatusPill({ status }: { status: string }) {
   const tone =
     status === "success"
-      ? "bg-emerald-500/15 text-emerald-400"
+      ? "bg-status-success/15 text-status-success"
       : status === "cached"
-        ? "bg-sky-500/15 text-sky-400"
-        : "bg-rose-500/15 text-rose-400";
+        ? "bg-status-info/15 text-status-info"
+        : "bg-status-danger/15 text-status-danger";
   return (
     <span
       className={cn(
@@ -120,7 +120,7 @@ export function AdminApiUsageDashboard() {
         align: "center",
         cell: (row) =>
           row.cacheHit ? (
-            <span className="text-[11px] text-sky-400 font-medium">Hit</span>
+            <span className="text-[11px] text-status-info font-medium">Hit</span>
           ) : (
             <span className="text-text-tertiary">—</span>
           ),

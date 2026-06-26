@@ -465,23 +465,30 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           deepAnalysisSummary,
         });
 
-        // ── Stage 4: Draft with streaming thinking ────────────────────────
-        emit({ event: "stage", stage: "draft", detail: "Claude is thinking and drafting your blog post…" });
+        // ── Stage 4 + 5: Draft → parse → validate, with bounded auto-retry ──
+        // A malformed draft (raw JSON envelope leaking into the body, truncation,
+        // placeholder-only content) is regenerated up to MAX_GEN_ATTEMPTS times.
+        // Broken content is NEVER persisted — see the quality gate after the loop.
+        const MAX_GEN_ATTEMPTS = 2;
 
         const { getProviderForRoute } = await import("@/services/ai/providers");
         const { model: routedModel } = await getProviderForRoute("blog");
         const claudeModel = routedModel.startsWith("claude") ? routedModel : "claude-sonnet-4-6";
 
-        let fullContent = "";
-        let thinkingEmitted = false;
+        const { parseGeneratedBlogJson } = await import("@/lib/gemini");
+        const { insertBlogImagePlaceholders } = await import("@/services/openAiImages");
+        const { sanitizeBlogContent } = await import("@/lib/blog-content");
+        const {
+          validateGeneratedContent,
+          looksLikeRawJsonEnvelope,
+          recoverContentFromEnvelope,
+          summarizeValidation,
+        } = await import("@/lib/content-validation");
 
         const abortController = new AbortController();
         if (req.signal) {
           req.signal.addEventListener("abort", () => abortController.abort());
         }
-
-        wasStalled = false;
-        stallTimeoutId = undefined;
         const resetStallTimeout = () => {
           if (stallTimeoutId) clearTimeout(stallTimeoutId);
           stallTimeoutId = setTimeout(() => {
@@ -490,51 +497,114 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           }, 120000);
         };
 
-        resetStallTimeout();
-
         const anthropic = getAnthropicClient();
-        const claudeStream = anthropic.messages.stream({
-          model: claudeModel,
-          max_tokens: 32000,
-          thinking: { type: "enabled", budget_tokens: 8000 },
-          messages: [{ role: "user", content: blogPrompt }],
-          system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
-        }, { signal: abortController.signal });
 
-        for await (const event of claudeStream) {
+        // One streamed Claude draft → accumulated raw model text.
+        const draftOnce = async (): Promise<string> => {
+          let fullContent = "";
+          let thinkingEmitted = false;
           resetStallTimeout();
-          if (event.type === "content_block_start") {
-            if (event.content_block.type === "thinking") thinkingEmitted = true;
-          } else if (event.type === "content_block_delta") {
-            if (event.delta.type === "thinking_delta") {
-              if (event.delta.thinking.length >= 10) {
-                emit({ event: "thinking", chunk: event.delta.thinking });
+          const claudeStream = anthropic.messages.stream({
+            model: claudeModel,
+            max_tokens: 32000,
+            thinking: { type: "enabled", budget_tokens: 8000 },
+            messages: [{ role: "user", content: blogPrompt }],
+            system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
+          }, { signal: abortController.signal });
+
+          for await (const event of claudeStream) {
+            resetStallTimeout();
+            if (event.type === "content_block_start") {
+              if (event.content_block.type === "thinking") thinkingEmitted = true;
+            } else if (event.type === "content_block_delta") {
+              if (event.delta.type === "thinking_delta") {
+                if (event.delta.thinking.length >= 10) {
+                  emit({ event: "thinking", chunk: event.delta.thinking });
+                }
+              } else if (event.delta.type === "text_delta") {
+                fullContent += event.delta.text;
               }
-            } else if (event.delta.type === "text_delta") {
-              fullContent += event.delta.text;
             }
+          }
+
+          if (stallTimeoutId) clearTimeout(stallTimeoutId);
+          if (thinkingEmitted) emit({ event: "thinking_done" });
+          return fullContent;
+        };
+
+        // Parse + recover + sanitize one raw draft into shippable content.
+        const buildFinal = async (fullContent: string) => {
+          let blogData = parseGeneratedBlogJson(fullContent, entry, project, research);
+          // Cheap recovery: if the body leaked the JSON envelope, pull the real
+          // contentMarkdown out instead of discarding an otherwise-good draft.
+          if (looksLikeRawJsonEnvelope(blogData.content)) {
+            const recovered =
+              recoverContentFromEnvelope(blogData.content) ?? recoverContentFromEnvelope(fullContent);
+            if (recovered) {
+              blogData = { ...blogData, content: recovered, word_count: countWords(recovered) };
+            }
+          }
+          const rawContent = insertBlogImagePlaceholders(blogData.content, {
+            title: blogData.title,
+            targetKeyword: entry.focus_keyword,
+            wordCount: blogData.word_count,
+          });
+          const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
+          const finalContent = sanitizeBlogMarkdown(sanitized.content);
+          return { blogData, sanitized, finalContent };
+        };
+
+        let built: Awaited<ReturnType<typeof buildFinal>> | null = null;
+        let lastValidation: ReturnType<typeof validateGeneratedContent> | null = null;
+
+        for (let attempt = 1; attempt <= MAX_GEN_ATTEMPTS; attempt++) {
+          emit({
+            event: "stage",
+            stage: "draft",
+            detail: attempt === 1
+              ? "Claude is thinking and drafting your blog post…"
+              : `Re-drafting (attempt ${attempt}/${MAX_GEN_ATTEMPTS}) to fix a malformed draft…`,
+          });
+          wasStalled = false;
+          const fullContent = await draftOnce();
+
+          emit({ event: "stage", stage: "polish", detail: "Generating images and running SEO polish…" });
+          const candidate = await buildFinal(fullContent);
+
+          const verdict = validateGeneratedContent(candidate.finalContent, {
+            type: "blog",
+            metaDescription: candidate.blogData.meta_description,
+          });
+          lastValidation = verdict;
+
+          if (verdict.ok) {
+            built = candidate;
+            break;
+          }
+
+          console.warn(`[blog stream] draft attempt ${attempt} failed validation: ${summarizeValidation(verdict)}`);
+          if (attempt < MAX_GEN_ATTEMPTS) {
+            emit({ event: "stage", stage: "revalidate", detail: "Draft failed quality checks — regenerating a clean version…" });
           }
         }
 
-        if (stallTimeoutId) clearTimeout(stallTimeoutId);
-        if (thinkingEmitted) emit({ event: "thinking_done" });
+        // Quality gate: never persist a broken draft. Reset the entry and ask the
+        // client to retry instead of saving raw JSON the viewer can't render.
+        if (!built) {
+          if (body.entryId) {
+            try {
+              await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
+            } catch { /* best effort */ }
+          }
+          emit({
+            event: "error",
+            message: `The draft failed quality validation (${lastValidation?.fatalCodes.join(", ") || "unknown"}). No broken content was saved — please generate again.`,
+          });
+          controller.close();
+          return;
+        }
 
-        // ── Stage 5: Polish ───────────────────────────────────────────────
-        emit({ event: "stage", stage: "polish", detail: "Generating images and running SEO polish…" });
-
-        const { parseGeneratedBlogJson } = await import("@/lib/gemini");
-        const blogData = parseGeneratedBlogJson(fullContent, entry, project, research);
-
-        const { insertBlogImagePlaceholders } = await import("@/services/openAiImages");
-        const { sanitizeBlogContent } = await import("@/lib/blog-content");
-
-        const rawContent = insertBlogImagePlaceholders(blogData.content, {
-          title: blogData.title,
-          targetKeyword: entry.focus_keyword,
-          wordCount: blogData.word_count,
-        });
-        const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
-        const finalContent = sanitizeBlogMarkdown(sanitized.content);
+        const { blogData, sanitized, finalContent } = built;
         const finalWordCount = countWords(finalContent);
 
         // ── Save to DB ────────────────────────────────────────────────────

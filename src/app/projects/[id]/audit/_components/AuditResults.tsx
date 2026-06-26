@@ -16,6 +16,7 @@ export function AuditResults({
   report, reportSource, projectId, activeTab, setActiveTab,
   generating, generatedBlogId, generateError, onGenerate,
   scheduleSaving, scheduledDate, onSchedule, scheduleOpen, setScheduleOpen, onReschedule, scheduledDates,
+  onClose,
 }: {
   report: ContentAuditReport;
   reportSource: "url" | "upload";
@@ -33,6 +34,7 @@ export function AuditResults({
   setScheduleOpen: (v: boolean) => void;
   onReschedule: (date: string) => void;
   scheduledDates: Set<string>;
+  onClose?: () => void;
 }) {
   const overall = report.scores.overall;
   const grade = scoreGrade(overall);
@@ -308,22 +310,49 @@ export function AuditResults({
     return null;
   };
 
+  if (report.is_blog_post === false) {
+    return (
+      <div className="rounded-[12px] border border-amber-500/20 bg-amber-500/10 p-4 flex items-start gap-3 text-left relative">
+        <svg className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+        </svg>
+        <div className="flex-1 min-w-0">
+          <h4 className="text-[13px] font-semibold text-text-primary">Content type warning: Not classified as a blog post</h4>
+          <p className="text-[12px] text-text-tertiary mt-1 leading-relaxed">
+            {report.non_blog_warning || `We detected that this page is a ${report.content_type_verdict || 'non-blog page'}. Content Audit Studio is optimized specifically for blog posts and article structures. Some metrics might not align correctly with this content type.`}
+          </p>
+        </div>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-amber-500 hover:text-amber-600 transition-colors shrink-0 p-1 rounded-lg"
+            aria-label="Close warning banner"
+          >
+            <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {report.is_blog_post === false && (
-        <div className="rounded-[12px] border border-amber-500/20 bg-amber-500/10 p-4 flex items-start gap-3 text-left">
-          <svg className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-          </svg>
-          <div className="flex-1 min-w-0">
-            <h4 className="text-[13px] font-semibold text-text-primary">Content type warning: Not classified as a blog post</h4>
-            <p className="text-[12px] text-text-tertiary mt-1 leading-relaxed">
-              {report.non_blog_warning || `We detected that this page is a ${report.content_type_verdict || 'non-blog page'}. Content Audit Studio is optimized specifically for blog posts and article structures. Some metrics might not align correctly with this content type.`}
-            </p>
-          </div>
-        </div>
-      )}
-      <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
+      <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm relative">
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-4 right-4 text-text-tertiary hover:text-text-primary transition-colors p-1 rounded-lg hover:bg-surface-secondary/80"
+            aria-label="Close audit results"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
         <div className="flex flex-col sm:flex-row gap-6 items-start">
           <div className="flex items-center gap-5 shrink-0">
             <ScoreRing score={overall} size={96} strokeWidth={7} />

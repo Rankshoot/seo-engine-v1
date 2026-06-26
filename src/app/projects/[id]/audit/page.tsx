@@ -568,6 +568,10 @@ export default function ContentAuditStudioPage() {
               setScheduleOpen={setScheduleOpen}
               onReschedule={handleReschedule}
               scheduledDates={scheduledDates}
+              onClose={() => {
+                setReport(null);
+                resetPostAuditState();
+              }}
             />
           </div>
         )}

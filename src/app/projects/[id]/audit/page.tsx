@@ -26,6 +26,7 @@ export default function ContentAuditStudioPage() {
   const [url, setUrl] = useState("");
   const [uploadedContent, setUploadedContent] = useState("");
   const [uploadedName, setUploadedName] = useState("");
+  const [targetKeyword, setTargetKeyword] = useState("");
 
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(-1);
@@ -141,6 +142,7 @@ export default function ContentAuditStudioPage() {
         const res = await contentAuditApi.analyze(projectId, syntheticUrl, {
           uploadedContent: uploadedContent.trim(),
           uploadedTitle: uploadedName || undefined,
+          focusKeyword: targetKeyword.trim() || undefined,
         });
         if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
         setReport(res.report);
@@ -397,7 +399,14 @@ export default function ContentAuditStudioPage() {
   return (
     <div className="relative space-y-10 pb-20">
       <PageHeader
-        title="Content Audit Studio"
+        title={
+          <div className="flex items-center gap-2">
+            <span>Content Audit Studio</span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-brand-violet/15 text-brand-violet border border-brand-violet/20 tracking-normal uppercase">
+              Beta
+            </span>
+          </div>
+        }
         description="Audit any blog by URL or uploaded content — SEO, GEO, AEO scores, competitor insights, and one-click enhanced regeneration."
         actions={headerActions}
         className="[&_h1]:text-[28px] [&_h1]:sm:text-[34px]"
@@ -408,7 +417,7 @@ export default function ContentAuditStudioPage() {
         <div className="mx-auto max-w-3xl w-full rounded-[24px] border border-brand-violet/20 hover:border-brand-violet/35 bg-gradient-to-b from-surface-elevated to-surface-elevated/60 p-8 sm:p-10 shadow-[0_0_50px_-12px_rgba(99,102,241,0.15)] hover:shadow-[0_0_55px_-10px_rgba(99,102,241,0.18)] transition-all">
           {inputMode === "url" ? (
             <div className="flex flex-col items-center text-center">
-              <label className="block text-[14px] font-semibold text-text-secondary mb-4">
+              <label className="block text-[18px] sm:text-[20px] font-semibold text-text-primary mb-4">
                 Enter any blog or article URL to audit
               </label>
               <div className="flex gap-3 w-full max-w-2xl">
@@ -441,9 +450,21 @@ export default function ContentAuditStudioPage() {
             </div>
           ) : (
             <div className="flex flex-col items-center text-center">
-              <label className="block text-[14px] font-semibold text-text-secondary mb-4">
+              <label className="block text-[18px] sm:text-[20px] font-semibold text-text-primary mb-4">
                 Upload or paste your content to audit
               </label>
+              <div className="w-full max-w-2xl text-left mb-4">
+                <label className="block text-[13px] font-semibold text-text-secondary mb-1.5">
+                  Target Keyword (optional)
+                </label>
+                <input
+                  type="text"
+                  value={targetKeyword}
+                  onChange={e => setTargetKeyword(e.target.value)}
+                  placeholder="e.g. business development manager salary"
+                  className="w-full h-11 px-4 rounded-[12px] border border-border-subtle bg-surface-primary text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.08)] transition-all"
+                />
+              </div>
               <div className="w-full max-w-2xl">
                 {!uploadedContent ? (
                   <div

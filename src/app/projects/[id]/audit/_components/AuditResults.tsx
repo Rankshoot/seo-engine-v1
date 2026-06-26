@@ -310,6 +310,19 @@ export function AuditResults({
 
   return (
     <div className="space-y-6">
+      {report.is_blog_post === false && (
+        <div className="rounded-[12px] border border-amber-500/20 bg-amber-500/10 p-4 flex items-start gap-3 text-left">
+          <svg className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-[13px] font-semibold text-text-primary">Content type warning: Not classified as a blog post</h4>
+            <p className="text-[12px] text-text-tertiary mt-1 leading-relaxed">
+              {report.non_blog_warning || `We detected that this page is a ${report.content_type_verdict || 'non-blog page'}. Content Audit Studio is optimized specifically for blog posts and article structures. Some metrics might not align correctly with this content type.`}
+            </p>
+          </div>
+        </div>
+      )}
       <div className="rounded-[20px] border border-border-subtle bg-surface-elevated p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-6 items-start">
           <div className="flex items-center gap-5 shrink-0">
@@ -415,6 +428,17 @@ export function AuditResults({
             </div>
           )}
 
+          <button
+            type="button"
+            onClick={() => exportAuditToPdf(report)}
+            className="h-9 px-4 rounded-[10px] border border-border-subtle bg-surface-secondary text-[13px] font-semibold text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-2"
+          >
+            <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            </svg>
+            Download PDF
+          </button>
+
           {generateError && <span className="text-[12px] text-status-danger">{generateError}</span>}
         </div>
       </div>
@@ -462,4 +486,276 @@ export function AuditResults({
       {activeTab === "competitors" && <CompetitorsPanel insights={report.competitor_insights} />}
     </div>
   );
+}
+
+export function exportAuditToPdf(report: ContentAuditReport) {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    alert("Please allow popups to download the PDF report.");
+    return;
+  }
+
+  const issuesList = report.issues
+    .map(
+      (issue, index) => `
+    <div class="issue-item">
+      <div class="issue-header">
+        <span class="issue-num">#${index + 1}</span>
+        <span class="issue-title">${issue.title}</span>
+        <span class="severity-badge ${issue.severity}">${issue.severity.toUpperCase()}</span>
+        <span class="category-badge">${issue.category.toUpperCase()}</span>
+      </div>
+      <div class="issue-body">
+        <p><strong>Observation:</strong> ${issue.detail}</p>
+        <p><strong>Impact:</strong> ${issue.impact}</p>
+        <p><strong>Recommendation/Fix:</strong> ${issue.fix}</p>
+      </div>
+    </div>
+  `
+    )
+    .join("");
+
+  const competitorList = report.competitor_insights
+    .map(
+      c => `
+    <div class="competitor-item">
+      <p class="competitor-url"><strong>${c.url}</strong></p>
+      <ul>
+        ${c.advantages.map(a => `<li>${a}</li>`).join("")}
+      </ul>
+    </div>
+  `
+    )
+    .join("");
+
+  const rubricRows = report.quality_rubric
+    .map(
+      r => `
+    <div class="rubric-item">
+      <span class="rubric-status status-${r.status}">${r.status.toUpperCase()}</span>
+      <span class="rubric-label"><strong>${r.label}</strong>: ${r.detail}</span>
+    </div>
+  `
+    )
+    .join("");
+
+  const htmlContent = `
+    <html>
+      <head>
+        <title>Rankshoot - Content Audit Report - ${report.title}</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: #1f2937;
+            line-height: 1.5;
+            padding: 40px;
+            max-width: 800px;
+            margin: 0 auto;
+          }
+          h1 {
+            font-size: 28px;
+            color: #111827;
+            margin-bottom: 5px;
+          }
+          h2 {
+            font-size: 20px;
+            color: #111827;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 8px;
+            margin-top: 40px;
+            margin-bottom: 20px;
+          }
+          .meta-info {
+            color: #6b7280;
+            font-size: 13px;
+            margin-bottom: 30px;
+          }
+          .scores-grid {
+            display: grid;
+            grid-template-cols: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+          }
+          .score-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+          }
+          .score-card .score-num {
+            font-size: 24px;
+            font-weight: bold;
+          }
+          .score-card .score-label {
+            font-size: 12px;
+            color: #4b5563;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 5px;
+          }
+          .verdict-box {
+            background-color: #f3f4f6;
+            border-left: 4px solid #6366f1;
+            padding: 15px 20px;
+            border-radius: 4px;
+            margin-bottom: 30px;
+            font-style: italic;
+          }
+          .issue-item {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+          }
+          .issue-header {
+            background-color: #f9fafb;
+            padding: 10px 15px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
+          .issue-num {
+            font-weight: bold;
+            color: #6b7280;
+          }
+          .issue-title {
+            font-weight: bold;
+            flex-grow: 1;
+            color: #111827;
+          }
+          .severity-badge {
+            font-size: 10px;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 9999px;
+          }
+          .severity-badge.critical { background-color: #fee2e2; color: #991b1b; }
+          .severity-badge.high { background-color: #ffedd5; color: #9a3412; }
+          .severity-badge.medium { background-color: #fef3c7; color: #92400e; }
+          .severity-badge.low { background-color: #d1fae5; color: #065f46; }
+          .category-badge {
+            font-size: 10px;
+            background-color: #e0e7ff;
+            color: #3730a3;
+            padding: 2px 6px;
+            border-radius: 9999px;
+            font-weight: bold;
+          }
+          .issue-body {
+            padding: 15px;
+            font-size: 14px;
+          }
+          .issue-body p {
+            margin: 5px 0;
+          }
+          .competitor-item {
+            border-bottom: 1px dashed #e5e7eb;
+            padding: 15px 0;
+          }
+          .competitor-item:last-child {
+            border-bottom: none;
+          }
+          .competitor-url {
+            color: #4f46e5;
+            font-size: 14px;
+            margin-bottom: 5px;
+          }
+          ul {
+            margin: 5px 0;
+            padding-left: 20px;
+            font-size: 14px;
+          }
+          .rubric-item {
+            display: flex;
+            align-items: start;
+            gap: 10px;
+            padding: 8px 0;
+            font-size: 13px;
+            border-bottom: 1px solid #f3f4f6;
+          }
+          .rubric-status {
+            font-size: 9px;
+            font-weight: bold;
+            padding: 1px 5px;
+            border-radius: 4px;
+            text-transform: uppercase;
+          }
+          .rubric-status.status-pass { background-color: #d1fae5; color: #065f46; }
+          .rubric-status.status-warn { background-color: #fef3c7; color: #92400e; }
+          .rubric-status.status-fail { background-color: #fee2e2; color: #991b1b; }
+          @media print {
+            body { padding: 20px; }
+            h2 { page-break-before: always; }
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Content Audit Report</h1>
+        <div class="meta-info">
+          URL: <strong>${report.url}</strong><br/>
+          Title: <strong>${report.title}</strong><br/>
+          Audit Date: ${new Date(report.analyzed_at).toLocaleDateString()}<br/>
+          Focus Keyword: <strong>${report.primary_keyword}</strong> · Word Count: <strong>${report.word_count.toLocaleString()} words</strong>
+        </div>
+
+        <div class="verdict-box">
+          <strong>Summary Verdict:</strong> ${report.plain_language_verdict}
+        </div>
+
+        <h2>Audit Scores</h2>
+        <div class="scores-grid">
+          <div class="score-card" style="border-color: #6366f1; background-color: #f5f3ff;">
+            <div class="score-num" style="color: #4f46e5;">${report.scores.overall}</div>
+            <div class="score-label">Overall Score</div>
+          </div>
+          <div class="score-card">
+            <div class="score-num">${report.scores.seo}</div>
+            <div class="score-label">SEO Score</div>
+          </div>
+          <div class="score-card">
+            <div class="score-num">${report.scores.geo}</div>
+            <div class="score-label">GEO Score</div>
+          </div>
+          <div class="score-card">
+            <div class="score-num">${report.scores.aeo}</div>
+            <div class="score-label">AEO Score</div>
+          </div>
+          <div class="score-card">
+            <div class="score-num">${report.scores.content_quality}</div>
+            <div class="score-label">Content Quality</div>
+          </div>
+          <div class="score-card">
+            <div class="score-num">${report.scores.freshness}</div>
+            <div class="score-label">Freshness</div>
+          </div>
+        </div>
+
+        <h2>Audit Issues & Recommendations</h2>
+        <div class="issues-list">
+          ${issuesList}
+        </div>
+
+        <h2>Quality Checklist</h2>
+        <div class="rubric-list">
+          ${rubricRows}
+        </div>
+
+        <h2>Competitor Gap Analysis</h2>
+        <div class="competitor-list">
+          ${competitorList}
+        </div>
+
+        <script>
+          window.onload = function() {
+            window.print();
+          }
+        </script>
+      </body>
+    </html>
+  `;
+
+  printWindow.document.open();
+  printWindow.document.write(htmlContent);
+  printWindow.document.close();
 }

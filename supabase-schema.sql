@@ -16,9 +16,33 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT DEFAULT '',
   ahrefs_rank_tracker_project_id BIGINT DEFAULT NULL,
   last_benchmarked_competitor_snapshot TEXT DEFAULT NULL,
+  -- Sitemap → enhanced internal linking (see supabase-migration-project-sitemap-internal-links.sql).
+  sitemap_url TEXT NOT NULL DEFAULT '',
+  sitemap_source TEXT NOT NULL DEFAULT '',            -- '' | 'auto' | 'manual'
+  sitemap_status TEXT NOT NULL DEFAULT 'pending',     -- 'pending' | 'found' | 'empty' | 'failed'
+  sitemap_synced_at TIMESTAMPTZ,
+  sitemap_url_count INTEGER NOT NULL DEFAULT 0,
+  sitemap_prompt_dismissed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Full sitemap URL inventory per project. Feeds relevance-ranked internal links
+-- into content generation. Populated by auto-discovery or a user-entered sitemap.
+CREATE TABLE IF NOT EXISTS project_sitemap_urls (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  path TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'page',                  -- 'blog' | 'page'
+  title TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (project_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_project_sitemap_urls_project_id
+  ON project_sitemap_urls(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_sitemap_urls_project_kind
+  ON project_sitemap_urls(project_id, kind);
 
 CREATE TABLE IF NOT EXISTS project_competitors (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

@@ -162,15 +162,28 @@ export function insertBlogImagePlaceholders(
   if (!content.trim()) return content;
 
   let next = content.trim();
-  
-  const section1Alt = `${input.targetKeyword} — section illustration`;
-  const section1Md = `![${escapeMarkdownAlt(section1Alt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
-  next = insertBeforeNthH2(next, section1Md, 2);
 
-  if (input.wordCount >= 1400) {
-    const section2Alt = `${input.targetKeyword} — summary visual`;
-    const section2Md = `![${escapeMarkdownAlt(section2Alt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
-    next = insertBeforeHeading(next, section2Md, /frequently asked questions|faq|conclusion/i);
+  // Place a placeholder roughly every other content section, so the number of
+  // images scales with the article: a short post gets none, a long multi-section
+  // post gets several. Each is just a slot — the user manually generates the ones
+  // they want. We skip the intro (1st H2) and wrap-up sections (FAQ / conclusion /
+  // takeaways / references), and cap the total so long posts don't get spammed.
+  const h2s = next.match(/^##\s+.+$/gm) ?? [];
+  if (h2s.length < 2) return next; // too short — no section images needed
+
+  const SKIP = /frequently asked questions|faqs?\b|conclusion|key takeaways|takeaways|references|sources/i;
+  const MAX_PLACEHOLDERS = 6;
+  let inserted = 0;
+
+  // 2nd, 4th, 6th … H2 (inserted images are not headings, so H2 ordering is stable).
+  for (let nth = 2; nth <= h2s.length && inserted < MAX_PLACEHOLDERS; nth += 2) {
+    if (SKIP.test(h2s[nth - 1])) continue;
+    const alt = inserted === 0
+      ? `${input.targetKeyword} — section illustration`
+      : `${input.targetKeyword} — visual ${inserted + 1}`;
+    const md = `![${escapeMarkdownAlt(alt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
+    next = insertBeforeNthH2(next, md, nth);
+    inserted++;
   }
 
   return next.replace(/\n{3,}/g, '\n\n').trim();

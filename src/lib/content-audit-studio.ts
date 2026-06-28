@@ -223,15 +223,33 @@ interface StructuralSignals {
   publish_date: string | null;
 }
 
-function extractSignals(markdown: string, url: string, rawHtml: RawHtmlSignals): StructuralSignals {
+function extractSignals(
+  markdown: string,
+  url: string,
+  rawHtml: RawHtmlSignals,
+  isUploaded = false,
+): StructuralSignals {
   const title = extractTitle(markdown) || rawHtml.title || '';
   const wordCount = markdown.split(/\s+/).filter(Boolean).length;
 
-  const headings = markdown.match(/^#{1,6}\s+.+$/gm) ?? [];
-  const h2 = markdown.match(/^##\s+.+$/gm) ?? [];
-  const h3 = markdown.match(/^###\s+.+$/gm) ?? [];
-  const faqSection = /^##+\s*(faqs?|frequently asked questions)\b/im.test(markdown);
-  const questionHeadings = headings.filter(h => /\?/.test(h)).length >= 2;
+  // Markdown-native structure.
+  const mdHeadings = markdown.match(/^#{1,6}\s+.+$/gm) ?? [];
+  let headingCount = mdHeadings.length;
+  let h2Count = (markdown.match(/^##\s+.+$/gm) ?? []).length;
+  let h3Count = (markdown.match(/^###\s+.+$/gm) ?? []).length;
+  let faqSection = /^##+\s*(faqs?|frequently asked questions)\b/im.test(markdown);
+  let questionHeadings = mdHeadings.filter(h => /\?/.test(h)).length >= 2;
+
+  // Pasted prose often has NO markdown markers — headings are bare lines. Derive
+  // structure heuristically so content-quality / GEO / AEO aren't wrongly zeroed.
+  if (isUploaded && h2Count === 0) {
+    const d = derivePlainTextStructure(markdown);
+    headingCount = Math.max(headingCount, d.headings);
+    h2Count = Math.max(h2Count, d.headings);
+    h3Count = Math.max(h3Count, d.subheadings);
+    faqSection = faqSection || d.hasFaq;
+    questionHeadings = questionHeadings || d.questionHeadings >= 2;
+  }
 
   const pageHost = safeHost(url);
   const linkRe = /\[[^\]]+\]\((https?:\/\/[^)]+)\)/g;
@@ -244,30 +262,111 @@ function extractSignals(markdown: string, url: string, rawHtml: RawHtmlSignals):
     else external++;
   }
 
-  const firstPara = markdown.split('\n\n')
-    .map(b => b.trim())
-    .find(b => b && !b.startsWith('#') && !b.startsWith('!') && !b.startsWith('>')) ?? '';
+  // Uploads have no page host, so we can't split internal vs external by domain.
+  // Infer "internal" as links to the single most-repeated host (the author's own
+  // site) — this stops false "no internal links" flags on pasted articles.
+  if (isUploaded && !pageHost) {
+    const counts = new Map<string, number>();
+    const hostsSeen: string[] = [];
+    let mm: RegExpExecArray | null;
+    const re2 = /\[[^\]]+\]\((https?:\/\/[^)]+)\)/g;
+    while ((mm = re2.exec(markdown))) {
+      const h = safeHost(mm[1]);
+      if (h) { counts.set(h, (counts.get(h) ?? 0) + 1); hostsSeen.push(h); }
+    }
+    let selfHost = '';
+    let maxC = 1;
+    for (const [h, c] of counts) if (c > maxC) { maxC = c; selfHost = h; }
+    if (selfHost) {
+      internal = hostsSeen.filter(h => h === selfHost).length;
+      external = hostsSeen.length - internal;
+    }
+  }
 
-  const answerFirst = firstPara.length > 60 && firstPara.length <= 420 && hasSharedNoun(firstPara, title);
+  const paras = markdown.split('\n\n')
+    .map(b => b.trim())
+    .filter(b => b && !b.startsWith('#') && !b.startsWith('!') && !b.startsWith('>'));
+  const firstPara = paras[0] ?? '';
+
+  // For uploads the first block is often a scenario/hook; accept a definitional
+  // answer anywhere in the first three blocks (matches how we generate content).
+  const answerFirst = isUploaded
+    ? paras.slice(0, 3).some(p => p.length > 60 && p.length <= 600 && hasSharedNoun(p, title))
+    : firstPara.length > 60 && firstPara.length <= 420 && hasSharedNoun(firstPara, title);
 
   const hasSchemaHints =
     rawHtml.hasSchema ||
     /<script[^>]*type=["']application\/ld\+json["']/i.test(markdown) ||
     /"@type"\s*:\s*["'](Article|FAQPage|BlogPosting)/.test(markdown);
 
-  // Detect publish date from markdown content
-  const yearInContent = markdown.match(/\b(20\d{2})\b/g) ?? [];
-  const latestYear = yearInContent.reduce((max, y) => Math.max(max, parseInt(y)), 0);
-  const publishDate = rawHtml.publishDate || (latestYear >= 2020 ? `${latestYear}` : null);
+  // Publish date: NEVER inferred from body years for uploads (a "by 2030"
+  // mention is not a publish date). For live URLs, use the HTML signal or the
+  // latest in-body year as a best-effort.
+  let publishDate: string | null = null;
+  if (!isUploaded) {
+    const yearInContent = markdown.match(/\b(20\d{2})\b/g) ?? [];
+    const latestYear = yearInContent.reduce((max, y) => Math.max(max, parseInt(y)), 0);
+    publishDate = rawHtml.publishDate || (latestYear >= 2020 ? `${latestYear}` : null);
+  }
 
   return {
-    title, word_count: wordCount, heading_count: headings.length,
-    h2_count: h2.length, h3_count: h3.length, faq_section: faqSection,
+    title, word_count: wordCount, heading_count: headingCount,
+    h2_count: h2Count, h3_count: h3Count, faq_section: faqSection,
     internal_link_count: internal, external_link_count: external,
     answer_first: answerFirst, has_schema_hints: hasSchemaHints,
     first_paragraph: firstPara.slice(0, 500), has_question_headings: questionHeadings,
     publish_date: publishDate,
   };
+}
+
+/**
+ * Heuristic structure detection for pasted plain-text (no markdown markers).
+ * Conservative: only counts short, heading-like lines (Title Case, ending in
+ * "?" or ":", or starting with what/how/why…) that precede a real paragraph.
+ * Used only for uploads, and only nudges scores upward — never creates issues.
+ */
+function derivePlainTextStructure(text: string): {
+  headings: number;
+  subheadings: number;
+  questionHeadings: number;
+  hasFaq: boolean;
+} {
+  const lines = text.split('\n');
+  let headings = 0;
+  let questionHeadings = 0;
+  let hasFaq = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (/^(faqs?|frequently asked questions)\s*:?\s*$/i.test(line)) {
+      hasFaq = true;
+      headings++;
+      continue;
+    }
+    if (line.length < 3 || line.length > 90) continue;
+    if (/^[#\-*●•>|!\[]/.test(line) || /^\d+[.)]\s/.test(line)) continue; // md heading, bullet, table, list, image
+    if (/[.,;]$/.test(line)) continue; // full sentences end with punctuation
+    if (line.split(/\s+/).length > 13) continue;
+
+    const endsQuestion = line.endsWith('?');
+    const endsColon = line.endsWith(':');
+    const titleish = /^[A-Z]/.test(line) && /[a-z]/.test(line);
+    const interrogative = /^(what|how|why|when|where|who|which|is|are|can|should|does)\b/i.test(line);
+    if (!(endsQuestion || endsColon || titleish || interrogative)) continue;
+
+    // Require a following paragraph (real body), unless it's a clear question.
+    let next = '';
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim()) { next = lines[j].trim(); break; }
+    }
+    if (!endsQuestion && next.length < 60) continue;
+
+    headings++;
+    if (endsQuestion) questionHeadings++;
+  }
+
+  return { headings, subheadings: Math.floor(headings / 3), questionHeadings, hasFaq };
 }
 
 function extractTitle(md: string): string {
@@ -618,6 +717,7 @@ async function runAiAnalysis(
   competitors: ScrapedCompetitor[],
   vitals: KeywordVitals | undefined,
   projectId: string,
+  isUploaded = false,
 ): Promise<z.infer<typeof AuditAnalysisSchema>> {
   const contentSnippet = markdown.slice(0, 14_000);
   const tailSnippet = markdown.length > 22_000 ? markdown.slice(-6_000) : '';
@@ -641,13 +741,17 @@ Competitor #${i + 1} (rank ~${c.rank}): ${c.url}
     ? `\nKEYWORD DATA: "${vitals.keyword}" — volume: ${vitals.volume}/mo, trend: ${vitals.trend_pct >= 0 ? '+' : ''}${vitals.trend_pct}%`
     : '';
 
+  const pastedModeBanner = isUploaded
+    ? `\nIMPORTANT — PASTED-CONTENT MODE: The text below was pasted directly by the author; it is NOT a live web page. Audit ONLY the writing — content quality, GEO and AEO. The title, meta description and FAQ are part of the content itself and ARE present (extracted for you). You MUST NOT raise any issue about a missing HTML <title> tag, missing meta description, missing schema / JSON-LD / structured data, canonical tags, publish date, freshness / outdated date, indexing, page speed or mobile. Do NOT use the "technical" or "freshness" categories at all. Focus on: answer-first clarity, heading/section structure, depth, examples & data, FAQ coverage, question-style headings, in-text linking and keyword usage.\n`
+    : '';
+
   const prompt = `You are a world-class SEO + GEO + AEO content auditor for Rankshoot, an AI SEO platform. Today's date is ${currentDate}.
 
-Analyze the blog post below and produce a comprehensive, actionable audit. This audit will be used to generate a revamped version of this blog.
+Analyze the ${isUploaded ? 'pasted content' : 'blog post'} below and produce a comprehensive, actionable audit. This audit will be used to generate a revamped version of this content.
+${pastedModeBanner}
+TARGET AUDIENCE: The output will be read by the content's author/owner — a business person, not an SEO expert. Use plain English. Explain any SEO/GEO/AEO term you use in a brief parenthetical.
 
-TARGET AUDIENCE: The output will be read by the blog's author/owner — a business person, not an SEO expert. Use plain English. Explain any SEO/GEO/AEO term you use in a brief parenthetical.
-
-BLOG URL: ${url}
+${isUploaded ? 'SOURCE: pasted content (no live URL)' : `BLOG URL: ${url}`}
 
 CURRENT DATE: ${currentDate} — use this to assess content freshness and flag outdated information.
 
@@ -660,9 +764,7 @@ STRUCTURAL SIGNALS (deterministic — trust these):
 - Internal links: ${signals.internal_link_count}
 - External citations: ${signals.external_link_count}
 - Direct answer in opening: ${signals.answer_first ? 'yes' : 'no'}
-- Schema / structured data: ${rawHtml.hasSchema ? `yes (${rawHtml.schemaTypes.join(', ') || 'unknown types'})` : 'no'}
-- Meta description: ${rawHtml.metaDescription || '(missing)'}
-- Publish date detected: ${signals.publish_date || '(not detected)'}
+${isUploaded ? '' : `- Schema / structured data: ${rawHtml.hasSchema ? `yes (${rawHtml.schemaTypes.join(', ') || 'unknown types'})` : 'no'}\n`}- Meta description: ${rawHtml.metaDescription || (isUploaded ? '(none included — optional for pasted content)' : '(missing)')}${isUploaded ? '' : `\n- Publish date detected: ${signals.publish_date || '(not detected)'}`}
 
 ${keywordBlock}
 ${competitorBlock}
@@ -695,7 +797,7 @@ OUTPUT RULES:
 6. For faq_questions: write actual questions a reader/searcher would type, in natural language.
 7. llm_quality_score: holistic quality 0–100. 90+ = excellent on all dimensions. 70–89 = solid with gaps. 50–69 = several issues. <50 = major problems.
 8. Respect PDF downloads & promised content: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides) and the title/H1 promises a specific number or list of items (e.g., "60+ questions", "100+ templates"), do NOT flag this as an issue (such as 'content hidden in PDF', 'locked value proposition', 'items/questions not listed on-page', or 'thin content'). Respect that the PDF download serves as the premium delivery mechanism for the full list/assets, and focus your audit purely on the supporting on-page text content without demanding that the full set be pasted onto the page.
-
+${isUploaded ? `9. PASTED-CONTENT MODE (strict): Do NOT output any issue with category "technical" or "freshness". Do NOT output issues about a missing title tag, missing meta description, missing schema/structured data, canonical, publish date, indexing, page speed or mobile. The content's title, meta line, headings and FAQ are PRESENT — never call them missing. Score "seo" on on-page writing only (keyword in the title/opening/headings, section structure, in-text links), not page metadata.\n` : ''}
 Return ONLY this JSON (no prose, no markdown fences):
 
 {
@@ -754,15 +856,26 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   const trace: { step: string; ok: boolean; detail?: string; ms?: number }[] = [];
   const { url, projectId, projectDomain, region = 'us', language = 'en', uploadedContent, uploadedTitle, focusKeyword } = input;
 
+  const isUploaded = Boolean(uploadedContent && uploadedContent.trim().length >= 160);
   let pageMarkdown: string;
   let rawHtml: RawHtmlSignals;
 
-  if (uploadedContent && uploadedContent.trim().length >= 160) {
-    // Uploaded content — skip preflight and scraping
+  if (isUploaded) {
+    // Uploaded/pasted content — NOT a live page. Skip preflight + scraping, and
+    // extract the title + meta description from the content itself so we never
+    // report page-level things (HTML title tag, meta, schema, publish date) as
+    // missing — they aren't applicable to pasted prose.
     trace.push({ step: 'preflight', ok: true, detail: 'skipped (uploaded content)', ms: 0 });
-    pageMarkdown = cleanPastedContent(uploadedContent);
-    rawHtml = { title: uploadedTitle ?? null, metaDescription: null, hasSchema: false, schemaTypes: [], publishDate: null };
-    trace.push({ step: 'scrape', ok: true, detail: `${pageMarkdown.length} chars (uploaded & cleaned)`, ms: 0 });
+    const parsed = normalizePastedContent(uploadedContent!, uploadedTitle ?? undefined);
+    pageMarkdown = parsed.markdown;
+    rawHtml = {
+      title: parsed.title || uploadedTitle || null,
+      metaDescription: parsed.metaDescription,
+      hasSchema: false,
+      schemaTypes: [],
+      publishDate: null,
+    };
+    trace.push({ step: 'scrape', ok: true, detail: `${pageMarkdown.length} chars (uploaded & parsed)`, ms: 0 });
   } else {
     // 1. Preflight
     const t0 = Date.now();
@@ -793,7 +906,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   }
 
   // 3. Extract structural signals
-  const signals = extractSignals(pageMarkdown, url, rawHtml);
+  const signals = extractSignals(pageMarkdown, url, rawHtml, isUploaded);
   if (rawHtml.title && !signals.title) signals.title = rawHtml.title;
   if (uploadedTitle && !signals.title) signals.title = uploadedTitle;
 
@@ -843,7 +956,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   const t4 = Date.now();
   let aiResult: z.infer<typeof AuditAnalysisSchema>;
   try {
-    aiResult = await runAiAnalysis(url, pageMarkdown, signals, rawHtml, competitors, vitals, projectId);
+    aiResult = await runAiAnalysis(url, pageMarkdown, signals, rawHtml, competitors, vitals, projectId, isUploaded);
     trace.push({ step: 'ai_analysis', ok: true, ms: Date.now() - t4 });
   } catch (e) {
     trace.push({ step: 'ai_analysis', ok: false, detail: String(e), ms: Date.now() - t4 });
@@ -871,7 +984,9 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   const keywordRelevance = computeKeywordRelevanceScore(vitals);
   const freshnessScore = computeFreshnessScore({
     ...signals,
-    publish_date: aiResult.publish_date_estimate ?? signals.publish_date,
+    // Uploads have no real publish date — keep freshness neutral instead of
+    // guessing from a "by 2030" mention in the body.
+    publish_date: isUploaded ? null : (aiResult.publish_date_estimate ?? signals.publish_date),
   });
 
   const scoresWithoutOverall = {
@@ -937,7 +1052,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
     url,
     title: signals.title || rawHtml.title || aiResult.primary_keyword || url,
     word_count: signals.word_count,
-    publish_date_detected: aiResult.publish_date_estimate ?? signals.publish_date,
+    publish_date_detected: isUploaded ? null : (aiResult.publish_date_estimate ?? signals.publish_date),
     primary_keyword: aiKeyword || primaryKeywordForSearch,
     secondary_keywords: aiResult.secondary_keywords.slice(0, 8),
     scores,
@@ -1134,4 +1249,49 @@ export function cleanPastedContent(content: string): string {
   text = text.replace(/\n{3,}/g, "\n\n");
 
   return text.trim();
+}
+
+/**
+ * Parse pasted/uploaded content the way an *author* thinks about it: the title,
+ * meta description and FAQ live INSIDE the text. We extract them so the audit
+ * never reports them as "missing" (they aren't — it's just not a live page).
+ *
+ * Returns cleaned markdown (with the Meta line removed and an H1 ensured),
+ * the derived title, and the meta description if the content carried one.
+ */
+export function normalizePastedContent(
+  raw: string,
+  uploadedTitle?: string,
+): { markdown: string; title: string; metaDescription: string | null } {
+  let text = cleanPastedContent(raw);
+  let metaDescription: string | null = null;
+
+  // Pull a standalone "Meta:" / "Meta description:" line out of the body.
+  const metaMatch = text.match(/^[ \t]*meta(?:\s*description)?\s*[:\-–]\s*(.+)$/im);
+  if (metaMatch && metaMatch[1].trim().length >= 20) {
+    metaDescription = metaMatch[1].trim();
+    text = text.replace(metaMatch[0], "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  // Title: first markdown H1, else the first short non-sentence line, else the
+  // uploaded filename/title.
+  let title = "";
+  const h1 = text.match(/^#\s+(.+)$/m);
+  if (h1) {
+    title = h1[1].replace(/\*+/g, "").trim();
+  } else {
+    const firstLine = text.split("\n").map(l => l.trim()).find(Boolean) ?? "";
+    if (firstLine && firstLine.length <= 160 && !/[.]$/.test(firstLine)) {
+      title = firstLine.replace(/^#+\s*/, "").trim();
+    }
+  }
+  if (!title && uploadedTitle) title = uploadedTitle.trim();
+
+  // Ensure the body opens with an H1 so heading/title detection downstream works
+  // even when the paste had no markdown markers.
+  if (!/^#\s+/m.test(text) && title) {
+    text = `# ${title}\n\n${text}`;
+  }
+
+  return { markdown: text, title: title || (uploadedTitle ?? "").trim(), metaDescription };
 }

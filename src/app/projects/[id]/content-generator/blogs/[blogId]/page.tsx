@@ -114,6 +114,19 @@ function SLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function showServerActionError(err: any, fallback: string) {
+  const msg = err?.message || String(err);
+  if (
+    msg.includes("Failed to find Server Action") ||
+    msg.includes("Server action not found") ||
+    msg.includes("Server Action")
+  ) {
+    toast.error("A new update has been deployed. Please refresh the page and try again!");
+  } else {
+    toast.error(msg || fallback);
+  }
+}
+
 // ─── Page component ────────────────────────────────────────────────────────
 
 export default function BlogViewerPage() {
@@ -456,7 +469,7 @@ export default function BlogViewerPage() {
         toast.error(res.error || "Failed to generate cover image");
       }
     } catch (e: any) {
-      toast.error(e.message || "Failed to generate cover image");
+      showServerActionError(e, "Failed to generate cover image");
     } finally {
       setGeneratingCoverImage(false);
     }
@@ -479,7 +492,7 @@ export default function BlogViewerPage() {
             toast.error(saveRes.error || "Failed to save cover image");
           }
         } catch (err: any) {
-          toast.error(err.message || "Failed to upload cover image");
+          showServerActionError(err, "Failed to upload cover image");
         } finally {
           setUploadingCoverImage(false);
         }
@@ -500,7 +513,7 @@ export default function BlogViewerPage() {
         toast.error(saveRes.error || "Failed to remove cover image");
       }
     } catch (e: any) {
-      toast.error(e.message || "Failed to remove cover image");
+      showServerActionError(e, "Failed to remove cover image");
     }
   };
 

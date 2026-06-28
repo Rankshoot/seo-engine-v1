@@ -18,6 +18,12 @@ async function ensureOwner(projectId: string, userId: string) {
 }
 
 async function upsertAudit(projectId: string, record: PersistedContentAudit, source: 'url' | 'upload' = 'url') {
+  // Don't persist pages we didn't really audit (non-article / unreachable /
+  // redirected / empty). Clean up any stale row so it leaves Audit History too.
+  if ((record.analysis.page_status ?? 'ok') !== 'ok') {
+    await supabaseAdmin.from('blog_audits').delete().eq('project_id', projectId).eq('url', record.url);
+    return null;
+  }
   const { error } = await supabaseAdmin
     .from('blog_audits')
     .upsert(

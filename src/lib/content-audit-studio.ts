@@ -866,6 +866,10 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   const trace: { step: string; ok: boolean; detail?: string; ms?: number }[] = [];
   const { url, projectId, projectDomain, region = 'us', language = 'en', uploadedContent, uploadedTitle, focusKeyword } = input;
 
+  // The URL we actually fetch/scrape/gate against. Defaults to the input URL but
+  // is replaced by the redirect destination after preflight, so a canonicalising
+  // (or content-moving) redirect is audited at the page it really resolves to.
+  let effectiveUrl = url;
   const isUploaded = Boolean(uploadedContent && uploadedContent.trim().length >= 160);
   let pageMarkdown: string;
   let rawHtml: RawHtmlSignals;
@@ -888,24 +892,21 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
     };
     trace.push({ step: 'scrape', ok: true, detail: `${pageMarkdown.length} chars (uploaded & parsed)`, ms: 0 });
   } else {
-    // 1. Preflight
+    // 1. Preflight — follow redirects to the page we'll actually audit.
     const t0 = Date.now();
     const pre = await preflight(url);
-    trace.push({ step: 'preflight', ok: pre.status !== 'broken', detail: pre.status, ms: Date.now() - t0 });
+    trace.push({ step: 'preflight', ok: pre.status !== 'broken', detail: pre.status === 'ok' ? `ok → ${pre.finalUrl}` : pre.status, ms: Date.now() - t0 });
 
     if (pre.status === 'broken') {
-      return { record: brokenRecord(url, (pre as { status: 'broken'; reason: string }).reason), trace };
+      return { record: brokenRecord(url, pre.reason), trace };
     }
-    if (pre.status === 'redirected') {
-      const redir = pre as { status: 'redirected'; finalUrl: string };
-      return { record: redirectedRecord(url, redir.finalUrl), trace };
-    }
+    effectiveUrl = pre.finalUrl;
 
-    // 2. Scrape (Jina + raw HTML in parallel)
+    // 2. Scrape (Jina + raw HTML in parallel) — against the resolved final URL.
     const t1 = Date.now();
     const [page, rawHtmlResult] = await Promise.all([
-      hybridReadUrl(url, { timeoutMs: 25_000 }),
-      fetchRawHtmlSignals(url),
+      hybridReadUrl(effectiveUrl, { timeoutMs: 25_000 }),
+      fetchRawHtmlSignals(effectiveUrl),
     ]);
     rawHtml = rawHtmlResult;
     trace.push({ step: 'scrape', ok: page.ok, detail: page.ok ? `${page.markdown.length} chars` : page.error, ms: Date.now() - t1 });
@@ -917,7 +918,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   }
 
   // 3. Extract structural signals
-  const signals = extractSignals(pageMarkdown, url, rawHtml, isUploaded);
+  const signals = extractSignals(pageMarkdown, effectiveUrl, rawHtml, isUploaded);
   if (rawHtml.title && !signals.title) signals.title = rawHtml.title;
   if (uploadedTitle && !signals.title) signals.title = uploadedTitle;
 
@@ -926,23 +927,41 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   // product, or landing page burns paid research credits (DataForSEO + Serper
   // + LLM) for output that doesn't apply. We decide using the page's OWN
   // declared type — schema.org JSON-LD (@type) + OpenGraph og:type — plus a
-  // publish-date / length signal. This is a standards-based check, never URL
-  // pattern guessing, and it runs BEFORE any paid call below. Uploaded/pasted
-  // content always passes (the user explicitly provided an article).
+  // publish-date / length signal and a homepage (root-path) check. It never
+  // guesses the content TYPE from URL patterns (no "/blog/ = article" rules);
+  // it runs BEFORE any paid call below. Uploaded/pasted content always passes
+  // (the user explicitly provided an article).
   if (!isUploaded) {
-    const ARTICLE_SCHEMA = /\b(article|blogposting|newsarticle|techarticle|scholarlyarticle|report)\b/i;
+    // Positive article signals — the page's OWN declared semantics.
+    const ARTICLE_SCHEMA = /\b(article|blogposting|newsarticle|techarticle|scholarlyarticle|liveblogposting|report)\b/i;
+    // Schema that a real blog post is essentially never marked up as. Used only
+    // as a negative signal, and only when no article schema is present.
+    const NON_ARTICLE_SCHEMA = /\b(website|collectionpage|itemlist|organization|localbusiness|corporation|product|searchresultspage|profilepage|aboutpage|contactpage)\b/i;
     const hasArticleSchema = rawHtml.schemaTypes.some(t => ARTICLE_SCHEMA.test(t));
+    const hasNonArticleSchema = !hasArticleSchema && rawHtml.schemaTypes.some(t => NON_ARTICLE_SCHEMA.test(t));
     const articleSignal = hasArticleSchema || rawHtml.ogType === 'article' || Boolean(rawHtml.publishDate);
+
     const declaredNonContent =
-      rawHtml.ogType !== null &&
-      ['website', 'product', 'profile', 'product.group', 'business.business'].includes(rawHtml.ogType);
-    const isNonContent = !articleSignal && (declaredNonContent || signals.word_count < 250);
+      (rawHtml.ogType !== null &&
+        ['website', 'product', 'profile', 'product.group', 'business.business'].includes(rawHtml.ogType)) ||
+      hasNonArticleSchema;
+
+    // Root path ("/") is the homepage — a real article never lives there. This
+    // is a structural fact about the resolved URL, not URL-pattern guessing, and
+    // it catches wordy homepages (like a company landing page) that declare no
+    // og:type at all — the case that was still slipping through and burning credits.
+    let isHomepage = false;
+    try {
+      isHomepage = new URL(effectiveUrl).pathname.replace(/\/+$/, '') === '';
+    } catch { /* leave false */ }
+
+    const isNonContent = !articleSignal && (declaredNonContent || isHomepage || signals.word_count < 250);
 
     if (isNonContent) {
       trace.push({
         step: 'content_gate',
         ok: false,
-        detail: `non-article page (og:type=${rawHtml.ogType ?? 'none'}, schema=[${rawHtml.schemaTypes.join(',') || 'none'}], words=${signals.word_count}) — skipped paid analysis`,
+        detail: `non-article page (og:type=${rawHtml.ogType ?? 'none'}, schema=[${rawHtml.schemaTypes.join(',') || 'none'}], homepage=${isHomepage}, words=${signals.word_count}) — skipped paid analysis`,
         ms: 0,
       });
       return { record: nonContentRecord(url, signals, rawHtml), trace };
@@ -959,7 +978,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   if (!primaryKeywordForSearch) {
     try {
       // Extract keyword from URL slug (e.g. /ai-specialist/ → "ai specialist")
-      const urlPath = new URL(url).pathname;
+      const urlPath = new URL(effectiveUrl).pathname;
       const slug = urlPath.split('/').filter(Boolean).pop() ?? '';
       primaryKeywordForSearch = slug
         .replace(/\.[a-z0-9]{2,5}$/i, '') // strip extension
@@ -996,7 +1015,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   const t4 = Date.now();
   let aiResult: z.infer<typeof AuditAnalysisSchema>;
   try {
-    aiResult = await runAiAnalysis(url, pageMarkdown, signals, rawHtml, competitors, vitals, projectId, isUploaded);
+    aiResult = await runAiAnalysis(effectiveUrl, pageMarkdown, signals, rawHtml, competitors, vitals, projectId, isUploaded);
     trace.push({ step: 'ai_analysis', ok: true, ms: Date.now() - t4 });
   } catch (e) {
     trace.push({ step: 'ai_analysis', ok: false, detail: String(e), ms: Date.now() - t4 });
@@ -1132,9 +1151,8 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function preflight(url: string): Promise<
-  | { status: 'ok' }
+  | { status: 'ok'; finalUrl: string }
   | { status: 'broken'; reason: string }
-  | { status: 'redirected'; finalUrl: string }
 > {
   try {
     const res = await fetch(url, {
@@ -1148,10 +1166,14 @@ async function preflight(url: string): Promise<
     if (res.status >= 500) {
       return { status: 'broken', reason: `Server returned HTTP ${res.status}.` };
     }
-    if (res.redirected && res.url && res.url !== url) {
-      return { status: 'redirected', finalUrl: res.url };
-    }
-    return { status: 'ok' };
+    // Follow redirects and audit wherever they land. A canonicalising redirect
+    // (trailing slash, http→https, www, lower-casing) is normal and must NOT be
+    // treated as "equity lost" — that false positive blocked real audits. Even a
+    // genuine cross-page redirect is better audited at its destination: the
+    // zero-cost content gate below decides whether that destination is a real
+    // article. Only an unreachable page (4xx / 5xx / network error) is broken.
+    const finalUrl = res.url && /^https?:\/\//i.test(res.url) ? res.url : url;
+    return { status: 'ok', finalUrl };
   } catch (e) {
     return { status: 'broken', reason: `Could not reach this page: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -1190,25 +1212,6 @@ function brokenRecord(url: string, reason: string): PersistedContentAudit {
     summary: 'Page is not reachable.', analyzed_at: new Date().toISOString(),
   };
   return { url, title: '(page not reachable)', primary_keyword: '', word_count: 0, health_score: 0, severity: 'high', analysis: report, error: reason };
-}
-
-function redirectedRecord(url: string, finalUrl: string): PersistedContentAudit {
-  const report: ContentAuditReport = {
-    version: 3, url, title: '(redirected)', word_count: 0, publish_date_detected: null,
-    primary_keyword: '', secondary_keywords: [], scores: emptyScores(10),
-    issues: [{
-      id: 'page_redirected', category: 'technical', severity: 'critical',
-      title: 'Redirects to another page',
-      detail: `${url} redirects to ${finalUrl}`,
-      impact: 'Search engines treat this as a soft-404 and drop any rankings the original URL had.',
-      fix: 'If the content was moved, set up a proper 301 redirect to the new location. If deleted, restore the original page.',
-    }],
-    competitor_insights: [], revamp_brief: emptyRevamp(), quality_rubric: [], keyword_data: null,
-    page_status: 'redirected',
-    plain_language_verdict: 'This URL redirects away. Any SEO equity from the original page is being lost.',
-    summary: 'Page redirects to another URL.', analyzed_at: new Date().toISOString(),
-  };
-  return { url, title: '(redirected)', primary_keyword: '', word_count: 0, health_score: 10, severity: 'high', analysis: report };
 }
 
 function emptyRecord(url: string, reason: string): PersistedContentAudit {

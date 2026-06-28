@@ -175,7 +175,7 @@ export async function failJob(job: JobRecord, message: string): Promise<void> {
  * Requeue jobs stuck in 'running' (worker crashed / instance reclaimed mid-job)
  * so the drainer can pick them up again. Called at the top of each drain tick.
  */
-export async function requeueStale(thresholdMs = 5 * 60 * 1000): Promise<number> {
+export async function requeueStale(thresholdMs = 2 * 60 * 1000): Promise<number> {
   const cutoff = new Date(Date.now() - thresholdMs).toISOString();
   const { data } = await supabaseAdmin
     .from('background_jobs')

@@ -178,7 +178,7 @@ export default function ContentAuditStudioPage() {
         setWarning(
           res.report.plain_language_verdict ||
           res.report.summary ||
-          "This page isn't a blog post or article, so we skipped the audit to save your research credits. Enter a specific article URL, or paste the content via the Upload tab."
+          "This page isn't a blog post or article. Enter a specific article URL, or paste the content via the Upload tab."
         );
         setReport(null);
         void loadHistory();

@@ -1,9 +1,5 @@
 {
-  "regions": ["sin1"],
-  "crons": [
-    {
-      "path": "/api/internal/jobs/drain?key=rankshoot_secret_17032026",
-      "schedule": "* * * * *"
-    }
+  "regions": [
+    "sin1"
   ]
 }

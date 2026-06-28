@@ -50,6 +50,7 @@ export default function ContentAuditStudioPage() {
   const [streamLog, setStreamLog] = useState<string[]>([]);
   const [showStreamPanel, setShowStreamPanel] = useState(false);
 
+  const [warning, setWarning] = useState("");
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -127,6 +128,7 @@ export default function ContentAuditStudioPage() {
 
   const handleAnalyze = async (targetUrl?: string) => {
     resetPostAuditState();
+    setWarning("");
 
     if (inputMode === "upload") {
       if (uploadedContent.trim().length < 160) {
@@ -169,6 +171,19 @@ export default function ContentAuditStudioPage() {
     try {
       const res = await contentAuditApi.analyze(projectId, auditUrl);
       if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
+      // Zero-credit content gate: the page wasn't an article/blog post, so the
+      // backend skipped the paid analysis. Surface a friendly yellow warning
+      // instead of an empty audit, and don't show the results tabs.
+      if (res.report.page_status === "non_content") {
+        setWarning(
+          res.report.plain_language_verdict ||
+          res.report.summary ||
+          "This page isn't a blog post or article, so we skipped the audit to save your research credits. Enter a specific article URL, or paste the content via the Upload tab."
+        );
+        setReport(null);
+        void loadHistory();
+        return;
+      }
       setReport(res.report);
       setReportSource("url");
       setActiveTab("issues");
@@ -528,6 +543,15 @@ export default function ContentAuditStudioPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0zm-9 3.75h.008v.008H12v-.008z" />
               </svg>
               {error}
+            </div>
+          )}
+
+          {warning && !error && (
+            <div className="mt-3 flex items-start gap-2 text-[13px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-[10px] px-3 py-2.5">
+              <svg className="w-4 h-4 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+              <span>{warning}</span>
             </div>
           )}
 

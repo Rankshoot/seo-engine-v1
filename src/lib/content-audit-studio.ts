@@ -104,7 +104,7 @@ export interface ContentAuditReport {
   revamp_brief: RevampBrief;
   quality_rubric: QualityRubricRow[];
   keyword_data: ContentAuditKeywordData | null;
-  page_status: 'ok' | 'broken' | 'redirected' | 'empty';
+  page_status: 'ok' | 'broken' | 'redirected' | 'empty' | 'non_content';
   plain_language_verdict: string;
   summary: string;
   analyzed_at: string;
@@ -156,11 +156,13 @@ interface RawHtmlSignals {
   hasSchema: boolean;
   schemaTypes: string[];
   publishDate: string | null;
+  /** OpenGraph og:type (lower-cased), e.g. 'article' | 'website' | 'product'. */
+  ogType: string | null;
 }
 
 async function fetchRawHtmlSignals(url: string): Promise<RawHtmlSignals> {
   const empty: RawHtmlSignals = {
-    title: null, metaDescription: null, hasSchema: false, schemaTypes: [], publishDate: null,
+    title: null, metaDescription: null, hasSchema: false, schemaTypes: [], publishDate: null, ogType: null,
   };
   try {
     const ctrl = new AbortController();
@@ -197,7 +199,15 @@ async function fetchRawHtmlSignals(url: string): Promise<RawHtmlSignals> {
       html.match(/<time[^>]+datetime=["']([^"']{1,50})["']/i);
     const publishDate = publishDateMatch ? publishDateMatch[1].trim() : null;
 
-    return { title, metaDescription, hasSchema, schemaTypes, publishDate };
+    // OpenGraph type — the page's own declaration of what it is. Real articles
+    // use og:type=article; homepages use website; stores use product. This is a
+    // standards-based signal, not a URL guess.
+    const ogTypeMatch =
+      html.match(/<meta[^>]+property=["']og:type["'][^>]+content=["']([^"']{1,60})["']/i) ??
+      html.match(/<meta[^>]+content=["']([^"']{1,60})["'][^>]+property=["']og:type["']/i);
+    const ogType = ogTypeMatch ? ogTypeMatch[1].trim().toLowerCase() : null;
+
+    return { title, metaDescription, hasSchema, schemaTypes, publishDate, ogType };
   } catch {
     return empty;
   }
@@ -910,6 +920,35 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   if (rawHtml.title && !signals.title) signals.title = rawHtml.title;
   if (uploadedTitle && !signals.title) signals.title = uploadedTitle;
 
+  // ── Zero-cost content gate ──────────────────────────────────────────────
+  // The Content Audit is for blog posts / articles. Auditing a homepage,
+  // product, or landing page burns paid research credits (DataForSEO + Serper
+  // + LLM) for output that doesn't apply. We decide using the page's OWN
+  // declared type — schema.org JSON-LD (@type) + OpenGraph og:type — plus a
+  // publish-date / length signal. This is a standards-based check, never URL
+  // pattern guessing, and it runs BEFORE any paid call below. Uploaded/pasted
+  // content always passes (the user explicitly provided an article).
+  if (!isUploaded) {
+    const ARTICLE_SCHEMA = /\b(article|blogposting|newsarticle|techarticle|scholarlyarticle|report)\b/i;
+    const hasArticleSchema = rawHtml.schemaTypes.some(t => ARTICLE_SCHEMA.test(t));
+    const articleSignal = hasArticleSchema || rawHtml.ogType === 'article' || Boolean(rawHtml.publishDate);
+    const declaredNonContent =
+      rawHtml.ogType !== null &&
+      ['website', 'product', 'profile', 'product.group', 'business.business'].includes(rawHtml.ogType);
+    const isNonContent = !articleSignal && (declaredNonContent || signals.word_count < 250);
+
+    if (isNonContent) {
+      trace.push({
+        step: 'content_gate',
+        ok: false,
+        detail: `non-article page (og:type=${rawHtml.ogType ?? 'none'}, schema=[${rawHtml.schemaTypes.join(',') || 'none'}], words=${signals.word_count}) — skipped paid analysis`,
+        ms: 0,
+      });
+      return { record: nonContentRecord(url, signals, rawHtml), trace };
+    }
+    trace.push({ step: 'content_gate', ok: true, detail: 'looks like an article — proceeding', ms: 0 });
+  }
+
   // 4. Keyword vitals lookup
   const locationCode = locationCodeFromTargetRegion(region);
   const t2 = Date.now();
@@ -1188,6 +1227,39 @@ function emptyRecord(url: string, reason: string): PersistedContentAudit {
     summary: 'Could not extract content from this page.', analyzed_at: new Date().toISOString(),
   };
   return { url, title: '(could not read page)', primary_keyword: '', word_count: 0, health_score: 12, severity: 'high', analysis: report, error: reason };
+}
+
+function nonContentRecord(url: string, signals: StructuralSignals, rawHtml: RawHtmlSignals): PersistedContentAudit {
+  const declaredAs = rawHtml.ogType ? `declares itself as a "${rawHtml.ogType}" page` : 'has no article schema or publish date';
+  const detail = `This URL ${declaredAs} and reads more like a homepage, product, or landing page than a blog post or article.`;
+  const report: ContentAuditReport = {
+    version: 3,
+    url,
+    title: signals.title || rawHtml.title || url,
+    word_count: signals.word_count,
+    publish_date_detected: signals.publish_date ?? null,
+    primary_keyword: '',
+    secondary_keywords: [],
+    scores: emptyScores(0),
+    issues: [{
+      id: 'not_content', category: 'content', severity: 'low',
+      title: 'Not an article or blog post',
+      detail,
+      impact: 'The Content Audit is built for blog posts and articles. Auditing a homepage or product/landing page would spend research credits without producing useful recommendations.',
+      fix: 'Enter the URL of a specific blog post or article. If this really is long-form content, paste it via the Upload tab to audit it directly.',
+    }],
+    competitor_insights: [],
+    revamp_brief: emptyRevamp(),
+    quality_rubric: [],
+    keyword_data: null,
+    page_status: 'non_content',
+    plain_language_verdict: 'This looks like a homepage or product/landing page, not an article — so we skipped the audit to save your research credits.',
+    summary: 'Not an article or blog post — audit skipped to avoid spending credits.',
+    analyzed_at: new Date().toISOString(),
+    is_blog_post: false,
+    non_blog_warning: detail,
+  };
+  return { url, title: signals.title || rawHtml.title || url, primary_keyword: '', word_count: signals.word_count, health_score: 0, severity: 'low', analysis: report };
 }
 
 function errorRecord(url: string, signals: StructuralSignals, error: string): PersistedContentAudit {

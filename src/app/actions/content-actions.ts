@@ -12,6 +12,7 @@ import {
 } from '@/lib/content-studio';
 import { researchKeyword } from '@/lib/research';
 import { sanitizeBlogContent } from '@/lib/blog-content';
+import { loadRankedSitemapInternalLinks } from '@/lib/internal-links';
 import type { BusinessBrief } from '@/lib/business-brief';
 import { TARGET_REGIONS } from '@/lib/types';
 import type {
@@ -87,6 +88,7 @@ async function loadInternalLinkPool(
   projectId: string,
   brief: BusinessBrief | null,
   domain: string,
+  topic?: { focusKeyword?: string; title?: string; secondaryKeywords?: string[] },
 ): Promise<string[]> {
   const fromBrief = (brief?.internal_link_candidates ?? [])
     .map(l => l.url)
@@ -106,7 +108,24 @@ async function loadInternalLinkPool(
   } catch {
     /* optional */
   }
-  return Array.from(new Set([...fromBrief, ...fromBriefBlogs, ...fromBlogs])).slice(0, 30);
+
+  // Relevance-ranked URLs from the project's saved sitemap — the deep content
+  // links that make internal linking rich instead of homepage-only. Listed
+  // first so the most relevant survive the cap.
+  let fromSitemap: string[] = [];
+  try {
+    const ranked = await loadRankedSitemapInternalLinks(projectId, {
+      focusKeyword: topic?.focusKeyword,
+      title: topic?.title,
+      secondaryKeywords: topic?.secondaryKeywords,
+      limit: 24,
+    });
+    fromSitemap = ranked.map(l => l.url);
+  } catch {
+    /* optional — sitemap not configured yet */
+  }
+
+  return Array.from(new Set([...fromSitemap, ...fromBrief, ...fromBriefBlogs, ...fromBlogs])).slice(0, 40);
 }
 
 async function loadApprovedKeywords(projectId: string): Promise<string[]> {
@@ -337,7 +356,11 @@ export async function generateEbookAction(
     mark('serper', 'skipped (user opted out)');
   }
 
-  const internalLinks = await loadInternalLinkPool(projectId, brief, project.domain);
+  const internalLinks = await loadInternalLinkPool(projectId, brief, project.domain, {
+    focusKeyword: payload.primaryKeyword,
+    title: payload.topic,
+    secondaryKeywords: payload.secondaryKeywords,
+  });
   mark('links', `internal pool: ${internalLinks.length} URL${internalLinks.length === 1 ? '' : 's'}`);
 
   const t1 = Date.now();
@@ -496,7 +519,11 @@ export async function generateWhitepaperAction(
     }
   }
 
-  const internalLinks = await loadInternalLinkPool(projectId, brief, project.domain);
+  const internalLinks = await loadInternalLinkPool(projectId, brief, project.domain, {
+    focusKeyword: payload.primaryKeyword,
+    title: payload.topic,
+    secondaryKeywords: payload.secondaryKeywords,
+  });
   mark('links', `internal pool: ${internalLinks.length} URL${internalLinks.length === 1 ? '' : 's'}`);
 
   const t1 = Date.now();

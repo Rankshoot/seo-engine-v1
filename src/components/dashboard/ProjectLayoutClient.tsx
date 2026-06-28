@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import ProjectSidebar from "./ProjectSidebar";
 import { NavigationOverlay } from "@/components/NavigationOverlay";
+import { SitemapOnboardingDialog } from "@/components/sitemap/SitemapOnboardingDialog";
 import type { Project } from "@/lib/types";
 import { useProjects } from "@/lib/query";
 
@@ -71,6 +72,7 @@ export default function ProjectLayoutClient({
         </div>
       </main>
       <NavigationOverlay />
+      <SitemapOnboardingDialog projectId={projectId} />
     </div>
   );
 }

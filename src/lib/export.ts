@@ -208,7 +208,7 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
   const {
     Document, Packer, Paragraph, TextRun, ImageRun,
     HeadingLevel, ExternalHyperlink, AlignmentType,
-    Table, TableRow, TableCell, WidthType, BorderStyle,
+    Table, TableRow, TableCell, WidthType, BorderStyle, TableLayoutType,
   } = await import('docx');
 
   type ParagraphInstance = InstanceType<typeof Paragraph>;
@@ -348,14 +348,35 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
         i++;
       }
 
-      // Build the docx Table
+      // Build the docx Table.
+      //
+      // Mac/Apple Pages, Quick Look, and Google Docs render OOXML tables with
+      // `auto` layout (PERCENTAGE width, no explicit column widths) very poorly —
+      // columns collapse or the last column stretches. Word on Windows tolerates
+      // it, which is why this only looked broken on Mac. The fix is a FIXED-layout
+      // table with explicit DXA (twentieths of a point) column AND per-cell widths
+      // that all agree. 9360 DXA = 6.5in content width (US Letter, 1in margins).
+      const TABLE_TOTAL_DXA = 9360;
+      const colCount = Math.max(1, headerCells.length);
+      const baseColDxa = Math.floor(TABLE_TOTAL_DXA / colCount);
+      // Last column absorbs the rounding remainder so widths sum exactly.
+      const colWidths = Array.from({ length: colCount }, (_, idx) =>
+        idx === colCount - 1 ? TABLE_TOTAL_DXA - baseColDxa * (colCount - 1) : baseColDxa
+      );
+      const cellWidthFor = (idx: number) => ({
+        size: colWidths[idx] ?? baseColDxa,
+        type: WidthType.DXA,
+      });
+
       const tableRows: InstanceType<typeof TableRow>[] = [];
 
       // 1. Header row
       tableRows.push(
         new TableRow({
-          children: headerCells.map(cellText => {
+          tableHeader: true,
+          children: headerCells.map((cellText, idx) => {
             return new TableCell({
+              width: cellWidthFor(idx),
               children: [
                 new Paragraph({
                   children: buildInlineRuns(cellText, TextRun, ExternalHyperlink),
@@ -379,8 +400,9 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
       for (const rowData of rowsData) {
         tableRows.push(
           new TableRow({
-            children: rowData.map(cellText => {
+            children: rowData.map((cellText, idx) => {
               return new TableCell({
+                width: cellWidthFor(idx),
                 children: [
                   new Paragraph({
                     children: buildInlineRuns(cellText, TextRun, ExternalHyperlink),
@@ -400,9 +422,11 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
 
       const docxTable = new Table({
         rows: tableRows,
+        layout: TableLayoutType.FIXED,
+        columnWidths: colWidths,
         width: {
-          size: 100,
-          type: WidthType.PERCENTAGE,
+          size: TABLE_TOTAL_DXA,
+          type: WidthType.DXA,
         },
         borders: {
           top: { style: BorderStyle.SINGLE, size: 4, color: 'D3D3D3' },

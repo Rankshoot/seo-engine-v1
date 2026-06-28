@@ -167,9 +167,17 @@ export async function POST(req: Request) {
             emit({ event: "stage", stage: "repair_draft", detail: "Applying audit fixes while preserving strong sections…" });
 
             const analysis: any = repairPlan.analysis;
+            const { loadRankedSitemapInternalLinks: loadRepairSitemapLinks } = await import("@/lib/internal-links");
+            const repairSitemapLinks = (await loadRepairSitemapLinks(projectId, {
+              focusKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
+              title: repairPlan.title || "",
+              secondaryKeywords: analysis.secondary_keywords ?? [],
+              excludeUrls: [repairPlan.url],
+              limit: 18,
+            })).map((l) => l.url);
             const fromAudit = (analysis.internal_link_opportunities ?? []).map((i: any) => i.target_url);
             const fromBrief = (brief?.internal_link_candidates ?? []).map((c: any) => c.url);
-            const internalLinkPool = Array.from(new Set([...fromAudit, ...fromBrief])).filter(
+            const internalLinkPool = Array.from(new Set([...fromAudit, ...fromBrief, ...repairSitemapLinks])).filter(
               (u) => u && u !== repairPlan.url
             ) as string[];
 
@@ -386,11 +394,26 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           }
         }
 
-        // Validate internal link candidates
+        // Internal-link pool: brief candidates + relevance-ranked sitemap URLs.
+        // The sitemap pool is what lets the article deep-link to other content
+        // pages instead of only the homepage / landing page.
         const { validateExternalUrl } = await import("@/lib/blog-content");
+        const { loadRankedSitemapInternalLinks } = await import("@/lib/internal-links");
+
+        const currentArticleUrl = entry.slug ? `https://${project.domain}/${entry.slug}` : "";
+        const sitemapCandidates = await loadRankedSitemapInternalLinks(projectId, {
+          focusKeyword: entry.focus_keyword,
+          title: entry.title,
+          secondaryKeywords: entry.secondary_keywords ?? [],
+          excludeUrls: currentArticleUrl ? [currentArticleUrl] : [],
+          limit: 18,
+        });
+
         const allCandidates = [
           ...(brief?.internal_link_candidates ?? []).filter((l: any) => l.url?.startsWith("http"))
             .map((l: any) => ({ url: l.url, title: l.title || l.topic || "Page", type: "site" })),
+          ...sitemapCandidates
+            .map((l) => ({ url: l.url, title: l.title || l.topic || "Page", type: "sitemap" })),
           ...(existingBlogs ?? []).filter((b: any) => b.target_keyword !== entry.focus_keyword)
             .map((b: any) => ({ url: `https://${project.domain}/${b.slug}`, title: b.title, type: "generated" })),
         ];
@@ -412,6 +435,13 @@ Respond with a concise but rich analysis (300–500 words) structured as:
         const filteredExistingBlogs = (existingBlogs ?? []).filter((b: any) =>
           validatedLinks.some((vl: any) => vl.type === "generated" && vl.url === `https://${project.domain}/${b.slug}`)
         );
+
+        // Sitemap-derived links that passed validation → fed to the prompt as
+        // an extra internal-link pool (merged + deduped inside buildBlogPrompt).
+        const validatedSitemapUrls = new Set(
+          validatedLinks.filter((vl: any) => vl.type === "sitemap").map((vl: any) => vl.url)
+        );
+        const extraInternalLinks = sitemapCandidates.filter((c) => validatedSitemapUrls.has(c.url));
 
         // Validate external research sources
         if (research?.topArticles?.length) {
@@ -458,6 +488,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           research,
           existingBlogs: filteredExistingBlogs,
           brief: filteredBrief,
+          extraInternalLinks,
           ahrefsContext,
           writerNotes: mergedWriterNotes || undefined,
           brandPersona: body.brandPersona,

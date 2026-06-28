@@ -1,6 +1,6 @@
 import type { ResearchContext } from '@/lib/research';
 import { formatResearchForPrompt } from '@/lib/research';
-import type { BusinessBrief } from '@/lib/business-brief';
+import type { BusinessBrief, InternalLinkCandidate } from '@/lib/business-brief';
 import type { Project } from '@/lib/types';
 
 export interface BlogPromptContext {
@@ -15,6 +15,13 @@ export interface BlogPromptContext {
   research?: ResearchContext | null;
   existingBlogs?: Array<{ title: string; slug: string; target_keyword: string }>;
   brief?: BusinessBrief | null;
+  /**
+   * Relevance-ranked internal-link candidates sourced from the project's saved
+   * sitemap. Merged into the "site" pool alongside the brief's candidates so
+   * generated articles deep-link to other content pages, not just the homepage.
+   * Already ranked + capped by the caller; validated upstream when possible.
+   */
+  extraInternalLinks?: InternalLinkCandidate[];
   ahrefsContext?: any;
   writerNotes?: string;
   brandPersona?: string;
@@ -89,13 +96,30 @@ ${serp || '(none)'}
 }
 
 export function buildBlogPrompt(ctx: BlogPromptContext): string {
-  const { entry, project, wordCount, research, existingBlogs, brief, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary } = ctx;
+  const { entry, project, wordCount, research, existingBlogs, brief, extraInternalLinks, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary } = ctx;
 
-  // 1. Internal link pool block
+  // 1. Internal link pool block.
+  //    Site pool = brief.internal_link_candidates ∪ sitemap-derived candidates
+  //    (extraInternalLinks). Deduped by URL so a page that appears in both
+  //    isn't listed twice. The sitemap pool is what lets the model deep-link to
+  //    other blog/content pages instead of only the homepage.
+  const siteCandidatesRaw = [
+    ...(brief?.internal_link_candidates ?? []),
+    ...(extraInternalLinks ?? []),
+  ]
+    .filter(l => l.url && l.url.startsWith('http'))
+    .map(l => ({ url: l.url, title: l.title || l.topic || 'Page', topic: l.topic, type: 'site' as const }));
+
+  const seenSiteUrls = new Set<string>();
+  const dedupedSiteCandidates = siteCandidatesRaw.filter(c => {
+    const key = c.url.replace(/\/+$/, '').toLowerCase();
+    if (seenSiteUrls.has(key)) return false;
+    seenSiteUrls.add(key);
+    return true;
+  });
+
   const allInternalCandidates = [
-    ...(brief?.internal_link_candidates ?? [])
-      .filter(l => l.url && l.url.startsWith('http'))
-      .map(l => ({ url: l.url, title: l.title || l.topic || 'Page', topic: l.topic, type: 'site' as const })),
+    ...dedupedSiteCandidates,
     ...(existingBlogs ?? [])
       .filter(b => b.target_keyword !== entry.focus_keyword)
       .map(b => ({
@@ -106,7 +130,7 @@ export function buildBlogPrompt(ctx: BlogPromptContext): string {
       }))
   ];
 
-  const siteLinks = allInternalCandidates.filter(c => c.type === 'site').slice(0, 12);
+  const siteLinks = allInternalCandidates.filter(c => c.type === 'site').slice(0, 24);
   const generatedLinks = allInternalCandidates.filter(c => c.type === 'generated').slice(0, 8);
 
   let internalLinksBlock = '';

@@ -184,13 +184,15 @@ function nowISO(): string {
 }
 
 function cleanSeeds(seeds: string[]): string[] {
-  return [
-    ...new Set(
-      seeds
-        .map(s => (s ?? '').toString().trim().toLowerCase())
-        .filter(Boolean)
-    ),
-  ].slice(0, 80);
+  const flatSeeds: string[] = [];
+  for (const s of seeds) {
+    if (!s) continue;
+    const parts = s.toString().split(',');
+    for (const part of parts) {
+      flatSeeds.push(part.trim().toLowerCase());
+    }
+  }
+  return [...new Set(flatSeeds.filter(Boolean))].slice(0, 80);
 }
 
 function ahrefsCountry(regionCode: string): string {
@@ -301,41 +303,44 @@ function ahrefsResearchCalls(
   queryRelated = true
 ): AhrefsResearchCall[] {
   const country = ahrefsCountry(region);
-  const keywordsParam = seeds.join(',');
   const calls: AhrefsResearchCall[] = [];
 
   if (queryMatching) {
-    calls.push({
-      endpoint: '/keywords-explorer/matching-terms',
-      label: 'matching-terms',
-      query: {
-        country,
-        keywords: keywordsParam,
-        select: AHREFS_IDEA_SELECT,
-        limit,
-        where: matchingLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', matchingLastVolume] }) : undefined,
-        match_mode: 'terms',
-        terms: 'all',
-        order_by: 'volume:desc',
-      },
-    });
+    for (const seed of seeds) {
+      calls.push({
+        endpoint: '/keywords-explorer/matching-terms',
+        label: `matching-terms:${seed}`,
+        query: {
+          country,
+          keywords: seed,
+          select: AHREFS_IDEA_SELECT,
+          limit,
+          where: matchingLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', matchingLastVolume] }) : undefined,
+          match_mode: 'terms',
+          terms: 'all',
+          order_by: 'volume:desc',
+        },
+      });
+    }
   }
 
   if (queryRelated) {
-    calls.push({
-      endpoint: '/keywords-explorer/related-terms',
-      label: 'related-terms',
-      query: {
-        country,
-        keywords: keywordsParam,
-        select: AHREFS_IDEA_SELECT,
-        limit,
-        where: relatedLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', relatedLastVolume] }) : undefined,
-        view_for: 'top_10',
-        terms: 'all',
-        order_by: 'volume:desc',
-      },
-    });
+    for (const seed of seeds) {
+      calls.push({
+        endpoint: '/keywords-explorer/related-terms',
+        label: `related-terms:${seed}`,
+        query: {
+          country,
+          keywords: seed,
+          select: AHREFS_IDEA_SELECT,
+          limit,
+          where: relatedLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', relatedLastVolume] }) : undefined,
+          view_for: 'top_10',
+          terms: 'all',
+          order_by: 'volume:desc',
+        },
+      });
+    }
   }
 
   return calls;
@@ -382,7 +387,7 @@ export async function fetchKeywordsFromAhrefs(
   input: KeywordResearchInput
 ): Promise<KeywordResearchResult> {
   const trace: KeywordResearchTraceEntry[] = [];
-  const seeds = cleanSeeds(input.seeds);
+  const seeds = cleanSeeds(input.seeds).slice(0, 15);
   const limit = 20;
   const region = (input.region || 'us').toLowerCase();
 
@@ -476,27 +481,15 @@ export async function fetchKeywordsFromAhrefs(
     }
     anySuccess = true;
     const rows = res.data?.keywords ?? [];
-    if (call.label === 'matching-terms') {
-      matchingHasMore = rows.length === limit;
-      if (rows.length > 0) {
-        const lastRow = rows[rows.length - 1];
-        matchingLastVolume = lastRow && lastRow.volume != null ? Number(lastRow.volume) : null;
-        if (matchingLastVolume === 0 || matchingLastVolume === null) {
-          matchingHasMore = false;
-        }
-      } else {
-        matchingHasMore = false;
+    if (call.label.startsWith('matching-terms')) {
+      const hasMoreForThisCall = rows.length === limit;
+      if (hasMoreForThisCall) {
+        matchingHasMore = true;
       }
-    } else if (call.label === 'related-terms') {
-      relatedHasMore = rows.length === limit;
-      if (rows.length > 0) {
-        const lastRow = rows[rows.length - 1];
-        relatedLastVolume = lastRow && lastRow.volume != null ? Number(lastRow.volume) : null;
-        if (relatedLastVolume === 0 || relatedLastVolume === null) {
-          relatedHasMore = false;
-        }
-      } else {
-        relatedHasMore = false;
+    } else if (call.label.startsWith('related-terms')) {
+      const hasMoreForThisCall = rows.length === limit;
+      if (hasMoreForThisCall) {
+        relatedHasMore = true;
       }
     }
     for (const row of rows) {
@@ -508,14 +501,25 @@ export async function fetchKeywordsFromAhrefs(
   const finalMatchingHasMore = queryMatching ? matchingHasMore : false;
   const finalRelatedHasMore = queryRelated ? relatedHasMore : false;
 
-  const ahrefsDiscoveryState = {
-    matching_last_volume: finalMatchingHasMore ? matchingLastVolume : null,
-    matching_has_more: finalMatchingHasMore,
-    related_last_volume: finalRelatedHasMore ? relatedLastVolume : null,
-    related_has_more: finalRelatedHasMore,
-  };
-
   const keywords = mergeKeywords(merged);
+  const slicedKeywords = keywords.slice(0, input.maxResults ?? DEFAULT_MAX_RESULTS);
+
+  if (slicedKeywords.length > 0) {
+    const lastRow = slicedKeywords[slicedKeywords.length - 1];
+    if (queryMatching) {
+      matchingLastVolume = lastRow && lastRow.volume != null ? Number(lastRow.volume) : null;
+    }
+    if (queryRelated) {
+      relatedLastVolume = lastRow && lastRow.volume != null ? Number(lastRow.volume) : null;
+    }
+  }
+
+  const ahrefsDiscoveryState = {
+    matching_last_volume: finalMatchingHasMore && matchingLastVolume !== 0 ? matchingLastVolume : null,
+    matching_has_more: finalMatchingHasMore && matchingLastVolume !== 0 && matchingLastVolume !== null,
+    related_last_volume: finalRelatedHasMore && relatedLastVolume !== 0 ? relatedLastVolume : null,
+    related_has_more: finalRelatedHasMore && relatedLastVolume !== 0 && relatedLastVolume !== null,
+  };
 
   if (!anySuccess) {
     const reason = firstHardFailure ?? 'http_error';

@@ -31,13 +31,23 @@ export async function GET(
     .select('url, title, primary_keyword, word_count, health_score, severity, analysis, updated_at')
     .eq('project_id', projectId)
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .limit(80);
 
   if (error) {
     return apiJson({ success: false, error: error.message, items: [] }, { status: 500 });
   }
 
-  const items = (data ?? []).map(row => {
+  const items = (data ?? [])
+    // Only show real, completed audits. Pages we deliberately didn't audit
+    // (non-article homepages/landing pages, unreachable or redirected URLs) are
+    // never surfaced in history — including any saved before the gate tightened.
+    .filter(row => {
+      const a = row.analysis as Record<string, unknown> | null;
+      const ps = (a?.page_status as string | undefined) ?? 'ok';
+      return ps === 'ok';
+    })
+    .slice(0, 50)
+    .map(row => {
     const analysis = row.analysis as Record<string, unknown> | null;
     return {
       url: row.url as string,

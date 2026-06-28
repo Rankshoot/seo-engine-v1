@@ -7,7 +7,7 @@ import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/co
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
 import type { ContentAuditReport } from "@/lib/content-audit-studio";
-import { startUrlAudit, getActiveAuditJobs, type ActiveAuditJob } from "@/app/actions/audit-jobs-actions";
+import { startUrlAudit, getActiveAuditJobs, getAuditJobOutcome, type ActiveAuditJob } from "@/app/actions/audit-jobs-actions";
 import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
 import type { BlogAuditAnalysis } from "@/lib/content-audit";
 import { Spinner, StepIndicator } from "./_shared/ch-ui";
@@ -220,27 +220,35 @@ export default function ContentAuditStudioPage() {
         if (!r.jobs.some(j => j.jobId === started.jobId)) break;
       }
 
-      // Load the finished report from studio history (persisted by the worker).
+      // Read the durable job outcome. This is authoritative even when nothing was
+      // saved to history (a non-article page we deliberately skipped), so we show
+      // the right warning instead of a phantom "couldn't load" error.
+      const outcome = await getAuditJobOutcome(projectId, started.jobId);
       const hist = await contentAuditApi.history(projectId);
       if (hist.success) setHistory(hist.items);
-      const item = hist.success
-        ? hist.items.find(i => i.url.replace(/#.*$/, "").replace(/\/+$/, "") === targetNorm)
-        : undefined;
-      if (item?.report) {
-        if (item.report.page_status === "non_content") {
-          setWarning(
-            item.report.plain_language_verdict ||
-            item.report.summary ||
-            "This page isn't a blog post or article, so we skipped the audit to save your research credits. Enter a specific article URL, or paste the content via the Upload tab."
-          );
-          setReport(null);
-        } else {
+
+      if (outcome.success && outcome.status === "failed") {
+        setError(outcome.error || "The audit could not complete. Please try again.");
+      } else if (outcome.success && outcome.pageStatus && outcome.pageStatus !== "ok") {
+        // Non-article / unreachable / redirected page — skipped to save credits.
+        // Nothing is saved to history and no enhance action is offered.
+        setWarning(
+          outcome.warning ||
+          "This page isn't a blog post or article, so we skipped the audit to save your research credits. Enter a specific article URL, or paste the content via the Upload tab."
+        );
+        setReport(null);
+      } else {
+        // Real audit — load the persisted report from history.
+        const item = hist.success
+          ? hist.items.find(i => i.url.replace(/#.*$/, "").replace(/\/+$/, "") === targetNorm)
+          : undefined;
+        if (item?.report) {
           setReport(item.report);
           setReportSource("url");
           setActiveTab("issues");
+        } else {
+          setError("The audit finished but its result couldn't be loaded. Check Audit History below.");
         }
-      } else {
-        setError("The audit finished but its result couldn't be loaded. Check Audit History below.");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unexpected error. Please try again.");

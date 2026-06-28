@@ -13,6 +13,7 @@
  */
 
 import { createJob, type CreateJobParams } from './service';
+import { runJob } from './runner';
 import type { JobRecord } from './types';
 
 /**
@@ -60,6 +61,31 @@ async function dispatch(jobId: string): Promise<void> {
 
 export async function enqueueJob(params: CreateJobParams): Promise<{ job: JobRecord; created: boolean }> {
   const { job, created } = await createJob(params);
-  if (created && job.status === 'pending') await dispatch(job.id);
+  if (created && job.status === 'pending') {
+    // PRIMARY (no infra, works on Vercel without any cron): run the job IN-PROCESS
+    // right after the HTTP response is sent, using next/server `after`. The
+    // platform keeps the function alive to finish it, so the audit completes even
+    // though we removed the cron drain — and the client still gets an instant
+    // jobId + skeleton. Claiming is atomic, so this never double-runs a job.
+    let scheduledInProcess = false;
+    try {
+      const { after } = await import('next/server');
+      after(async () => {
+        try {
+          await runJob(job.id);
+        } catch {
+          /* failJob() already recorded the error; the poll/drain backstop retries */
+        }
+      });
+      scheduledInProcess = true;
+    } catch {
+      /* not inside a request scope (e.g. a cron tick) — fall back to dispatch */
+    }
+    // SECONDARY (optional): HTTP self-dispatch to the worker route. Only useful
+    // when INTERNAL_BASE_URL points at a separate worker; otherwise it's a no-op
+    // best-effort call. Skipped when we already scheduled in-process to avoid the
+    // redundant request.
+    if (!scheduledInProcess) await dispatch(job.id);
+  }
   return { job, created };
 }

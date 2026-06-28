@@ -96,6 +96,9 @@ export function AuditHistory({
           const score = item.overall_score || item.health_score;
           const color = scoreColor(score);
           const isExpanded = expandedUrl === item.url;
+          // Only real, completed audits ('ok') can be enhanced/scheduled — never a
+          // page we flagged as non-article / unreachable.
+          const isReal = (((item.report as ContentAuditReport | null)?.page_status as string | undefined) ?? "ok") === "ok";
           const issueList = (item.report?.issues ?? []) as ContentAuditReport["issues"];
           const sortedIssues = [...issueList].sort(
             (a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99)
@@ -177,26 +180,30 @@ export function AuditHistory({
                   </div>
 
                   <div className="px-4 py-3 border-t border-border-subtle/30 flex items-center gap-2 flex-wrap bg-surface-secondary/20">
-                    <button
-                      type="button"
-                      onClick={() => onGenerateFromHistory(item)}
-                      className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
-                      </svg>
-                      Generate Enhanced Blog
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onScheduleFromHistory(item)}
-                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
-                      </svg>
-                      Schedule to Calendar
-                    </button>
+                    {isReal && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onGenerateFromHistory(item)}
+                          className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                          </svg>
+                          Generate Enhanced Blog
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onScheduleFromHistory(item)}
+                          className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                          </svg>
+                          Schedule to Calendar
+                        </button>
+                      </>
+                    )}
                     <button
                       type="button"
                       onClick={() => onOpen(item)}

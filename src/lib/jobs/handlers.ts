@@ -35,33 +35,50 @@ async function runContentAuditJob(job: JobRecord): Promise<Record<string, unknow
     focusKeyword: p.focusKeyword || undefined,
   });
 
-  const source = p.origin === 'upload' ? 'upload' : 'url';
-  const analysis = { ...(record.analysis as unknown as Record<string, unknown>), _source: source };
+  const pageStatus = record.analysis.page_status ?? 'ok';
+  // Only a real, completed audit ('ok') is worth keeping. Non-article pages,
+  // unreachable/redirected/empty URLs etc. are NOT saved to history — the user
+  // explicitly asked us not to store (or show) results for pages we deliberately
+  // didn't audit. The warning still reaches the UI via this job's `result`.
+  const isRealAudit = pageStatus === 'ok';
+  const warning =
+    record.analysis.plain_language_verdict || record.analysis.summary || record.error || '';
 
-  const { error } = await supabaseAdmin.from('blog_audits').upsert(
-    {
-      project_id: p.projectId,
-      url: record.url,
-      title: record.title,
-      primary_keyword: record.primary_keyword,
-      word_count: record.word_count,
-      health_score: record.health_score,
-      severity: record.severity,
-      analysis,
-      scraped_markdown: record.scraped_markdown ?? null,
-      page_status: record.analysis.page_status ?? 'ok',
-      job_status: 'done',
-      job_id: job.id,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'project_id,url' }
-  );
-  if (error) throw new Error(`persist audit failed: ${error.message}`);
+  if (isRealAudit) {
+    const source = p.origin === 'upload' ? 'upload' : 'url';
+    const analysis = { ...(record.analysis as unknown as Record<string, unknown>), _source: source };
+
+    const { error } = await supabaseAdmin.from('blog_audits').upsert(
+      {
+        project_id: p.projectId,
+        url: record.url,
+        title: record.title,
+        primary_keyword: record.primary_keyword,
+        word_count: record.word_count,
+        health_score: record.health_score,
+        severity: record.severity,
+        analysis,
+        scraped_markdown: record.scraped_markdown ?? null,
+        page_status: pageStatus,
+        job_status: 'done',
+        job_id: job.id,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'project_id,url' }
+    );
+    if (error) throw new Error(`persist audit failed: ${error.message}`);
+  } else {
+    // Remove any stale row from a previous run (e.g. a homepage that was audited
+    // before the gate was tightened) so it stops showing up in Audit History.
+    await supabaseAdmin.from('blog_audits').delete().eq('project_id', p.projectId).eq('url', record.url);
+  }
 
   return {
     url: record.url,
     health_score: record.health_score,
-    page_status: record.analysis.page_status ?? 'ok',
+    page_status: pageStatus,
+    persisted: isRealAudit,
+    warning: isRealAudit ? '' : warning,
     severity: record.severity,
   };
 }

@@ -7,6 +7,7 @@ import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/co
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
 import type { ContentAuditReport } from "@/lib/content-audit-studio";
+import { startUrlAudit, getActiveAuditJobs, type ActiveAuditJob } from "@/app/actions/audit-jobs-actions";
 import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
 import type { BlogAuditAnalysis } from "@/lib/content-audit";
 import { Spinner, StepIndicator } from "./_shared/ch-ui";
@@ -18,6 +19,8 @@ import { AuditHistory } from "./_components/AuditHistory";
 import { GenerationStreamPanel } from "./_components/GenerationStreamPanel";
 
 const MAX_UPLOAD_CHARS = 200_000;
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 export default function ContentAuditStudioPage() {
   const { id: projectId } = useParams<{ id: string }>();
@@ -36,6 +39,7 @@ export default function ContentAuditStudioPage() {
   const [history, setHistory] = useState<ContentAuditHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors">("issues");
+  const [activeJobs, setActiveJobs] = useState<ActiveAuditJob[]>([]);
 
   const [entryId, setEntryId] = useState<string | null>(null);
   const [scheduledDate, setScheduledDate] = useState<string | null>(null);
@@ -76,6 +80,34 @@ export default function ContentAuditStudioPage() {
   }, [projectId]);
 
   useEffect(() => { void loadHistory(); void loadScheduledDates(); }, [loadHistory, loadScheduledDates]);
+
+  // Resume in-flight audits after a tab-switch / refresh. The audit jobs keep
+  // running server-side regardless of the client, so on return we re-attach,
+  // render skeletons for what's still running, and refresh history as each
+  // finishes — no duplicate paid API calls, no lost work.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    void (async () => {
+      const first = await getActiveAuditJobs(projectId);
+      if (cancelled || !first.success || first.jobs.length === 0) return;
+      setActiveJobs(first.jobs);
+      while (!cancelled) {
+        await sleep(4000);
+        if (cancelled) return;
+        const r = await getActiveAuditJobs(projectId);
+        if (cancelled) return;
+        setActiveJobs(r.jobs);
+        try {
+          const hist = await contentAuditApi.history(projectId);
+          if (!cancelled && hist.success) setHistory(hist.items);
+        } catch { /* ignore */ }
+        if (r.jobs.length === 0) return;
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   useEffect(() => {
     if (!report?.url || !projectId) return;
@@ -169,25 +201,47 @@ export default function ContentAuditStudioPage() {
     setAnalyzing(true);
     startStepAnimation();
     try {
-      const res = await contentAuditApi.analyze(projectId, auditUrl);
-      if (!res.success || !res.report) { setError(res.error ?? "Analysis failed. Please try again."); return; }
-      // Zero-credit content gate: the page wasn't an article/blog post, so the
-      // backend skipped the paid analysis. Surface a friendly yellow warning
-      // instead of an empty audit, and don't show the results tabs.
-      if (res.report.page_status === "non_content") {
-        setWarning(
-          res.report.plain_language_verdict ||
-          res.report.summary ||
-          "This page isn't a blog post or article. Enter a specific article URL, or paste the content via the Upload tab."
-        );
-        setReport(null);
-        void loadHistory();
+      // Resilient flow: enqueue a durable audit job and poll. The audit runs
+      // server-side, so it completes (and is saved) even if the user switches
+      // tabs or refreshes; idempotency means a re-click won't pay twice.
+      const started = await startUrlAudit(projectId, auditUrl, { focusKeyword: targetKeyword.trim() || undefined });
+      if (!started.success || !started.jobId) {
+        setError(started.error ?? "Could not start the audit. Please try again.");
         return;
       }
-      setReport(res.report);
-      setReportSource("url");
-      setActiveTab("issues");
-      void loadHistory();
+      const targetNorm = (started.url ?? auditUrl).replace(/#.*$/, "").replace(/\/+$/, "");
+
+      // Poll until this job leaves the active set (done or failed).
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 6 * 60 * 1000) {
+        await sleep(3000);
+        const r = await getActiveAuditJobs(projectId);
+        setActiveJobs(r.jobs);
+        if (!r.jobs.some(j => j.jobId === started.jobId)) break;
+      }
+
+      // Load the finished report from studio history (persisted by the worker).
+      const hist = await contentAuditApi.history(projectId);
+      if (hist.success) setHistory(hist.items);
+      const item = hist.success
+        ? hist.items.find(i => i.url.replace(/#.*$/, "").replace(/\/+$/, "") === targetNorm)
+        : undefined;
+      if (item?.report) {
+        if (item.report.page_status === "non_content") {
+          setWarning(
+            item.report.plain_language_verdict ||
+            item.report.summary ||
+            "This page isn't a blog post or article, so we skipped the audit to save your research credits. Enter a specific article URL, or paste the content via the Upload tab."
+          );
+          setReport(null);
+        } else {
+          setReport(item.report);
+          setReportSource("url");
+          setActiveTab("issues");
+        }
+      } else {
+        setError("The audit finished but its result couldn't be loaded. Check Audit History below.");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unexpected error. Please try again.");
     } finally {
@@ -560,6 +614,20 @@ export default function ContentAuditStudioPage() {
               <p className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wide mb-3">Analyzing your content…</p>
               <StepIndicator steps={STEPS} currentStep={analysisStep} />
               <p className="mt-3 text-[12px] text-text-tertiary">This takes 30–90 seconds while we read the content, check competitors, and run AI analysis.</p>
+            </div>
+          )}
+
+          {activeJobs.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-border-subtle space-y-2">
+              <p className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wide">In progress ({activeJobs.length})</p>
+              {activeJobs.slice(0, 6).map(j => (
+                <div key={j.jobId} className="flex items-center gap-3 rounded-[10px] border border-border-subtle bg-surface-elevated px-3 py-2.5">
+                  <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-border-strong border-t-brand-violet" />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-text-secondary">{j.url || "Auditing…"}</span>
+                  <span className="shrink-0 text-[10px] text-text-tertiary">{j.status === "pending" ? "Queued" : "Auditing…"}</span>
+                </div>
+              ))}
+              <p className="text-[11px] text-text-tertiary">These keep running even if you switch tabs or refresh — results appear here and in Audit History when done.</p>
             </div>
           )}
         </div>

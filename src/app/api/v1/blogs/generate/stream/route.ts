@@ -555,7 +555,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
               } else if (event.delta.type === "text_delta") {
                 fullContent += event.delta.text;
               }
-            }
+            } 
           }
 
           if (stallTimeoutId) clearTimeout(stallTimeoutId);

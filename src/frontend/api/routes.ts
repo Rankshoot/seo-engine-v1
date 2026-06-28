@@ -50,13 +50,8 @@ export const V1Routes = {
   competitorsLoadMoreAhrefs: (projectId: string) =>
     `/projects/${projectId}/competitors/load-more-from-ahrefs`,
 
-  // ── Content health (audits) — legacy ──────────────────────────────────────
+  // ── Content health (audits) — coverage stats for the project overview ─────
   contentHealthAudits: (projectId: string) => `/projects/${projectId}/content-health/audits`,
-  contentHealthAuditsRun: (projectId: string) => `/projects/${projectId}/content-health/audits/run`,
-  contentHealthAuditsSelected: (projectId: string) =>
-    `/projects/${projectId}/content-health/audits/selected`,
-  contentHealthSitemapPages: (projectId: string) =>
-    `/projects/${projectId}/content-health/sitemap-pages`,
 
   // ── Content Audit Studio ──────────────────────────────────────────────────
   contentAuditAnalyze: (projectId: string) => `/projects/${projectId}/content-audit/analyze`,

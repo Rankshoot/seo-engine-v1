@@ -130,9 +130,9 @@ export default async function BlogPostPage(
         {children}
       </blockquote>
     ),
-    img: ({ src, alt }: { src?: string; alt?: string }) => (
+    img: ({ src, alt }: { src?: any; alt?: string }) => (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={src} alt={alt ?? ""} loading="lazy" className="w-full rounded-xl border border-border-subtle" />
+      <img src={typeof src === "string" ? src : undefined} alt={alt ?? ""} loading="lazy" className="w-full rounded-xl border border-border-subtle" />
     ),
   };
 

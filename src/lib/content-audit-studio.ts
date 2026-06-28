@@ -884,6 +884,7 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
       hasSchema: false,
       schemaTypes: [],
       publishDate: null,
+      ogType: null,
     };
     trace.push({ step: 'scrape', ok: true, detail: `${pageMarkdown.length} chars (uploaded & parsed)`, ms: 0 });
   } else {

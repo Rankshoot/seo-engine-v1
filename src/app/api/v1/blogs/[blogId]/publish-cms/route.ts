@@ -10,6 +10,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { apiJson } from "@/server/http/json";
 import { createUserStrapiClient, StrapiUserClientError } from "@/services/strapi/user-client";
 import { createUserWordPressClient, WordPressUserClientError } from "@/services/wordpress/user-client";
+import { createUserShopifyClient, ShopifyUserClientError } from "@/services/shopify/user-client";
 import type { Blog } from "@/lib/types";
 import { uploadBase64Images } from "@/lib/server/blog-images";
 
@@ -156,6 +157,23 @@ export async function POST(
       });
       result = { documentId: r.documentId, slug: r.slug };
       publishedUrl = r.link ?? `${integration.base_url}/?p=${r.documentId}`;
+    } else if (integration.cms_type === "shopify") {
+      // collection_name holds the target Blog id/handle; api_token is the Admin API token.
+      const { renderMarkdownToHtml } = await import("@/lib/export");
+      const shopify = createUserShopifyClient(
+        integration.base_url,
+        integration.api_token,
+        integration.collection_name,
+      );
+      const html = renderMarkdownToHtml(contentForCms);
+      const r = await shopify.publishArticle({
+        title: blog.title,
+        slug: blog.slug,
+        content: html,
+        isPublished: true,
+      });
+      result = { documentId: r.documentId, slug: r.slug };
+      publishedUrl = r.link ?? `https://${integration.base_url}`;
     } else {
       const client = createUserStrapiClient(
         integration.base_url,
@@ -208,6 +226,12 @@ export async function POST(
     if (err instanceof WordPressUserClientError) {
       return apiJson(
         { success: false, error: err.wpError },
+        { status: err.status >= 400 && err.status < 500 ? err.status : 502 }
+      );
+    }
+    if (err instanceof ShopifyUserClientError) {
+      return apiJson(
+        { success: false, error: err.shopifyError },
         { status: err.status >= 400 && err.status < 500 ? err.status : 502 }
       );
     }

@@ -446,12 +446,166 @@ function WordPressForm({
   );
 }
 
+function ShopifyIcon() {
+  return (
+    <svg viewBox="0 0 32 32" className="w-5 h-5" fill="none">
+      <rect width="32" height="32" rx="8" fill="#95BF47" />
+      <path d="M20.9 10.6c0-.13-.11-.2-.2-.2-.08-.01-1.74-.13-1.74-.13s-1.16-1.15-1.28-1.27c-.12-.12-.36-.09-.45-.06l-.6.19c-.36-1.03-.99-1.98-2.1-1.98h-.1c-.32-.42-.72-.6-1.06-.6-2.6.01-3.84 3.26-4.23 4.91l-1.82.56c-.56.18-.58.19-.65.72-.06.4-1.53 11.8-1.53 11.8L19 27.5l5.06-1.1S20.9 10.73 20.9 10.6Zm-4.45-1.1-1 .31v-.22c0-.66-.09-1.2-.24-1.62.6.08 1 .76 1.24 1.53Zm-1.94-1.4c.17.42.27 1.02.27 1.84v.12l-2.06.64c.4-1.53 1.14-2.27 1.79-2.6Zm-.8-.76c.12 0 .24.04.35.12-.86.4-1.78 1.42-2.17 3.46l-1.63.5c.46-1.55 1.5-4.08 3.45-4.08Z" fill="#fff" opacity=".95"/>
+      <path d="M20.7 10.4c-.08-.01-1.74-.13-1.74-.13s-1.16-1.15-1.28-1.27a.3.3 0 0 0-.17-.08L16.5 27.5l5.06-1.1S20.9 10.73 20.9 10.6a.22.22 0 0 0-.2-.2Z" fill="#fff" opacity=".7"/>
+      <path d="M14.94 13.2l-.62 1.85s-.55-.3-1.22-.3c-.98 0-1.03.62-1.03.77 0 .85 2.2 1.17 2.2 3.15 0 1.56-.99 2.56-2.32 2.56-1.6 0-2.41-1-2.41-1l.43-1.42s.84.72 1.55.72c.46 0 .65-.36.65-.63 0-1.1-1.8-1.15-1.8-2.97 0-1.53 1.1-3 3.3-3 .85 0 1.27.29 1.27.29Z" fill="#5E8E3E"/>
+    </svg>
+  );
+}
+
+function ShopifyForm({
+  existing,
+  onClose,
+  onSaved,
+}: {
+  existing?: { base_url: string; masked_token: string; blog_ref: string } | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [shopDomain, setShopDomain] = useState(existing?.base_url ?? "");
+  const [accessToken, setAccessToken] = useState("");
+  const [blogRef, setBlogRef] = useState(existing?.blog_ref ?? "");
+  const [status, setStatus] = useState<FormStatus>("idle");
+  const [message, setMessage] = useState("");
+
+  const busy = status === "testing" || status === "saving";
+  const ready = Boolean(shopDomain && accessToken);
+
+  const handleTest = async () => {
+    if (!ready) { setMessage("Shop domain and access token are required"); return; }
+    setStatus("testing"); setMessage("");
+    const r = await integrationsApi.testUserShopify({ shop_domain: shopDomain, access_token: accessToken, blog_ref: blogRef });
+    setStatus(r.success ? "success" : "error");
+    setMessage(r.success ? "Connection successful!" : r.error ?? "Connection failed");
+  };
+
+  const handleSave = async () => {
+    if (!ready) { setMessage("Shop domain and access token are required"); return; }
+    setStatus("saving"); setMessage("");
+    const r = await integrationsApi.saveUserShopify({ shop_domain: shopDomain, access_token: accessToken, blog_ref: blogRef });
+    if (r.success) { setStatus("success"); onSaved(); }
+    else { setStatus("error"); setMessage(r.error ?? "Could not save integration"); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-2xl border border-border-subtle bg-surface-primary shadow-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
+          <div className="flex items-center gap-2.5">
+            <ShopifyIcon />
+            <div>
+              <h3 className="text-[14px] font-semibold text-text-primary">
+                {existing ? "Update Shopify credentials" : "Connect Shopify"}
+              </h3>
+              <p className="text-[11px] text-text-tertiary">Publish blogs as articles in your Shopify store</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 flex items-center justify-center rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-secondary transition-all"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-[12px] font-semibold text-text-secondary block mb-1.5">
+              Store domain <span className="text-status-danger">*</span>
+            </label>
+            <input
+              type="text"
+              value={shopDomain}
+              onChange={e => { setShopDomain(e.target.value); setMessage(""); setStatus("idle"); }}
+              placeholder="your-store.myshopify.com"
+              className="w-full h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand-action/50 transition-colors font-mono"
+            />
+            <p className="text-[11px] text-text-tertiary mt-1">Use the .myshopify.com domain (not your custom domain).</p>
+          </div>
+
+          <div>
+            <label className="text-[12px] font-semibold text-text-secondary block mb-1.5">
+              Admin API access token <span className="text-status-danger">*</span>
+            </label>
+            <input
+              type="password"
+              value={accessToken}
+              onChange={e => { setAccessToken(e.target.value); setMessage(""); setStatus("idle"); }}
+              placeholder={existing ? "Enter a new token to rotate" : "shpat_…"}
+              className="w-full h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand-action/50 transition-colors font-mono"
+            />
+            <p className="text-[11px] text-text-tertiary mt-1">
+              Shopify admin → Settings → Apps → Develop apps → create a custom app with the <strong>write_content</strong> scope → install → Admin API access token.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-[12px] font-semibold text-text-secondary block mb-1.5">Blog</label>
+            <input
+              type="text"
+              value={blogRef}
+              onChange={e => { setBlogRef(e.target.value); setMessage(""); setStatus("idle"); }}
+              placeholder="Blog ID or handle (optional)"
+              className="w-full h-9 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand-action/50 transition-colors"
+            />
+            <p className="text-[11px] text-text-tertiary mt-1">Which blog to publish into. Leave blank to use your store&apos;s first blog.</p>
+          </div>
+
+          {message && (
+            <div className={`flex items-start gap-2 text-[12px] rounded-[8px] px-3 py-2.5 ${
+              status === "success"
+                ? "bg-status-success/10 text-status-success border border-status-success/20"
+                : "bg-status-danger/10 text-status-danger border border-status-danger/20"
+            }`}>
+              {status === "success"
+                ? <Check className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                : <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
+              {message}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 px-5 pb-5">
+          <button
+            onClick={handleTest}
+            disabled={busy || !ready}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-[8px] border border-border-subtle text-[12px] font-medium text-text-secondary hover:text-text-primary transition-all disabled:opacity-50"
+          >
+            {status === "testing" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+            Test Connection
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={busy || !ready}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-[8px] bg-brand-action text-white text-[12px] font-semibold hover:opacity-90 transition-all disabled:opacity-50"
+          >
+            {status === "saving" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+            {existing ? "Update" : "Save & Connect"}
+          </button>
+          <button
+            onClick={onClose}
+            className="ml-auto px-3 py-2 text-[12px] text-text-tertiary hover:text-text-secondary transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function StrapiIntegrationSection() {
   const queryClient = useQueryClient();
   const [showForm,   setShowForm]   = useState(false);
   const [deleting,   setDeleting]   = useState(false);
   const [showWpForm, setShowWpForm] = useState(false);
   const [wpDeleting, setWpDeleting] = useState(false);
+  const [showShopifyForm, setShowShopifyForm] = useState(false);
+  const [shopifyDeleting, setShopifyDeleting] = useState(false);
 
   const { data: res, isLoading } = useQuery({
     queryKey: ["user-cms-integration"],
@@ -465,8 +619,15 @@ export function StrapiIntegrationSection() {
     staleTime: 60_000,
   });
 
+  const { data: shopifyRes } = useQuery({
+    queryKey: ["user-shopify-integration"],
+    queryFn:  () => integrationsApi.getUserShopify(),
+    staleTime: 60_000,
+  });
+
   const existing = res?.success ? res.data : null;
   const wpExisting = wpRes?.success ? wpRes.data : null;
+  const shopifyExisting = shopifyRes?.success ? shopifyRes.data : null;
 
   const handleDelete = async () => {
     if (!confirm("Disconnect Strapi? You can reconnect at any time.")) return;
@@ -495,6 +656,19 @@ export function StrapiIntegrationSection() {
     void queryClient.invalidateQueries({ queryKey: ["user-wordpress-integration"] });
   };
 
+  const handleShopifyDelete = async () => {
+    if (!confirm("Disconnect Shopify? You can reconnect at any time.")) return;
+    setShopifyDeleting(true);
+    await integrationsApi.deleteUserShopify();
+    setShopifyDeleting(false);
+    void queryClient.invalidateQueries({ queryKey: ["user-shopify-integration"] });
+  };
+
+  const handleShopifySaved = () => {
+    setShowShopifyForm(false);
+    void queryClient.invalidateQueries({ queryKey: ["user-shopify-integration"] });
+  };
+
   return (
     <>
       {showForm && (
@@ -510,6 +684,14 @@ export function StrapiIntegrationSection() {
           existing={wpExisting}
           onClose={() => setShowWpForm(false)}
           onSaved={handleWpSaved}
+        />
+      )}
+
+      {showShopifyForm && (
+        <ShopifyForm
+          existing={shopifyExisting}
+          onClose={() => setShowShopifyForm(false)}
+          onSaved={handleShopifySaved}
         />
       )}
 
@@ -555,6 +737,21 @@ export function StrapiIntegrationSection() {
               onEdit={() => setShowWpForm(true)}
               onDelete={handleWpDelete}
               deleting={wpDeleting}
+            />
+
+            {/* Shopify */}
+            <IntegrationCard
+              name="Shopify"
+              description="Publish blogs as articles in your Shopify store's blog."
+              icon={<ShopifyIcon />}
+              connected={Boolean(shopifyExisting)}
+              maskedToken={shopifyExisting?.masked_token}
+              baseUrl={shopifyExisting ? `https://${shopifyExisting.base_url}/admin` : undefined}
+              collectionName={shopifyExisting?.blog_ref || "first blog"}
+              collectionLabel="Blog"
+              onEdit={() => setShowShopifyForm(true)}
+              onDelete={handleShopifyDelete}
+              deleting={shopifyDeleting}
             />
 
             {/* Contentful — coming soon */}

@@ -97,6 +97,47 @@ export const integrationsApi = {
     return apiPost(V1Routes.userWordPressTest, body);
   },
 
+  /** Get the current user's saved Shopify integration. */
+  getUserShopify(): Promise<{
+    success: boolean;
+    error?: string;
+    data: {
+      id: string;
+      cms_type: string;
+      base_url: string;
+      masked_token: string;
+      blog_ref: string;
+      collection_name: string;
+      created_at: string;
+      updated_at: string;
+    } | null;
+  }> {
+    return apiGet(V1Routes.userShopifyIntegration);
+  },
+
+  /** Save (upsert) the user's Shopify integration. Tests the connection first. */
+  saveUserShopify(body: {
+    shop_domain: string;
+    access_token: string;
+    blog_ref?: string;
+  }): Promise<{ success: boolean; error?: string; masked_token?: string }> {
+    return apiPost(V1Routes.userShopifyIntegration, body);
+  },
+
+  /** Remove the user's Shopify integration. */
+  deleteUserShopify(): Promise<{ success: boolean; error?: string }> {
+    return apiDelete(V1Routes.userShopifyIntegration);
+  },
+
+  /** Test a Shopify connection without saving credentials. */
+  testUserShopify(body: {
+    shop_domain: string;
+    access_token: string;
+    blog_ref?: string;
+  }): Promise<{ success: boolean; error?: string; message?: string }> {
+    return apiPost(V1Routes.userShopifyTest, body);
+  },
+
   /**
    * Publish a blog to the user's connected CMS. Pass `cmsType` to target a
    * specific provider when more than one is connected; otherwise the server

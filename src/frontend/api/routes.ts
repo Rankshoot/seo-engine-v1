@@ -83,6 +83,8 @@ export const V1Routes = {
   userStrapiTest:      "/integrations/user-strapi/test",
   userWordPressIntegration: "/integrations/user-wordpress",
   userWordPressTest:        "/integrations/user-wordpress/test",
+  userShopifyIntegration:   "/integrations/user-shopify",
+  userShopifyTest:          "/integrations/user-shopify/test",
   userCmsIntegration:       "/integrations/user-cms",
   blogPublishCms: (blogId: string) => `/blogs/${blogId}/publish-cms`,
 

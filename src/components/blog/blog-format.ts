@@ -116,6 +116,33 @@ export function extractFaqs(markdown: string): FaqItem[] {
   return out.slice(0, 12);
 }
 
+export interface SplitContent {
+  /** Markdown with the FAQ section removed (content before + any content after it). */
+  body: string;
+  /** Parsed FAQ items (may be empty) — rendered as a styled accordion. */
+  faqs: FaqItem[];
+}
+
+/**
+ * Split the FAQ section out of the body so it can render as a styled, SEO-safe
+ * accordion while the rest of the article renders normally. Content that comes
+ * AFTER the FAQ section (e.g. a "Key Takeaways" conclusion) is preserved in body.
+ */
+export function splitContentAndFaqs(markdown: string): SplitContent {
+  const lines = (markdown || '').split('\n');
+  const idx = lines.findIndex(l => /^##\s+(faqs?|frequently asked questions)\b/i.test(l.trim()));
+  if (idx === -1) return { body: markdown, faqs: [] };
+
+  let end = lines.length;
+  for (let j = idx + 1; j < lines.length; j++) {
+    if (/^##\s+/.test(lines[j])) { end = j; break; }
+  }
+  const before = lines.slice(0, idx).join('\n').trim();
+  const after = lines.slice(end).join('\n').trim();
+  const body = [before, after].filter(Boolean).join('\n\n');
+  return { body, faqs: extractFaqs(markdown) };
+}
+
 export function formatBlogDate(iso: string | null): string {
   if (!iso) return '';
   try {

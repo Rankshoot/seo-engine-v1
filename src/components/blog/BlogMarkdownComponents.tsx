@@ -222,16 +222,25 @@ function PdfPreviewer({ href, label }: { href: string; label: string }) {
 
   const displayTitle = label || filename;
 
+  // Frame the PDF through our same-origin proxy. Most PDF hosts (Supabase
+  // Storage, CDNs, the sites we audit) send X-Frame-Options / frame-ancestors,
+  // which makes a direct cross-origin <iframe src={pdf}> render "This content is
+  // blocked". The proxy streams the bytes from our own origin with no framing
+  // restriction, so the inline preview works reliably.
+  const previewSrc = `/api/pdf-proxy?url=${encodeURIComponent(href)}#toolbar=0&navpanes=0`;
+
   return (
     <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-sm not-italic no-underline">
-      {/* PDF Iframe Viewer */}
-      <iframe
-        src={`${href}#toolbar=0&navpanes=0`}
-        className="w-full border-none block bg-surface-primary"
-        style={{ height: "600px" }}
-        title={displayTitle}
-        allowFullScreen
-      />
+      {/* PDF Viewer (proxied so cross-origin framing restrictions don't block it) */}
+      <object data={previewSrc} type="application/pdf" className="w-full block bg-surface-primary" style={{ height: "600px" }}>
+        <iframe
+          src={previewSrc}
+          className="w-full border-none block bg-surface-primary"
+          style={{ height: "600px" }}
+          title={displayTitle}
+          allowFullScreen
+        />
+      </object>
 
       {/* PDF Download Bar */}
       <span className="flex items-center justify-between gap-4 border-t border-border-subtle bg-surface-primary px-6 py-4 flex-wrap">

@@ -17,6 +17,8 @@ import { STEPS } from "./_components/audit-config";
 import { AuditResults } from "./_components/AuditResults";
 import { AuditHistory } from "./_components/AuditHistory";
 import { GenerationStreamPanel } from "./_components/GenerationStreamPanel";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { setGeneratedMap, setGeneratedBlog } from "@/lib/redux/audit-generations-slice";
 
 const MAX_UPLOAD_CHARS = 200_000;
 
@@ -24,6 +26,7 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 
 export default function ContentAuditStudioPage() {
   const { id: projectId } = useParams<{ id: string }>();
+  const dispatch = useAppDispatch();
 
   const [inputMode, setInputMode] = useState<"url" | "upload">("url");
   const [url, setUrl] = useState("");
@@ -81,6 +84,20 @@ export default function ContentAuditStudioPage() {
 
   useEffect(() => { void loadHistory(); void loadScheduledDates(); }, [loadHistory, loadScheduledDates]);
 
+  // Hydrate the audit-URL → generated-blog map (Redux) so Audit History rows can
+  // show "View Blog" instead of "Generate Enhanced Blog" when a blog already exists.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await contentAuditApi.generatedMap(projectId);
+        if (!cancelled && res?.map) dispatch(setGeneratedMap({ projectId, map: res.map }));
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId, dispatch]);
+
   // Resume in-flight audits after a tab-switch / refresh. The audit jobs keep
   // running server-side regardless of the client, so on return we re-attach,
   // render skeletons for what's still running, and refresh history as each
@@ -119,10 +136,13 @@ export default function ContentAuditStudioPage() {
           `/api/v1/projects/${projectId}/content-audit/check-generated?url=${encodeURIComponent(auditUrl)}`
         );
         const data = (await res.json()) as { blogId?: string };
-        if (data.blogId) setGeneratedBlogId(data.blogId);
+        if (data.blogId) {
+          setGeneratedBlogId(data.blogId);
+          dispatch(setGeneratedBlog({ projectId, url: auditUrl, blogId: data.blogId }));
+        }
       } catch { /* non-fatal */ }
     })();
-  }, [report?.url, projectId]);
+  }, [report?.url, projectId, dispatch]);
 
   useEffect(() => {
     if (report) {
@@ -355,6 +375,7 @@ export default function ContentAuditStudioPage() {
       }
       if (blogId) {
         setGeneratedBlogId(blogId);
+        if (report?.url) dispatch(setGeneratedBlog({ projectId, url: report.url, blogId }));
         void loadHistory();
       } else {
         setGenerateError("Generation finished without returning a blog. Check Content History.");
@@ -678,6 +699,7 @@ export default function ContentAuditStudioPage() {
 
         {!analyzing && (
           <AuditHistory
+            projectId={projectId}
             items={history}
             loading={historyLoading}
             onOpen={openHistoryItem}

@@ -1,9 +1,29 @@
 import { useDispatch, useSelector, type TypedUseSelectorHook } from "react-redux";
 import type { AppDispatch, RootState } from "@/lib/redux/store";
 import { defaultPrefs, type ProjectStatsSnapshot } from "@/lib/redux/keyword-workspace-slice";
+import { normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
 
 export const useAppDispatch = () => useDispatch<AppDispatch>();
 export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
+
+const EMPTY_GENERATED_MAP: Record<string, string> = {};
+
+/** A project's audit-URL → generated-blogId map (stable empty-object fallback). */
+export function selectAuditGenerationsForProject(
+  state: RootState,
+  projectId: string
+): Record<string, string> {
+  return state.auditGenerations.byProject[projectId] ?? EMPTY_GENERATED_MAP;
+}
+
+/** The generated blogId for a single audited URL, or null if none yet. */
+export function selectGeneratedBlogId(
+  state: RootState,
+  projectId: string,
+  url: string
+): string | null {
+  return state.auditGenerations.byProject[projectId]?.[normalizeAuditGenerationUrl(url)] ?? null;
+}
 
 export function selectKeywordPrefs(state: RootState, projectId: string) {
   const p = state.keywordWorkspace.projects[projectId]?.prefs;

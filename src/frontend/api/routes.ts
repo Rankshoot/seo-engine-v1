@@ -56,6 +56,7 @@ export const V1Routes = {
   // ── Content Audit Studio ──────────────────────────────────────────────────
   contentAuditAnalyze: (projectId: string) => `/projects/${projectId}/content-audit/analyze`,
   contentAuditHistory: (projectId: string) => `/projects/${projectId}/content-audit/history`,
+  contentAuditGeneratedMap: (projectId: string) => `/projects/${projectId}/content-audit/generated-map`,
 
   // ── Blogs ─────────────────────────────────────────────────────────────────
   blog: (blogId: string) => `/blogs/${blogId}`,

@@ -1,22 +1,30 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import type { ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import type { ContentAuditReport } from "@/lib/content-audit-studio";
 import { SeverityChip, EmptyState, scoreColor } from "../_shared/ch-ui";
 import { SEVERITY_ORDER } from "./IssuesPanel";
+import { useAppSelector, selectAuditGenerationsForProject } from "@/lib/redux/hooks";
+import { normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
 
 const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
 
 export function AuditHistory({
-  items, loading, onOpen, onGenerateFromHistory, onScheduleFromHistory,
+  projectId, items, loading, onOpen, onGenerateFromHistory, onScheduleFromHistory,
 }: {
+  projectId: string;
   items: ContentAuditHistoryItem[];
   loading: boolean;
   onOpen: (item: ContentAuditHistoryItem) => void;
   onGenerateFromHistory: (item: ContentAuditHistoryItem) => void;
   onScheduleFromHistory: (item: ContentAuditHistoryItem) => void;
 }) {
+  const router = useRouter();
+  // Audit-URL → generated-blogId map (kept current by the page via Redux). Lets
+  // each row decide between "Generate Enhanced Blog" and "View Blog".
+  const generatedMap = useAppSelector(s => selectAuditGenerationsForProject(s, projectId));
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
@@ -99,6 +107,9 @@ export function AuditHistory({
           // Only real, completed audits ('ok') can be enhanced/scheduled — never a
           // page we flagged as non-article / unreachable.
           const isReal = (((item.report as ContentAuditReport | null)?.page_status as string | undefined) ?? "ok") === "ok";
+          // If an enhanced blog already exists for this audited URL, show "View
+          // Blog" instead of "Generate Enhanced Blog".
+          const generatedBlogId = isReal ? (generatedMap[normalizeAuditGenerationUrl(item.url)] ?? null) : null;
           const issueList = (item.report?.issues ?? []) as ContentAuditReport["issues"];
           const sortedIssues = [...issueList].sort(
             (a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99)
@@ -180,29 +191,41 @@ export function AuditHistory({
                   </div>
 
                   <div className="px-4 py-3 border-t border-border-subtle/30 flex items-center gap-2 flex-wrap bg-surface-secondary/20">
+                    {generatedBlogId ? (
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/projects/${projectId}/content-history/${generatedBlogId}`)}
+                        className="h-8 px-3 rounded-[8px] bg-status-success text-white text-[12px] font-semibold hover:opacity-90 transition-all flex items-center gap-1.5"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+                        </svg>
+                        View Blog
+                      </button>
+                    ) : isReal ? (
+                      <button
+                        type="button"
+                        onClick={() => onGenerateFromHistory(item)}
+                        className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                        </svg>
+                        Generate Enhanced Blog
+                      </button>
+                    ) : null}
                     {isReal && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => onGenerateFromHistory(item)}
-                          className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
-                        >
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
-                          </svg>
-                          Generate Enhanced Blog
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onScheduleFromHistory(item)}
-                          className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
-                        >
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
-                          </svg>
-                          Schedule to Calendar
-                        </button>
-                      </>
+                      <button
+                        type="button"
+                        onClick={() => onScheduleFromHistory(item)}
+                        className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                        </svg>
+                        Schedule to Calendar
+                      </button>
                     )}
                     <button
                       type="button"

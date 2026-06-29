@@ -809,11 +809,19 @@ export function renderMarkdownToHtml(markdown: string): string {
     if (pdfMatch) {
       const label = pdfMatch[1];
       const href = pdfMatch[2];
-      out.push(`<div class="pdf-preview-container" style="margin: 2.5em 0; border: 1px solid #d0d0dc; border-radius: 16px; overflow: hidden; background: #f4f4f8; font-family: system-ui, -apple-system, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
-  <iframe src="${href}#toolbar=0&navpanes=0" style="width: 100%; height: 600px; border: none; display: block; background: #ececf2;" allowfullscreen></iframe>
-  <div class="pdf-download-bar" style="display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; background: #ffffff; border-top: 1px solid #d0d0dc; gap: 16px; flex-wrap: wrap;">
-    <span class="pdf-title" style="font-size: 14px; font-weight: 700; color: #ff7759; word-break: break-word;">${escapeHTML(label)}</span>
-    <a href="${href}" download style="display: inline-flex; align-items: center; justify-content: center; background: #22252a; color: #ffffff; border: 1px solid #ff7759; padding: 8px 20px; border-radius: 9999px; font-size: 13px; font-weight: 600; text-decoration: none; transition: opacity 0.15s ease;">Download</a>
+      // Exported files are standalone — they can't use the app's same-origin PDF
+      // proxy, and a direct cross-origin <iframe> to the PDF is blocked by most
+      // hosts (X-Frame-Options). So emit a clean, always-working attachment card
+      // with Open + Download links instead of a preview that renders blank.
+      out.push(`<div class="pdf-attachment" style="margin: 2.5em 0; border: 1px solid #d0d0dc; border-radius: 16px; background: #ffffff; font-family: system-ui, -apple-system, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+  <div style="display: flex; align-items: center; gap: 16px; padding: 20px 24px; flex-wrap: wrap;">
+    <span style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 10px; background: #ff7759; color: #ffffff; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; flex-shrink: 0;">PDF</span>
+    <span style="flex: 1; min-width: 160px;">
+      <span style="display: block; font-size: 15px; font-weight: 700; color: #22252a; word-break: break-word;">${escapeHTML(label)}</span>
+      <span style="display: block; font-size: 13px; color: #6b7280;">PDF document</span>
+    </span>
+    <a href="${href}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; justify-content: center; background: #ffffff; color: #22252a; border: 1px solid #d0d0dc; padding: 8px 18px; border-radius: 9999px; font-size: 13px; font-weight: 600; text-decoration: none;">Open PDF</a>
+    <a href="${href}" download style="display: inline-flex; align-items: center; justify-content: center; background: #22252a; color: #ffffff; border: 1px solid #ff7759; padding: 8px 20px; border-radius: 9999px; font-size: 13px; font-weight: 600; text-decoration: none;">Download</a>
   </div>
 </div>`);
     } else {

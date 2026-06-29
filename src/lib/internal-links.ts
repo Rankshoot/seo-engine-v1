@@ -46,6 +46,10 @@ function scoreRow(tokens: string[], row: SitemapLinkRow): number {
   }
   // Bias towards real article pages over generic marketing/utility pages.
   if (row.kind === 'blog') s += 1;
+  // Surface a few commercial pages (product / solution / pricing / demo) so the
+  // article can link to one and end with a product-landing-page CTA, instead of
+  // only ever linking to other blogs.
+  if (/(product|pricing|solution|service|platform|features?|demo|book-a|get-started|sign-?up|contact)/.test(path)) s += 1;
   return s;
 }
 

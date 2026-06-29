@@ -9,6 +9,7 @@ import {
   type ContentHealthAuditState,
 } from "@/lib/redux/content-health-audit-slice";
 import { dataRestSlice, type DataRestState } from "@/lib/redux/data-rest-slice";
+import { auditGenerationsSlice } from "@/lib/redux/audit-generations-slice";
 
 const STORAGE_KEY = "seo-engine:redux:v1";
 
@@ -16,6 +17,8 @@ const rootReducer = combineReducers({
   keywordWorkspace: keywordWorkspaceSlice.reducer,
   contentHealthAudit: contentHealthAuditSlice.reducer,
   dataRest: dataRestSlice.reducer,
+  // Audit-URL → generated-blog map. Not persisted (rehydrated from the server).
+  auditGenerations: auditGenerationsSlice.reducer,
 });
 
 type RootStateFromReducer = ReturnType<typeof rootReducer>;

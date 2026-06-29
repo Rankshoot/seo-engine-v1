@@ -42,6 +42,11 @@ export const contentAuditApi = {
     return apiGet(V1Routes.contentAuditHistory(projectId));
   },
 
+  /** Map of audited URL → generated ("enhanced") blogId for this project. */
+  generatedMap(projectId: string): Promise<{ map: Record<string, string>; error?: string }> {
+    return apiGet(V1Routes.contentAuditGeneratedMap(projectId));
+  },
+
   clearHistory(projectId: string): Promise<{ success: boolean; error?: string }> {
     return apiDelete(V1Routes.contentAuditHistory(projectId));
   },

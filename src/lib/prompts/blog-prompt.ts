@@ -145,7 +145,7 @@ export function buildBlogPrompt(ctx: BlogPromptContext): string {
           .map(b => `- "${b.title}" → ${b.url} (keyword: ${b.topic})`)
           .join('\n')}`
       : '';
-    internalLinksBlock = `\nINTERNAL LINKING (use 4–6 total where contextually relevant, split across the two pools, placed where they genuinely help the reader. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 4 validated internal links are available, use all available validated links instead of inventing links):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
+    internalLinksBlock = `\nINTERNAL LINKING (use 3–7 total — NEVER more than 7 — where contextually relevant, split across the two pools, placed where they genuinely help the reader. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 3 validated internal links are available, use all available validated links instead of inventing links. When the pool contains a product / solution / pricing / landing page, include at least one such link, and END the article with a short, natural call-to-action that links to the most relevant product/solution/landing page — fall back to the site homepage https://${project.domain} only if no better page exists):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
   }
 
   // 2. External research context (competitor articles — for topic reference only, NOT for citation links)
@@ -280,8 +280,8 @@ SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 5. H2 HEADINGS: At least 5 × ## headings in the contentMarkdown (the scorer requires >= 3).
 6. H3 SUB-HEADINGS: At least 2 × ### headings inside long H2 body sections to organize sub-topics.
 7. FAQ SECTION: MUST have a heading that reads exactly "## FAQs" (or "## Frequently Asked Questions"). Include exactly 7 to 10 Q&A pairs, each question as a ### heading.
-8. EXTERNAL LINKS: Include 4–6 highly credible external citations. Format: [anchor text](https://...). Each external link must directly support the exact claim near the link. RULES: (a) Link to the PRIMARY SOURCE of every claim — the actual research report, dataset, government page, or academic paper — not a blog post summarising it. (b) Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista (direct report pages), SHRM, LinkedIn official research reports, IEEE, ISO, peer-reviewed journals. (c) Never link to root domains alone (e.g. "https://www.gartner.com") — always deep-link to the specific report or article page. (d) Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any URL that is primarily promotional. (e) Never invent fake report URLs — if a citation is uncertain, skip it instead of adding a weak link. (f) Never use the same URL twice. Each citation must be a distinct, unique deep-linked URL.
-9. INTERNAL LINKS: Include 4–6 internal links from the INTERNAL LINKING pool wherever contextually relevant. Format: [anchor text](/slug) or absolute URL. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 4 validated internal links are available, use all available validated links instead of inventing links.
+8. EXTERNAL LINKS: Include 3–7 highly credible external citations — NEVER more than 7, and never fewer than 3 when credible sources for the topic exist. Format: [anchor text](https://...). Each external link must directly support the exact claim near the link. RULES: (a) Cite the PRIMARY SOURCE of the claim where possible — the actual research report, dataset, government page, or academic paper — not a blog post summarising it. (b) Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista, SHRM, LinkedIn official research, IEEE, ISO, peer-reviewed journals. (c) Prefer a specific report/article page, BUT a real, stable, well-known section or topic page on a credible domain is acceptable when you are not certain a deep link exists. The goal is REAL, working URLs — do not fabricate deep links just to look specific. (d) Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any primarily-promotional URL. (e) Only cite a URL you are confident actually exists; if unsure of a specific page, use the publication's known stable page rather than guessing — never invent a URL. (f) Never use the same URL twice.
+9. INTERNAL LINKS: Include 3–7 internal links — NEVER more than 7 — from the INTERNAL LINKING pool wherever contextually relevant. Format: [anchor text](/slug) or absolute URL. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 3 validated internal links are available, use all available validated links instead of inventing links. Include at least one link to a relevant product / solution / landing page when the pool offers one, and finish with a short call-to-action linking to such a page.
 10. META DESCRIPTION: Exactly 150–160 characters long and MUST contain "${entry.focus_keyword}".
 11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer", "In today's rapidly evolving landscape", "unlock the power of", "delve into"). Use specific wording and practical examples instead of vague claims.
 12. HUMAN TONE: Write in a natural, human editorial tone with varied sentence rhythm, practical examples, small connective phrases, and smooth transitions. Avoid robotic, repetitive, overly polished AI-style phrasing. Keep paragraphs readable and natural.
@@ -327,18 +327,18 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
      (e.g., > Infographic suggestion: A 5-step RPO hiring workflow from requirement intake to onboarding.)
 
 7. NATURAL INTERLINKING & "ALSO READ" CALLOUTS:
-   - Target 4–6 internal links total. Use verified internal links only from the provided INTERNAL LINKING pool. Do NOT invent internal URLs, slugs, or pages.
-   - If fewer than 4 validated internal links are available, use all available ones — never invent additional links to hit the count.
+   - Target 3–7 internal links total (NEVER more than 7), including at least one product/solution/landing page when the pool offers one. Use verified internal links only from the provided INTERNAL LINKING pool. Do NOT invent internal URLs, slugs, or pages.
+   - If fewer than 3 validated internal links are available, use all available ones — never invent additional links to hit the count.
    - If a validated internal link cannot be naturally woven into the prose of the paragraphs, you MUST include a clean callout block:
      > **Also Read:** [Anchor text / Title of the related blog](https://domain/slug)
 
 8. CITATIONS & EXTERNAL LINKING:
-   - Target 4–6 external citations total. Every external citation must directly support the exact claim near the link.
+   - Target 3–7 external citations total (NEVER more than 7, and never fewer than 3 when credible sources for the topic exist). Every external citation must directly support the exact claim near the link.
    - Every external citation must point to the PRIMARY SOURCE of the claim — the actual study, report, dataset, or official page — not a blog post or article that summarises it.
    - Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista (direct report pages), SHRM, LinkedIn official research reports, IEEE, ISO, peer-reviewed journals.
    - Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any URL that is primarily promotional.
-   - Never link to root domains (e.g. "https://gartner.com"). Always deep-link to the specific report, article, or data page.
-   - Never invent fake report URLs. If a citation is uncertain, skip it — do not add a weak link just to reach the count.
+   - Prefer a specific report/article/data page, but a real, stable, well-known section or topic page on a credible domain is acceptable when a deep link is uncertain. The priority is REAL, working URLs over fake-specific ones.
+   - Never invent or guess a URL. If unsure of a specific page, cite the publication's known stable page instead of fabricating a deep link.
    - Never use the same URL twice. Each citation must be a distinct, unique deep-linked URL.
 
 9. AUTHORITY-BUILDING SECTIONS & GROUNDING:

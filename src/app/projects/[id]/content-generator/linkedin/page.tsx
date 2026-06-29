@@ -11,7 +11,7 @@ import {
   Card,
   Field,
   Input,
-  PageTitle,
+  PageHeader,
   Select,
   Spinner,
   Textarea,
@@ -24,7 +24,6 @@ import {
   GenerationProgress,
   SectionHeading,
   StepRow,
-  StudioBreadcrumb,
   RecentHistorySkeleton,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
@@ -194,21 +193,17 @@ export default function LinkedInGeneratorPage() {
         : "Tell us the angle, the audience, and the kind of post. The engine handles the hook, structure, and CTA.";
 
   return (
-    <div className={`relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8 ${mounted ? "animate-slide-in-right" : ""}`}>
-      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
-        <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="LinkedIn posts" />
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div className="min-w-0 max-w-3xl">
-            <PageTitle>{heroTitle}</PageTitle>
-            <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
-            {!canGenerateLinkedIn && quota && (
-              <div className="mt-3 text-[14px] text-rose-400 font-medium">
-                LinkedIn post limit reached ({quota.linkedin.used}/{quota.linkedin.effectiveLimit}). Upgrade your plan to generate more LinkedIn posts.
-              </div>
-            )}
-          </div>
-          {phase === "form" ? (
+    <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
+      {!canGenerateLinkedIn && quota && (
+        <div className="text-[14px] text-status-danger font-medium">
+          LinkedIn post limit reached ({quota.linkedin.used}/{quota.linkedin.effectiveLimit}). Upgrade your plan to generate more LinkedIn posts.
+        </div>
+      )}
+      <PageHeader
+        title={heroTitle}
+        description={heroLead}
+        actions={
+          phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="outline"
@@ -261,9 +256,9 @@ export default function LinkedInGeneratorPage() {
                 Generate post
               </Button>
             </div>
-          ) : null}
-        </div>
-      </div>
+          ) : null
+        }
+      />
 
       <div className="mx-auto w-full max-w-4xl">
         {phase !== "generating" ? (

@@ -43,26 +43,25 @@ export function StudioBreadcrumb({
   current: string;
 }) {
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-3 text-[14px] text-text-tertiary">
-      <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
-        <span className="h-2 w-2 rounded-full bg-brand-action" />
-        Content studio
-      </span>
+    <nav className="mb-3 flex flex-wrap items-center gap-1.5 text-[12px] text-text-tertiary" aria-label="Breadcrumb">
       {parentHref && parentLabel ? (
         <>
           <a
             href={parentHref}
-            className="font-medium text-text-secondary transition-colors hover:text-text-primary"
+            className="text-text-tertiary transition-colors hover:text-text-primary"
           >
             {parentLabel}
           </a>
-          <span className="opacity-30" aria-hidden>
-            /
-          </span>
+          <span className="opacity-30" aria-hidden>/</span>
         </>
-      ) : null}
-      <span className="font-mono text-text-primary">{current}</span>
-    </div>
+      ) : (
+        <>
+          <span className="text-text-tertiary">Content Generator</span>
+          <span className="opacity-30" aria-hidden>/</span>
+        </>
+      )}
+      <span className="text-text-secondary font-medium">{current}</span>
+    </nav>
   );
 }
 

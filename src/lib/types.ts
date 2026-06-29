@@ -450,7 +450,12 @@ export interface LinkedInContentData {
   featured_image_url?: string;
 }
 
+export interface BlogContentData {
+  cover_image_url?: string;
+}
+
 export type ContentDataPayload =
+  | BlogContentData
   | Record<string, never>
   | EbookContentData
   | WhitepaperContentData

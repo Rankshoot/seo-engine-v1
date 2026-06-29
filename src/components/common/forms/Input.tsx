@@ -14,7 +14,7 @@ const baseField =
   "outline-none transition-colors duration-(--duration-fast) ease-out " +
   "focus:border-brand-action focus:ring-1 focus:ring-brand-action/60 " +
   "disabled:opacity-50 disabled:cursor-not-allowed " +
-  "aria-[invalid=true]:border-rose-500/60 aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-rose-500/40";
+  "aria-[invalid=true]:border-status-danger/60 aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-status-danger/40";
 
 const sizeClass = {
   sm: "h-8 px-2.5 text-[13px]",
@@ -133,7 +133,7 @@ export function Field({
         <p className="text-[12px] text-text-tertiary leading-relaxed">{description}</p>
       ) : null}
       {error ? (
-        <p className="text-[12px] text-rose-400 leading-relaxed">{error}</p>
+        <p className="text-[12px] text-status-danger leading-relaxed">{error}</p>
       ) : null}
     </div>
   );

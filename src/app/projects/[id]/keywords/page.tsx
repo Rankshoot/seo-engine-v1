@@ -25,13 +25,7 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           {/* Title area */}
           <div className="min-w-0 flex-1">
-            {/* Eyebrow label */}
-            <div className="mb-4">
-              <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-3 py-1 font-mono text-[12px] uppercase tracking-widest text-text-secondary">
-                <span className="h-2 w-2 rounded-full bg-brand-action" />
-                Keyword Discovery
-              </span>
-            </div>
+  
 
             <h1 className="text-[28px] sm:text-[34px] font-semibold tracking-tight text-text-primary leading-none">
               Find & Schedule Keywords

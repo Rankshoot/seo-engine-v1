@@ -93,7 +93,7 @@ export function ExportMenu<T extends string>({
                 className={cn(
                   "flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] font-medium transition-colors",
                   isCopied
-                    ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                    ? "border border-status-success/40 bg-status-success/10 text-status-success"
                     : "border border-border-subtle bg-surface-tertiary text-text-secondary hover:border-border-default hover:text-text-primary",
                 )}
               >

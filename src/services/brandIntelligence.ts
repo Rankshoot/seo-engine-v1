@@ -237,7 +237,7 @@ async function extractColorsFromLogo(imageUrl: string): Promise<string[]> {
   if (!base64Data) return [];
 
   try {
-    const anthropic = new Anthropic({ apiKey });
+    const anthropic = new Anthropic({ apiKey, maxRetries: 5 });
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 80,

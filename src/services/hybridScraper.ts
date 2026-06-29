@@ -74,7 +74,10 @@ async function fetchHtmlWithPlaywright(url: string, timeoutMs = 25_000): Promise
   if (!playwrightAvailable) return null;
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
     const context = await browser.newContext({
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -289,6 +292,187 @@ export interface ScrapedPageMarkdown {
   error?: string;
 }
 
+function extractFaqsFromHtml(html: string): string {
+  const $ = cheerio.load(html);
+  const faqs: { q: string; a: string }[] = [];
+
+  // Find all accordion/FAQ items
+  $('.jet-accordion__item, .elementor-accordion-item, .elementor-toggle-item, .accordion-item, .wp-block-yoast-faq-block, .schema-faq-section, .su-spoiler').each((_, item) => {
+    const q = $(item).find(
+      '.jet-accordion__control, .jet-toggle__control, .jet-accordion__item-header, ' +
+      '.elementor-accordion-title, .elementor-toggle-title, ' +
+      '.accordion-header, .accordion-title, .accordion-button, ' +
+      '.schema-faq-question, .su-spoiler-title'
+    ).text().trim();
+
+    const a = $(item).find(
+      '.jet-accordion__content, .jet-toggle__content, .jet-accordion__item-body, ' +
+      '.elementor-accordion-content, .elementor-tab-content, ' +
+      '.accordion-content, .accordion-panel, ' +
+      '.schema-faq-answer, .su-spoiler-content'
+    ).text().trim();
+
+    if (q && a) {
+      faqs.push({ q, a });
+    }
+  });
+
+  if (faqs.length === 0) {
+    // Fallback for Yoast FAQ blocks structure
+    $('.schema-faq-question').each((_, el) => {
+      const q = $(el).text().trim();
+      const a = $(el).next('.schema-faq-answer').text().trim();
+      if (q && a) {
+        faqs.push({ q, a });
+      }
+    });
+  }
+
+  if (faqs.length === 0) {
+    return '';
+  }
+
+  let markdown = '\n\n## Frequently Asked Questions\n\n';
+  faqs.forEach((faq, i) => {
+    const cleanQ = faq.q.replace(/^\d+[\s.)-]+\s*/, '');
+    markdown += `### ${i + 1}. ${cleanQ}\n\n${faq.a}\n\n`;
+  });
+
+  return markdown;
+}
+
+export function isJinaPdfHijack(markdown: string, originalUrl: string): boolean {
+  // If the user intentionally audited a PDF URL, it's not a hijack
+  const path = originalUrl.toLowerCase().split('?')[0];
+  if (path.endsWith('.pdf')) {
+    return false;
+  }
+
+  // Inspect the top metadata section (first 1500 chars) of Jina's response
+  const header = markdown.slice(0, 1500);
+
+  // Check if Jina's PDF metadata header is present:
+  // Jina's PDF engine always prepends "Number of Pages: X" to its markdown output.
+  const hasPdfPages = /^\s*Number of Pages:\s*\d+/im.test(header);
+
+  // As a backup, check if the Title metadata explicitly references PDF and Jina metadata is present
+  const hasPdfTitle = /^\s*Title:\s*.*?\bpdf\b/im.test(header);
+  const isJinaScrape = header.includes('URL Source:');
+
+  return hasPdfPages || (hasPdfTitle && isJinaScrape);
+}
+
+/**
+ * Pre-processes HTML to find PDF links/embeds, extracting them and placing them
+ * in clean, non-strippable paragraphs so that Readability doesn't discard them.
+ */
+function extractAndPreservePdfLinks(html: string, baseUrl: string): { html: string; extractedUrls: { url: string; label: string }[] } {
+  const $ = cheerio.load(html);
+  const extractedUrls: { url: string; label: string }[] = [];
+  const processedUrls = new Set<string>();
+
+  const addExtracted = (rawUrl: string, rawLabel: string) => {
+    try {
+      const resolved = new URL(rawUrl, baseUrl).href;
+      if (!processedUrls.has(resolved)) {
+        processedUrls.add(resolved);
+        const cleanLabel = rawLabel.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+        extractedUrls.push({ url: resolved, label: cleanLabel });
+      }
+    } catch {
+      // Invalid URL
+    }
+  };
+
+  // 1. Process wp-block-file containers (WordPress specific but very common)
+  $('.wp-block-file').each((_, container) => {
+    const $container = $(container);
+    let pdfUrl = '';
+    let label = '';
+
+    // Look for pdf links inside this container
+    $container.find('a[href]').each((_, a) => {
+      const $a = $(a);
+      const href = $a.attr('href');
+      if (href && href.toLowerCase().includes('.pdf')) {
+        pdfUrl = href;
+        const text = $a.text().trim();
+        if (text && text.toLowerCase() !== 'download' && !label) {
+          label = text;
+        }
+      }
+    });
+
+    // If no label but object exists
+    if (!label) {
+      const embed = $container.find('.wp-block-file__embed');
+      if (embed.length) {
+        label = embed.attr('aria-label') || 'Download PDF';
+        if (!pdfUrl) {
+          pdfUrl = embed.attr('data') || embed.attr('src') || '';
+        }
+      }
+    }
+
+    if (pdfUrl) {
+      addExtracted(pdfUrl, label || 'Download PDF');
+      const resolvedUrl = new URL(pdfUrl, baseUrl).href;
+      const cleanLabel = label.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+      
+      // Replace entire container with a standard paragraph containing the link
+      $container.replaceWith(`<p><a href="${resolvedUrl}">${cleanLabel}</a></p>`);
+    }
+  });
+
+  // 2. Process other elements that might embed PDFs (object, embed, iframe)
+  $('object[data], embed[src], iframe[src]').each((_, el) => {
+    const $el = $(el);
+    // Skip if it was already removed/replaced
+    if ($el.closest('html').length === 0) return;
+
+    const data = $el.attr('data') || '';
+    const src = $el.attr('src') || '';
+    const type = $el.attr('type') || '';
+    const pdfUrl = data.toLowerCase().includes('.pdf') ? data : (src.toLowerCase().includes('.pdf') || type.toLowerCase() === 'application/pdf' ? src : '');
+
+    if (pdfUrl) {
+      const label = $el.attr('aria-label') || $el.text().trim() || 'Download PDF';
+      addExtracted(pdfUrl, label);
+      
+      const resolvedUrl = new URL(pdfUrl, baseUrl).href;
+      const cleanLabel = label.replace(/<[^>]*>/g, '').replace(/^Embed of\s+/i, '').replace(/\.$/, '').trim() || 'Download PDF';
+      
+      // Replace with clean paragraph link
+      $el.replaceWith(`<p><a href="${resolvedUrl}">${cleanLabel}</a></p>`);
+    }
+  });
+
+  // 3. Process any other raw a[href] tags pointing to a PDF to make sure they are not stripped
+  $('a[href]').each((_, el) => {
+    const $el = $(el);
+    if ($el.closest('html').length === 0) return;
+
+    const href = $el.attr('href') || '';
+    if (href.toLowerCase().includes('.pdf')) {
+      const label = $el.text().trim() || 'Download PDF';
+      addExtracted(href, label);
+
+      // Make sure it is inside a readable paragraph, or wrap it
+      const parent = $el.parent();
+      const parentTag = parent.prop('tagName')?.toLowerCase();
+      if (parentTag !== 'p' && parentTag !== 'li' && parentTag !== 'td') {
+        const resolvedUrl = new URL(href, baseUrl).href;
+        $el.replaceWith(`<p><a href="${resolvedUrl}">${label}</a></p>`);
+      }
+    }
+  });
+
+  return {
+    html: $.html(),
+    extractedUrls
+  };
+}
+
 export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapedPageMarkdown> {
   try {
     const timeoutMs = opts.timeoutMs ?? 15_000;
@@ -296,7 +480,10 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
     if (!html) {
       console.log(`[hybridScraper] Using Jina Reader for ${url}`);
       const jina = await readUrlViaJinaReader(url, { timeoutMs });
-      if (jina.ok && jina.markdown.trim()) {
+      
+      const isHijack = jina.ok && isJinaPdfHijack(jina.markdown, url);
+
+      if (jina.ok && jina.markdown.trim() && !isHijack) {
         return {
           url,
           markdown: jina.markdown,
@@ -304,12 +491,21 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
           ok: true,
         };
       }
-      console.log(`[hybridScraper] Using Playwright fallback for ${url}`);
+      
+      if (isHijack) {
+        console.log(`[hybridScraper] Jina PDF hijack detected for ${url}. Falling back to Playwright.`);
+      } else {
+        console.log(`[hybridScraper] Jina failed or returned empty, using Playwright fallback for ${url}`);
+      }
       html = await fetchHtmlWithPlaywright(url, timeoutMs);
     }
     if (!html) {
       throw new Error(`Failed to fetch HTML for ${url}`);
     }
+
+    // Pre-process HTML to extract and preserve PDF links from stripping
+    const { html: processedHtml, extractedUrls } = extractAndPreservePdfLinks(html, url);
+    html = processedHtml;
 
     const { document } = parseHTML(html);
     
@@ -330,11 +526,31 @@ export async function hybridReadUrl(url: string, opts: { timeoutMs?: number } = 
       // Remove scripts, styles before turndown
       turndownService.remove(['script', 'style']);
       markdown = turndownService.turndown(article.content);
+
+      // Check if FAQ section is present in parsed markdown; if missing, extract and append via Cheerio
+      const hasFaq = /(faq|frequently asked)/i.test(markdown);
+      if (!hasFaq) {
+        const faqsMd = extractFaqsFromHtml(html);
+        if (faqsMd) {
+          markdown += faqsMd;
+        }
+      }
     } else {
       // Fallback: if readability fails, try just cheerio text
       const $ = cheerio.load(html);
       $('script, style, noscript').remove();
       markdown = $('body').text().replace(/\s+/g, ' ').trim();
+    }
+
+    // Post-process markdown to append any PDF links that might have been stripped
+    if (extractedUrls.length > 0) {
+      extractedUrls.forEach(({ url: pdfUrl, label }) => {
+        const hasLink = markdown.toLowerCase().includes(pdfUrl.toLowerCase());
+        if (!hasLink) {
+          console.log(`[hybridScraper] Appending missing PDF link to markdown: ${pdfUrl}`);
+          markdown += `\n\n[${label}](${pdfUrl})\n`;
+        }
+      });
     }
 
     return {

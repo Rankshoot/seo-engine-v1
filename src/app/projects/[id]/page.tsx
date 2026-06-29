@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { motion } from "framer-motion";
+import { PageHeader } from "@/components/common";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -30,7 +32,9 @@ import {
   BookOpen,
   TrendingUp,
   Eye,
+  Activity,
 } from "lucide-react";
+import { auditsApi } from "@/frontend/api/audits";
 
 /* ─────────── helpers ─────────── */
 
@@ -175,29 +179,20 @@ export default function ProjectOverviewPage() {
   }
 
   return (
-    <div className="pb-20 -mt-6 lg:-mt-8">
+    <div className="pb-20">
       {/* ── Header ── */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 mb-6">
-        <div className="border-b border-border-subtle/70 bg-surface-primary/95 backdrop-blur-md px-6 lg:px-8 pt-6 lg:pt-8 pb-4">
-          {/* Gradient glow top accent */}
-          <div aria-hidden className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-brand-violet/40 to-transparent" />
-
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary mb-1.5">
-                <Link href="/projects" className="hover:text-text-secondary transition-colors">Projects</Link>
-                <ChevronRight className="h-3 w-3 opacity-40" />
-                <span className="text-text-secondary font-medium truncate">{project.name}</span>
-                <span className="opacity-40 mx-0.5">·</span>
-                <Globe2 className="h-3 w-3" />
-                <span className="font-mono text-text-tertiary">{project.domain}</span>
-              </div>
-              <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-text-primary leading-tight truncate">
-                {project.name}
-              </h1>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
+      <div className="sticky top-0 z-30 bg-surface-primary/98 backdrop-blur-md mb-6">
+        <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary mb-3">
+          <Link href="/projects" className="hover:text-text-secondary transition-colors">Projects</Link>
+          <ChevronRight className="h-3 w-3 opacity-40" />
+          <Globe2 className="h-3 w-3" />
+          <span className="font-mono text-text-tertiary">{project.domain}</span>
+        </div>
+        <PageHeader
+          title={project.name}
+          description={`${project.domain} · Content engine overview`}
+          actions={
+            <>
               <ProjectNavLink
                 href={`/projects/${id}/keywords`}
                 className="inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-elevated px-3.5 py-1.5 text-[12.5px] font-medium text-text-primary transition-all hover:-translate-y-0.5 hover:shadow-sm"
@@ -210,12 +205,22 @@ export default function ProjectOverviewPage() {
               >
                 <Wand2 className="h-3.5 w-3.5" /> Generate
               </ProjectNavLink>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          borderless
+          sticky={false}
+          className="pb-0"
+        />
+        <div className="mt-4 h-px bg-gradient-to-r from-transparent via-border-subtle to-transparent" />
+        <div className="h-px bg-gradient-to-r from-transparent via-brand-action/20 to-transparent" />
       </div>
 
-      <div className="px-4 space-y-6">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1], staggerChildren: 0.06 }}
+        className="space-y-6"
+      >
         {/* ── Metrics strip ── */}
         <StatStrip projectId={id} stats={stats} />
 
@@ -306,32 +311,32 @@ export default function ProjectOverviewPage() {
                 icon: <Search className="h-4 w-4" />,
                 label: "Keywords",
                 sub: `${formatCompactNumber(stats?.totalKeywords ?? 0)} found`,
-                color: "text-violet-500",
-                bg: "bg-violet-500/10",
+                color: "text-brand-violet",
+                bg: "bg-brand-violet/10",
               },
               {
                 href: `/projects/${id}/content-calendar`,
                 icon: <Calendar className="h-4 w-4" />,
                 label: "Calendar",
                 sub: `${formatCompactNumber(stats?.calendarEntries ?? 0)} scheduled`,
-                color: "text-blue-500",
-                bg: "bg-blue-500/10",
+                color: "text-status-info",
+                bg: "bg-status-info/10",
               },
               {
                 href: `/projects/${id}/content-generator`,
                 icon: <Wand2 className="h-4 w-4" />,
                 label: "Generate",
                 sub: "Blogs, ebooks, LinkedIn",
-                color: "text-emerald-500",
-                bg: "bg-emerald-500/10",
+                color: "text-status-success",
+                bg: "bg-status-success/10",
               },
               {
                 href: `/projects/${id}/content-history`,
                 icon: <FileText className="h-4 w-4" />,
                 label: "Library",
                 sub: `${formatCompactNumber(stats?.blogsGenerated ?? 0)} created`,
-                color: "text-amber-500",
-                bg: "bg-amber-500/10",
+                color: "text-status-warning",
+                bg: "bg-status-warning/10",
               },
             ].map(item => (
               <ProjectNavLink
@@ -351,27 +356,104 @@ export default function ProjectOverviewPage() {
           </div>
         </section>
 
-        {/* ── Content Health teaser ── */}
-        <section className="rounded-xl border border-dashed border-border-subtle/80 bg-surface-secondary/20 px-5 py-4">
+        {/* ── Content Health widget ── */}
+        <ContentHealthWidget projectId={id} />
+      </motion.div>
+    </div>
+  );
+}
+
+/* ─────────── ContentHealthWidget ─────────── */
+
+function ContentHealthWidget({ projectId }: { projectId: string }) {
+  const { data: auditsRes, isLoading } = useQuery({
+    queryKey: ["audit-coverage", projectId],
+    queryFn: () => auditsApi.list(projectId, { limit: 0 }),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const coverage = auditsRes?.coverage;
+  const hasAudits = (coverage?.blogs_audited ?? 0) > 0;
+
+  if (isLoading) {
+    return <Skeleton className="h-24 w-full rounded-xl" />;
+  }
+
+  if (!hasAudits) {
+    return (
+      <section className="rounded-xl border border-border-subtle bg-surface-elevated px-5 py-4">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-elevated text-text-tertiary">
-              <AlertCircle className="h-3.5 w-3.5" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-status-warning/10 text-status-warning">
+              <Activity className="h-4 w-4" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] font-semibold text-text-primary">Content Health Audit</span>
-                <span className="inline-flex items-center rounded-full border border-border-subtle bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold text-text-tertiary">
-                  Coming soon
-                </span>
-              </div>
+              <div className="text-[13px] font-semibold text-text-primary">Content Health</div>
               <p className="text-[11.5px] text-text-tertiary mt-0.5">
-                Track live URL performance, surface decaying pages, and queue fixes automatically.
+                Find pages losing traffic and fix them automatically.
               </p>
             </div>
           </div>
-        </section>
+          <ProjectNavLink
+            href={`/projects/${projectId}/audit`}
+            className="shrink-0 text-[12px] font-medium text-brand-violet hover:text-brand-action-hover transition-colors"
+          >
+            Run audit →
+          </ProjectNavLink>
+        </div>
+      </section>
+    );
+  }
+
+  const avgHealth = coverage?.avg_health ?? 0;
+  const healthColor =
+    avgHealth >= 70 ? "text-status-success" : avgHealth >= 50 ? "text-status-warning" : "text-status-danger";
+  const highSeverity = coverage?.high_severity ?? 0;
+  const blogsAudited = coverage?.blogs_audited ?? 0;
+
+  return (
+    <section className="rounded-xl border border-border-subtle bg-surface-elevated overflow-hidden">
+      <div className="px-5 py-3.5 flex items-center justify-between border-b border-border-subtle/60">
+        <div className="flex items-center gap-2">
+          <Activity className="h-3.5 w-3.5 text-status-warning" />
+          <span className="text-[13px] font-semibold text-text-primary">Content Health</span>
+        </div>
+        <ProjectNavLink
+          href={`/projects/${projectId}/audit`}
+          className="text-[12px] font-medium text-brand-violet hover:text-brand-action-hover transition-colors"
+        >
+          View all →
+        </ProjectNavLink>
       </div>
-    </div>
+      <div className="grid grid-cols-3 divide-x divide-border-subtle/60">
+        <div className="px-4 py-3 text-center">
+          <div className={`text-[20px] font-semibold tabular-nums ${healthColor}`}>
+            {avgHealth > 0 ? avgHealth : "–"}
+          </div>
+          <div className="text-[10.5px] text-text-tertiary mt-0.5">Avg health</div>
+        </div>
+        <div className="px-4 py-3 text-center">
+          <div className="text-[20px] font-semibold tabular-nums text-status-danger">{highSeverity}</div>
+          <div className="text-[10.5px] text-text-tertiary mt-0.5">Need fixes</div>
+        </div>
+        <div className="px-4 py-3 text-center">
+          <div className="text-[20px] font-semibold tabular-nums text-text-primary">{blogsAudited}</div>
+          <div className="text-[10.5px] text-text-tertiary mt-0.5">Audited</div>
+        </div>
+      </div>
+      {highSeverity > 0 && (
+        <div className="px-5 py-2.5 border-t border-border-subtle/60 bg-status-danger/5">
+          <ProjectNavLink
+            href={`/projects/${projectId}/audit?filter=high`}
+            className="flex items-center gap-1.5 text-[12px] font-medium text-status-danger hover:opacity-80 transition-opacity"
+          >
+            <AlertCircle className="h-3.5 w-3.5" />
+            {highSeverity} page{highSeverity !== 1 ? "s" : ""} need urgent attention
+            <ArrowRight className="h-3 w-3 ml-auto" />
+          </ProjectNavLink>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -403,21 +485,21 @@ function StatStrip({
       value: stats?.calendarEntries,
       href: `/projects/${projectId}/content-calendar`,
       icon: <Calendar className="h-3.5 w-3.5" />,
-      accentColor: "text-blue-500",
+      accentColor: "text-status-info",
     },
     {
       label: "Generated",
       value: stats?.blogsGenerated,
       href: `/projects/${projectId}/content-history`,
       icon: <TrendingUp className="h-3.5 w-3.5" />,
-      accentColor: "text-emerald-500",
+      accentColor: "text-status-success",
     },
     {
       label: "Total keywords",
       value: stats?.totalKeywords,
       href: `/projects/${projectId}/keywords`,
       icon: <Globe2 className="h-3.5 w-3.5" />,
-      accentColor: "text-amber-500",
+      accentColor: "text-status-warning",
     },
   ];
 

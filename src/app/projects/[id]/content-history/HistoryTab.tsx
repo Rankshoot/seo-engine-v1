@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -37,7 +37,7 @@ function fmtDate(iso: string): string {
 }
 
 function statusTone(status: string): string {
-  if (status === "published") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-400";
+  if (status === "published") return "border-status-success/30 bg-status-success/10 text-status-success";
   if (status === "approved") return "border-brand-action/30 bg-brand-action/10 text-brand-action";
   return "border-border-subtle bg-surface-secondary text-text-secondary";
 }
@@ -87,7 +87,7 @@ const HistoryRow = memo(function HistoryRow({
   }, [scheduledDatesSet]);
 
   return (
-    <tr className="hover:bg-surface-hover/50 transition-colors">
+    <tr className="hover:bg-surface-hover/50 transition-colors animate-slide-up-bounce">
       <td className="px-3 py-2.5 align-middle text-center text-[12px] font-mono text-text-tertiary tabular-nums">
         {index}
       </td>
@@ -177,6 +177,38 @@ const HistoryRow = memo(function HistoryRow({
   );
 });
 
+const SkeletonRow = memo(function SkeletonRow() {
+  return (
+    <tr className="animate-pulse bg-surface-secondary/10">
+      <td className="px-3 py-3.5 text-center align-middle">
+        <div className="h-3 w-4 bg-surface-tertiary rounded mx-auto" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-5.5 w-16 bg-surface-tertiary rounded-full" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-4 w-3/4 bg-surface-tertiary rounded" />
+        <div className="h-3 w-1/2 bg-surface-tertiary rounded mt-1.5" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-4 w-24 bg-surface-tertiary rounded" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-5.5 w-16 bg-surface-tertiary rounded-full" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-4 w-10 bg-surface-tertiary rounded" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="h-5.5 w-24 bg-surface-tertiary rounded-full" />
+      </td>
+      <td className="px-4 py-3.5 align-middle text-right">
+        <div className="h-8.5 w-16 bg-surface-tertiary rounded-full ml-auto" />
+      </td>
+    </tr>
+  );
+});
+
 interface HistoryTableBodyProps {
   rows: ContentStudioHistoryRow[];
   offset: number;
@@ -186,6 +218,7 @@ interface HistoryTableBodyProps {
   savingRowId: string | null;
   onScheduleConfirm: (row: ContentStudioHistoryRow, date: string) => Promise<void>;
   onUnschedule: (row: ContentStudioHistoryRow) => Promise<void>;
+  isLoadingMore?: boolean;
 }
 
 const HistoryTableBody = memo(function HistoryTableBody({
@@ -197,6 +230,7 @@ const HistoryTableBody = memo(function HistoryTableBody({
   savingRowId,
   onScheduleConfirm,
   onUnschedule,
+  isLoadingMore,
 }: HistoryTableBodyProps) {
   return (
     <tbody className="divide-y divide-border-subtle">
@@ -213,6 +247,12 @@ const HistoryTableBody = memo(function HistoryTableBody({
           onUnschedule={onUnschedule}
         />
       ))}
+      {isLoadingMore && (
+        <>
+          <SkeletonRow />
+          <SkeletonRow />
+        </>
+      )}
     </tbody>
   );
 });
@@ -321,7 +361,7 @@ export function HistoryTab() {
     return () => clearTimeout(handler);
   }, [search]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       ...qk.contentStudioHistory(projectId),
       {
@@ -344,9 +384,75 @@ export function HistoryTab() {
     ...DEFAULT_QUERY_OPTIONS,
   });
 
-  const allRows: ContentStudioHistoryRow[] = data?.success ? data.data : [];
+  const [allRows, setAllRows] = useState<ContentStudioHistoryRow[]>([]);
+
+  // Reset page and clear rows when filters change
+  useEffect(() => {
+    setPage(1);
+    setAllRows([]);
+  }, [activeType, debouncedSearch]);
+
+  // Accumulate pages of history rows
+  useEffect(() => {
+    if (data?.success) {
+      if (page === 1) {
+        setAllRows(data.data);
+      } else {
+        setAllRows((prev) => {
+          const existingIds = new Set(prev.map((r) => r.id));
+          const newRows = data.data.filter((r) => !existingIds.has(r.id));
+          return [...prev, ...newRows];
+        });
+      }
+    }
+  }, [data, page]);
+
   const totalCount = data?.success ? data.total : 0;
   const counts = data?.success ? data.counts : { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const stateRef = useRef({ page, totalPages, isFetching });
+
+  // Keep stateRef up to date on every render
+  useEffect(() => {
+    stateRef.current = { page, totalPages, isFetching };
+  }, [page, totalPages, isFetching]);
+
+  // Clean up observer on unmount
+  useEffect(() => {
+    return () => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+    };
+  }, []);
+
+  // Use callback ref to handle conditional rendering of the sentinel element
+  const loadMoreCallbackRef = useCallback((node: HTMLDivElement | null) => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const { page: currentPage, totalPages: maxPages, isFetching: activeFetch } = stateRef.current;
+        if (entries[0].isIntersecting && !activeFetch && currentPage < maxPages) {
+          setPage((p) => p + 1);
+        }
+      },
+      {
+        threshold: 0,
+        rootMargin: "150px",
+      }
+    );
+
+    observer.observe(node);
+    observerRef.current = observer;
+  }, []);
 
   const handleTypeChange = (t: TypeFilter) => {
     setActiveType(t);
@@ -364,21 +470,36 @@ export function HistoryTab() {
   const hasActiveFilters = activeType !== "all" || search.trim() !== "";
   const isEmptyStateForNoContent = totalCount === 0 && !hasActiveFilters;
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-  const fromRecord = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const toRecord = Math.min(page * PAGE_SIZE, totalCount);
-
   return (
-    <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
+    <div className="flex flex-col h-full gap-4 pb-4">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3">
+                <div className="relative">
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); }}
+            placeholder="Search title, keyword, type…"
+            className="h-9 w-[260px] rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action focus:ring-1 focus:ring-brand-action/40"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
+        </div>
         {/* Content type dropdown */}
         <div className="relative" ref={typeDropdownRef}>
           <button
             type="button"
             onClick={() => setTypeDropdownOpen(o => !o)}
             className={cn(
-              "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
+              "inline-flex h-9 items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
               typeDropdownOpen
                 ? "border-border-strong bg-surface-hover text-text-primary"
                 : "border-border-subtle bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary",
@@ -425,53 +546,37 @@ export function HistoryTab() {
           )}
         </div>
 
-        <div className="relative">
-          <input
-            value={search}
-            onChange={e => { setSearch(e.target.value); }}
-            placeholder="Search title, keyword, type…"
-            className="h-9 w-[260px] rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand-action focus:ring-1 focus:ring-brand-action/40"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary transition-colors"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </button>
-          )}
-        </div>
+
 
       </div>
 
-      {isLoading ? (
-        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
+      {isLoading || (allRows.length === 0 && isFetching) ? (
+        <div className="flex-1 min-h-0 rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <TableSkeleton rows={8} columns={6} />
         </div>
       ) : allRows.length === 0 ? (
-        <EmptyState
-          title={isEmptyStateForNoContent ? "No content generated yet" : "No assets match these filters"}
-          body={
-            isEmptyStateForNoContent
-              ? "Open a studio above and generate your first piece — it'll show up here automatically."
-              : "Try widening your filters or clearing the search to see more assets."
-          }
-          action={
-            <ProjectNavLink href={studioBase}>
-              <Button variant="primary" size="md" shape="pill">
-                Open content studio
-              </Button>
-            </ProjectNavLink>
-          }
-        />
+        <div className="flex-1 min-h-0">
+          <EmptyState
+            title={isEmptyStateForNoContent ? "No content generated yet" : "No assets match these filters"}
+            body={
+              isEmptyStateForNoContent
+                ? "Open a studio above and generate your first piece — it'll show up here automatically."
+                : "Try widening your filters or clearing the search to see more assets."
+            }
+            action={
+              <ProjectNavLink href={studioBase}>
+                <Button variant="primary" size="md" shape="pill">
+                  Open content studio
+                </Button>
+              </ProjectNavLink>
+            }
+          />
+        </div>
       ) : (
-        <div className="rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="flex-1 min-h-0 flex flex-col rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
             <table className="w-full min-w-[840px] text-left border-collapse">
-              <thead className="bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
+              <thead className="sticky top-0 z-10 bg-surface-secondary text-[10px] font-bold uppercase tracking-widest text-text-tertiary border-b border-border-subtle">
                 <tr>
                   <th className="px-3 py-3 w-12 text-center">#</th>
                   <th className="px-4 py-3 w-32">Type</th>
@@ -485,53 +590,31 @@ export function HistoryTab() {
               </thead>
               <HistoryTableBody
                 rows={allRows}
-                offset={(page - 1) * PAGE_SIZE}
+                offset={0}
                 viewerHref={viewerHref}
                 calendarEntries={calendarEntries}
                 scheduledDatesSet={scheduledDatesSet}
                 savingRowId={savingRowId}
                 onScheduleConfirm={handleScheduleConfirm}
                 onUnschedule={handleUnschedule}
+                isLoadingMore={isFetching && page > 1}
               />
             </table>
+            {/* Sentinel element for infinite scroll */}
+            <div ref={loadMoreCallbackRef} className="h-6" />
           </div>
 
-          {/* Pagination */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/20">
+          {/* Infinite Scroll Footer */}
+          <div className="shrink-0 flex items-center justify-between gap-3 px-6 py-3.5 border-t border-border-subtle bg-surface-secondary/20">
             <p className="text-[12px] text-text-tertiary tabular-nums">
-              {totalCount === 0 ? "No results" : `Showing ${fromRecord}–${toRecord} of ${totalCount}`}
+              {totalCount === 0 ? "No results" : `Showing ${allRows.length} of ${totalCount} assets`}
             </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={page <= 1}
-                onClick={() => setPage(page - 1)}
-                className={cn(
-                  "h-8 px-3 rounded-md text-[12px] font-medium border border-border-subtle transition-colors",
-                  page <= 1
-                    ? "opacity-40 cursor-not-allowed text-text-tertiary"
-                    : "text-text-secondary bg-surface-secondary hover:bg-surface-hover hover:text-text-primary"
-                )}
-              >
-                Previous
-              </button>
-              <span className="text-[12px] text-text-tertiary tabular-nums px-1">
-                Page {page} / {totalPages}
-              </span>
-              <button
-                type="button"
-                disabled={page >= totalPages}
-                onClick={() => setPage(page + 1)}
-                className={cn(
-                  "h-8 px-3 rounded-md text-[12px] font-medium border border-border-subtle transition-colors",
-                  page >= totalPages
-                    ? "opacity-40 cursor-not-allowed text-text-tertiary"
-                    : "text-text-secondary bg-surface-secondary hover:bg-surface-hover hover:text-text-primary"
-                )}
-              >
-                Next
-              </button>
-            </div>
+            {isFetching && page > 1 && (
+              <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
+                <span className="w-3.5 h-3.5 animate-spin rounded-full border-[2px] border-border-subtle border-t-text-secondary" />
+                <span>Loading more...</span>
+              </div>
+            )}
           </div>
         </div>
       )}

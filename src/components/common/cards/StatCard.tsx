@@ -16,10 +16,10 @@ export interface StatCardProps {
 
 const toneClass: Record<NonNullable<StatCardProps["tone"]>, string> = {
   default: "text-text-primary",
-  positive: "text-emerald-400",
-  warning: "text-amber-400",
-  critical: "text-rose-400",
-  info: "text-sky-400",
+  positive: "text-status-success",
+  warning: "text-status-warning",
+  critical: "text-status-danger",
+  info: "text-status-info",
 };
 
 /**

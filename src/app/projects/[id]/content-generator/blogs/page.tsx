@@ -6,12 +6,13 @@ import { useKeywordParam } from "@/hooks/useKeywordParam";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
+import { motion } from "framer-motion";
 import {
   Button,
   Card,
   Field,
   Input,
-  PageTitle,
+  PageHeader,
   Select,
   Spinner,
   Textarea,
@@ -190,6 +191,14 @@ export default function BlogGeneratorPage() {
   const entryId = searchParams?.get("entryId");
   const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
 
+  // Audit-fix mode: coming from Content Health → Generate enhanced
+  const auditUrl = searchParams?.get("auditUrl") || "";
+  const auditKeyword = searchParams?.get("auditKeyword") || "";
+  const auditTitle = searchParams?.get("auditTitle") || "";
+  const auditMode = searchParams?.get("auditMode") || ""; // "fix" = surgical edit, not rewrite
+  const auditIssues = searchParams?.get("auditIssues") || "";
+  const isAuditFixMode = auditMode === "fix" && !!auditUrl;
+
   const { data: entriesData } = useQuery({
     queryKey: qk.calendarWithBlogs(projectId),
     queryFn: () => calendarApi.withBlogs(projectId),
@@ -278,6 +287,18 @@ export default function BlogGeneratorPage() {
       if (scheduledEntry.secondary_keywords?.length) setSecondaryKeywords(scheduledEntry.secondary_keywords);
     }
   }, [scheduledEntry]);
+
+  // Seed form from audit params when in fix mode
+  useEffect(() => {
+    if (!isAuditFixMode) return;
+    if (auditKeyword && !keywordParam) setPrimaryKeyword(auditKeyword);
+    if (auditTitle) setTopic(auditTitle);
+    if (auditIssues) {
+      setCustomInstructions(
+        `AUDIT FIX MODE — apply these specific fixes to the existing blog at ${auditUrl}. DO NOT rewrite the entire post. Make surgical edits only:\n\n${auditIssues}`
+      );
+    }
+  }, [isAuditFixMode]);
 
   // ── Ahrefs keyword fetch (triggered by toggle) ─────────────────────────
   const fetchAhrefsData = useCallback(async () => {
@@ -491,21 +512,33 @@ export default function BlogGeneratorPage() {
   const hasAnyAhrefsCredits = hasAhrefsH2sCredits || hasAhrefsFaqsCredits;
 
   return (
-    <div className={`relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8 ${mounted ? "animate-slide-in-right" : ""}`}>
-      {/* Sticky header */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
-        <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Blogs" />
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div className="min-w-0 max-w-3xl">
-            <PageTitle>{heroTitle}</PageTitle>
-            <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
-            {!canGenerateBlog && quota && (
-              <div className="mt-3 text-[14px] text-rose-400 font-medium">
-                Blog limit reached ({quota.blogs.used}/{quota.blogs.effectiveLimit}). Upgrade your plan to generate more blogs.
-              </div>
-            )}
+    <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
+      {isAuditFixMode && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-status-warning/30 bg-status-warning/8 px-4 py-3">
+          <span className="mt-0.5 shrink-0 rounded-full border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-warning">
+            Enhancing existing blog
+          </span>
+          <div className="min-w-0">
+            <p className="text-[12px] font-semibold text-status-warning leading-snug truncate">{auditTitle || auditUrl}</p>
+            <p className="text-[11px] text-text-tertiary mt-0.5">
+              Applying surgical fixes from content audit — not a full rewrite.{" "}
+              <a href={auditUrl} target="_blank" rel="noopener noreferrer" className="text-brand-action hover:underline underline-offset-2">
+                View page →
+              </a>
+            </p>
           </div>
-          {phase === "form" ? (
+        </div>
+      )}
+      {!canGenerateBlog && quota && (
+        <div className="text-[14px] text-status-danger font-medium">
+          Blog limit reached ({quota.blogs.used}/{quota.blogs.effectiveLimit}). Upgrade your plan to generate more blogs.
+        </div>
+      )}
+      <PageHeader
+        title={heroTitle}
+        description={heroLead}
+        actions={
+          phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="outline"
@@ -518,7 +551,10 @@ export default function BlogGeneratorPage() {
               >
                 {askLoading ? "Thinking…" : "Ask AI for a topic"}
               </Button>
-              <button
+              <Button
+                variant="action"
+                shape="pill"
+                size="lg"
                 onClick={goReview}
                 disabled={!isFormValid || !canGenerateBlog}
                 title={
@@ -528,15 +564,9 @@ export default function BlogGeneratorPage() {
                     ? `Required: ${emptyRequiredFields.join(", ")}`
                     : undefined
                 }
-                className={
-                  "inline-flex h-10 items-center justify-center rounded-full px-5 text-[14px] font-semibold transition-all " +
-                  (isFormValid && canGenerateBlog
-                    ? "bg-brand-action text-white hover:opacity-90 cursor-pointer"
-                    : "bg-text-primary/15 text-text-tertiary cursor-not-allowed opacity-60")
-                }
               >
                 Review &amp; continue
-              </button>
+              </Button>
             </div>
           ) : phase === "review" ? (
             <div className="flex flex-wrap items-center gap-3">
@@ -558,11 +588,11 @@ export default function BlogGeneratorPage() {
                 Generate blog
               </Button>
             </div>
-          ) : null}
-        </div>
-      </div>
+          ) : null
+        }
+      />
 
-      <div className="mx-auto w-full max-w-4xl">
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }} className="mx-auto w-full max-w-4xl">
         {phase !== "generating" ? (
           <StepRow
             steps={[
@@ -762,7 +792,7 @@ export default function BlogGeneratorPage() {
                         Fetching keyword data from Ahrefs…
                       </div>
                     ) : ahrefsError ? (
-                      <p className="text-[12px] text-rose-400">{ahrefsError}</p>
+                      <p className="text-[12px] text-status-danger">{ahrefsError}</p>
                     ) : (ahrefsH2s.length > 0 || ahrefsFaqs.length > 0) ? (
                       <div className="space-y-3 pt-1">
                         {ahrefsH2s.length > 0 && (
@@ -787,7 +817,7 @@ export default function BlogGeneratorPage() {
                             </p>
                             <div className="flex flex-wrap gap-1.5">
                               {ahrefsFaqs.map((k, i) => (
-                                <span key={i} className="inline-flex items-center gap-1 rounded-full border border-blue-500/20 bg-blue-500/5 px-2 py-0.5 text-[11px] text-blue-300">
+                                <span key={i} className="inline-flex items-center gap-1 rounded-full border border-status-info/20 bg-status-info/5 px-2 py-0.5 text-[11px] text-status-info">
                                   {k.keyword}
                                   <span className="text-[9px] opacity-60">vol {k.volume}</span>
                                 </span>
@@ -795,7 +825,7 @@ export default function BlogGeneratorPage() {
                             </div>
                           </div>
                         )}
-                        <p className="text-[10px] text-emerald-400">
+                        <p className="text-[10px] text-status-success">
                           ✓ These keywords will be woven into the blog's H2 headings and FAQ section.
                         </p>
                       </div>
@@ -821,7 +851,7 @@ export default function BlogGeneratorPage() {
                         Finding top-ranking pages via DataForSEO…
                       </div>
                     ) : competitorError ? (
-                      <p className="text-[12px] text-rose-400">{competitorError}</p>
+                      <p className="text-[12px] text-status-danger">{competitorError}</p>
                     ) : competitorPages.length > 0 ? (
                       <div className="space-y-2 pt-1">
                         <p className="text-[10px] font-bold uppercase tracking-wider text-text-tertiary">
@@ -840,7 +870,7 @@ export default function BlogGeneratorPage() {
                             </div>
                           ))}
                         </div>
-                        <p className="text-[10px] text-emerald-400">
+                        <p className="text-[10px] text-status-success">
                           ✓ At generation time we'll scrape these pages, find what they're missing, and use those gaps to make your blog rank higher.
                         </p>
                       </div>
@@ -889,7 +919,7 @@ export default function BlogGeneratorPage() {
             ) : null}
           </ContentForm>
         )}
-      </div>
+      </motion.div>
     </div>
   );
 }

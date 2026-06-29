@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { notFound } from "next/navigation";
+import { useState, useCallback } from "react";
 import ProjectSidebar from "./ProjectSidebar";
 import { NavigationOverlay } from "@/components/NavigationOverlay";
+import { SitemapOnboardingDialog } from "@/components/sitemap/SitemapOnboardingDialog";
 import type { Project } from "@/lib/types";
-import { useProject, useProjects } from "@/lib/query";
+import { useProjects } from "@/lib/query";
 
 export default function ProjectLayoutClient({
   projectId,
@@ -15,21 +15,26 @@ export default function ProjectLayoutClient({
   children: React.ReactNode;
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Commented out to prevent duplicate API call in keyword discovery page
-  // const { data: projectRes, isFetched } = useProject(projectId);
   const { data: projectsListRes } = useProjects();
 
   const allProjects = projectsListRes?.success && projectsListRes.data ? projectsListRes.data : [];
   const project: Project | null = allProjects.find(p => p.id === projectId) || null;
 
-  // Only trigger notFound if the query finished and explicitly failed to find a project
-  // if (isFetched && !project) {
-  //   notFound();
-  // }
+  const closeMobile = useCallback(() => setMobileOpen(false), []);
 
   return (
-    <div className="h-screen overflow-hidden bg-surface-primary flex transition-all duration-300 ease-in-out">
+    <div className="h-screen overflow-hidden bg-surface-primary flex">
+      {/* Mobile sidebar backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 sm:hidden"
+          onClick={closeMobile}
+          aria-hidden
+        />
+      )}
+
       <ProjectSidebar
         project={project}
         projectId={projectId}
@@ -37,16 +42,37 @@ export default function ProjectLayoutClient({
         allProjects={allProjects}
         isCollapsed={isCollapsed}
         setIsCollapsed={setIsCollapsed}
+        mobileOpen={mobileOpen}
+        setMobileOpen={setMobileOpen}
       />
+
       <main
-        className={`flex-1 min-w-0 overflow-y-auto p-6 lg:p-8 transition-all duration-300 ease-in-out ${
-          isCollapsed ? "ml-[68px]" : "ml-[260px]"
+        className={`flex-1 min-w-0 h-full overflow-hidden transition-[margin] duration-300 ease-out sm:ml-[260px] ${
+          isCollapsed ? "sm:ml-[68px]" : "sm:ml-[260px]"
         }`}
       >
-        {children}
+        {/* Mobile top bar */}
+        <div className="flex h-12 items-center justify-between border-b border-border-subtle bg-surface-primary/95 px-4 sm:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileOpen(true)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border-subtle bg-surface-secondary text-text-secondary hover:text-text-primary transition-colors"
+            aria-label="Open navigation"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+            </svg>
+          </button>
+          <span className="text-[13px] font-semibold text-text-primary">{project?.name ?? "Loading…"}</span>
+          <div className="w-8" />
+        </div>
+
+        <div className="h-[calc(100%-48px)] sm:h-full overflow-y-auto p-4 sm:p-6 lg:p-8">
+          {children}
+        </div>
       </main>
       <NavigationOverlay />
+      <SitemapOnboardingDialog projectId={projectId} />
     </div>
   );
 }
-

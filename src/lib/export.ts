@@ -2,6 +2,24 @@ import { Blog, ExportFormat } from './types';
 import { EXPORT_FILE_INFO, safeFilename } from './blog-content';
 import { buildBlogSchemas, type ProjectMeta } from './schema';
 import { displayDomain } from './studio-brand';
+import {
+  preprocessMarkdownForHtmlExport,
+  preprocessMarkdownForDocx,
+  stripVisualPlaceholders,
+} from './visual-export';
+import { prepareForRender, sanitizeForExport } from './content-validation';
+
+/**
+ * Make a blog safe to export: recover leaked-envelope content when possible and
+ * strip placeholder images / leaked JSON artifacts, so a broken draft can never
+ * be serialized into a downloaded file. Returns a shallow clone (or the original
+ * when nothing changed).
+ */
+function exportSafeBlog(blog: Blog): Blog {
+  const prepared = prepareForRender(blog.content ?? "", { type: "blog" });
+  const content = sanitizeForExport(prepared.ok ? prepared.content : (blog.content ?? ""));
+  return content === blog.content ? blog : { ...blog, content };
+}
 
 export function extractYouTubeId(url: string): string | null {
   try {
@@ -35,6 +53,7 @@ function cleanMarkdownForExport(markdown: string): string {
 // ─── Public API ────────────────────────────────────────────────────────────
 
 export function exportToMarkdown(blog: Blog, projectMeta?: ProjectMeta): Blob {
+  blog = exportSafeBlog(blog);
   const orgBlock =
     projectMeta?.company?.trim() ?
       `organization: "${escapeYaml(projectMeta.company.trim())}"
@@ -79,7 +98,10 @@ ${orgBlock}---
 }
 
 export function exportToHTML(blog: Blog, projectMeta?: ProjectMeta): Blob {
-  const body = renderMarkdownToHtml(blog.content);
+  blog = exportSafeBlog(blog);
+  // Render visual placeholders as inline HTML/SVG before line-by-line parsing.
+  // Use 'paper' variant as a neutral default for standalone HTML export.
+  const body = renderMarkdownToHtml(preprocessMarkdownForHtmlExport(blog.content, 'paper'));
 
   const { article, faq } = buildBlogSchemas(blog, projectMeta);
   const articleScript = `<script type="application/ld+json">\n${JSON.stringify(article, null, 2)}\n</script>`;
@@ -149,7 +171,8 @@ export function exportToText(
   blog: Blog,
   opts?: { publisherLine?: string },
 ): Blob {
-  const stripped = blog.content
+  blog = exportSafeBlog(blog);
+  const stripped = stripVisualPlaceholders(blog.content)
     // Drop image markdown — they make no sense in plain text.
     .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
     // Inline links → "text (url)" so the URL is still readable.
@@ -181,10 +204,11 @@ export function exportToText(
 }
 
 export async function exportToDocx(blog: Blog): Promise<Blob> {
+  blog = exportSafeBlog(blog);
   const {
     Document, Packer, Paragraph, TextRun, ImageRun,
     HeadingLevel, ExternalHyperlink, AlignmentType,
-    Table, TableRow, TableCell, WidthType, BorderStyle,
+    Table, TableRow, TableCell, WidthType, BorderStyle, TableLayoutType,
   } = await import('docx');
 
   type ParagraphInstance = InstanceType<typeof Paragraph>;
@@ -207,7 +231,11 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
   // Cache image fetches so the same data: URL doesn't get decoded twice.
   const imageCache = new Map<string, Uint8Array>();
 
-  const lines = blog.content.split('\n');
+  // Convert visual placeholders → markdown pipe tables / bulleted text blocks
+  // before the line-by-line DOCX builder runs. The builder already handles
+  // pipe tables natively (renders them as proper DOCX Table objects).
+  const processedContent = preprocessMarkdownForDocx(blog.content);
+  const lines = processedContent.split('\n');
   let i = 0;
   let inYoutubeBlock = false;
   let youtubeUrl = '';
@@ -320,14 +348,35 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
         i++;
       }
 
-      // Build the docx Table
+      // Build the docx Table.
+      //
+      // Mac/Apple Pages, Quick Look, and Google Docs render OOXML tables with
+      // `auto` layout (PERCENTAGE width, no explicit column widths) very poorly —
+      // columns collapse or the last column stretches. Word on Windows tolerates
+      // it, which is why this only looked broken on Mac. The fix is a FIXED-layout
+      // table with explicit DXA (twentieths of a point) column AND per-cell widths
+      // that all agree. 9360 DXA = 6.5in content width (US Letter, 1in margins).
+      const TABLE_TOTAL_DXA = 9360;
+      const colCount = Math.max(1, headerCells.length);
+      const baseColDxa = Math.floor(TABLE_TOTAL_DXA / colCount);
+      // Last column absorbs the rounding remainder so widths sum exactly.
+      const colWidths = Array.from({ length: colCount }, (_, idx) =>
+        idx === colCount - 1 ? TABLE_TOTAL_DXA - baseColDxa * (colCount - 1) : baseColDxa
+      );
+      const cellWidthFor = (idx: number) => ({
+        size: colWidths[idx] ?? baseColDxa,
+        type: WidthType.DXA,
+      });
+
       const tableRows: InstanceType<typeof TableRow>[] = [];
 
       // 1. Header row
       tableRows.push(
         new TableRow({
-          children: headerCells.map(cellText => {
+          tableHeader: true,
+          children: headerCells.map((cellText, idx) => {
             return new TableCell({
+              width: cellWidthFor(idx),
               children: [
                 new Paragraph({
                   children: buildInlineRuns(cellText, TextRun, ExternalHyperlink),
@@ -351,8 +400,9 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
       for (const rowData of rowsData) {
         tableRows.push(
           new TableRow({
-            children: rowData.map(cellText => {
+            children: rowData.map((cellText, idx) => {
               return new TableCell({
+                width: cellWidthFor(idx),
                 children: [
                   new Paragraph({
                     children: buildInlineRuns(cellText, TextRun, ExternalHyperlink),
@@ -372,9 +422,11 @@ export async function exportToDocx(blog: Blog): Promise<Blob> {
 
       const docxTable = new Table({
         rows: tableRows,
+        layout: TableLayoutType.FIXED,
+        columnWidths: colWidths,
         width: {
-          size: 100,
-          type: WidthType.PERCENTAGE,
+          size: TABLE_TOTAL_DXA,
+          type: WidthType.DXA,
         },
         borders: {
           top: { style: BorderStyle.SINGLE, size: 4, color: 'D3D3D3' },
@@ -588,7 +640,7 @@ export function triggerDownload(blob: Blob, filename: string) {
  * images, blockquotes, code, hr, and tables to render properly in the
  * downloaded `.html` file.
  */
-function renderMarkdownToHtml(markdown: string): string {
+export function renderMarkdownToHtml(markdown: string): string {
   const lines = markdown.split('\n');
   const out: string[] = [];
 
@@ -752,7 +804,29 @@ function renderMarkdownToHtml(markdown: string): string {
       buf.push(lines[i].trim());
       i++;
     }
-    out.push(`<p>${renderInline(buf.join(' '))}</p>`);
+    const paragraphText = buf.join(' ');
+    const pdfMatch = paragraphText.trim().match(/^\[([^\]]+)\]\(([^)\s]+\.pdf(?:[?#]\S*)?)\)$/i);
+    if (pdfMatch) {
+      const label = pdfMatch[1];
+      const href = pdfMatch[2];
+      // Exported files are standalone — they can't use the app's same-origin PDF
+      // proxy, and a direct cross-origin <iframe> to the PDF is blocked by most
+      // hosts (X-Frame-Options). So emit a clean, always-working attachment card
+      // with Open + Download links instead of a preview that renders blank.
+      out.push(`<div class="pdf-attachment" style="margin: 2.5em 0; border: 1px solid #d0d0dc; border-radius: 16px; background: #ffffff; font-family: system-ui, -apple-system, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+  <div style="display: flex; align-items: center; gap: 16px; padding: 20px 24px; flex-wrap: wrap;">
+    <span style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 10px; background: #ff7759; color: #ffffff; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; flex-shrink: 0;">PDF</span>
+    <span style="flex: 1; min-width: 160px;">
+      <span style="display: block; font-size: 15px; font-weight: 700; color: #22252a; word-break: break-word;">${escapeHTML(label)}</span>
+      <span style="display: block; font-size: 13px; color: #6b7280;">PDF document</span>
+    </span>
+    <a href="${href}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; justify-content: center; background: #ffffff; color: #22252a; border: 1px solid #d0d0dc; padding: 8px 18px; border-radius: 9999px; font-size: 13px; font-weight: 600; text-decoration: none;">Open PDF</a>
+    <a href="${href}" download style="display: inline-flex; align-items: center; justify-content: center; background: #22252a; color: #ffffff; border: 1px solid #ff7759; padding: 8px 20px; border-radius: 9999px; font-size: 13px; font-weight: 600; text-decoration: none;">Download</a>
+  </div>
+</div>`);
+    } else {
+      out.push(`<p>${renderInline(paragraphText)}</p>`);
+    }
   }
 
   closeLists();

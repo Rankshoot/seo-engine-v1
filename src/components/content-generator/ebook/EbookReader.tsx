@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   LongFormMarkdown,
   ReadOnlyArticle,
@@ -14,6 +14,7 @@ import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content
 import { cn } from "@/lib/cn";
 import type { StudioBrand } from "@/lib/studio-brand";
 import type { Blog, EbookContentData } from "@/lib/types";
+import { VisualBlock } from "./VisualBlock";
 
 export interface EbookSegment {
   title: string;
@@ -26,14 +27,23 @@ export function splitMarkdownIntoSegments(markdown: string): EbookSegment[] {
   const lines = markdown.split("\n");
   const out: EbookSegment[] = [];
   let current: EbookSegment | null = null;
-  
+
+  const finaliseSegment = (seg: EbookSegment) => {
+    // Strip trailing --- separators (chapter dividers) and blank lines so
+    // they don't render as a second <hr> beneath the footer border.
+    seg.body = seg.body.replace(/(\n\s*---+\s*)+\s*$/, "").trimEnd();
+  };
+
   for (const line of lines) {
     if (/^#\s+/.test(line)) continue; // skip H1 cover title
-    
+
     const m = line.match(/^##\s+(.+?)\s*$/);
     if (m) {
-      if (current) out.push(current);
-      const title = m[1].replace(/^Chapter\s+\d+\s*[\u2014-]\s*/i, "").trim();
+      if (current) {
+        finaliseSegment(current);
+        out.push(current);
+      }
+      const title = m[1].replace(/^Chapter\s+\d+\s*[—-]\s*/i, "").trim();
       current = {
         title,
         headerLine: line,
@@ -54,9 +64,46 @@ export function splitMarkdownIntoSegments(markdown: string): EbookSegment[] {
       }
     }
   }
-  if (current) out.push(current);
+  if (current) {
+    finaliseSegment(current);
+    out.push(current);
+  }
   return out.filter(c => c.body.trim().length > 0);
 }
+
+// ── Visual placeholder parsing ─────────────────────────────────────────────
+
+type BodyPart =
+  | { kind: "text"; text: string }
+  | { kind: "visual"; attrs: Record<string, string> };
+
+function parseBodyParts(body: string): BodyPart[] {
+  const PLACEHOLDER_RE = /<!--\s*VISUAL_PLACEHOLDER\s+([\s\S]*?)-->/g;
+  const parts: BodyPart[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = PLACEHOLDER_RE.exec(body)) !== null) {
+    if (match.index > last) {
+      parts.push({ kind: "text", text: body.slice(last, match.index) });
+    }
+    const attrs: Record<string, string> = {};
+    const attrRe = /(\w[\w-]*)="([^"]*)"/g;
+    let am: RegExpExecArray | null;
+    while ((am = attrRe.exec(match[1])) !== null) {
+      attrs[am[1]] = am[2];
+    }
+    parts.push({ kind: "visual", attrs });
+    last = match.index + match[0].length;
+  }
+
+  if (last < body.length) {
+    parts.push({ kind: "text", text: body.slice(last) });
+  }
+  return parts;
+}
+
+// ── Theme ──────────────────────────────────────────────────────────────────
 
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
 
@@ -110,11 +157,9 @@ export interface EbookReaderProps {
 /**
  * Immersive book reader.
  *
- * The reader emulates a paged ebook: a typographic cover page,
- * dotted-line chapter list, and chapters stacked in scroll-snap blocks
- * so the reader can flick through one chapter at a time. Sepia + dark
- * themes mirror what real e-readers (Kindle, Apple Books, Readwise)
- * ship with.
+ * Renders a paged ebook: cover, a UI-rendered ToC, and chapters in scroll
+ * blocks. Visual placeholders inside chapter bodies are rendered as image
+ * placeholder cards with a "Generate" affordance.
  */
 export function EbookReader({
   blog,
@@ -145,8 +190,14 @@ export function EbookReader({
   }, [palette.text, palette.muted, palette.border, theme]);
 
   const localChapters = useMemo(() => {
-    return splitMarkdownIntoSegments(blog.content);
-  }, [blog.content]);
+    const all = splitMarkdownIntoSegments(blog.content);
+    // The markdown ToC segment is redundant when structured ToC data exists.
+    // Filtering it also prevents broken-link anchor clicks in that segment.
+    if ((data.table_of_contents?.length ?? 0) > 0) {
+      return all.filter(s => !/^(table of contents|what you.ll learn)$/i.test(s.title.trim()));
+    }
+    return all;
+  }, [blog.content, data.table_of_contents]);
 
   const chapters = localChapters;
 
@@ -169,13 +220,13 @@ export function EbookReader({
         .trim();
     },
     replaceSelection: (markdown: string) => {
-      // Try each chapter editor — the one with an active selection will return true.
       for (const edRef of Object.values(editorRefs.current)) {
         if (edRef && edRef.replaceSelection(markdown)) return true;
       }
       return false;
     },
   }));
+
   const { hero } = stripHeroH1(blog.content);
   const heroTitle = data.cover_title || hero || blog.title;
   const subtitle = data.cover_subtitle ?? "";
@@ -191,25 +242,38 @@ export function EbookReader({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [activeChapter, setActiveChapter] = useState(0);
 
-  // Track which chapter is in view so the chapter pill in the corner stays in sync.
+  // Scroll-position-based chapter tracking — reliable for chapters of any
+  // length, unlike IntersectionObserver with a fixed threshold that never
+  // fires on full-page sections.
   useEffect(() => {
     if (mode !== "preview") return;
     const root = containerRef.current;
     if (!root) return;
-    const observer = new IntersectionObserver(
-      entries => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            const idx = Number((entry.target as HTMLElement).dataset.chapterIndex);
-            if (!Number.isNaN(idx)) setActiveChapter(idx);
-          }
-        });
-      },
-      { root, threshold: 0.4 },
-    );
-    root.querySelectorAll<HTMLElement>("[data-chapter-index]").forEach(el => observer.observe(el));
-    return () => observer.disconnect();
+
+    const update = () => {
+      const elements = root.querySelectorAll<HTMLElement>("[data-chapter-index]");
+      let best = 0;
+      // "Active" = last element whose top edge is above the top quarter of the viewport.
+      const threshold = root.scrollTop + root.clientHeight * 0.25;
+      for (const el of elements) {
+        if (el.offsetTop <= threshold) best = Number(el.dataset.chapterIndex);
+        else break;
+      }
+      setActiveChapter(best);
+    };
+
+    root.addEventListener("scroll", update, { passive: true });
+    update(); // initial paint
+    return () => root.removeEventListener("scroll", update);
   }, [chapters, mode]);
+
+  // Smooth-scroll the reader container to a given data-chapter-index.
+  const scrollToChapter = useCallback((chapterDataIndex: number) => {
+    const root = containerRef.current;
+    if (!root) return;
+    const target = root.querySelector<HTMLElement>(`[data-chapter-index="${chapterDataIndex}"]`);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   // Seed title/desc contentEditable elements when entering edit mode.
   useLayoutEffect(() => {
@@ -221,7 +285,6 @@ export function EbookReader({
     h.textContent = hero ?? blog.title;
     p.textContent = blog.meta_description ?? "";
   }, [blog, mode, titleRef, descRef]);
-
 
   if (mode === "raw") {
     return (
@@ -239,6 +302,19 @@ export function EbookReader({
     );
   }
 
+  // Number of content chapters (everything in chapters array).
+  // Used by the floating pill.
+  const totalChapters = chapters.length;
+
+  // Map active data-chapter-index → human label for the pill.
+  function pillLabel(idx: number): string {
+    if (idx === 0) return "Cover";
+    if (idx === 1) return "Contents";
+    const chapterNum = idx - 1; // chapter 1 = data-chapter-index 2
+    if (chapterNum > totalChapters) return "End";
+    return `Chapter ${chapterNum} / ${totalChapters}`;
+  }
+
   return (
     <div
       ref={el => {
@@ -249,31 +325,20 @@ export function EbookReader({
       style={{
         background: palette.canvas,
         color: palette.text,
-        /* `zoom` scales typography + layout together (px, Tailwind, markdown) — % font-size on root did not affect fixed px/clamp sizes. */
         zoom: fontScale,
         scrollbarGutter: "stable",
       }}
     >
-      {/* Floating chapter chip — always visible, anchored top-right of viewport */}
+      {/* Floating chapter pill */}
       <div
         className="sticky top-2 z-10 mx-auto flex max-w-[820px] items-center justify-end pr-2"
         aria-hidden
       >
         <span
           className="inline-flex items-center gap-2 rounded-full border bg-surface-elevated/80 px-3 py-1 text-[10px] backdrop-blur"
-          style={{
-            borderColor: palette.border,
-            color: palette.muted,
-            ...MONO_LABEL,
-          }}
+          style={{ borderColor: palette.border, color: palette.muted, ...MONO_LABEL }}
         >
-          <span>
-            {activeChapter === 0
-              ? "Cover"
-              : activeChapter === 1
-                ? "Contents"
-                : `Chapter ${activeChapter - 1} / ${chapters.length}`}
-          </span>
+          <span>{pillLabel(activeChapter)}</span>
           <span>·</span>
           <span>{readingMinutes(blog.word_count)} min read</span>
         </span>
@@ -344,11 +409,7 @@ export function EbookReader({
 
         <div
           className="relative mt-12 inline-flex items-center justify-center gap-3 rounded-full border px-4 py-1.5 text-[11px]"
-          style={{
-            borderColor: palette.border,
-            color: palette.muted,
-            ...MONO_LABEL,
-          }}
+          style={{ borderColor: palette.border, color: palette.muted, ...MONO_LABEL }}
         >
           <span>{blog.word_count.toLocaleString()} words</span>
           <span>·</span>
@@ -356,7 +417,8 @@ export function EbookReader({
         </div>
       </article>
 
-      {/* TABLE OF CONTENTS PAGE */}
+      {/* TABLE OF CONTENTS PAGE — rendered from structured data, each item
+          scrolls within the reader (no page navigation). */}
       {(data.table_of_contents?.length ?? 0) > 0 || chapters.length > 1 ? (
         <article
           data-chapter-index="1"
@@ -381,46 +443,54 @@ export function EbookReader({
             What you&apos;ll learn
           </h2>
           <ol className="space-y-1">
-            {(data.table_of_contents?.length ? data.table_of_contents : chapters.map((c, i) => ({
-              number: i + 1,
-              title: c.title,
-              summary: "",
-              word_count: 0,
-            }))).map(c => (
-              <li
-                key={c.number}
-                className="flex items-start gap-4 border-b border-dotted py-3"
-                style={{ borderColor: palette.border }}
-              >
-                <span
-                  className="font-mono text-[12px] tabular-nums"
-                  style={{ color: palette.muted, minWidth: "32px", ...MONO_LABEL }}
+            {(data.table_of_contents?.length
+              ? data.table_of_contents
+              : chapters.map((c, i) => ({
+                  number: i + 1,
+                  title: c.title,
+                  summary: "",
+                  word_count: 0,
+                }))
+            ).map(c => (
+              <li key={c.number}>
+                {/* Button scrolls within the reader — no new tab, no page reload. */}
+                <button
+                  type="button"
+                  onClick={() => scrollToChapter(c.number + 1)}
+                  className="w-full flex items-start gap-4 border-b border-dotted py-3 text-left transition-opacity hover:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-action/40 rounded-sm"
+                  style={{ borderColor: palette.border }}
                 >
-                  {String(c.number).padStart(2, "0")}
-                </span>
-                <div className="min-w-0">
-                  <p
-                    className="text-[15px] font-semibold leading-snug"
-                    style={{ color: palette.text }}
+                  <span
+                    className="font-mono text-[12px] tabular-nums flex-shrink-0"
+                    style={{ color: palette.muted, minWidth: "32px", ...MONO_LABEL }}
                   >
-                    {c.title}
-                  </p>
-                  {c.summary ? (
-                    <p className="mt-0.5 text-[12px] leading-relaxed" style={{ color: palette.muted }}>
-                      {c.summary}
+                    {String(c.number).padStart(2, "0")}
+                  </span>
+                  <div className="min-w-0">
+                    <p
+                      className="text-[15px] font-semibold leading-snug"
+                      style={{ color: palette.text }}
+                    >
+                      {c.title}
                     </p>
-                  ) : null}
-                </div>
+                    {c.summary ? (
+                      <p className="mt-0.5 text-[12px] leading-relaxed" style={{ color: palette.muted }}>
+                        {c.summary}
+                      </p>
+                    ) : null}
+                  </div>
+                </button>
               </li>
             ))}
           </ol>
         </article>
       ) : null}
 
-      {/* CHAPTER PAGES — title hero is stripped so the heading reads as a chapter, not the cover */}
+      {/* CHAPTER PAGES */}
       {chapters.map((chapter, i) => (
         <article
           key={i}
+          // data-chapter-index: 0=cover, 1=ToC, 2=chapters[0], 3=chapters[1], …
           data-chapter-index={i + 2}
           className="relative mx-auto mb-8 max-w-[820px] rounded-[16px] border px-6 py-10 sm:px-12 sm:py-14 shadow-(--shadow-sm)"
           style={{ background: palette.page, borderColor: palette.border }}
@@ -458,9 +528,7 @@ export function EbookReader({
               <TipTapBlogEditor
                 key={`ebook-tiptap-${editSessionKey}-${i}`}
                 initialMarkdown={chapter.body}
-                ref={el => {
-                  editorRefs.current[i] = el;
-                }}
+                ref={el => { editorRefs.current[i] = el; }}
                 className="min-h-0"
                 style={{
                   color: palette.text,
@@ -471,31 +539,35 @@ export function EbookReader({
                 }}
               />
             ) : (
-              <LongFormMarkdown
-                markdown={chapter.body}
+              // Preview mode: split body at VISUAL_PLACEHOLDER comments and
+              // render placeholder cards between markdown text segments.
+              <ChapterBodyWithVisuals
+                body={chapter.body}
                 internalLinks={blog.internal_links ?? []}
                 ownSiteHost={ownSiteHost}
                 readerInk={readerInk}
+                palette={palette}
+                theme={theme}
               />
             )}
           </div>
 
+          {/* Chapter footer — single top border only; trailing --- in the
+              markdown body is stripped in splitMarkdownIntoSegments. */}
           <div
-            className="mt-10 flex flex-col gap-6 border-t pt-4 text-[11px]"
+            className="mt-10 border-t pt-4 text-[11px]"
             style={{ borderColor: palette.border, color: palette.muted, ...MONO_LABEL }}
           >
             {brand ? (
-              <div className="flex justify-center">
+              <div className="flex justify-center mb-4">
                 <div style={{ color: palette.muted }} className="max-w-md">
                   <StudioBrandMasthead brand={brand} size="sm" borderColor={palette.border} />
                 </div>
               </div>
             ) : null}
             <div className="flex items-center justify-between">
-            <span>
-              Page {String(i + 1).padStart(2, "0")} / {String(chapters.length).padStart(2, "0")}
-            </span>
-            <span>{readingMinutes(chapter.body.split(/\s+/).length)} min</span>
+              <span>Page {String(i + 1).padStart(2, "0")} / {String(chapters.length).padStart(2, "0")}</span>
+              <span>{readingMinutes(chapter.body.split(/\s+/).length)} min</span>
             </div>
           </div>
         </article>
@@ -529,7 +601,7 @@ export function EbookReader({
         ) : null}
       </article>
 
-      {/* Replacement display fallback when no chapters were parsed (extremely short ebooks). */}
+      {/* Fallback for extremely short ebooks with no parseable chapters. */}
       {chapters.length === 0 ? (
         <div className="mx-auto max-w-[820px] rounded-[16px] border bg-surface-primary px-6 py-10" style={{ borderColor: palette.border }}>
           <ReadOnlyArticle blog={blog} ownSiteHost={ownSiteHost} readerInk={readerInk} />
@@ -539,9 +611,48 @@ export function EbookReader({
   );
 }
 
+// ── Chapter body renderer with visual placeholder support ──────────────────
+
+function ChapterBodyWithVisuals({
+  body,
+  internalLinks,
+  ownSiteHost,
+  readerInk,
+  palette,
+  theme,
+}: {
+  body: string;
+  internalLinks: string[];
+  ownSiteHost: string | null;
+  readerInk: LongFormReaderInk;
+  palette: { page: string; text: string; muted: string; border: string };
+  theme: EbookTheme;
+}) {
+  const parts = useMemo(() => parseBodyParts(body), [body]);
+
+  return (
+    <>
+      {parts.map((part, idx) =>
+        part.kind === "text" ? (
+          part.text.trim() ? (
+            <LongFormMarkdown
+              key={idx}
+              markdown={part.text}
+              internalLinks={internalLinks}
+              ownSiteHost={ownSiteHost}
+              readerInk={readerInk}
+            />
+          ) : null
+        ) : (
+          // VisualBlock handles Generate button, loading, error, and rendering.
+          <VisualBlock key={idx} attrs={part.attrs} palette={palette} theme={theme} />
+        ),
+      )}
+    </>
+  );
+}
+
 /** Reading-minutes estimate using 220 WPM. */
 function readingMinutes(words: number): number {
   return Math.max(1, Math.round(words / 220));
 }
-
-

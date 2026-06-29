@@ -29,7 +29,7 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordModal";
-import { PageTitle } from "@/components/common";
+import { PageHeader, Button } from "@/components/common";
 import { Dialog } from "@/components/common/dialogs/Dialog";
 import { toast } from "react-hot-toast";
 
@@ -50,8 +50,8 @@ function fmtDate(iso: string): string {
 
 function KdCell({ kd }: { kd?: number | null }) {
   if (!kd || kd <= 0) return <span className="text-text-tertiary text-[13px]">—</span>;
-  if (kd < 30) return <span className="text-[12px] font-bold text-[#10b981]">Easy</span>;
-  if (kd < 60) return <span className="text-[12px] font-bold text-[#f59e0b]">Medium</span>;
+  if (kd < 30) return <span className="text-[12px] font-bold text-status-success">Easy</span>;
+  if (kd < 60) return <span className="text-[12px] font-bold text-status-warning">Medium</span>;
   return <span className="text-[12px] font-bold text-brand-coral">Hard</span>;
 }
 
@@ -244,7 +244,7 @@ const CalendarListRow = memo(function CalendarListRow({
         {isLocked && (
           <ProjectNavLink
             href={getContentPreviewUrl(projectId, resolvedBlogId || entry.id, historyEntry?.contentType || entry.article_type)}
-            className="inline-flex items-center justify-center gap-1 rounded-full border border-[#10b981]/20 bg-[#10b981]/10 px-4 py-1.5 text-[12px] font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-1 rounded-full border border-status-success/20 bg-status-success/10 px-4 py-1.5 text-[12px] font-semibold text-status-success transition-colors hover:bg-status-success/20 whitespace-nowrap"
           >
             View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
           </ProjectNavLink>
@@ -259,8 +259,8 @@ const CalendarListRow = memo(function CalendarListRow({
           </button>
         )}
         {isGenerating && (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#f59e0b]/20 px-4 py-1.5 text-[12px] font-semibold text-[#f59e0b]/70 select-none whitespace-nowrap">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f59e0b]" />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-status-warning/20 px-4 py-1.5 text-[12px] font-semibold text-status-warning/70 select-none whitespace-nowrap">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-status-warning" />
             Generating…
           </span>
         )}
@@ -562,37 +562,38 @@ export function ScheduledCalendar() {
   return (
     <div className="space-y-8 pb-20 max-w-full px-4 mx-auto">
       {/* ── HEADER ──────────────────────────────────────────────────────── */}
-      <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <PageTitle>Content Calendar</PageTitle>
-          <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
-            Schedule approved keywords to publish dates and track asset generation.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {blogReady > 0 && (
-            <ProjectNavLink
-              href={`/projects/${projectId}/content-history`}
-              className="inline-flex h-10 items-center gap-2 rounded-[30px] border border-border-subtle bg-surface-secondary px-5 text-[14px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+      <PageHeader
+        title="Content Calendar"
+        description="Schedule approved keywords to publish dates and track asset generation."
+        actions={
+          <>
+            {blogReady > 0 && (
+              <ProjectNavLink
+                href={`/projects/${projectId}/content-history`}
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+              >
+                View History
+                <span className="rounded-full bg-status-success/15 px-2 py-0.5 text-[11px] font-bold text-status-success">
+                  {blogReady} ready
+                </span>
+              </ProjectNavLink>
+            )}
+            <Button
+              variant="primary"
+              shape="pill"
+              size="md"
+              onClick={() => setAddKeywordModalDate("")}
+              iconLeft={
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              }
             >
-              View History
-              <span className="rounded-full bg-[#10b981]/15 px-2 py-0.5 text-[11px] font-bold text-[#10b981]">
-                {blogReady} ready
-              </span>
-            </ProjectNavLink>
-          )}
-          <button
-            type="button"
-            onClick={() => setAddKeywordModalDate("")}
-            className="inline-flex h-10 items-center gap-2 rounded-[30px] bg-brand-primary px-5 text-[14px] font-medium text-brand-on-primary transition-opacity hover:opacity-90"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            Add keyword
-          </button>
-        </div>
-      </div>
+              Add keyword
+            </Button>
+          </>
+        }
+      />
 
       <section className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -617,7 +618,7 @@ export function ScheduledCalendar() {
                 {blogReady > 0 && (
                   <>
                     <span className="text-text-tertiary/30">·</span>
-                    <span className="text-[#10b981]">
+                    <span className="text-status-success">
                       <span className="font-semibold">{blogReady}</span> asset{blogReady !== 1 ? "s" : ""} ready
                     </span>
                   </>

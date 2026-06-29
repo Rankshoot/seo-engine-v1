@@ -39,7 +39,7 @@ export function PageShell({
 }: PageShellProps) {
   return (
     <div className={cn("space-y-8 pb-20", className)}>
-      <PageHeader
+      <ShellHeader
         title={title}
         subtitle={subtitle}
         backHref={backHref}
@@ -52,7 +52,7 @@ export function PageShell({
   );
 }
 
-export function PageHeader({
+function ShellHeader({
   title,
   subtitle,
   backHref,

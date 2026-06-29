@@ -146,7 +146,7 @@ export function AdminSettingsDashboard() {
                           type="button"
                           disabled={revokeMutation.isPending}
                           onClick={() => void handleRevoke(row.id)}
-                          className="text-[12px] font-semibold text-rose-400 hover:text-rose-300 hover:underline disabled:opacity-50 transition-colors cursor-pointer"
+                          className="text-[12px] font-semibold text-status-danger hover:text-status-danger/70 hover:underline disabled:opacity-50 transition-colors cursor-pointer"
                         >
                           Revoke
                         </button>

@@ -11,7 +11,7 @@ import {
   Card,
   Field,
   Input,
-  PageTitle,
+  PageHeader,
   Select,
   Spinner,
   Textarea,
@@ -25,7 +25,6 @@ import {
   KeywordChips,
   SectionHeading,
   StepRow,
-  StudioBreadcrumb,
   RecentHistorySkeleton,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
@@ -89,6 +88,7 @@ export default function EbookGeneratorPage() {
     "Book a demo or download a deeper resource on our site.",
   );
   const [chapterDepth, setChapterDepth] = useState<(typeof EBOOK_DEPTH_OPTIONS)[number]["id"]>("standard");
+  const [customWordCount, setCustomWordCount] = useState<string>("");
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
@@ -167,6 +167,7 @@ export default function EbookGeneratorPage() {
       goal,
       ctaObjective,
       chapterDepth,
+      customWordCount: customWordCount ? parseInt(customWordCount, 10) : undefined,
       region,
       language,
       semanticKeywords: secondaryKeywords,
@@ -201,21 +202,17 @@ export default function EbookGeneratorPage() {
   }, [phase]);
 
   return (
-    <div className={`relative space-y-10 pb-16 pl-4 pr-4 -mt-6 lg:-mt-8 ${mounted ? "animate-slide-in-right" : ""}`}>
-      {/* Sticky header — -mt-6 lg:-mt-8 cancels main padding-top so sticky top-0 = true viewport top */}
-      <div className="sticky -top-6 lg:-top-8 z-20 -mx-6 lg:-mx-8 border-b border-border-subtle bg-surface-primary/95 px-6 lg:px-8 pb-8 pt-6 lg:pt-8 backdrop-blur-sm">
-        <StudioBreadcrumb parentHref={studioBase} parentLabel="Content generator" current="Ebooks" />
-        <div className="flex flex-wrap items-start justify-between gap-6">
-          <div className="min-w-0 max-w-3xl">
-            <PageTitle>{heroTitle}</PageTitle>
-            <p className="mt-3 text-[16px] leading-relaxed text-text-tertiary">{heroLead}</p>
-            {!canGenerateEbook && quota && (
-              <div className="mt-3 text-[14px] text-rose-400 font-medium">
-                Ebook limit reached ({quota.ebooks.used}/{quota.ebooks.effectiveLimit}). Upgrade your plan to generate more ebooks.
-              </div>
-            )}
-          </div>
-          {phase === "form" ? (
+    <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
+      {!canGenerateEbook && quota && (
+        <div className="text-[14px] text-status-danger font-medium">
+          Ebook limit reached ({quota.ebooks.used}/{quota.ebooks.effectiveLimit}). Upgrade your plan to generate more ebooks.
+        </div>
+      )}
+      <PageHeader
+        title={heroTitle}
+        description={heroLead}
+        actions={
+          phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="outline"
@@ -268,9 +265,9 @@ export default function EbookGeneratorPage() {
                 Generate ebook
               </Button>
             </div>
-          ) : null}
-        </div>
-      </div>
+          ) : null
+        }
+      />
 
       <div className="mx-auto w-full max-w-4xl">
         {phase !== "generating" ? (
@@ -377,6 +374,23 @@ export default function EbookGeneratorPage() {
                     value={chapterDepth}
                     onChange={setChapterDepth}
                     ariaLabel="Chapter depth"
+                  />
+                </Field>
+                <Field
+                  label="Custom word count (optional)"
+                  description="Override the depth preset with an exact word count. Leave blank to use the depth preset above."
+                  htmlFor="ebook-word-count"
+                >
+                  <Input
+                    id="ebook-word-count"
+                    type="number"
+                    inputSize="lg"
+                    min={2000}
+                    max={25000}
+                    step={500}
+                    placeholder={`e.g. 8000 — or leave blank to use ${EBOOK_DEPTH_OPTIONS.find(d => d.id === chapterDepth)?.label ?? chapterDepth} preset`}
+                    value={customWordCount}
+                    onChange={e => setCustomWordCount(e.target.value)}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>

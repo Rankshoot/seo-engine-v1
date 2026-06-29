@@ -1,23 +1,23 @@
 "use client";
 
-import { PageTitle } from "@/components/common";
+import { PageHeader } from "@/components/common";
 import { HistoryTab } from "./HistoryTab";
+import { motion } from "framer-motion";
+
+const pageAnim = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.28, ease: [0.16, 1, 0.3, 1] as const } };
 
 export default function UnifiedContentHistoryPage() {
   return (
-    <div className="space-y-8 pb-16 max-w-full px-4 mx-auto">
-      <div className="pt-4 pb-6 border-b border-border-subtle flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <PageTitle>Content History</PageTitle>
-          <p className="mt-3 text-[15px] text-text-tertiary max-w-[480px]">
-            Track all generated content assets. Monitor status, details, and metrics for blogs, ebooks, whitepapers, and social posts.
-          </p>
-        </div>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="Content History"
+        description="Track all generated content assets — blogs, ebooks, whitepapers, and social posts."
+        actions={null}
+      />
 
-      <div className="mt-4">
+      <motion.div {...pageAnim} className="flex-1 min-h-0 mt-6">
         <HistoryTab />
-      </div>
+      </motion.div>
     </div>
   );
 }

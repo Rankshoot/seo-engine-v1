@@ -24,11 +24,29 @@ import { recordJinaCall } from '@/lib/admin/logging/record-provider-call';
  */
 export async function fetchSitemapUrls(domain: string, max = 500): Promise<string[]> {
   const base = normalizeDomain(domain);
-  const roots = [
-    `${base}/sitemap.xml`,
-    `${base}/sitemap_index.xml`,
-    `${base}/sitemap-index.xml`,
-  ];
+  return crawlSitemaps(
+    [`${base}/sitemap.xml`, `${base}/sitemap_index.xml`, `${base}/sitemap-index.xml`],
+    max
+  );
+}
+
+/**
+ * Core sitemap crawler. Recurses one level into child sitemaps (sitemap-index
+ * shape) and returns content-page URLs only.
+ *
+ * @param roots  Candidate sitemap URLs to crawl (already absolute).
+ * @param max    Hard cap on returned URLs.
+ * @param opts.stopAtFirstNonEmpty  When true (default) we stop after the first
+ *   root that yields any URLs — used when probing alternative index locations
+ *   (sitemap.xml vs sitemap_index.xml). Set false to accumulate across ALL
+ *   roots — used when robots.txt lists several distinct sitemaps.
+ */
+export async function crawlSitemaps(
+  roots: string[],
+  max = 500,
+  opts: { stopAtFirstNonEmpty?: boolean } = {}
+): Promise<string[]> {
+  const stopAtFirstNonEmpty = opts.stopAtFirstNonEmpty ?? true;
 
   const seenSitemaps = new Set<string>();
   const seenUrls = new Set<string>();
@@ -83,10 +101,35 @@ export async function fetchSitemapUrls(domain: string, max = 500): Promise<strin
   for (const root of roots) {
     if (out.length >= max) break;
     await visit(root, 0);
-    if (out.length) break; // first sitemap that worked wins
+    if (stopAtFirstNonEmpty && out.length) break; // first sitemap that worked wins
   }
 
   return out.slice(0, max);
+}
+
+/**
+ * Read a domain's robots.txt and return any `Sitemap:` URLs it declares.
+ * This is the most reliable discovery path — many sites point robots.txt at a
+ * non-standard sitemap location (e.g. /sitemap-index-1.xml, a CDN URL).
+ */
+export async function discoverSitemapsFromRobots(domain: string): Promise<string[]> {
+  const base = normalizeDomain(domain);
+  let txt = '';
+  try {
+    const res = await fetch(`${base}/robots.txt`, { method: 'GET' });
+    if (!res.ok) return [];
+    txt = await res.text();
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  const re = /^\s*sitemap:\s*(\S+)\s*$/gim;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(txt))) {
+    const url = m[1].trim();
+    if (/^https?:\/\//i.test(url)) out.push(url);
+  }
+  return Array.from(new Set(out));
 }
 
 function extractLocs(xml: string): string[] {

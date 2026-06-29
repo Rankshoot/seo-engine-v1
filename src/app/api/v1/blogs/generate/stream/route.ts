@@ -9,7 +9,7 @@ export const maxDuration = 300;
 function getAnthropicClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
-  return new Anthropic({ apiKey });
+  return new Anthropic({ apiKey, maxRetries: 5 });
 }
 
 /**
@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     secondaryKeywords?: string[];
     wordCount?: number;
     writerNotes?: string;
+    contentHealthAudit?: Record<string, any>;
     // Advanced options
     brandPersona?: string;
     useAhrefsData?: boolean;
@@ -104,7 +105,7 @@ export async function POST(req: Request) {
             title: body.topic || kw,
             article_type: "Blog Post",
             secondary_keywords: body.secondaryKeywords || [],
-            content_health_audit: null,
+            content_health_audit: body.contentHealthAudit || null,
             slug: kw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80),
           };
         }
@@ -124,6 +125,179 @@ export async function POST(req: Request) {
             .from("project_briefs").select("brief").eq("project_id", projectId).maybeSingle();
           brief = briefRow?.brief ?? null;
         } catch { /* optional */ }
+
+        // ── Surgical repair branch (Content Audit Studio → Generate Enhanced) ──
+        // When the calendar entry carries a content-health audit in repair mode,
+        // we DON'T regenerate from scratch — we surgically fix the audited issues
+        // while preserving everything that already passes. Runs over SSE so it
+        // never hits the gateway timeout.
+        const auditData = body.contentHealthAudit || (entry ? (entry as any).content_health_audit : null);
+        if (auditData) {
+          const { parseContentHealthRepairPlan } = await import("@/lib/content-health-calendar");
+          const repairPlan = parseContentHealthRepairPlan(auditData);
+          if (repairPlan) {
+            emit({ event: "stage", stage: "repair_scrape", detail: "Reading the original article…" });
+
+            // Prefer the markdown we already scraped during the audit (works for
+            // both URL audits and uploaded content); fall back to a fresh scrape.
+            let originalMarkdown = "";
+            try {
+              const { data: auditRow } = await supabaseAdmin
+                .from("blog_audits")
+                .select("scraped_markdown")
+                .eq("project_id", projectId)
+                .eq("url", repairPlan.url)
+                .maybeSingle();
+              originalMarkdown = (auditRow?.scraped_markdown as string) || "";
+            } catch { /* fall through to scrape */ }
+
+            if (originalMarkdown.trim().length < 400 && /^https?:\/\//i.test(repairPlan.url)) {
+              const { hybridReadUrl } = await import("@/services/hybridScraper");
+              const fresh = await hybridReadUrl(repairPlan.url, { timeoutMs: 25_000 });
+              if (fresh.ok) originalMarkdown = fresh.markdown;
+            }
+
+            if (originalMarkdown.trim().length < 400) {
+              emit({ event: "error", message: "Could not read the original article content to enhance. Re-run the audit and try again." });
+              await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
+              controller.close();
+              return;
+            }
+
+            emit({ event: "stage", stage: "repair_draft", detail: "Applying audit fixes while preserving strong sections…" });
+
+            const analysis: any = repairPlan.analysis;
+            const { loadRankedSitemapInternalLinks: loadRepairSitemapLinks } = await import("@/lib/internal-links");
+            const repairSitemapLinks = (await loadRepairSitemapLinks(projectId, {
+              focusKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
+              title: repairPlan.title || "",
+              secondaryKeywords: analysis.secondary_keywords ?? [],
+              excludeUrls: [repairPlan.url],
+              limit: 18,
+            })).map((l) => l.url);
+            const fromAudit = (analysis.internal_link_opportunities ?? []).map((i: any) => i.target_url);
+            const fromBrief = (brief?.internal_link_candidates ?? []).map((c: any) => c.url);
+            const internalLinkPool = Array.from(new Set([...fromAudit, ...fromBrief, ...repairSitemapLinks])).filter(
+              (u) => u && u !== repairPlan.url
+            ) as string[];
+
+            // ── Strip PDF artefacts before passing to the repair LLM ──────
+            // Pages that embed PDF viewers can have their full PDF text
+            // extracted by Jina/Playwright. Without this, the repaired blog
+            // ends up being just a dump of the PDF content.
+            const { stripPdfArtifacts, hasPdfContent } = await import("@/lib/pdf-content");
+            let cleanedMarkdown = originalMarkdown;
+            if (hasPdfContent(originalMarkdown)) {
+              const { cleaned, strippedPdf } = stripPdfArtifacts(originalMarkdown);
+              cleanedMarkdown = cleaned;
+              if (strippedPdf) {
+                emit({ event: "stage", stage: "repair_clean", detail: "Detected embedded PDF — separating article content from document content…" });
+              }
+            }
+
+            const { repairBlogPost } = await import("@/lib/claude-blog-repair");
+
+            const repaired = await repairBlogPost(
+              {
+                sourceUrl: repairPlan.url,
+                originalTitle: repairPlan.title || "",
+                originalMarkdown: cleanedMarkdown,
+                issues: (analysis.issues ?? []).map((i: any) => ({
+                  label: i.label,
+                  detail: i.detail,
+                  fix: i.fix,
+                  severity: i.severity,
+                  category: i.category,
+                  why_it_matters: i.why_it_matters,
+                })),
+                contentGaps: analysis.content_gaps ?? [],
+                internalLinkPool,
+                primaryKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
+                secondaryKeywords: analysis.secondary_keywords ?? [],
+                brief,
+                project,
+                wordCount: Math.min(4500, Math.max(1400, countWords(cleanedMarkdown) + 250)),
+              },
+              {
+                // Forward Claude's streaming chunks as thinking events so the
+                // UI can show the generation progress in real time.
+                onChunk: (chunk) => emit({ event: "thinking", chunk }),
+              }
+            );
+
+            emit({ event: "stage", stage: "polish", detail: "Polishing markdown and validating links…" });
+
+            const { insertBlogImagePlaceholders } = await import("@/services/openAiImages");
+            const { sanitizeBlogContent } = await import("@/lib/blog-content");
+
+            const withImages = insertBlogImagePlaceholders(repaired.content, {
+              title: repaired.title,
+              targetKeyword: entry.focus_keyword,
+              wordCount: countWords(repaired.content),
+            });
+            const sanitized = await sanitizeBlogContent(sanitizeBlogMarkdown(withImages), {
+              ownDomain: project.domain ?? "",
+            });
+            const finalContent = sanitizeBlogMarkdown(sanitized.content);
+
+            const repairPayload = {
+              title: repaired.title,
+              content: finalContent,
+              meta_description: analysis.summary || repaired.meta_description,
+              slug: repaired.slug,
+              word_count: countWords(finalContent),
+              target_keyword: entry.focus_keyword,
+              article_type: "Repair",
+              status: "generated" as const,
+              research_sources: repaired.research_sources,
+              external_links: sanitized.externalLinks.slice(0, 7),
+              internal_links: sanitized.internalLinks.slice(0, 7),
+              source_url: repairPlan.url,
+              repair_notes: repaired.repair_notes ?? [],
+              updated_at: new Date().toISOString(),
+            };
+
+            let existingRepair = null;
+            if (body.entryId) {
+              const { data } = await supabaseAdmin
+                .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
+              existingRepair = data;
+            } else if (repairPlan.url) {
+              const { data } = await supabaseAdmin
+                .from("blogs")
+                .select("id")
+                .eq("project_id", projectId)
+                .eq("source_url", repairPlan.url)
+                .is("entry_id", null)
+                .maybeSingle();
+              existingRepair = data;
+            }
+
+            let repairBlogId: string;
+            if (existingRepair) {
+              const { data, error } = await supabaseAdmin
+                .from("blogs").update(repairPayload).eq("id", existingRepair.id).select("id").single();
+              if (error) throw error;
+              repairBlogId = data.id;
+            } else {
+              const { data, error } = await supabaseAdmin
+                .from("blogs").insert({ ...repairPayload, entry_id: body.entryId || null, project_id: projectId })
+                .select("id").single();
+              if (error) throw error;
+              repairBlogId = data.id;
+            }
+
+            if (body.entryId) {
+              await supabaseAdmin
+                .from("calendar_entries").update({ status: "generated", title: repaired.title })
+                .eq("id", body.entryId);
+            }
+
+            emit({ event: "done", blogId: repairBlogId });
+            controller.close();
+            return;
+          }
+        }
 
         // ── Stage 2: Research ─────────────────────────────────────────────
         emit({ event: "stage", stage: "research", detail: "Gathering live SERP research and keyword context…" });
@@ -220,11 +394,26 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           }
         }
 
-        // Validate internal link candidates
+        // Internal-link pool: brief candidates + relevance-ranked sitemap URLs.
+        // The sitemap pool is what lets the article deep-link to other content
+        // pages instead of only the homepage / landing page.
         const { validateExternalUrl } = await import("@/lib/blog-content");
+        const { loadRankedSitemapInternalLinks } = await import("@/lib/internal-links");
+
+        const currentArticleUrl = entry.slug ? `https://${project.domain}/${entry.slug}` : "";
+        const sitemapCandidates = await loadRankedSitemapInternalLinks(projectId, {
+          focusKeyword: entry.focus_keyword,
+          title: entry.title,
+          secondaryKeywords: entry.secondary_keywords ?? [],
+          excludeUrls: currentArticleUrl ? [currentArticleUrl] : [],
+          limit: 18,
+        });
+
         const allCandidates = [
           ...(brief?.internal_link_candidates ?? []).filter((l: any) => l.url?.startsWith("http"))
             .map((l: any) => ({ url: l.url, title: l.title || l.topic || "Page", type: "site" })),
+          ...sitemapCandidates
+            .map((l) => ({ url: l.url, title: l.title || l.topic || "Page", type: "sitemap" })),
           ...(existingBlogs ?? []).filter((b: any) => b.target_keyword !== entry.focus_keyword)
             .map((b: any) => ({ url: `https://${project.domain}/${b.slug}`, title: b.title, type: "generated" })),
         ];
@@ -246,6 +435,13 @@ Respond with a concise but rich analysis (300–500 words) structured as:
         const filteredExistingBlogs = (existingBlogs ?? []).filter((b: any) =>
           validatedLinks.some((vl: any) => vl.type === "generated" && vl.url === `https://${project.domain}/${b.slug}`)
         );
+
+        // Sitemap-derived links that passed validation → fed to the prompt as
+        // an extra internal-link pool (merged + deduped inside buildBlogPrompt).
+        const validatedSitemapUrls = new Set(
+          validatedLinks.filter((vl: any) => vl.type === "sitemap").map((vl: any) => vl.url)
+        );
+        const extraInternalLinks = sitemapCandidates.filter((c) => validatedSitemapUrls.has(c.url));
 
         // Validate external research sources
         if (research?.topArticles?.length) {
@@ -292,6 +488,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           research,
           existingBlogs: filteredExistingBlogs,
           brief: filteredBrief,
+          extraInternalLinks,
           ahrefsContext,
           writerNotes: mergedWriterNotes || undefined,
           brandPersona: body.brandPersona,
@@ -299,76 +496,146 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           deepAnalysisSummary,
         });
 
-        // ── Stage 4: Draft with streaming thinking ────────────────────────
-        emit({ event: "stage", stage: "draft", detail: "Claude is thinking and drafting your blog post…" });
+        // ── Stage 4 + 5: Draft → parse → validate, with bounded auto-retry ──
+        // A malformed draft (raw JSON envelope leaking into the body, truncation,
+        // placeholder-only content) is regenerated up to MAX_GEN_ATTEMPTS times.
+        // Broken content is NEVER persisted — see the quality gate after the loop.
+        const MAX_GEN_ATTEMPTS = 2;
 
         const { getProviderForRoute } = await import("@/services/ai/providers");
         const { model: routedModel } = await getProviderForRoute("blog");
         const claudeModel = routedModel.startsWith("claude") ? routedModel : "claude-sonnet-4-6";
 
-        let fullContent = "";
-        let thinkingEmitted = false;
+        const { parseGeneratedBlogJson } = await import("@/lib/gemini");
+        const { insertBlogImagePlaceholders } = await import("@/services/openAiImages");
+        const { sanitizeBlogContent } = await import("@/lib/blog-content");
+        const {
+          validateGeneratedContent,
+          looksLikeRawJsonEnvelope,
+          recoverContentFromEnvelope,
+          summarizeValidation,
+        } = await import("@/lib/content-validation");
 
         const abortController = new AbortController();
         if (req.signal) {
           req.signal.addEventListener("abort", () => abortController.abort());
         }
-
-        wasStalled = false;
-        stallTimeoutId = undefined;
         const resetStallTimeout = () => {
           if (stallTimeoutId) clearTimeout(stallTimeoutId);
           stallTimeoutId = setTimeout(() => {
             wasStalled = true;
             abortController.abort();
-          }, 45000);
+          }, 120000);
         };
 
-        resetStallTimeout();
-
         const anthropic = getAnthropicClient();
-        const claudeStream = anthropic.messages.stream({
-          model: claudeModel,
-          max_tokens: 16000,
-          thinking: { type: "enabled", budget_tokens: 8000 },
-          messages: [{ role: "user", content: blogPrompt }],
-          system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
-        }, { signal: abortController.signal });
 
-        for await (const event of claudeStream) {
+        // One streamed Claude draft → accumulated raw model text.
+        const draftOnce = async (): Promise<string> => {
+          let fullContent = "";
+          let thinkingEmitted = false;
           resetStallTimeout();
-          if (event.type === "content_block_start") {
-            if (event.content_block.type === "thinking") thinkingEmitted = true;
-          } else if (event.type === "content_block_delta") {
-            if (event.delta.type === "thinking_delta") {
-              if (event.delta.thinking.length >= 10) {
-                emit({ event: "thinking", chunk: event.delta.thinking });
+          const claudeStream = anthropic.messages.stream({
+            model: claudeModel,
+            max_tokens: 32000,
+            thinking: { type: "enabled", budget_tokens: 8000 },
+            messages: [{ role: "user", content: blogPrompt }],
+            system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
+          }, { signal: abortController.signal });
+
+          for await (const event of claudeStream) {
+            resetStallTimeout();
+            if (event.type === "content_block_start") {
+              if (event.content_block.type === "thinking") thinkingEmitted = true;
+            } else if (event.type === "content_block_delta") {
+              if (event.delta.type === "thinking_delta") {
+                if (event.delta.thinking.length >= 10) {
+                  emit({ event: "thinking", chunk: event.delta.thinking });
+                }
+              } else if (event.delta.type === "text_delta") {
+                fullContent += event.delta.text;
               }
-            } else if (event.delta.type === "text_delta") {
-              fullContent += event.delta.text;
+            } 
+          }
+
+          if (stallTimeoutId) clearTimeout(stallTimeoutId);
+          if (thinkingEmitted) emit({ event: "thinking_done" });
+          return fullContent;
+        };
+
+        // Parse + recover + sanitize one raw draft into shippable content.
+        const buildFinal = async (fullContent: string) => {
+          let blogData = parseGeneratedBlogJson(fullContent, entry, project, research);
+          // Cheap recovery: if the body leaked the JSON envelope, pull the real
+          // contentMarkdown out instead of discarding an otherwise-good draft.
+          if (looksLikeRawJsonEnvelope(blogData.content)) {
+            const recovered =
+              recoverContentFromEnvelope(blogData.content) ?? recoverContentFromEnvelope(fullContent);
+            if (recovered) {
+              blogData = { ...blogData, content: recovered, word_count: countWords(recovered) };
             }
+          }
+          const rawContent = insertBlogImagePlaceholders(blogData.content, {
+            title: blogData.title,
+            targetKeyword: entry.focus_keyword,
+            wordCount: blogData.word_count,
+          });
+          const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
+          const finalContent = sanitizeBlogMarkdown(sanitized.content);
+          return { blogData, sanitized, finalContent };
+        };
+
+        let built: Awaited<ReturnType<typeof buildFinal>> | null = null;
+        let lastValidation: ReturnType<typeof validateGeneratedContent> | null = null;
+
+        for (let attempt = 1; attempt <= MAX_GEN_ATTEMPTS; attempt++) {
+          emit({
+            event: "stage",
+            stage: "draft",
+            detail: attempt === 1
+              ? "Claude is thinking and drafting your blog post…"
+              : `Re-drafting (attempt ${attempt}/${MAX_GEN_ATTEMPTS}) to fix a malformed draft…`,
+          });
+          wasStalled = false;
+          const fullContent = await draftOnce();
+
+          emit({ event: "stage", stage: "polish", detail: "Generating images and running SEO polish…" });
+          const candidate = await buildFinal(fullContent);
+
+          const verdict = validateGeneratedContent(candidate.finalContent, {
+            type: "blog",
+            metaDescription: candidate.blogData.meta_description,
+          });
+          lastValidation = verdict;
+
+          if (verdict.ok) {
+            built = candidate;
+            break;
+          }
+
+          console.warn(`[blog stream] draft attempt ${attempt} failed validation: ${summarizeValidation(verdict)}`);
+          if (attempt < MAX_GEN_ATTEMPTS) {
+            emit({ event: "stage", stage: "revalidate", detail: "Draft failed quality checks — regenerating a clean version…" });
           }
         }
 
-        if (stallTimeoutId) clearTimeout(stallTimeoutId);
-        if (thinkingEmitted) emit({ event: "thinking_done" });
+        // Quality gate: never persist a broken draft. Reset the entry and ask the
+        // client to retry instead of saving raw JSON the viewer can't render.
+        if (!built) {
+          if (body.entryId) {
+            try {
+              await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
+            } catch { /* best effort */ }
+          }
+          emit({
+            event: "error",
+            message: `The draft failed quality validation (${lastValidation?.fatalCodes.join(", ") || "unknown"}). No broken content was saved — please generate again.`,
+          });
+          controller.close();
+          return;
+        }
 
-        // ── Stage 5: Polish ───────────────────────────────────────────────
-        emit({ event: "stage", stage: "polish", detail: "Generating images and running SEO polish…" });
-
-        const { parseGeneratedBlogJson } = await import("@/lib/gemini");
-        const blogData = parseGeneratedBlogJson(fullContent, entry, project, research);
-
-        const { insertBlogImagePlaceholders } = await import("@/services/openAiImages");
-        const { sanitizeBlogContent } = await import("@/lib/blog-content");
-
-        const rawContent = insertBlogImagePlaceholders(blogData.content, {
-          title: blogData.title,
-          targetKeyword: entry.focus_keyword,
-          wordCount: blogData.word_count,
-        });
-        const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
-        const finalContent = sanitizeBlogMarkdown(sanitized.content);
+        const { blogData, sanitized, finalContent } = built;
         const finalWordCount = countWords(finalContent);
 
         // ── Save to DB ────────────────────────────────────────────────────
@@ -382,8 +649,8 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           article_type: entry.article_type,
           status: "generated" as const,
           research_sources: blogData.research_sources,
-          external_links: sanitized.externalLinks.slice(0, 10),
-          internal_links: sanitized.internalLinks.slice(0, 12),
+          external_links: sanitized.externalLinks.slice(0, 7),
+          internal_links: sanitized.internalLinks.slice(0, 7),
           source_url: "",
           repair_notes: [] as string[],
           updated_at: new Date().toISOString(),
@@ -458,6 +725,7 @@ function countWords(markdown: string): number {
 function sanitizeBlogMarkdown(markdown: string): string {
   let cleaned = markdown
     .replace(/^\s*```(?:markdown|md)?\s*/i, "").replace(/\s*```\s*$/i, "")
+    .replace(/<!--\s*Schema:\s*[\s\S]*?-->/gi, "")
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, "")
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, "");
 

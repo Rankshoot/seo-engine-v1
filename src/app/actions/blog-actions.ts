@@ -135,15 +135,16 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       const preserveTitle = !repairTitleNeedsRepairFlag(analysis) && Boolean(repairPlan.title);
       const finalTitle = preserveTitle ? repairPlan.title : repaired.title;
       const rawMarkdown = preserveTitle ? replaceFirstH1(repaired.content, repairPlan.title) : repaired.content;
+      const contentWithPdfLinks = preservePdfLinks(fresh.markdown, rawMarkdown);
       const finalMetaDescription = repairMetaNeedsRepairFlag(analysis)
         ? repaired.meta_description
         : (analysis.summary || repaired.meta_description);
       const repairNotes = normalizeRepairNotesFromModel(repaired.repair_notes, analysis);
 
-      const contentWithImages = sanitizeBlogMarkdown(insertBlogImagePlaceholders(rawMarkdown, {
+      const contentWithImages = sanitizeBlogMarkdown(insertBlogImagePlaceholders(contentWithPdfLinks, {
         title: finalTitle,
         targetKeyword: entry.focus_keyword,
-        wordCount: countWords(rawMarkdown),
+        wordCount: countWords(contentWithPdfLinks),
       }));
       const sanitized = await sanitizeBlogContent(contentWithImages, {
         ownDomain: project.domain ?? '',
@@ -679,10 +680,13 @@ function sanitizeBlogMarkdown(markdown: string): string {
   // JSON (e.g. `{"title":"...","contentMarkdown":"# H1\n\n...","..."}`)
   // extract contentMarkdown before any other processing.
   const rescued = rescueJsonBlogContent(markdown);
+
+  // Clean up any newlines or spaces between markdown image brackets and parentheses
+  const healed = rescued.replace(/!\[([^\]]*?)\]\s+\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, '![$1]($2)');
   
   // Mask ```youtube\n...\n``` blocks
   const youtubeBlocks: string[] = [];
-  let masked = rescued.replace(/```youtube\r?\n([\s\S]*?)\r?\n```/g, (match) => {
+  let masked = healed.replace(/```youtube\r?\n([\s\S]*?)\r?\n```/g, (match) => {
     youtubeBlocks.push(match);
     return `__YOUTUBE_BLOCK_PLACEHOLDER_${youtubeBlocks.length - 1}__`;
   });
@@ -690,6 +694,7 @@ function sanitizeBlogMarkdown(markdown: string): string {
   let cleaned = stripEmptyFragmentAnchorTags(stripSchemaJsonBlocks(masked))
     .replace(/^\s*```(?:markdown|md)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
+    .replace(/<!--\s*Schema:\s*[\s\S]*?-->/gi, '')
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, '')
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, '')
     .replace(/Regenerat(?:e|ing) with AI[^\n]*(?:illustration|visual)?/gi, '')
@@ -916,6 +921,15 @@ export async function updateBlogContent(
     return { success: false, error: 'Blog content is too short to save.', data: null };
   }
 
+  // Upload any inline base64 images to Supabase Storage
+  let uploadedContent = cleaned;
+  try {
+    const { uploadBase64Images } = await import('@/lib/server/blog-images');
+    uploadedContent = await uploadBase64Images(cleaned, blogId);
+  } catch (err) {
+    console.error('[blog-actions] failed to process and upload inline images during update', err);
+  }
+
   const { data: blog, error: bErr } = await supabaseAdmin
     .from('blogs')
     .select('id, project_id')
@@ -933,10 +947,10 @@ export async function updateBlogContent(
 
   if (pErr || !project) return { success: false, error: 'Not authorized', data: null };
 
-  const { externalLinks, internalLinks } = extractMarkdownLinks(cleaned, project.domain as string);
+  const { externalLinks, internalLinks } = extractMarkdownLinks(uploadedContent, project.domain as string);
   const patch: Record<string, unknown> = {
-    content: cleaned,
-    word_count: countWords(cleaned),
+    content: uploadedContent,
+    word_count: countWords(uploadedContent),
     external_links: externalLinks,
     internal_links: internalLinks,
     updated_at: new Date().toISOString(),
@@ -2598,7 +2612,8 @@ Rules — read carefully:
 - Include 0-5 content_gaps (only real missing topics, not padding).
 - Include 1-4 quick_wins.
 - Be specific. Reference actual text from the article when relevant.
-- Do NOT fabricate keyword volume data. Focus purely on content quality.`;
+- Do NOT fabricate keyword volume data. Focus purely on content quality.
+- Respect PDF downloads & promised content: If the blog post contains a downloadable PDF or PDF template (e.g., cover letter templates, question sheets, kits, interview question guides) and the title/H1 promises a specific number or list of items (e.g., "60+ questions", "100+ templates"), do NOT flag this as an issue (such as 'content hidden in PDF', 'locked value proposition', 'items/questions not listed on-page', or 'thin content'). Respect that the PDF download serves as the premium delivery mechanism for the full list/assets, and focus your audit purely on the supporting on-page text content without demanding that the full set be pasted onto the page.`;
 
   try {
     const raw = await geminiGenerate(prompt, 2);
@@ -2608,4 +2623,115 @@ Rules — read carefully:
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : "Analysis failed" };
   }
+}
+
+export async function updateBlogCoverImage(blogId: string, imageUrl: string | null) {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated', data: null };
+
+  const { data: blog, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, project_id, content_data')
+    .eq('id', blogId)
+    .single();
+
+  if (bErr || !blog) return { success: false, error: 'Blog not found', data: null };
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', blog.project_id)
+    .eq('user_id', user.id)
+    .single();
+
+  if (pErr || !project) return { success: false, error: 'Not authorized', data: null };
+
+  let finalUrl = imageUrl;
+  if (imageUrl && imageUrl.startsWith('data:image/')) {
+    try {
+      const { uploadSingleBase64Image } = await import('@/lib/server/blog-images');
+      finalUrl = await uploadSingleBase64Image(imageUrl, blogId);
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to upload cover image', data: null };
+    }
+  }
+
+  const currentContentData = (blog.content_data ?? {}) as Record<string, any>;
+  const nextContentData = { ...currentContentData, cover_image_url: finalUrl || undefined };
+  if (!finalUrl) {
+    delete nextContentData.cover_image_url;
+  }
+
+  const { data: updated, error: uErr } = await supabaseAdmin
+    .from('blogs')
+    .update({
+      content_data: nextContentData,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', blogId)
+    .select()
+    .single();
+
+  if (uErr) return { success: false, error: uErr.message, data: null };
+  return { success: true, data: updated as Blog };
+}
+
+function preservePdfLinks(originalMarkdown: string, generatedMarkdown: string): string {
+  const pdfLinkRegex = /\[([^\]]+)\]\(([^)\s]+\.pdf(?:[?#]\S*)?)\)/gi;
+  const originalPdfLinks: { full: string; label: string; href: string }[] = [];
+  
+  let match: RegExpExecArray | null;
+  while ((match = pdfLinkRegex.exec(originalMarkdown)) !== null) {
+    originalPdfLinks.push({
+      full: match[0],
+      label: match[1],
+      href: match[2]
+    });
+  }
+
+  if (originalPdfLinks.length === 0) return generatedMarkdown;
+
+  let result = generatedMarkdown;
+  
+  for (const link of originalPdfLinks) {
+    if (result.toLowerCase().includes(link.href.toLowerCase())) {
+      continue;
+    }
+
+    const lines = result.split('\n');
+    let injectedIndex = -1;
+
+    // Pass 1: Look for a paragraph containing BOTH "download" AND ("pdf" or "template")
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].toLowerCase();
+      const isParagraph = !line.startsWith('#') && !line.startsWith('!') && !line.startsWith('[') && line.length > 20;
+      if (isParagraph && line.includes('download') && (line.includes('pdf') || line.includes('template'))) {
+        injectedIndex = i;
+        break;
+      }
+    }
+
+    // Pass 2: Fallback to a paragraph containing "pdf" or "download" or "template"
+    if (injectedIndex === -1) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].toLowerCase();
+        const isParagraph = !line.startsWith('#') && !line.startsWith('!') && !line.startsWith('[') && line.length > 20;
+        if (isParagraph && (line.includes('pdf') || line.includes('download') || line.includes('template'))) {
+          injectedIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (injectedIndex !== -1) {
+      console.log(`[link-preservation] Injecting PDF link after line: "${lines[injectedIndex]}"`);
+      lines.splice(injectedIndex + 1, 0, '', link.full, '');
+      result = lines.join('\n');
+    } else {
+      console.log(`[link-preservation] Appending PDF link to the end of markdown: ${link.href}`);
+      result = result.trim() + `\n\n${link.full}\n`;
+    }
+  }
+
+  return result;
 }

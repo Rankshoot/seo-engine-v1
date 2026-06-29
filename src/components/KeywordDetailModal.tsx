@@ -250,9 +250,9 @@ export function KeywordDetailModal(props: KeywordDetailModalProps) {
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {fetchError && (
-            <div className="m-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+            <div className="m-5 rounded-xl border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">
               <p className="font-semibold">Failed to load live data</p>
-              <p className="text-xs text-rose-400/90">{fetchError}</p>
+              <p className="text-xs text-status-danger/90">{fetchError}</p>
             </div>
           )}
 
@@ -377,7 +377,7 @@ function Header({
             <span
               className={`rounded-full border px-2 py-0.5 font-semibold ${
                 data.fromCache
-                  ? "border-cyan-500/25 bg-cyan-500/10 text-cyan-400"
+                  ? "border-status-info/25 bg-status-info/10 text-status-info"
                   : "border-accent-500/25 bg-accent-500/10 text-accent-400"
               }`}
               title={`Last fetched ${new Date(data.lastFetchedAt).toLocaleString()}`}
@@ -394,7 +394,7 @@ function Header({
           )}
         </div>
         {refreshError && (
-          <p className="mt-2 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+          <p className="mt-2 rounded-md border border-status-danger/30 bg-status-danger/10 px-2 py-1 text-[11px] text-status-danger">
             {refreshError}
           </p>
         )}
@@ -459,7 +459,7 @@ function KdCard({
         ? "text-accent-400"
         : safeKd < 60
           ? "text-warm-400"
-          : "text-rose-400";
+          : "text-status-danger";
 
   return (
     <Card label="Keyword difficulty">
@@ -486,7 +486,7 @@ function Gauge({ value, loading }: { value: number; loading: boolean }) {
   const arcLength = Math.PI * r * (220 / 360);
   const dash = (value / 100) * arcLength;
   const stroke =
-    value < 30 ? "var(--color-accent-500)" : value < 60 ? "var(--color-warm-500)" : "var(--color-rose-500)";
+    value < 30 ? "var(--color-accent-500)" : value < 60 ? "var(--color-warm-500)" : "var(--color-status-danger)";
 
   return (
     <svg width={112} height={72} viewBox="0 0 112 72" aria-hidden>
@@ -928,7 +928,7 @@ function IdeaRow({ idea }: { idea: ModalIdea }) {
         ? "text-accent-400"
         : kd < 60
           ? "text-warm-400"
-          : "text-rose-400";
+          : "text-status-danger";
   return (
     <li className="grid grid-cols-[1fr_64px_88px] items-center gap-3 px-3 py-2 hover:bg-surface-elevated/40">
       <p className="truncate text-xs text-text-secondary" title={idea.keyword}>
@@ -941,7 +941,7 @@ function IdeaRow({ idea }: { idea: ModalIdea }) {
             <div className="h-1 w-10 overflow-hidden rounded-full bg-surface-elevated">
               <div
                 className={`h-full rounded-full ${
-                  kd < 30 ? "bg-accent-500" : kd < 60 ? "bg-warm-500" : "bg-rose-500"
+                  kd < 30 ? "bg-accent-500" : kd < 60 ? "bg-warm-500" : "bg-status-danger"
                 }`}
                 style={{ width: `${Math.min(100, kd)}%` }}
               />

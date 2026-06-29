@@ -16,9 +16,33 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT DEFAULT '',
   ahrefs_rank_tracker_project_id BIGINT DEFAULT NULL,
   last_benchmarked_competitor_snapshot TEXT DEFAULT NULL,
+  -- Sitemap → enhanced internal linking (see supabase-migration-project-sitemap-internal-links.sql).
+  sitemap_url TEXT NOT NULL DEFAULT '',
+  sitemap_source TEXT NOT NULL DEFAULT '',            -- '' | 'auto' | 'manual'
+  sitemap_status TEXT NOT NULL DEFAULT 'pending',     -- 'pending' | 'found' | 'empty' | 'failed'
+  sitemap_synced_at TIMESTAMPTZ,
+  sitemap_url_count INTEGER NOT NULL DEFAULT 0,
+  sitemap_prompt_dismissed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Full sitemap URL inventory per project. Feeds relevance-ranked internal links
+-- into content generation. Populated by auto-discovery or a user-entered sitemap.
+CREATE TABLE IF NOT EXISTS project_sitemap_urls (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  path TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'page',                  -- 'blog' | 'page'
+  title TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (project_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_project_sitemap_urls_project_id
+  ON project_sitemap_urls(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_sitemap_urls_project_kind
+  ON project_sitemap_urls(project_id, kind);
 
 CREATE TABLE IF NOT EXISTS project_competitors (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -57,10 +81,41 @@ CREATE TABLE IF NOT EXISTS blog_audits (
   scraped_chars INTEGER DEFAULT 0,
   scraped_markdown TEXT,
   error TEXT DEFAULT '',
+  -- Background-job lifecycle for this audit row (see supabase-migration-background-jobs.sql).
+  -- 'done' = complete; 'running'/'pending'/'failed' drive the in-progress skeleton.
+  job_status TEXT NOT NULL DEFAULT 'done',
+  job_id UUID,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(project_id, url)
 );
+
+-- Durable, resumable long-running work. See supabase-migration-background-jobs.sql.
+CREATE TABLE IF NOT EXISTS background_jobs (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',          -- pending | running | done | failed
+  idempotency_key TEXT,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result JSONB,
+  error TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  run_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  locked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_status_run_after
+  ON background_jobs(status, run_after);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_project_type_status
+  ON background_jobs(project_id, type, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_background_jobs_active_idempotency
+  ON background_jobs(idempotency_key)
+  WHERE idempotency_key IS NOT NULL AND status IN ('pending', 'running');
 
 CREATE TABLE IF NOT EXISTS keywords (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

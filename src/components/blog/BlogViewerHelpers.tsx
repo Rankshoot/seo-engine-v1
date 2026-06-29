@@ -75,7 +75,7 @@ export function RepairBanner({
   repairNotes: string[];
   projectId: string;
 }) {
-  const [open, setOpen] = useState(repairNotes.length > 0);
+  const [open, setOpen] = useState(false);
   return (
     <div className="rounded-[8px] px-4 py-3 border border-border-subtle bg-surface-secondary">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -128,7 +128,7 @@ export function RepairBanner({
           <ul className="space-y-1 text-[11px] text-text-secondary">
             {repairNotes.map((note, i) => (
               <li key={i} className="flex items-start gap-2">
-                <svg className="mt-0.5 h-3 w-3 shrink-0 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <svg className="mt-0.5 h-3 w-3 shrink-0 text-status-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                 </svg>
                 {note}

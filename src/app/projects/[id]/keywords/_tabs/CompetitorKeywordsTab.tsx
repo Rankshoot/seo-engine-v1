@@ -46,12 +46,12 @@ function compactUrl(url: string): string {
 }
 
 const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-[#10b981]" : kd < 60 ? "text-[#f59e0b]" : "text-brand-coral";
+  kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function getAiGapScoreCategory(score: number): { icon: string; colorClass: string; label: string } {
-  if (score >= 75) return { icon: "★", colorClass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400", label: "High opportunity" };
+  if (score >= 75) return { icon: "★", colorClass: "border-status-success/30 bg-status-success/10 text-status-success", label: "High opportunity" };
   if (score >= 55) return { icon: "◆", colorClass: "border-brand-action/30 bg-brand-action/10 text-brand-action", label: "Good fit" };
-  if (score >= 35) return { icon: "●", colorClass: "border-amber-500/30 bg-amber-500/10 text-amber-400", label: "Moderate" };
+  if (score >= 35) return { icon: "●", colorClass: "border-status-warning/30 bg-status-warning/10 text-status-warning", label: "Moderate" };
   return { icon: "▼", colorClass: "border-border-subtle bg-surface-tertiary text-text-tertiary", label: "Low priority" };
 }
 
@@ -115,7 +115,7 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
               <span className="w-[100px] shrink-0 text-[10px] text-text-tertiary">{d.label}</span>
               <div className="flex-1 h-1 rounded-full bg-surface-tertiary overflow-hidden">
                 <div
-                  className={`h-full rounded-full ${d.val >= 7 ? "bg-[#10b981]" : d.val >= 4 ? "bg-[#f59e0b]" : "bg-brand-coral"}`}
+                  className={`h-full rounded-full ${d.val >= 7 ? "bg-status-success" : d.val >= 4 ? "bg-status-warning" : "bg-brand-coral"}`}
                   style={{ width: `${d.val * 10}%` }}
                 />
               </div>
@@ -131,7 +131,7 @@ function GapAiScoreTooltip({ data, score }: { data: GapAiEvalData; score: number
 
       {data.reasoning.strengths?.length > 0 && (
         <div>
-          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#10b981]">Strengths</p>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-status-success">Strengths</p>
           <ul className="space-y-0.5">
             {data.reasoning.strengths.slice(0, 2).map((s, i) => (
               <li key={i} className="text-[11px] text-text-secondary leading-snug">+ {s}</li>
@@ -562,7 +562,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             </p>
           </Tooltip>
           {aiGapKeywordSet.has(g.keyword.toLowerCase()) && (
-            <span className="shrink-0 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#8b5cf6]">
+            <span className="shrink-0 rounded-full border border-brand-violet/30 bg-brand-violet/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-violet">
               AI pick
             </span>
           )}
@@ -603,10 +603,10 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       tooltip: "Search intent: Informational · Navigational · Commercial · Transactional",
       cell: (g: KeywordGap) => {
         const activeIntents = [
-          g.is_transactional && { label: "Transactional", color: "text-[#10b981]" },
-          g.is_commercial && { label: "Commercial", color: "text-[#f59e0b]" },
-          g.is_informational && { label: "Informational", color: "text-[#60a5fa]" },
-          g.is_navigational && { label: "Navigational", color: "text-[#a78bfa]" },
+          g.is_transactional && { label: "Transactional", color: "text-status-success" },
+          g.is_commercial && { label: "Commercial", color: "text-status-warning" },
+          g.is_informational && { label: "Informational", color: "text-status-info" },
+          g.is_navigational && { label: "Navigational", color: "text-brand-violet-soft" },
         ].filter((t): t is { label: string; color: string } => !!t);
 
         return activeIntents.length > 0 ? (
@@ -658,8 +658,8 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       cell: (g: KeywordGap) => {
         const pos = typeof g.position === "number" && g.position > 0 ? g.position : null;
         const badgeCls = pos === null ? "" :
-          pos <= 3 ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" :
-          pos <= 10 ? "border-amber-500/30 bg-amber-500/10 text-amber-400" :
+          pos <= 3 ? "border-status-success/30 bg-status-success/10 text-status-success" :
+          pos <= 10 ? "border-status-warning/30 bg-status-warning/10 text-status-warning" :
           "border-border-subtle bg-surface-secondary text-text-tertiary";
         return (
           <div className="flex items-center gap-1.5 min-w-0 max-w-[280px]">
@@ -781,13 +781,13 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             disabled={aiScoring || loading}
             className={`inline-flex h-8 shrink-0 cursor-pointer flex-row items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold leading-none uppercase tracking-wide shadow-sm transition-[transform,opacity,colors] duration-200 ease-out hover:-translate-y-px active:scale-95 disabled:pointer-events-none disabled:opacity-50 motion-safe:hover:scale-105 ${
               aiScoring
-                ? "border-[#8b5cf6]/40 bg-[#8b5cf6]/20 text-[#8b5cf6] animate-pulse"
-                : "border-[#8b5cf6]/30 bg-[#8b5cf6]/10 text-[#8b5cf6] hover:bg-[#8b5cf6]/20"
+                ? "border-brand-violet/40 bg-brand-violet/20 text-brand-violet animate-pulse"
+                : "border-brand-violet/30 bg-brand-violet/10 text-brand-violet hover:bg-brand-violet/20"
             }`}
           >
             {aiScoring ? (
               <>
-                <div className="h-3 w-3 rounded-full border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] animate-spin" />
+                <div className="h-3 w-3 rounded-full border-2 border-brand-violet/30 border-t-brand-violet animate-spin" />
                 <span>Scoring…</span>
               </>
             ) : (
@@ -884,14 +884,14 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   return (
     <div className="flex-1 flex flex-col min-h-0 relative animate-slide-in-right">
       {compHasMismatch && (
-        <div className="mb-4 shrink-0 flex items-start gap-3.5 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5">
-          <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10">
-            <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="mb-4 shrink-0 flex items-start gap-3.5 rounded-2xl border border-status-warning/25 bg-status-warning/[0.07] px-4 py-3.5">
+          <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-full border border-status-warning/30 bg-status-warning/10">
+            <svg className="h-4 w-4 text-status-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
             </svg>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[13px] font-semibold text-amber-400">Competitor list has changed</p>
+            <p className="text-[13px] font-semibold text-status-warning">Competitor list has changed</p>
             <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
               Your configured competitors no longer match the last benchmark. Run a new benchmark to find gaps based on your updated competitor list.
             </p>
@@ -901,7 +901,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
               type="button"
               onClick={() => { void handleRun(); }}
               disabled={running}
-              className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3.5 py-1.5 text-[12px] font-semibold text-amber-400 transition-colors hover:bg-amber-500/25 disabled:opacity-50 disabled:pointer-events-none"
+              className="inline-flex items-center gap-1.5 rounded-full border border-status-warning/40 bg-status-warning/15 px-3.5 py-1.5 text-[12px] font-semibold text-status-warning transition-colors hover:bg-status-warning/25 disabled:opacity-50 disabled:pointer-events-none"
             >
               {running ? "Benchmarking…" : "Re-benchmark"}
             </button>

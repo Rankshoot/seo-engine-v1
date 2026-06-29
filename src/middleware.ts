@@ -2,6 +2,7 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { adminPanelPathFromProjectsAdmin } from "@/lib/projects/reserved-project-slugs";
+import { isClerkKeyValid } from "@/lib/clerk-keys";
 
 // Edge-native in-memory rate limit cache
 const rateLimitCache = new Map<string, number[]>();
@@ -60,10 +61,11 @@ async function fetchApprovalStatus(userId: string): Promise<"approved" | "pendin
   return "pending";
 }
 
-const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+const clerkEnabled = isClerkKeyValid(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 const isPublicRoute = createRouteMatcher([
   "/",
+  "/blog(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/pending-approval(.*)",

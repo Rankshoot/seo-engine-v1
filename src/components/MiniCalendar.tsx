@@ -188,7 +188,6 @@ export function MiniCalendar({
     <div className="rounded-[16px] border border-border-subtle bg-surface-elevated p-6" onDragEnd={endDragSession}>
       <div className="mb-5 flex items-center justify-between">
         <div>
-          <h3 className="text-[18px] font-medium tracking-[-0.18px] text-text-primary">Content Calendar</h3>
           {schedulingKeywordId ? (
             <p className="mt-0.5 text-[13px] text-status-warning">
               {schedulingKeywordCurrentDate ? (

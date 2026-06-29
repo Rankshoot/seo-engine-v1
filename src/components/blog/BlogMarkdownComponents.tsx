@@ -231,16 +231,17 @@ function PdfPreviewer({ href, label }: { href: string; label: string }) {
 
   return (
     <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-sm not-italic no-underline">
-      {/* PDF Viewer (proxied so cross-origin framing restrictions don't block it) */}
-      <object data={previewSrc} type="application/pdf" className="w-full block bg-surface-primary" style={{ height: "600px" }}>
-        <iframe
-          src={previewSrc}
-          className="w-full border-none block bg-surface-primary"
-          style={{ height: "600px" }}
-          title={displayTitle}
-          allowFullScreen
-        />
-      </object>
+      {/* PDF Viewer — proxied through our origin so the host's cross-origin
+          framing restrictions don't block it. Uses a plain <iframe> (allowed by
+          the app CSP's `frame-src 'self'`); <object> is intentionally avoided
+          because the CSP sets `object-src 'none'`. */}
+      <iframe
+        src={previewSrc}
+        className="w-full border-none block bg-surface-primary"
+        style={{ height: "600px" }}
+        title={displayTitle}
+        allowFullScreen
+      />
 
       {/* PDF Download Bar */}
       <span className="flex items-center justify-between gap-4 border-t border-border-subtle bg-surface-primary px-6 py-4 flex-wrap">

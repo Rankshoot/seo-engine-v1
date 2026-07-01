@@ -205,6 +205,7 @@ VOICE & ANALYTICAL TONE RULES
 - Be direct and confident. A whitepaper that hedges every statement is useless. Hedge only where genuine uncertainty exists — and name the uncertainty source explicitly.
 - Vary sentence length for emphasis: short sentences for conclusions, longer sentences to build the analytical chain. Average ≤ 20 words per sentence.
 - Use contractions sparingly — one or two per section is fine, but this is a formal document.
+- Do NOT use em-dashes (—) or en-dashes (–) to connect clauses or offset parenthetical phrases. These are a primary signature of AI-generated content and make the text look robotic. Instead, use standard commas, colons, parentheses, or break the sentence into two separate, short sentences.
 - Name things specifically. "A financial services firm in ${ctx.regionLabel}" is better than "a large enterprise". "ISO 27001:2022 Annex A.8.7" is better than "industry security standards".
 - The Executive Summary must read as a standalone document. A decision-maker who reads only the Executive Summary should understand the problem, the core finding, and the recommendation — without reading the rest.
 - Every section must open with a 2–3 sentence thesis that answers its core question before supporting analysis follows. This is not optional.

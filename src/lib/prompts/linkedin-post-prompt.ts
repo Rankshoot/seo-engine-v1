@@ -76,6 +76,7 @@ const LINKEDIN_PROMPT_TEMPLATE = Object.freeze({
 - No "👇" / "DM me" / "P.S." cliché endings. You MUST close the post (either the final line of the body or the CTA block) with a direct, engaging question (ending with "?") or a clear CTA.
 - No links inside the body (LinkedIn deprioritizes them). The CTA can mention "link in profile" if appropriate.
 - Avoid generic AI phrasing ("delve", "leverage", "unlock", "navigating", "in today's fast-paced", "game-changer", "synergy", "robust").
+- Do NOT use em-dashes (—) or en-dashes (–) anywhere. These make the post look robotic and AI-generated. Use commas, colons, or shorter sentences instead.
 - Ensure personal voice is clear: you MUST use first-person/collective pronouns (I, we, my, our, us, I'm) at least twice in the post.
 - Active voice, plain words. Specific > vague every time.`,
   outputContract: `OUTPUT CONTRACT — produce exactly this Markdown shape, then the ---META--- block:`

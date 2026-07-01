@@ -37,6 +37,27 @@ export const keywordsApi = {
     return apiPost(V1Routes.keywordsLoadMore(projectId), { offset, limit });
   },
 
+  /** Claude-generated trending keyword ideas (5, diversified) with DataForSEO metrics. */
+  generateTrending(
+    projectId: string,
+    opts: { userPrompt?: string } = {}
+  ): Promise<
+    | {
+        success: true;
+        keywords: Array<{
+          keyword: string;
+          rationale: string;
+          volume: number | null;
+          kd: number | null;
+          cpc: number | null;
+          intent: string | null;
+        }>;
+      }
+    | { success: false; error: string }
+  > {
+    return apiPost(V1Routes.keywordsGenerateTrending(projectId), { userPrompt: opts.userPrompt });
+  },
+
   loadMoreFromAhrefs(projectId: string): Promise<{
     success: boolean;
     error?: string;

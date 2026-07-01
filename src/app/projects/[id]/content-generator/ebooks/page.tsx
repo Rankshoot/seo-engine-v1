@@ -36,6 +36,8 @@ import {
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
 import { useUserQuota } from "@/hooks/useUserQuota";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import {
   EBOOK_TONES,
   EBOOK_DEPTH_OPTIONS,
@@ -49,6 +51,7 @@ export default function EbookGeneratorPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const { canGenerateEbook, quota, hasAiCredits } = useUserQuota();
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
@@ -180,6 +183,12 @@ export default function EbookGeneratorPage() {
       toast.success("Ebook ready — opening preview.");
       void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+      if (entryId) {
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+        dispatch(calendarRefreshBump({ projectId }));
+      }
       router.push(`${studioBase}/ebooks/${res.data.id}`);
     } else {
       toast.error(res.error);

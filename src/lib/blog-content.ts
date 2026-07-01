@@ -602,3 +602,24 @@ export const EXPORT_FILE_INFO = {
     mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   },
 } as const;
+
+/**
+ * Replace em-dashes (—), en-dashes (–), and double hyphens (--) with standard,
+ * humanized punctuation (such as commas) to remove AI content footprint.
+ * Only replaces dashes occurring after a non-whitespace character to prevent
+ * modifying bullet points/list items starting with a dash.
+ */
+export function humanizeDashes(text: string): string {
+  if (!text) return text;
+  return text
+    // Replace emdash, endash, and double hyphens when they occur after a non-whitespace character
+    .replace(/(\S)\s*[—–]\s*/g, '$1, ')
+    .replace(/(\S)\s*--\s*/g, '$1, ')
+    // Clean up any double commas or commas next to other punctuation
+    .replace(/,\s*,/g, ', ')
+    .replace(/,\s*\./g, '.')
+    .replace(/,\s*:/g, ':')
+    .replace(/,\s*;/g, ';')
+    .replace(/,\s*\?/g, '?')
+    .replace(/,\s*!/g, '!');
+}

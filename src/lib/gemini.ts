@@ -10,7 +10,7 @@ import {
   parseFunnelStageLabel,
   type FunnelStage,
 } from '@/lib/keyword-funnel';
-import { countWordsInMarkdown, stripEmptyFragmentAnchorTags, validateExternalUrl } from '@/lib/blog-content';
+import { countWordsInMarkdown, stripEmptyFragmentAnchorTags, validateExternalUrl, humanizeDashes } from '@/lib/blog-content';
 import {
   extractGeminiTokenUsage,
   recordGeminiCall,
@@ -580,9 +580,9 @@ export function parseGeneratedBlogJson(
     return parseGeneratedBlogMarkdown(rawText, entry, project, research);
   }
 
-  let content = parsed.contentMarkdown ?? '';
-  const meta_description = parsed.metaDescription ?? '';
-  const title = parsed.title ?? entry.title;
+  let content = humanizeDashes(parsed.contentMarkdown ?? '');
+  const meta_description = humanizeDashes(parsed.metaDescription ?? '');
+  const title = humanizeDashes(parsed.title ?? entry.title);
   const slug = entry.slug;
 
   // Make sure the content markdown begins with the H1 title if not present

@@ -17,7 +17,7 @@ import {
   buildLinkedInPostPrompt,
   type LinkedInPromptContext,
 } from '@/lib/prompts/linkedin-post-prompt';
-import { stripEmptyFragmentAnchorTags, countWordsInMarkdown } from '@/lib/blog-content';
+import { stripEmptyFragmentAnchorTags, countWordsInMarkdown, humanizeDashes } from '@/lib/blog-content';
 import type {
   EbookContentData,
   WhitepaperContentData,
@@ -154,25 +154,32 @@ export async function generateEbook(
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
   const meta = parseLooseJson<Record<string, unknown>>(metaJson) ?? {};
+  
+  // Clean up emdashes/endashes
+  const humanizedBodyRaw = humanizeDashes(bodyRaw);
+  
   const content = ensureValidStudioContent(
-    stripEmptyFragmentAnchorTags(bodyRaw),
+    stripEmptyFragmentAnchorTags(humanizedBodyRaw),
     'ebook',
-    typeof meta.meta_description === 'string' ? meta.meta_description : '',
+    typeof meta.meta_description === 'string' ? humanizeDashes(meta.meta_description) : '',
   );
 
   const titleMatch = content.match(/^#\s+(.+)$/m);
-  const fallbackTitle = (typeof meta.cover_title === 'string' && meta.cover_title.trim())
-    || titleMatch?.[1]?.replace(/\*+/g, '').trim()
-    || ctx.topic.trim()
-    || 'Untitled ebook';
+  const rawCoverTitle = typeof meta.cover_title === 'string' ? meta.cover_title.trim() : '';
+  const fallbackTitle = humanizeDashes(
+    rawCoverTitle
+      || titleMatch?.[1]?.replace(/\*+/g, '').trim()
+      || ctx.topic.trim()
+      || 'Untitled ebook'
+  );
 
   const tocRaw = Array.isArray(meta.table_of_contents) ? meta.table_of_contents : [];
   const tableOfContents = tocRaw.slice(0, 24).map((c, i) => {
     const row = c as Record<string, unknown>;
     return {
       number: typeof row.number === 'number' ? row.number : i + 1,
-      title: typeof row.title === 'string' ? row.title : `Chapter ${i + 1}`,
-      summary: typeof row.summary === 'string' ? row.summary : '',
+      title: typeof row.title === 'string' ? humanizeDashes(row.title) : `Chapter ${i + 1}`,
+      summary: typeof row.summary === 'string' ? humanizeDashes(row.summary) : '',
       word_count: typeof row.word_count === 'number' ? row.word_count : 0,
     };
   });
@@ -181,8 +188,8 @@ export async function generateEbook(
   const faqs = faqRaw.slice(0, 10).map(c => {
     const row = c as Record<string, unknown>;
     return {
-      question: typeof row.question === 'string' ? row.question : '',
-      answer: typeof row.answer === 'string' ? row.answer : '',
+      question: typeof row.question === 'string' ? humanizeDashes(row.question) : '',
+      answer: typeof row.answer === 'string' ? humanizeDashes(row.answer) : '',
     };
   }).filter(r => r.question && r.answer);
 
@@ -193,12 +200,12 @@ export async function generateEbook(
   const wordCount = countWordsInMarkdown(content);
 
   const content_data: EbookContentData = {
-    cover_title: typeof meta.cover_title === 'string' ? meta.cover_title : fallbackTitle,
-    cover_subtitle: typeof meta.cover_subtitle === 'string' ? meta.cover_subtitle : '',
+    cover_title: typeof meta.cover_title === 'string' ? humanizeDashes(meta.cover_title) : fallbackTitle,
+    cover_subtitle: typeof meta.cover_subtitle === 'string' ? humanizeDashes(meta.cover_subtitle) : '',
     table_of_contents: tableOfContents,
     faqs,
-    cta: typeof meta.cta === 'string' ? meta.cta : '',
-    references: safeArrayString(meta.references, 18),
+    cta: typeof meta.cta === 'string' ? humanizeDashes(meta.cta) : '',
+    references: safeArrayString(meta.references, 18).map(r => humanizeDashes(r)),
     audience: ctx.audience,
     tone: ctx.tone,
     goal: ctx.goal,
@@ -209,7 +216,7 @@ export async function generateEbook(
   return {
     title: fallbackTitle,
     content,
-    meta_description: typeof meta.meta_description === 'string' ? meta.meta_description : '',
+    meta_description: typeof meta.meta_description === 'string' ? humanizeDashes(meta.meta_description) : '',
     slug: typeof meta.slug === 'string' && meta.slug.trim() ? meta.slug.trim() : slugifyTitle(fallbackTitle, 'ebook'),
     word_count: wordCount,
     research_sources: ctx.research?.totalSourcesFound ?? 0,
@@ -248,25 +255,32 @@ export async function generateWhitepaper(
 
   const { content: bodyRaw, metaJson } = splitMarkdownAndMeta(raw);
   const meta = parseLooseJson<Record<string, unknown>>(metaJson) ?? {};
+  
+  // Clean up emdashes/endashes
+  const humanizedBodyRaw = humanizeDashes(bodyRaw);
+  
   const content = ensureValidStudioContent(
-    stripEmptyFragmentAnchorTags(bodyRaw),
+    stripEmptyFragmentAnchorTags(humanizedBodyRaw),
     'whitepaper',
-    typeof meta.meta_description === 'string' ? meta.meta_description : '',
+    typeof meta.meta_description === 'string' ? humanizeDashes(meta.meta_description) : '',
   );
 
   const titleMatch = content.match(/^#\s+(.+)$/m);
-  const fallbackTitle = (typeof meta.cover_title === 'string' && meta.cover_title.trim())
-    || titleMatch?.[1]?.replace(/\*+/g, '').trim()
-    || ctx.topic.trim()
-    || 'Untitled whitepaper';
+  const rawCoverTitle = typeof meta.cover_title === 'string' ? meta.cover_title.trim() : '';
+  const fallbackTitle = humanizeDashes(
+    rawCoverTitle
+      || titleMatch?.[1]?.replace(/\*+/g, '').trim()
+      || ctx.topic.trim()
+      || 'Untitled whitepaper'
+  );
 
   const sectionsRaw = Array.isArray(meta.sections) ? meta.sections : [];
   const sections = sectionsRaw.slice(0, 14).map((s, i) => {
     const row = s as Record<string, unknown>;
     return {
       number: typeof row.number === 'number' ? row.number : i + 1,
-      title: typeof row.title === 'string' ? row.title : `Section ${i + 1}`,
-      summary: typeof row.summary === 'string' ? row.summary : '',
+      title: typeof row.title === 'string' ? humanizeDashes(row.title) : `Section ${i + 1}`,
+      summary: typeof row.summary === 'string' ? humanizeDashes(row.summary) : '',
     };
   });
 
@@ -275,12 +289,12 @@ export async function generateWhitepaper(
   const internalLinks = Array.from(new Set([...internal, ...safeArrayString(meta.internal_links, 16)])).slice(0, 12);
 
   const content_data: WhitepaperContentData = {
-    cover_title: typeof meta.cover_title === 'string' ? meta.cover_title : fallbackTitle,
-    cover_subtitle: typeof meta.cover_subtitle === 'string' ? meta.cover_subtitle : '',
-    executive_summary: typeof meta.executive_summary === 'string' ? meta.executive_summary : '',
+    cover_title: typeof meta.cover_title === 'string' ? humanizeDashes(meta.cover_title) : fallbackTitle,
+    cover_subtitle: typeof meta.cover_subtitle === 'string' ? humanizeDashes(meta.cover_subtitle) : '',
+    executive_summary: typeof meta.executive_summary === 'string' ? humanizeDashes(meta.executive_summary) : '',
     sections,
-    recommendations: safeArrayString(meta.recommendations, 12),
-    references: safeArrayString(meta.references, 24),
+    recommendations: safeArrayString(meta.recommendations, 12).map(r => humanizeDashes(r)),
+    references: safeArrayString(meta.references, 24).map(r => humanizeDashes(r)),
     industry: ctx.industry,
     audience: ctx.audience,
     problem_statement: ctx.problemStatement,
@@ -293,7 +307,7 @@ export async function generateWhitepaper(
   return {
     title: fallbackTitle,
     content,
-    meta_description: typeof meta.meta_description === 'string' ? meta.meta_description : '',
+    meta_description: typeof meta.meta_description === 'string' ? humanizeDashes(meta.meta_description) : '',
     slug: typeof meta.slug === 'string' && meta.slug.trim() ? meta.slug.trim() : slugifyTitle(fallbackTitle, 'whitepaper'),
     word_count: countWordsInMarkdown(content),
     research_sources: ctx.research?.totalSourcesFound ?? 0,

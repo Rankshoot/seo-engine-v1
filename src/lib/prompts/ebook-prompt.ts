@@ -212,6 +212,7 @@ VOICE & HUMANISATION RULES
 - Open at least 3 chapters with a concrete, specific scenario — a real situation a ${ctx.audience} professional would recognise by name, job title, or industry context. Never write "many companies" or "organisations often find". Write "A procurement director at a mid-size ${ctx.niche} firm in ${ctx.regionLabel} faces this every Q4."
 - Vary sentence length. Short sentences for emphasis (under 10 words). Longer sentences to build complexity (16–22 words). Never three long sentences in a row.
 - Use contractions where formal register allows: "it's", "you're", "don't", "won't". Avoid them in direct citations or formal definitions.
+- Do NOT use em-dashes (—) or en-dashes (–) to connect clauses or offset parenthetical phrases. These are a primary signature of AI-generated content and make the text look robotic. Instead, use standard commas, colons, parentheses, or break the sentence into two separate, short sentences.
 - Every H2 chapter title must read like a conversation starter or a proposition, not a filing cabinet label. Bad: "Chapter 3: Market Analysis". Good: "Chapter 3 — The Numbers ${ctx.regionLabel} Decision-Makers Aren't Reading".
 - Write paragraph breaks where the argument shifts, not on a fixed rhythm. Aim for 3–5 sentences per paragraph.
 - Before publishing each section mentally: "Would a sharp, experienced ${ctx.audience} professional find this obvious?" If yes, cut it or deepen it.

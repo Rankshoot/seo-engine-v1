@@ -96,7 +96,31 @@ export async function POST(req: Request) {
           }
           entry = entryRow;
           projectId = entry.project_id;
-          await supabaseAdmin.from("calendar_entries").update({ status: "generating" }).eq("id", body.entryId);
+
+          // The generator form pre-fills from this calendar entry, but the user
+          // may have edited the keyword/topic/secondary keywords before hitting
+          // Generate. Whatever is in the form when they submit is what must
+          // actually get generated — apply those edits on top of the stored
+          // entry, and persist them back so the calendar/history stay truthful
+          // about what this slot generated.
+          const entryUpdates: Record<string, any> = {};
+          const editedKeyword = body.keyword?.trim();
+          if (editedKeyword && editedKeyword !== entry.focus_keyword) {
+            entry.focus_keyword = editedKeyword;
+            entryUpdates.focus_keyword = editedKeyword;
+            entryUpdates.slug = editedKeyword.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+          }
+          const editedTopic = body.topic?.trim();
+          if (editedTopic && editedTopic !== entry.title) {
+            entry.title = editedTopic;
+            entryUpdates.title = editedTopic;
+          }
+          if (body.secondaryKeywords && JSON.stringify(body.secondaryKeywords) !== JSON.stringify(entry.secondary_keywords ?? [])) {
+            entry.secondary_keywords = body.secondaryKeywords;
+            entryUpdates.secondary_keywords = body.secondaryKeywords;
+          }
+          entryUpdates.status = "generating";
+          await supabaseAdmin.from("calendar_entries").update(entryUpdates).eq("id", body.entryId);
         } else {
           projectId = body.projectId!;
           const kw = body.keyword!;
@@ -385,7 +409,13 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           const { formatContentHealthAuditForWriter } = await import("@/lib/content-health-calendar");
           const contentHealthRaw = (entry as any).content_health_audit;
           const auditWriterBlock = formatContentHealthAuditForWriter(contentHealthRaw);
-          mergedWriterNotes = [body.writerNotes?.trim(), auditWriterBlock || ""]
+          // Live form edits (audience/tone/goal/CTA/secondary keywords) made in the
+          // generator review step — not just whatever was stored when the entry
+          // was first scheduled.
+          const liveNotesBlock = (body.audience || body.tone || body.goal || body.ctaObjective || body.secondaryKeywords?.length)
+            ? `Audience: ${body.audience || ""}\nTone: ${body.tone || ""}\nGoal: ${body.goal || ""}\nCTA: ${body.ctaObjective || ""}\nSecondary Keywords: ${(body.secondaryKeywords || []).join(", ")}`
+            : "";
+          mergedWriterNotes = [body.writerNotes?.trim(), liveNotesBlock, auditWriterBlock || ""]
             .filter(Boolean).join("\n\n---\n\n");
         } else {
           mergedWriterNotes = `Audience: ${body.audience || ""}\nTone: ${body.tone || ""}\nGoal: ${body.goal || ""}\nCTA: ${body.ctaObjective || ""}\nSecondary Keywords: ${(body.secondaryKeywords || []).join(", ")}`;

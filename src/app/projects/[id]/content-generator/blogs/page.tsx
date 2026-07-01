@@ -44,6 +44,8 @@ import {
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
 import { useUserQuota } from "@/hooks/useUserQuota";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 
 const TONES = [
   { id: "premium-educational", label: "Premium · educational" },
@@ -181,6 +183,7 @@ export default function BlogGeneratorPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const { canGenerateBlog, quota, hasAiCredits, hasAhrefsH2sCredits, hasAhrefsFaqsCredits, hasDeepAnalysisCredits } = useUserQuota();
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
@@ -216,6 +219,15 @@ export default function BlogGeneratorPage() {
 
   const keywordParam = searchParams?.get("keyword") || "";
   const { value: primaryKeyword, setValue: setPrimaryKeyword, isTyping: isKeywordTyping } = useKeywordParam(keywordParam);
+
+  // True when this generator was opened from an already-scheduled calendar
+  // entry (Generate button on the calendar / repair row). Used to warn the
+  // user that editing the keyword here retargets that calendar slot instead
+  // of silently generating the old keyword underneath their edits.
+  const isFromScheduledEntry = !!entryId;
+  const keywordEditedFromSchedule =
+    isFromScheduledEntry && !isKeywordTyping && !!keywordParam.trim() &&
+    primaryKeyword.trim().toLowerCase() !== keywordParam.trim().toLowerCase();
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
@@ -446,6 +458,10 @@ export default function BlogGeneratorPage() {
           toast.success("Blog generated!");
           void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+          dispatch(calendarRefreshBump({ projectId }));
           router.push(`${studioBase}/blogs/${event.blogId}`);
           return "done";
         } else if (event.event === "error") {
@@ -477,6 +493,13 @@ export default function BlogGeneratorPage() {
       } else {
         for await (const event of blogsApi.generateStream({
           entryId: finalEntryId!,
+          keyword: primaryKeyword,
+          topic,
+          audience,
+          tone: TONES.find(t => t.id === tone)?.label || tone,
+          goal,
+          ctaObjective,
+          secondaryKeywords,
           wordCount,
           ...advancedBody,
         })) {
@@ -513,6 +536,28 @@ export default function BlogGeneratorPage() {
 
   return (
     <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
+      {phase === "form" && isFromScheduledEntry && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-brand-action/25 bg-brand-action/8 px-4 py-3">
+          <span className="mt-0.5 shrink-0 rounded-full border border-brand-action/40 bg-brand-action/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-action">
+            From calendar
+          </span>
+          <div className="min-w-0">
+            {keywordEditedFromSchedule ? (
+              <p className="text-[12px] font-medium text-text-primary leading-snug">
+                You changed the keyword from <span className="font-semibold">&ldquo;{keywordParam}&rdquo;</span> to{" "}
+                <span className="font-semibold text-brand-action">&ldquo;{primaryKeyword}&rdquo;</span>. Generating now will
+                retarget this calendar slot to the new keyword — the &ldquo;{keywordParam}&rdquo; brief will be replaced,
+                not kept separately.
+              </p>
+            ) : (
+              <p className="text-[12px] text-text-secondary leading-snug">
+                This brief was scheduled on your calendar as <span className="font-semibold text-text-primary">&ldquo;{keywordParam}&rdquo;</span>.
+                You can edit any field below — if you change the keyword, this calendar slot will be updated to match.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
       {isAuditFixMode && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-status-warning/30 bg-status-warning/8 px-4 py-3">
           <span className="mt-0.5 shrink-0 rounded-full border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-warning">

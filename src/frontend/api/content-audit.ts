@@ -47,6 +47,11 @@ export const contentAuditApi = {
     return apiGet(V1Routes.contentAuditGeneratedMap(projectId));
   },
 
+  /** Map of audited URL → { entryId, scheduledDate } for this project. */
+  scheduledMap(projectId: string): Promise<{ map: Record<string, { entryId: string; scheduledDate: string }>; error?: string }> {
+    return apiGet(V1Routes.contentAuditScheduledMap(projectId));
+  },
+
   clearHistory(projectId: string): Promise<{ success: boolean; error?: string }> {
     return apiDelete(V1Routes.contentAuditHistory(projectId));
   },

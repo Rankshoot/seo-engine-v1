@@ -12,7 +12,8 @@ CRITICAL RULES:
 5. Improve examples and statistics by integrating concrete, real-world examples/data if the analysis says they are missing or weak.
 6. Improve the meta description to contain the target keyword and be between 140-165 characters if it was flagged as poor or missing.
 7. Improve target keyword placement (e.g., in title, first 100 words, meta description) if the SEO issues flag them as missing.
-8. PRESERVE verified links. Do NOT invent new URLs. Do NOT copy competitor content verbatim.`,
+8. PRESERVE verified links. Do NOT invent new URLs. Do NOT copy competitor content verbatim.
+9. Do NOT use em-dashes (—) or en-dashes (–) to connect clauses or offset parenthetical phrases. These make the text look AI-generated; use standard commas, colons, parentheses, or break sentences into shorter ones.`,
   outputFormat: `OUTPUT FORMAT:
 You must respond with a JSON object matching the following TypeScript schema:
 {

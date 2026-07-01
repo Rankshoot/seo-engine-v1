@@ -8,6 +8,7 @@ import {
   fetchGoogleAdsKeywordsForSite,
   type CompetitorKeywordsForSiteRow,
   type DataForSEOTraceEntry,
+  type DiscoveredKeyword,
 } from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief, getBusinessBrief } from './brief-actions';
@@ -687,7 +688,18 @@ export async function discoverKeywords(projectId: string) {
 
   await supabaseAdmin
     .from('projects')
-    .update({ ahrefs_discovery_state: ahrefsDiscoveryState || {} })
+    .update({
+      ahrefs_discovery_state: ahrefsDiscoveryState || {},
+      // Server-side baseline for the "Project details have changed" warning —
+      // replaces the old client-only localStorage hash, which false-positived
+      // on any new browser/device that had never written it.
+      discovery_params_snapshot: {
+        domain: websiteDomain,
+        niche: nicheIndustry,
+        target_region: region,
+        target_language: language,
+      },
+    })
     .eq('id', projectId);
 
   return {
@@ -699,6 +711,142 @@ export async function discoverKeywords(projectId: string) {
     relevance: relevanceSummary,
   };
   });
+}
+
+export interface TrendingKeywordSuggestion {
+  keyword: string;
+  rationale: string;
+  volume: number | null;
+  kd: number | null;
+  cpc: number | null;
+  intent: string | null;
+}
+
+/**
+ * Claude-generated keyword ideas for the "Generate Keywords" content-calendar
+ * modal — 5 trending, diversified blog-keyword ideas grounded in the project's
+ * business brief, enriched with DataForSEO metrics. When `userPrompt` is
+ * given, it is weighted ABOVE the general business brief (explicit user intent
+ * wins over the passive brief context whenever they'd otherwise conflict).
+ */
+export async function generateTrendingKeywordsAction(
+  projectId: string,
+  opts: { userPrompt?: string } = {}
+): Promise<
+  | { success: true; keywords: TrendingKeywordSuggestion[] }
+  | { success: false; error: string }
+> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  try {
+    const { QuotaService } = await import('@/services/quota');
+    await QuotaService.checkQuota(user.id, 'ai_credits');
+  } catch (e: any) {
+    const isQuotaError = e?.name === 'QuotaExhaustedError' || e?.message?.includes('Quota exceeded');
+    return {
+      success: false,
+      error: isQuotaError
+        ? 'QUOTA_EXCEEDED:ai_credits — You have reached your AI credit limit. Upgrade your plan to generate more keyword ideas.'
+        : (e instanceof Error ? e.message : 'AI credit check failed'),
+    };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('*')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (pErr || !project) return { success: false, error: 'Project not found' };
+
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.success ? briefRes.brief : null;
+
+  const { data: existingRows } = await supabaseAdmin
+    .from('keywords')
+    .select('keyword')
+    .eq('project_id', projectId)
+    .limit(200);
+  const existingKeywords = (existingRows ?? [])
+    .map(r => String(r.keyword ?? '').trim())
+    .filter(Boolean);
+
+  const userPrompt = (opts.userPrompt || '').trim();
+
+  const businessContext = [
+    `Company: ${project.company || project.name || ''}`,
+    `Domain: ${project.domain || ''}`,
+    `Niche/industry: ${project.niche || 'unspecified'}`,
+    `Target audience: ${project.target_audience || 'unspecified'}`,
+    brief?.summary ? `Business summary: ${brief.summary}` : '',
+    brief?.products?.length ? `Products/offerings: ${brief.products.join(', ')}` : '',
+    brief?.usps?.length ? `Differentiators: ${brief.usps.join(', ')}` : '',
+    brief?.audiences?.length ? `Audience segments: ${brief.audiences.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+
+  const prompt = `You are an expert SEO strategist generating NEW blog keyword ideas for a content calendar.
+${userPrompt ? `\nPRIMARY INSTRUCTION — follow this first and most closely. It overrides the general business context below whenever they conflict:\n"${userPrompt}"\n` : ''}
+BUSINESS CONTEXT (background${userPrompt ? " — keep ideas relevant to this business, but the instruction above takes priority" : ''}):
+${businessContext || 'No business brief available yet.'}
+${existingKeywords.length ? `\nKeywords already covered on this project's calendar/discovery — do NOT repeat these or close variants:\n${existingKeywords.slice(0, 150).join(', ')}` : ''}
+
+Generate exactly 5 NEW, trending, and DIVERSE keyword ideas suitable for individual blog posts. Diversify across search intent (informational/commercial/navigational), funnel stage, and topical angle — never return 5 near-duplicates of the same phrase. Each must be a realistic phrase a real searcher would type.
+
+Respond with ONLY valid JSON, no markdown fences, no commentary:
+{"keywords":[{"keyword":"...","rationale":"one short sentence on why this is a good target right now"}]}`;
+
+  let raw: string;
+  try {
+    raw = await aiGenerate('keyword-ideation', prompt, {
+      temperature: 0.9,
+      maxOutputTokens: 1200,
+      jsonMode: true,
+      timeoutMs: 45000,
+      userId: user.id,
+      projectId,
+    });
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'AI generation failed. Please try again.' };
+  }
+
+  const { parseLooseJson } = await import('@/services/ai/providers/base');
+  const parsed = parseLooseJson<{ keywords?: Array<{ keyword?: string; rationale?: string }> }>(raw);
+  const ideas = (parsed?.keywords ?? [])
+    .map(k => ({ keyword: (k.keyword || '').trim(), rationale: (k.rationale || '').trim() }))
+    .filter(k => k.keyword)
+    .slice(0, 5);
+
+  if (!ideas.length) {
+    return { success: false, error: 'The AI did not return usable keyword ideas. Please try again.' };
+  }
+
+  // Metrics are best-effort — a DataForSEO hiccup shouldn't block showing ideas.
+  let metrics: Map<string, DiscoveredKeyword> = new Map();
+  try {
+    const { fetchKeywordMetrics } = await import('@/lib/dataforseo');
+    metrics = await fetchKeywordMetrics(
+      ideas.map(i => i.keyword),
+      project.target_region || 'us',
+      project.target_language || 'en'
+    );
+  } catch (e) {
+    console.warn('[generateTrendingKeywordsAction] metrics fetch failed:', e);
+  }
+
+  const keywords: TrendingKeywordSuggestion[] = ideas.map(i => {
+    const m = metrics.get(i.keyword.toLowerCase());
+    return {
+      keyword: i.keyword,
+      rationale: i.rationale,
+      volume: m?.volume ?? null,
+      kd: m?.kd ?? null,
+      cpc: m?.cpc ?? null,
+      intent: m?.intent ?? null,
+    };
+  });
+
+  return { success: true, keywords };
 }
 
 /**

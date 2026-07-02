@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { startBlogGeneration, getBlogGenerationOutcome } from "@/app/actions/blog-generation-actions";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -42,7 +43,6 @@ import {
   type CompetitorPage,
 } from "@/app/actions/premium-blog-actions";
 import { calendarApi } from "@/frontend/api/calendar";
-import { blogsApi } from "@/frontend/api/blogs";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
@@ -201,6 +201,10 @@ export default function BlogGeneratorPage() {
     return () => { isOnPageRef.current = false; };
   }, []);
 
+  // The durable generation job currently being watched by this page instance.
+  // Used to stop a stale poll loop and to resume progress after a refresh.
+  const activeJobIdRef = useRef<string | null>(null);
+
   const entryId = searchParams?.get("entryId");
   const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
 
@@ -229,12 +233,6 @@ export default function BlogGeneratorPage() {
 
   const keywordParam = searchParams?.get("keyword") || "";
   const { value: primaryKeyword, setValue: setPrimaryKeyword, isTyping: isKeywordTyping } = useKeywordParam(keywordParam);
-
-  // True when this generator was opened from an already-scheduled calendar
-  // entry (Generate button on the calendar / repair row). Used to warn the
-  // user that editing the keyword here retargets that calendar slot instead
-  // of silently generating the old keyword underneath their edits.
-  const isFromScheduledEntry = !!entryId;
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
@@ -403,6 +401,51 @@ export default function BlogGeneratorPage() {
     setPhase("review");
   };
 
+  // Poll a durable blog-generation job to completion, advancing the stage
+  // progress on a light timer (the job runs server-side, so there's no live
+  // SSE here). Reuses the caller's done/error handler for navigation/toast.
+  const watchBlogJob = useCallback(
+    async (
+      jobId: string,
+      stageOrder: readonly StreamStage[],
+      stageCumulative: number[],
+      onEvent: (e: { event: string; blogId?: string; message?: string }) => "done" | "error" | null
+    ) => {
+      activeJobIdRef.current = jobId;
+      let stageIdx = 0;
+      setStreamProgress(0.03);
+      const timer = setInterval(() => {
+        stageIdx = Math.min(stageIdx + 1, Math.max(0, stageOrder.length - 1));
+        setStreamProgress(Math.min(0.92, stageCumulative[stageIdx] ?? 0.9));
+      }, 11000);
+      const startedAt = Date.now();
+      try {
+        while (activeJobIdRef.current === jobId) {
+          if (Date.now() - startedAt > 6 * 60 * 1000) {
+            toast.error("Generation is taking longer than usual — it'll appear in Content History when it's done.");
+            setPhase("form");
+            setStreamProgress(undefined);
+            return;
+          }
+          await new Promise(r => setTimeout(r, 2500));
+          if (activeJobIdRef.current !== jobId) return;
+          const outcome = await getBlogGenerationOutcome(projectId!, jobId);
+          if (outcome.status === "done" && outcome.blogId) {
+            onEvent({ event: "done", blogId: outcome.blogId });
+            return;
+          }
+          if (outcome.status === "failed") {
+            onEvent({ event: "error", message: outcome.error || "Generation failed" });
+            return;
+          }
+        }
+      } finally {
+        clearInterval(timer);
+      }
+    },
+    [projectId]
+  );
+
   const runGeneration = async () => {
     const stages = buildStages(useDeepAnalysis);
     const stageOrder = useDeepAnalysis ? STAGE_ORDER_DEEP : STAGE_ORDER_BASE;
@@ -503,43 +546,29 @@ export default function BlogGeneratorPage() {
         return null;
       };
 
-      if (!finalEntryId) {
-        for await (const event of blogsApi.generateStreamDirect({
-          projectId: projectId!,
-          keyword: primaryKeyword,
-          topic,
-          audience,
-          tone: TONES.find(t => t.id === tone)?.label || tone,
-          goal,
-          ctaObjective,
-          secondaryKeywords,
-          wordCount,
-          ...advancedBody,
-        })) {
-          const result = handleEvent(event);
-          if (result === "done" || result === "error") return;
-        }
-      } else {
-        for await (const event of blogsApi.generateStream({
-          entryId: finalEntryId!,
-          keyword: primaryKeyword,
-          topic,
-          audience,
-          tone: TONES.find(t => t.id === tone)?.label || tone,
-          goal,
-          ctaObjective,
-          secondaryKeywords,
-          wordCount,
-          ...advancedBody,
-        })) {
-          const result = handleEvent(event);
-          if (result === "done" || result === "error") return;
-        }
+      // Enqueue a DURABLE generation job. It runs server-side, so it keeps going
+      // even if the user refreshes or navigates away (no more lost work / wasted
+      // credits on an accidental refresh). We then poll it to completion.
+      const started = await startBlogGeneration(projectId!, {
+        entryId: finalEntryId || undefined,
+        keyword: primaryKeyword,
+        topic,
+        audience,
+        tone: TONES.find(t => t.id === tone)?.label || tone,
+        goal,
+        ctaObjective,
+        secondaryKeywords,
+        wordCount,
+        label: topic || primaryKeyword,
+        ...advancedBody,
+      });
+      if (!started.success || !started.jobId) {
+        toast.error(started.error || "Could not start generation. Please try again.");
+        setPhase("form");
+        setStreamProgress(undefined);
+        return;
       }
-
-      toast.error("Generation ended unexpectedly. Please try again.");
-      setPhase("form");
-      setStreamProgress(undefined);
+      await watchBlogJob(started.jobId, stageOrder, stageCumulative, handleEvent);
     } catch {
       toast.error("An error occurred during generation");
       setPhase("form");
@@ -565,19 +594,6 @@ export default function BlogGeneratorPage() {
 
   return (
     <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
-      {phase === "form" && isFromScheduledEntry && (
-        <div className="mb-4 flex items-start gap-3 rounded-xl border border-brand-action/25 bg-brand-action/8 px-4 py-3">
-          <span className="mt-0.5 shrink-0 rounded-full border border-brand-action/40 bg-brand-action/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-action">
-            From calendar
-          </span>
-          <div className="min-w-0">
-            <p className="text-[12px] text-text-secondary leading-snug">
-              This brief was scheduled on your calendar as <span className="font-semibold text-text-primary">&ldquo;{keywordParam}&rdquo;</span>.
-              You can edit any field below — if you change the keyword, this calendar slot will be updated to match.
-            </p>
-          </div>
-        </div>
-      )}
       {isAuditFixMode && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-status-warning/30 bg-status-warning/8 px-4 py-3">
           <span className="mt-0.5 shrink-0 rounded-full border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-warning">

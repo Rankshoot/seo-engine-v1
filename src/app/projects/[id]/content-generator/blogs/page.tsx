@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -190,6 +190,16 @@ export default function BlogGeneratorPage() {
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+
+  // Tracks whether the user is still on this drafting page. Generation keeps
+  // running (the fetch stays alive through in-app navigation), so on completion
+  // we only auto-open the finished blog if the user is STILL here — otherwise we
+  // notify with a toast instead of yanking them off whatever page they moved to.
+  const isOnPageRef = useRef(true);
+  useEffect(() => {
+    isOnPageRef.current = true;
+    return () => { isOnPageRef.current = false; };
+  }, []);
 
   const entryId = searchParams?.get("entryId");
   const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
@@ -452,14 +462,36 @@ export default function BlogGeneratorPage() {
         } else if (event.event === "done") {
           setStreamProgress(1);
           setIsThinking(false);
-          toast.success("Blog generated!");
+          const blogHref = `${studioBase}/blogs/${event.blogId}`;
+          // No-refresh updates: refresh Content History + Calendar wherever they're mounted.
           void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
           dispatch(calendarRefreshBump({ projectId }));
-          router.push(`${studioBase}/blogs/${event.blogId}`);
+          if (isOnPageRef.current) {
+            // Still watching the drafting page → open the finished draft.
+            toast.success("Blog generated!");
+            router.push(blogHref);
+          } else {
+            // Navigated away while it generated → notify, never force-navigate.
+            toast.success(
+              (t) => (
+                <span className="flex items-center gap-3">
+                  <span>✅ Your blog{topic ? ` “${topic}”` : ""} is ready</span>
+                  <button
+                    type="button"
+                    onClick={() => { toast.dismiss(t.id); router.push(blogHref); }}
+                    className="rounded-md bg-brand-action px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
+                  >
+                    View blog
+                  </button>
+                </span>
+              ),
+              { duration: 8000 }
+            );
+          }
           return "done";
         } else if (event.event === "error") {
           toast.error(event.message || "Generation failed");

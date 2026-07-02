@@ -985,6 +985,11 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
                   <EmptyState
                     variant="card"
                     title={workspaceTab !== "all" ? "No opportunities match this tab" : "No opportunities match this view"}
+                    body={
+                      workspaceTab !== "all"
+                        ? "Try switching the filter dropdown in the toolbar (e.g., to All or Unscheduled) to view other competitor opportunities."
+                        : "No competitor opportunities found. Run a new benchmark or add competitor domains to find gaps."
+                    }
                   />
                 }
                 rowClassName={(g) => {

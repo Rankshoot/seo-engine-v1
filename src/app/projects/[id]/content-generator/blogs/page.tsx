@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { startBlogGeneration, getBlogGenerationOutcome } from "@/app/actions/blog-generation-actions";
+import { startBlogGeneration, getBlogGenerationOutcome, getActiveBlogGenerationJobs } from "@/app/actions/blog-generation-actions";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -446,6 +446,79 @@ export default function BlogGeneratorPage() {
     [projectId]
   );
 
+  // Completion / failure handlers shared by the live poll (runGeneration) and
+  // the resume-on-refresh effect below.
+  const finishGeneration = (blogId: string) => {
+    activeJobIdRef.current = null;
+    setStreamProgress(1);
+    setIsThinking(false);
+    const blogHref = `${studioBase}/blogs/${blogId}`;
+    void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+    void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+    void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+    void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+    void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+    dispatch(calendarRefreshBump({ projectId }));
+    if (isOnPageRef.current) {
+      toast.success("Blog generated!");
+      router.push(blogHref);
+    } else {
+      toast.success(
+        (t) => (
+          <span className="flex items-center gap-3">
+            <span>✅ Your blog{topic ? ` “${topic}”` : ""} is ready</span>
+            <button
+              type="button"
+              onClick={() => { toast.dismiss(t.id); router.push(blogHref); }}
+              className="rounded-md bg-brand-action px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
+            >
+              View blog
+            </button>
+          </span>
+        ),
+        { duration: 8000 }
+      );
+    }
+  };
+
+  const failGeneration = (message: string) => {
+    activeJobIdRef.current = null;
+    toast.error(message || "Generation failed");
+    setPhase("form");
+    setIsThinking(false);
+    setStreamProgress(undefined);
+  };
+
+  // Keep the latest handlers in a ref so the mount-only resume effect always
+  // calls the current versions without re-running every render.
+  const genCbRef = useRef({ finish: finishGeneration, fail: failGeneration });
+  useEffect(() => { genCbRef.current = { finish: finishGeneration, fail: failGeneration }; });
+
+  // Resume after refresh: if a generation job is still running for this
+  // entry/keyword, jump back into the "generating" view and re-attach the poll,
+  // so a mid-generation refresh reconnects instead of showing an empty form.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await getActiveBlogGenerationJobs(projectId);
+      if (cancelled || !res.success || res.jobs.length === 0) return;
+      if (activeJobIdRef.current) return; // already generating in this session
+      const job = (entryId ? res.jobs.find(j => j.entryId === entryId) : undefined) || res.jobs[0];
+      if (!job || cancelled) return;
+      setPhase("generating");
+      const stages = buildStages(false);
+      setStreamStages(stages.map(s => ({ ...s })));
+      await watchBlogJob(job.jobId, STAGE_ORDER_BASE, buildCumulative(stages), (e) => {
+        if (e.event === "done" && e.blogId) { genCbRef.current.finish(e.blogId); return "done"; }
+        if (e.event === "error") { genCbRef.current.fail(e.message || "Generation failed"); return "error"; }
+        return null;
+      });
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, entryId]);
+
   const runGeneration = async () => {
     const stages = buildStages(useDeepAnalysis);
     const stageOrder = useDeepAnalysis ? STAGE_ORDER_DEEP : STAGE_ORDER_BASE;
@@ -503,44 +576,10 @@ export default function BlogGeneratorPage() {
           setIsThinking(false);
           return null;
         } else if (event.event === "done") {
-          setStreamProgress(1);
-          setIsThinking(false);
-          const blogHref = `${studioBase}/blogs/${event.blogId}`;
-          // No-refresh updates: refresh Content History + Calendar wherever they're mounted.
-          void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-          dispatch(calendarRefreshBump({ projectId }));
-          if (isOnPageRef.current) {
-            // Still watching the drafting page → open the finished draft.
-            toast.success("Blog generated!");
-            router.push(blogHref);
-          } else {
-            // Navigated away while it generated → notify, never force-navigate.
-            toast.success(
-              (t) => (
-                <span className="flex items-center gap-3">
-                  <span>✅ Your blog{topic ? ` “${topic}”` : ""} is ready</span>
-                  <button
-                    type="button"
-                    onClick={() => { toast.dismiss(t.id); router.push(blogHref); }}
-                    className="rounded-md bg-brand-action px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
-                  >
-                    View blog
-                  </button>
-                </span>
-              ),
-              { duration: 8000 }
-            );
-          }
+          if (event.blogId) finishGeneration(event.blogId);
           return "done";
         } else if (event.event === "error") {
-          toast.error(event.message || "Generation failed");
-          setPhase("form");
-          setIsThinking(false);
-          setStreamProgress(undefined);
+          failGeneration(event.message || "Generation failed");
           return "error";
         }
         return null;

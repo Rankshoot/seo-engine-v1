@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getActiveBlogGenerationJobs } from "@/app/actions/blog-generation-actions";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { Button, EmptyState } from "@/components/common";
 import {
@@ -209,6 +210,37 @@ const SkeletonRow = memo(function SkeletonRow() {
   );
 });
 
+/**
+ * Live "Generating…" row for an in-flight background generation job. Shows the
+ * topic/keyword so the user knows exactly what's being produced, and is replaced
+ * by the real row (no refresh) the moment the job completes.
+ */
+const GeneratingRow = memo(function GeneratingRow({ label }: { label: string }) {
+  return (
+    <tr className="bg-brand-action/[0.04]">
+      <td className="px-3 py-3.5 text-center align-middle">
+        <span className="inline-block w-3.5 h-3.5 animate-spin rounded-full border-2 border-border-subtle border-t-brand-action" />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <span className="inline-flex items-center rounded-full bg-surface-tertiary/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">Blog</span>
+      </td>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="text-[13px] font-medium text-text-primary truncate max-w-[22rem]">{label}</div>
+        <div className="text-[11px] text-brand-action mt-0.5">Generating…</div>
+      </td>
+      <td className="px-4 py-3.5 align-middle"><div className="h-3.5 w-24 bg-surface-tertiary rounded animate-pulse" /></td>
+      <td className="px-4 py-3.5 align-middle">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-action/10 px-2 py-0.5 text-[11px] font-semibold text-brand-action">
+          <span className="w-1.5 h-1.5 rounded-full bg-brand-action animate-pulse" /> Generating
+        </span>
+      </td>
+      <td className="px-4 py-3.5 align-middle"><div className="h-3.5 w-8 bg-surface-tertiary rounded animate-pulse" /></td>
+      <td className="px-4 py-3.5 align-middle"><div className="h-3.5 w-16 bg-surface-tertiary rounded animate-pulse" /></td>
+      <td className="px-4 py-3.5 align-middle text-right"><div className="h-8 w-16 bg-surface-tertiary rounded-full ml-auto animate-pulse" /></td>
+    </tr>
+  );
+});
+
 interface HistoryTableBodyProps {
   rows: ContentStudioHistoryRow[];
   offset: number;
@@ -219,6 +251,8 @@ interface HistoryTableBodyProps {
   onScheduleConfirm: (row: ContentStudioHistoryRow, date: string) => Promise<void>;
   onUnschedule: (row: ContentStudioHistoryRow) => Promise<void>;
   isLoadingMore?: boolean;
+  /** In-flight generation jobs, rendered as "Generating…" rows above the list. */
+  generatingRows?: { jobId: string; label: string }[];
 }
 
 const HistoryTableBody = memo(function HistoryTableBody({
@@ -231,9 +265,13 @@ const HistoryTableBody = memo(function HistoryTableBody({
   onScheduleConfirm,
   onUnschedule,
   isLoadingMore,
+  generatingRows,
 }: HistoryTableBodyProps) {
   return (
     <tbody className="divide-y divide-border-subtle">
+      {generatingRows?.map((g) => (
+        <GeneratingRow key={`gen-${g.jobId}`} label={g.label} />
+      ))}
       {rows.map((row, i) => (
         <HistoryRow
           key={row.id}
@@ -407,6 +445,28 @@ export function HistoryTab() {
     }
   }, [data, page]);
 
+  // Live blog-generation jobs → a "Generating…" row per active job, polled so it
+  // appears and updates with no manual refresh. When a job finishes (the count
+  // drops), pull the freshly-saved blog into the list so the skeleton is
+  // seamlessly replaced by the real row. Multiple concurrent jobs = multiple rows.
+  const { data: genJobsData } = useQuery({
+    queryKey: ["blogGenerateJobs", projectId],
+    queryFn: () => getActiveBlogGenerationJobs(projectId),
+    enabled: !!projectId,
+    ...DEFAULT_QUERY_OPTIONS,
+    refetchInterval: 3000,
+  });
+  const activeGenJobs = genJobsData?.success ? genJobsData.jobs : [];
+  const prevGenCountRef = useRef(0);
+  useEffect(() => {
+    if (activeGenJobs.length < prevGenCountRef.current) {
+      void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+    }
+    prevGenCountRef.current = activeGenJobs.length;
+  }, [activeGenJobs.length, projectId, queryClient]);
+
   const totalCount = data?.success ? data.total : 0;
   const counts = data?.success ? data.counts : { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -550,11 +610,11 @@ export function HistoryTab() {
 
       </div>
 
-      {isLoading || (allRows.length === 0 && isFetching) ? (
+      {(isLoading || (allRows.length === 0 && isFetching)) && activeGenJobs.length === 0 ? (
         <div className="flex-1 min-h-0 rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <TableSkeleton rows={8} columns={6} />
         </div>
-      ) : allRows.length === 0 ? (
+      ) : allRows.length === 0 && activeGenJobs.length === 0 ? (
         <div className="flex-1 min-h-0">
           <EmptyState
             title={isEmptyStateForNoContent ? "No content generated yet" : "No assets match these filters"}
@@ -598,6 +658,7 @@ export function HistoryTab() {
                 onScheduleConfirm={handleScheduleConfirm}
                 onUnschedule={handleUnschedule}
                 isLoadingMore={isFetching && page > 1}
+                generatingRows={activeGenJobs}
               />
             </table>
             {/* Sentinel element for infinite scroll */}

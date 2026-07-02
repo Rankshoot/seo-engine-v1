@@ -10,31 +10,24 @@ import { calendarApi } from "@/frontend/api/calendar";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 
+export type SuggestedContentType = "blog" | "ebook" | "whitepaper" | "linkedin";
+
 export interface TrendingKeywordSuggestion {
   keyword: string;
   rationale: string;
-  volume: number | null;
-  kd: number | null;
-  cpc: number | null;
-  intent: string | null;
+  /** AI's recommended content format for this keyword. */
+  recommendedType: SuggestedContentType;
 }
+
+const CONTENT_TYPE_OPTIONS: { value: SuggestedContentType; label: string }[] = [
+  { value: "blog", label: "Blog article" },
+  { value: "ebook", label: "Ebook" },
+  { value: "whitepaper", label: "Whitepaper" },
+  { value: "linkedin", label: "LinkedIn post" },
+];
 
 type Phase = "prompt" | "results";
 type ItemState = "idle" | "scheduling" | "scheduled" | "error";
-
-function fmtVolume(v: number | null): string {
-  if (v == null || v <= 0) return "—";
-  if (v >= 10000) return `${Math.round(v / 1000)}K/mo`;
-  if (v >= 1000) return `${(v / 1000).toFixed(1)}K/mo`;
-  return `${v}/mo`;
-}
-
-function kdInfo(kd: number | null): { label: string; className: string } | null {
-  if (kd == null) return null;
-  if (kd < 30) return { label: "Easy", className: "text-status-success" };
-  if (kd < 60) return { label: "Medium", className: "text-status-warning" };
-  return { label: "Hard", className: "text-brand-coral" };
-}
 
 export function GenerateKeywordsModal({
   projectId,
@@ -58,6 +51,8 @@ export function GenerateKeywordsModal({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [itemStates, setItemStates] = useState<Record<string, ItemState>>({});
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
+  // Per-keyword chosen content type (seeded from the AI's recommendedType).
+  const [contentTypes, setContentTypes] = useState<Record<string, SuggestedContentType>>({});
   const [scheduling, setScheduling] = useState(false);
 
   const generateButtonRef = useRef<HTMLButtonElement>(null);
@@ -73,6 +68,7 @@ export function GenerateKeywordsModal({
     setSelected(new Set());
     setItemStates({});
     setItemErrors({});
+    setContentTypes({});
     setScheduling(false);
 
     // Focus the generate button to prevent autofocusing the optional textarea
@@ -89,6 +85,7 @@ export function GenerateKeywordsModal({
       if (res.success) {
         setSuggestions(res.keywords);
         setSelected(new Set(res.keywords.map(k => k.keyword)));
+        setContentTypes(Object.fromEntries(res.keywords.map(k => [k.keyword, k.recommendedType])));
         setItemStates({});
         setItemErrors({});
         setPhase("results");
@@ -132,10 +129,7 @@ export function GenerateKeywordsModal({
           keyword: s.keyword,
           source: "ai_keyword_generator",
           page: "calendar",
-          volume: s.volume ?? undefined,
-          kd: s.kd ?? undefined,
-          cpc: s.cpc ?? undefined,
-          intent: s.intent ?? undefined,
+          contentType: contentTypes[s.keyword] ?? s.recommendedType,
         });
         if (res.success) {
           setItemStates(prev => ({ ...prev, [s.keyword]: "scheduled" }));
@@ -257,7 +251,7 @@ export function GenerateKeywordsModal({
           {suggestions.map(s => {
             const state = itemStates[s.keyword] ?? "idle";
             const isSelected = selected.has(s.keyword);
-            const kd = kdInfo(s.kd);
+            const chosenType = contentTypes[s.keyword] ?? s.recommendedType;
             return (
               <div
                 key={s.keyword}
@@ -300,19 +294,24 @@ export function GenerateKeywordsModal({
                     )}
                   </div>
                   <p className="mt-0.5 text-[12px] leading-snug text-text-tertiary">{s.rationale}</p>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                    <span className="text-text-secondary">
-                      Vol <span className="font-mono font-medium">{fmtVolume(s.volume)}</span>
-                    </span>
-                    {kd && (
-                      <span className={`font-semibold ${kd.className}`}>KD {s.kd} · {kd.label}</span>
-                    )}
-                    {s.cpc != null && s.cpc > 0 && (
-                      <span className="text-text-secondary">
-                        CPC <span className="font-mono font-medium">${s.cpc.toFixed(2)}</span>
-                      </span>
-                    )}
-                    {s.intent && <span className="capitalize text-text-tertiary">{s.intent}</span>}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <label className="text-[11px] font-medium text-text-tertiary">Schedule as</label>
+                    <select
+                      value={chosenType}
+                      onChange={e =>
+                        setContentTypes(prev => ({ ...prev, [s.keyword]: e.target.value as SuggestedContentType }))
+                      }
+                      disabled={state === "scheduling" || state === "scheduled"}
+                      aria-label={`Content type for ${s.keyword}`}
+                      className="rounded-md border border-border-subtle bg-surface-primary px-2 py-1 text-[12px] font-medium text-text-primary focus:border-brand-action focus:outline-none disabled:opacity-60"
+                    >
+                      {CONTENT_TYPE_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                          {opt.value === s.recommendedType ? "  ✨ AI pick" : ""}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   {state === "error" && itemErrors[s.keyword] && (
                     <p className="mt-1 text-[11px] text-status-danger">{itemErrors[s.keyword]}</p>

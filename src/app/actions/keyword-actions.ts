@@ -8,7 +8,6 @@ import {
   fetchGoogleAdsKeywordsForSite,
   type CompetitorKeywordsForSiteRow,
   type DataForSEOTraceEntry,
-  type DiscoveredKeyword,
 } from '@/lib/dataforseo';
 import { Keyword, KeywordStatus } from '@/lib/types';
 import { generateBusinessBrief, getBusinessBrief } from './brief-actions';
@@ -713,13 +712,13 @@ export async function discoverKeywords(projectId: string) {
   });
 }
 
+export type SuggestedContentType = 'blog' | 'ebook' | 'whitepaper' | 'linkedin';
+
 export interface TrendingKeywordSuggestion {
   keyword: string;
   rationale: string;
-  volume: number | null;
-  kd: number | null;
-  cpc: number | null;
-  intent: string | null;
+  /** AI's recommended content type for this keyword (drives the modal's dropdown default). */
+  recommendedType: SuggestedContentType;
 }
 
 /**
@@ -772,6 +771,24 @@ export async function generateTrendingKeywordsAction(
     .map(r => String(r.keyword ?? '').trim())
     .filter(Boolean);
 
+  // Titles of content already published on the site (from the sitemap the user
+  // configures in Settings). Feeding these lets the AI see what already exists
+  // so it proposes genuinely NEW, complementary topics instead of re-suggesting
+  // things the site already ranks for. Best-effort — degrade silently if the
+  // sitemap table isn't populated yet.
+  let postedTitles: string[] = [];
+  try {
+    const { data: sitemapRows } = await supabaseAdmin
+      .from('project_sitemap_urls')
+      .select('title, path, kind')
+      .eq('project_id', projectId)
+      .eq('kind', 'blog')
+      .limit(400);
+    postedTitles = (sitemapRows ?? [])
+      .map(r => String((r as { title?: string }).title ?? '').trim())
+      .filter(t => t.length > 3);
+  } catch { /* sitemap not configured / table absent — no-op */ }
+
   const userPrompt = (opts.userPrompt || '').trim();
 
   const businessContext = [
@@ -790,11 +807,16 @@ ${userPrompt ? `\nPRIMARY INSTRUCTION — follow this first and most closely. It
 BUSINESS CONTEXT (background${userPrompt ? " — keep ideas relevant to this business, but the instruction above takes priority" : ''}):
 ${businessContext || 'No business brief available yet.'}
 ${existingKeywords.length ? `\nKeywords already covered on this project's calendar/discovery — do NOT repeat these or close variants:\n${existingKeywords.slice(0, 150).join(', ')}` : ''}
+${postedTitles.length ? `\nContent ALREADY PUBLISHED on this site (from its sitemap) — do NOT suggest keywords that overlap these topics. Instead, propose fresh, complementary angles that expand the same themes the site clearly invests in:\n${postedTitles.slice(0, 150).join(' | ')}` : ''}
 
-Generate exactly 5 NEW, trending, and DIVERSE keyword ideas suitable for individual blog posts. Diversify across search intent (informational/commercial/navigational), funnel stage, and topical angle — never return 5 near-duplicates of the same phrase. Each must be a realistic phrase a real searcher would type.
+Generate exactly 5 NEW, DIVERSE keyword ideas. Requirements:
+- Prioritise questions and phrasings people actually ask AI assistants (ChatGPT, Perplexity, Google AI Overviews) — favour high AEO/GEO potential (clear, answerable, entity-rich queries) over raw search volume.
+- Stay in the same topical territory the site already publishes in (so they fit the brand), but never duplicate an existing keyword or published title above — always something newer.
+- Diversify across search intent (informational/commercial/navigational), funnel stage, and angle — never 5 near-duplicates.
+- For each keyword, recommend the best content format: "blog" (most topics), "ebook" or "whitepaper" (deep, download-worthy or data-heavy topics), or "linkedin" (short opinion/thought-leadership angles).
 
 Respond with ONLY valid JSON, no markdown fences, no commentary:
-{"keywords":[{"keyword":"...","rationale":"one short sentence on why this is a good target right now"}]}`;
+{"keywords":[{"keyword":"...","rationale":"one short sentence on why this is a good target right now","recommendedType":"blog|ebook|whitepaper|linkedin"}]}`;
 
   let raw: string;
   try {
@@ -810,42 +832,32 @@ Respond with ONLY valid JSON, no markdown fences, no commentary:
     return { success: false, error: e instanceof Error ? e.message : 'AI generation failed. Please try again.' };
   }
 
+  const SUPPORTED_TYPES: SuggestedContentType[] = ['blog', 'ebook', 'whitepaper', 'linkedin'];
+  const normalizeType = (t: unknown): SuggestedContentType => {
+    const v = String(t ?? '').trim().toLowerCase();
+    return (SUPPORTED_TYPES as string[]).includes(v) ? (v as SuggestedContentType) : 'blog';
+  };
+
   const { parseLooseJson } = await import('@/services/ai/providers/base');
-  const parsed = parseLooseJson<{ keywords?: Array<{ keyword?: string; rationale?: string }> }>(raw);
-  const ideas = (parsed?.keywords ?? [])
-    .map(k => ({ keyword: (k.keyword || '').trim(), rationale: (k.rationale || '').trim() }))
+  const parsed = parseLooseJson<{
+    keywords?: Array<{ keyword?: string; rationale?: string; recommendedType?: string }>;
+  }>(raw);
+  const keywords: TrendingKeywordSuggestion[] = (parsed?.keywords ?? [])
+    .map(k => ({
+      keyword: (k.keyword || '').trim(),
+      rationale: (k.rationale || '').trim(),
+      recommendedType: normalizeType(k.recommendedType),
+    }))
     .filter(k => k.keyword)
     .slice(0, 5);
 
-  if (!ideas.length) {
+  if (!keywords.length) {
     return { success: false, error: 'The AI did not return usable keyword ideas. Please try again.' };
   }
 
-  // Metrics are best-effort — a DataForSEO hiccup shouldn't block showing ideas.
-  let metrics: Map<string, DiscoveredKeyword> = new Map();
-  try {
-    const { fetchKeywordMetrics } = await import('@/lib/dataforseo');
-    metrics = await fetchKeywordMetrics(
-      ideas.map(i => i.keyword),
-      project.target_region || 'us',
-      project.target_language || 'en'
-    );
-  } catch (e) {
-    console.warn('[generateTrendingKeywordsAction] metrics fetch failed:', e);
-  }
-
-  const keywords: TrendingKeywordSuggestion[] = ideas.map(i => {
-    const m = metrics.get(i.keyword.toLowerCase());
-    return {
-      keyword: i.keyword,
-      rationale: i.rationale,
-      volume: m?.volume ?? null,
-      kd: m?.kd ?? null,
-      cpc: m?.cpc ?? null,
-      intent: m?.intent ?? null,
-    };
-  });
-
+  // No paid keyword-metrics lookup here by design — the suggestion step shows
+  // the keyword + its rationale + a recommended content type only. Volume/KD are
+  // deliberately omitted so we don't spend DataForSEO credits at ideation time.
   return { success: true, keywords };
 }
 

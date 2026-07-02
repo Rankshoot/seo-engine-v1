@@ -37,7 +37,8 @@ export const keywordsApi = {
     return apiPost(V1Routes.keywordsLoadMore(projectId), { offset, limit });
   },
 
-  /** Claude-generated trending keyword ideas (5, diversified) with DataForSEO metrics. */
+  /** Claude-generated trending keyword ideas (5, diversified) — keyword +
+   *  rationale + an AI-recommended content type. No paid volume lookup. */
   generateTrending(
     projectId: string,
     opts: { userPrompt?: string } = {}
@@ -47,10 +48,7 @@ export const keywordsApi = {
         keywords: Array<{
           keyword: string;
           rationale: string;
-          volume: number | null;
-          kd: number | null;
-          cpc: number | null;
-          intent: string | null;
+          recommendedType: "blog" | "ebook" | "whitepaper" | "linkedin";
         }>;
       }
     | { success: false; error: string }

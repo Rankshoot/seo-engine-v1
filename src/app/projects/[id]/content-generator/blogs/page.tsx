@@ -225,9 +225,6 @@ export default function BlogGeneratorPage() {
   // user that editing the keyword here retargets that calendar slot instead
   // of silently generating the old keyword underneath their edits.
   const isFromScheduledEntry = !!entryId;
-  const keywordEditedFromSchedule =
-    isFromScheduledEntry && !isKeywordTyping && !!keywordParam.trim() &&
-    primaryKeyword.trim().toLowerCase() !== keywordParam.trim().toLowerCase();
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
@@ -542,19 +539,10 @@ export default function BlogGeneratorPage() {
             From calendar
           </span>
           <div className="min-w-0">
-            {keywordEditedFromSchedule ? (
-              <p className="text-[12px] font-medium text-text-primary leading-snug">
-                You changed the keyword from <span className="font-semibold">&ldquo;{keywordParam}&rdquo;</span> to{" "}
-                <span className="font-semibold text-brand-action">&ldquo;{primaryKeyword}&rdquo;</span>. Generating now will
-                retarget this calendar slot to the new keyword — the &ldquo;{keywordParam}&rdquo; brief will be replaced,
-                not kept separately.
-              </p>
-            ) : (
-              <p className="text-[12px] text-text-secondary leading-snug">
-                This brief was scheduled on your calendar as <span className="font-semibold text-text-primary">&ldquo;{keywordParam}&rdquo;</span>.
-                You can edit any field below — if you change the keyword, this calendar slot will be updated to match.
-              </p>
-            )}
+            <p className="text-[12px] text-text-secondary leading-snug">
+              This brief was scheduled on your calendar as <span className="font-semibold text-text-primary">&ldquo;{keywordParam}&rdquo;</span>.
+              You can edit any field below — if you change the keyword, this calendar slot will be updated to match.
+            </p>
           </div>
         </div>
       )}

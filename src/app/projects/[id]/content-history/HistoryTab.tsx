@@ -16,7 +16,8 @@ import { cn } from "@/lib/cn";
 import { getContentPreviewUrl } from "@/lib/content-routing";
 import { calendarApi } from "@/frontend/api/calendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
-import { unscheduleContentAction } from "@/app/actions/content-actions";
+import { Dialog } from "@/components/common/dialogs/Dialog";
+import { deleteContentAssetAction, unscheduleContentAction } from "@/app/actions/content-actions";
 import toast from "react-hot-toast";
 
 type SortKey = "updated" | "created" | "words" | "title";
@@ -51,6 +52,7 @@ interface HistoryRowProps {
   savingRowId: string | null;
   onScheduleConfirm: (row: ContentStudioHistoryRow, date: string) => Promise<void>;
   onUnschedule: (row: ContentStudioHistoryRow) => Promise<void>;
+  onDelete: (row: ContentStudioHistoryRow) => void;
 }
 
 const HistoryRow = memo(function HistoryRow({
@@ -62,6 +64,7 @@ const HistoryRow = memo(function HistoryRow({
   savingRowId,
   onScheduleConfirm,
   onUnschedule,
+  onDelete,
 }: HistoryRowProps) {
   const [open, setOpen] = useState(false);
 
@@ -171,6 +174,19 @@ const HistoryRow = memo(function HistoryRow({
           >
             View
           </ProjectNavLink>
+          <button
+            type="button"
+            onClick={() => onDelete(row)}
+            disabled={savingRowId === row.id}
+            aria-label={`Delete ${row.title}`}
+            className="inline-flex items-center justify-center gap-1 rounded-full border border-border-subtle/50 bg-transparent px-3 py-1 text-[11px] font-medium text-text-tertiary transition-colors hover:border-brand-coral/30 hover:bg-brand-coral/10 hover:text-brand-coral disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            title="Delete content"
+          >
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            Delete
+          </button>
         </div>
       </td>
     </tr>
@@ -218,6 +234,7 @@ interface HistoryTableBodyProps {
   savingRowId: string | null;
   onScheduleConfirm: (row: ContentStudioHistoryRow, date: string) => Promise<void>;
   onUnschedule: (row: ContentStudioHistoryRow) => Promise<void>;
+  onDelete: (row: ContentStudioHistoryRow) => void;
   isLoadingMore?: boolean;
 }
 
@@ -230,6 +247,7 @@ const HistoryTableBody = memo(function HistoryTableBody({
   savingRowId,
   onScheduleConfirm,
   onUnschedule,
+  onDelete,
   isLoadingMore,
 }: HistoryTableBodyProps) {
   return (
@@ -245,6 +263,7 @@ const HistoryTableBody = memo(function HistoryTableBody({
           savingRowId={savingRowId}
           onScheduleConfirm={onScheduleConfirm}
           onUnschedule={onUnschedule}
+          onDelete={onDelete}
         />
       ))}
       {isLoadingMore && (
@@ -263,6 +282,8 @@ export function HistoryTab() {
   const queryClient = useQueryClient();
 
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [rowToDelete, setRowToDelete] = useState<ContentStudioHistoryRow | null>(null);
 
   // Load calendar entries to populate the CalendarDatePicker and avoid date collisions
   const { data: calendarData } = useQuery({
@@ -332,6 +353,37 @@ export function HistoryTab() {
       setSavingRowId(null);
     }
   };
+
+  const handleDelete = useCallback((row: ContentStudioHistoryRow) => {
+    setRowToDelete(row);
+    setDeleteConfirmOpen(true);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!rowToDelete || !projectId) return;
+    setSavingRowId(rowToDelete.id);
+    setDeleteConfirmOpen(false);
+    try {
+      const res = await deleteContentAssetAction(projectId, rowToDelete.id, rowToDelete.entry_id);
+      if (res.success) {
+        toast.success(`"${rowToDelete.title}" deleted`);
+        setAllRows((prev) => prev.filter((r) => r.id !== rowToDelete.id));
+        void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+      } else {
+        toast.error(res.error || "Could not delete content");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not delete content");
+    } finally {
+      setSavingRowId(null);
+      setRowToDelete(null);
+    }
+  }, [rowToDelete, projectId, queryClient]);
 
   const [activeType, setActiveType] = useState<TypeFilter>("all");
   const [typeDropdownOpen, setTypeDropdownOpen] = useState(false);
@@ -597,6 +649,7 @@ export function HistoryTab() {
                 savingRowId={savingRowId}
                 onScheduleConfirm={handleScheduleConfirm}
                 onUnschedule={handleUnschedule}
+                onDelete={handleDelete}
                 isLoadingMore={isFetching && page > 1}
               />
             </table>
@@ -618,6 +671,35 @@ export function HistoryTab() {
           </div>
         </div>
       )}
+
+      <Dialog
+        open={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        size="sm"
+        title="Delete content"
+        description={`Are you sure you want to delete "${rowToDelete?.title}"? The linked calendar entry will remain and the keyword will show Generate again.`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setDeleteConfirmOpen(false)}
+              className="inline-flex items-center justify-center rounded-full border border-border-subtle bg-surface-secondary px-5 py-2 text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmDelete}
+              disabled={savingRowId !== null}
+              className="inline-flex items-center justify-center rounded-full bg-brand-coral px-5 py-2 text-[13px] font-medium text-brand-on-coral transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {savingRowId ? "Deleting..." : "Delete"}
+            </button>
+          </>
+        }
+      >
+        <></>
+      </Dialog>
     </div>
   );
 }

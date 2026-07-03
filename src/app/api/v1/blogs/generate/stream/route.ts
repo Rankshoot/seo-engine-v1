@@ -648,6 +648,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           const verdict = validateGeneratedContent(candidate.finalContent, {
             type: "blog",
             metaDescription: candidate.blogData.meta_description,
+            focusKeyword: entry.focus_keyword,
           });
           lastValidation = verdict;
 

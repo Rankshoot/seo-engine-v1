@@ -396,6 +396,50 @@ interface SanitizeOpts {
  *   4. Returns a fresh `external_links` / `internal_links` array reflecting
  *      what's actually still in the content.
  */
+/**
+ * Remove writer/designer-facing meta notes that must never appear in a
+ * published post (e.g. "> Infographic suggestion: ...", "[infographic]").
+ */
+function stripMetaSuggestionNotes(md: string): string {
+  return md
+    .split('\n')
+    .filter(line => {
+      const t = line.replace(/^\s*>?\s*/, '').trim().toLowerCase();
+      return !(
+        t.startsWith('infographic suggestion') ||
+        t.startsWith('infographic:') ||
+        t.startsWith('suggested infographic') ||
+        t.startsWith('[infographic')
+      );
+    })
+    .join('\n');
+}
+
+/**
+ * Repair malformed GitHub-flavoured-markdown table separator rows. LLMs
+ * sometimes emit a broken separator like `|, -|, -|, -|`, which stops the row
+ * from being recognised as a table so the whole thing renders as raw pipes.
+ * We detect a pipes/dashes/colons-only row that follows a header row and
+ * rebuild it as a valid `| --- | --- | ... |` matching the header's columns.
+ */
+function repairMarkdownTables(md: string): string {
+  const lines = md.split('\n');
+  for (let i = 1; i < lines.length; i++) {
+    const compact = lines[i].replace(/\s/g, '');
+    if (!compact || !compact.includes('-') || (compact.match(/\|/g)?.length ?? 0) < 2) continue;
+    // Only characters a separator row can legitimately (or wrongly) contain.
+    if (!/^[|:\-,]+$/.test(compact)) continue;
+    // Already a valid separator? Leave it alone.
+    if (/^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(lines[i])) continue;
+    const header = lines[i - 1];
+    if (!header || !header.includes('|')) continue;
+    const cols = header.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').length;
+    if (cols < 1) continue;
+    lines[i] = '| ' + Array.from({ length: cols }, () => '---').join(' | ') + ' |';
+  }
+  return lines.join('\n');
+}
+
 export async function sanitizeBlogContent(
   markdown: string,
   opts: SanitizeOpts = {}
@@ -405,6 +449,11 @@ export async function sanitizeBlogContent(
 
   // Phase 0 — empty `<a name|id>` tags (no href) leak as visible text in Markdown preview.
   let next = stripEmptyFragmentAnchorTags(markdown);
+
+  // Phase 0b — remove writer-facing meta notes ("Infographic suggestion", …)
+  // and repair malformed markdown tables so the draft is publish-ready.
+  next = stripMetaSuggestionNotes(next);
+  next = repairMarkdownTables(next);
 
   // Phase 1 — strip placeholder images. These are LLM artifacts, never real.
   next = next.replace(

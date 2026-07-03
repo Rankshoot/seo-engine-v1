@@ -322,9 +322,8 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
    - Include exactly 2-3 relevant image placeholder suggestions inside \`contentMarkdown\` exactly in this format:
      ![Suggested image: Description of a highly contextual image matching the paragraph](image-placeholder)
      (e.g., ![Suggested image: HR team reviewing recruitment dashboard](image-placeholder))
-   - Include exactly 1 relevant infographic suggestion block where it adds workflow value in this format:
-     > Infographic suggestion: Description of the infographic flow/process here.
-     (e.g., > Infographic suggestion: A 5-step RPO hiring workflow from requirement intake to onboarding.)
+   - Do NOT write "Infographic suggestion" notes, "[infographic]" placeholders, or any other meta note addressed to the writer/designer. The output must be the finished, publish-ready article — never a suggestion or instruction to add something later.
+   - MARKDOWN TABLES: when you include a table, it MUST be valid GitHub-flavoured markdown — a header row, then a separator row of ONLY pipes and dashes (e.g. \`| --- | --- | --- |\`, one cell per column), then the data rows. Every row must start and end with \`|\`. Never write a malformed separator like \`|, -|, -|\`. If you cannot produce a clean table, use a bulleted list instead.
 
 7. NATURAL INTERLINKING & "ALSO READ" CALLOUTS:
    - Target 3–7 internal links total (NEVER more than 7), including at least one product/solution/landing page when the pool offers one. Use verified internal links only from the provided INTERNAL LINKING pool. Do NOT invent internal URLs, slugs, or pages.

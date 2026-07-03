@@ -34,6 +34,7 @@ import { toast } from "react-hot-toast";
 import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
 import { useUserQuota } from "@/hooks/useUserQuota";
+import { EmptyState } from "@/components/common";
 
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
@@ -1124,10 +1125,11 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
             controls={renderControls()}
             emptyState={
               keywords.length > 0 ? (
-                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
-                  <p className="text-[14px] font-medium text-text-secondary">No keywords match this filter.</p>
-                  <p className="mt-1 text-[12px] text-text-tertiary">Switch to another tab to see keywords.</p>
-                </div>
+                <EmptyState
+                  variant="card"
+                  title="No keywords match this filter"
+                  body="Try switching the filter dropdown in the toolbar (e.g., to All or Unscheduled) to view other discovered keywords."
+                />
               ) : (
                 <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
                   <div className="mb-6 flex justify-center">

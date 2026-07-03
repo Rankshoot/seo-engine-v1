@@ -75,6 +75,12 @@ export async function POST(req: Request) {
 
       let wasStalled = false;
       let stallTimeoutId: NodeJS.Timeout | undefined;
+      // True when the user changed the keyword from what was scheduled.
+      // When set, the generated blog is treated as standalone — the original
+      // calendar entry is left completely untouched (stays "scheduled" for its
+      // original keyword). The blog is NOT linked back to it via entry_id.
+      // Declared outside try so the catch block can read it.
+      let keywordChanged = false;
 
       try {
         // ── Stage 1: Load context ─────────────────────────────────────────
@@ -99,28 +105,31 @@ export async function POST(req: Request) {
 
           // The generator form pre-fills from this calendar entry, but the user
           // may have edited the keyword/topic/secondary keywords before hitting
-          // Generate. Whatever is in the form when they submit is what must
-          // actually get generated — apply those edits on top of the stored
-          // entry, and persist them back so the calendar/history stay truthful
-          // about what this slot generated.
-          const entryUpdates: Record<string, any> = {};
+          // Generate. Apply form values to the local entry object so generation
+          // uses them, then decide what to persist back.
           const editedKeyword = body.keyword?.trim();
-          if (editedKeyword && editedKeyword !== entry.focus_keyword) {
-            entry.focus_keyword = editedKeyword;
-            entryUpdates.focus_keyword = editedKeyword;
-            entryUpdates.slug = editedKeyword.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-          }
+          const originalKeyword = entry.focus_keyword as string;
+          keywordChanged = Boolean(editedKeyword && editedKeyword !== originalKeyword);
+
+          // Always apply all form values to the local entry so the prompt is correct.
+          if (editedKeyword) entry.focus_keyword = editedKeyword;
           const editedTopic = body.topic?.trim();
-          if (editedTopic && editedTopic !== entry.title) {
-            entry.title = editedTopic;
-            entryUpdates.title = editedTopic;
+          const originalTitle = entry.title as string;
+          if (editedTopic) entry.title = editedTopic;
+          if (body.secondaryKeywords?.length) entry.secondary_keywords = body.secondaryKeywords;
+
+          if (keywordChanged) {
+            // Keyword was changed: leave the original calendar slot completely
+            // untouched. The blog will be saved as a standalone piece with no
+            // entry_id — the original scheduled keyword remains pending.
+          } else {
+            // Keyword unchanged: sync any other form edits back and mark generating.
+            const entryUpdates: Record<string, unknown> = { status: "generating" };
+            if (editedTopic && editedTopic !== originalTitle) entryUpdates.title = editedTopic;
+            if (body.secondaryKeywords && JSON.stringify(body.secondaryKeywords) !== JSON.stringify(entryRow.secondary_keywords ?? []))
+              entryUpdates.secondary_keywords = body.secondaryKeywords;
+            await supabaseAdmin.from("calendar_entries").update(entryUpdates).eq("id", body.entryId);
           }
-          if (body.secondaryKeywords && JSON.stringify(body.secondaryKeywords) !== JSON.stringify(entry.secondary_keywords ?? [])) {
-            entry.secondary_keywords = body.secondaryKeywords;
-            entryUpdates.secondary_keywords = body.secondaryKeywords;
-          }
-          entryUpdates.status = "generating";
-          await supabaseAdmin.from("calendar_entries").update(entryUpdates).eq("id", body.entryId);
         } else {
           projectId = body.projectId!;
           const kw = body.keyword!;
@@ -700,10 +709,14 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           updated_at: new Date().toISOString(),
         };
 
+        // When the keyword was changed from what was scheduled, the generated
+        // blog is standalone — don't link it to the original calendar entry.
+        const linkedEntryId = keywordChanged ? null : (body.entryId ?? null);
+
         let blogId: string;
-        if (body.entryId) {
+        if (linkedEntryId) {
           const { data: existing } = await supabaseAdmin
-            .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
+            .from("blogs").select("id").eq("entry_id", linkedEntryId).maybeSingle();
 
           if (existing) {
             const { data, error } = await supabaseAdmin
@@ -712,7 +725,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
             blogId = data.id;
           } else {
             const { data, error } = await supabaseAdmin
-              .from("blogs").insert({ ...upsertPayload, entry_id: body.entryId, project_id: projectId })
+              .from("blogs").insert({ ...upsertPayload, entry_id: linkedEntryId, project_id: projectId })
               .select("id").single();
             if (error) throw error;
             blogId = data.id;
@@ -720,7 +733,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
           await supabaseAdmin
             .from("calendar_entries").update({ status: "generated", title: blogData.title })
-            .eq("id", body.entryId);
+            .eq("id", linkedEntryId);
         } else {
           const { data, error } = await supabaseAdmin
             .from("blogs").insert({ ...upsertPayload, entry_id: null, project_id: projectId })
@@ -736,7 +749,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           message = "Gateway Timeout";
         }
         console.error("[blog stream] Error:", message);
-        if (body.entryId) {
+        if (body.entryId && !keywordChanged) {
           try {
             await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
           } catch { /* best effort */ }

@@ -440,6 +440,26 @@ function repairMarkdownTables(md: string): string {
   return lines.join('\n');
 }
 
+/**
+ * Delete leftover comma/dash/pipe fragments the LLM occasionally drops when a
+ * table it started never came together — e.g. a bare `, -` line on its own,
+ * or `, -` tacked onto the end of an otherwise normal sentence or link (see
+ * `repairMarkdownTables` above: this catches what that couldn't, because it
+ * had no pipes to key off or no valid header row to rebuild from). No
+ * legitimate sentence or markdown construct ends with a comma followed only
+ * by dashes, so both patterns are safe to strip unconditionally.
+ */
+function stripStrayTableArtifacts(md: string): string {
+  return md
+    .split('\n')
+    .map(line => line.replace(/,\s*-+\s*$/, ''))
+    .filter(line => {
+      const compact = line.replace(/\s/g, '');
+      return !(compact.length > 0 && compact.includes(',') && /^[|:,\-]+$/.test(compact));
+    })
+    .join('\n');
+}
+
 export async function sanitizeBlogContent(
   markdown: string,
   opts: SanitizeOpts = {}
@@ -454,6 +474,7 @@ export async function sanitizeBlogContent(
   // and repair malformed markdown tables so the draft is publish-ready.
   next = stripMetaSuggestionNotes(next);
   next = repairMarkdownTables(next);
+  next = stripStrayTableArtifacts(next);
 
   // Phase 1 — strip placeholder images. These are LLM artifacts, never real.
   next = next.replace(

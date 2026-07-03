@@ -7,13 +7,12 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase';
-import type { BlogGenerateJobPayload, ContentAuditJobPayload, JobRecord } from './types';
+import type { ContentAuditJobPayload, JobRecord } from './types';
 
 export type JobHandler = (job: JobRecord) => Promise<Record<string, unknown>>;
 
 const handlers: Record<string, JobHandler> = {
   content_audit: runContentAuditJob,
-  blog_generate: runBlogGenerateJob,
 };
 
 export function getJobHandler(type: string): JobHandler | null {
@@ -82,93 +81,4 @@ async function runContentAuditJob(job: JobRecord): Promise<Record<string, unknow
     warning: isRealAudit ? '' : warning,
     severity: record.severity,
   };
-}
-
-/**
- * Resolve a base URL to reach our own generation route from the worker.
- * Prefer explicit env, then Vercel's URL, then the current request's host.
- */
-async function resolveInternalBaseUrl(): Promise<string> {
-  const env =
-    process.env.INTERNAL_BASE_URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
-  if (env) return env.replace(/\/+$/, '');
-  try {
-    const { headers } = await import('next/headers');
-    const h = await headers();
-    const host = h.get('host');
-    if (host) return `${h.get('x-forwarded-proto') || 'https'}://${host}`;
-  } catch {
-    /* not in a request scope */
-  }
-  return '';
-}
-
-/**
- * blog_generate handler. Rather than duplicating the ~400-line generation
- * pipeline, the worker calls the existing SSE generation route SERVER-SIDE
- * (internal auth) and consumes the stream to completion. Because it runs in the
- * durable job — not the browser — generation survives client refresh/navigation.
- * On retry it first checks whether the entry's blog already landed, so a cut-off
- * attempt never double-generates.
- */
-async function runBlogGenerateJob(job: JobRecord): Promise<Record<string, unknown>> {
-  const p = job.payload as unknown as BlogGenerateJobPayload;
-  if (!p?.projectId || !p?.userId) throw new Error('blog_generate job missing projectId/userId');
-  if (!p.entryId && !p.keyword) throw new Error('blog_generate job missing entryId/keyword');
-
-  // Idempotency on retry: if a blog already exists for this calendar slot, reuse it.
-  if (p.entryId) {
-    const { data: existing } = await supabaseAdmin
-      .from('blogs')
-      .select('id')
-      .eq('project_id', p.projectId)
-      .eq('entry_id', p.entryId)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (existing?.id) return { blogId: existing.id as string, reused: true };
-  }
-
-  const base = await resolveInternalBaseUrl();
-  if (!base) throw new Error('No base URL available to reach the generation route');
-  const secret = process.env.INTERNAL_JOBS_SECRET ?? '';
-
-  const res = await fetch(`${base}/api/v1/blogs/generate/stream`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-internal-secret': secret },
-    body: JSON.stringify({ ...p }),
-  });
-  if (!res.ok || !res.body) throw new Error(`generation route returned HTTP ${res.status}`);
-
-  // Consume the SSE stream to completion; capture the terminal done/error event.
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let blogId = '';
-  let errorMsg = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let sep: number;
-    while ((sep = buffer.indexOf('\n\n')) !== -1) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      const dataLine = frame.split('\n').find(l => l.startsWith('data: '));
-      if (!dataLine) continue;
-      try {
-        const ev = JSON.parse(dataLine.slice(6)) as { event?: string; blogId?: string; message?: string };
-        if (ev.event === 'done' && ev.blogId) blogId = ev.blogId;
-        else if (ev.event === 'error') errorMsg = ev.message || 'Generation failed';
-      } catch {
-        /* ignore partial/non-JSON frames */
-      }
-    }
-  }
-
-  if (errorMsg) throw new Error(errorMsg);
-  if (!blogId) throw new Error('Generation finished without returning a blogId');
-  return { blogId };
 }

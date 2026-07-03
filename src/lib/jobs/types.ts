@@ -32,33 +32,6 @@ export interface JobRecord {
   finished_at: string | null;
 }
 
-/** Payload for a `blog_generate` job — mirrors the blog generation route body
- *  plus the owning userId (the worker calls the route under internal auth). */
-export interface BlogGenerateJobPayload {
-  projectId: string;
-  userId: string;
-  entryId?: string;
-  keyword?: string;
-  topic?: string;
-  audience?: string;
-  tone?: string;
-  goal?: string;
-  ctaObjective?: string;
-  secondaryKeywords?: string[];
-  wordCount?: number;
-  writerNotes?: string;
-  contentHealthAudit?: Record<string, unknown> | null;
-  brandPersona?: string;
-  useAhrefsData?: boolean;
-  ahrefsH2s?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
-  ahrefsFaqs?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
-  useDeepAnalysis?: boolean;
-  deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
-  customInstructions?: string;
-  /** Display label for the Content-History skeleton row while it generates. */
-  label?: string;
-}
-
 /** Payload for a `content_audit` job — mirrors AuditStudioInput. */
 export interface ContentAuditJobPayload {
   url: string;

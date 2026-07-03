@@ -223,6 +223,42 @@ function dropArtifactLines(lines: string[], fenced: boolean[]): string[] {
   });
 }
 
+// ─── Link URL sanitization ───────────────────────────────────────────────────
+
+/**
+ * Fix markdown links whose URL contains whitespace or stray Unicode glyphs
+ * injected by the LLM (e.g. "↗" arrows, citation markers, or a long URL
+ * wrapped to the next line).
+ *
+ * A URL with an embedded space is not valid markdown — the parser stops at
+ * the first space and emits the rest as visible raw text. This is exactly
+ * what appears in the blog viewer when the LLM writes:
+ *   [ILO](https://ilo.org/path ↗, en/index.htm)
+ * instead of:
+ *   [ILO](https://ilo.org/path/en/index.htm)
+ *
+ * Only URLs that actually contain whitespace or known bad glyphs are touched;
+ * clean links are returned unchanged.
+ */
+function fixBrokenLinkUrls(markdown: string): string {
+  // [^\]] matches anything except ] (including newlines) — captures the full
+  // URL even when the LLM wrapped it across a line break.
+  return markdown.replace(
+    /(!?\[[^\]]*\])\(([^)]*)\)/g,
+    (match, prefix, rawUrl) => {
+      // Fast path: nothing to fix.
+      if (!/[\s↗→↑↗⤢]/.test(rawUrl)) return match;
+      const clean = rawUrl
+        .replace(/\n\s*/g, '')                      // join line-wrapped URLs
+        .replace(/[↗→↑↗⤢]+/g, '')   // strip arrow/citation glyphs
+        .replace(/,\s*$/, '')                       // trailing comma (e.g. "url, ")
+        .replace(/\s+/g, '')                        // remove any remaining spaces
+        .trim();
+      return clean ? `${prefix}(${clean})` : match;
+    },
+  );
+}
+
 // ─── Meta description ────────────────────────────────────────────────────────
 
 /**
@@ -266,6 +302,7 @@ export function polishBlogMarkdown(markdown: string): string {
   if (!markdown || !markdown.trim()) return markdown ?? '';
 
   let md = balanceCodeFences(markdown);
+  md = fixBrokenLinkUrls(md);
 
   // Fence-preserving line passes. The mask is recomputed after filtering
   // passes because they change line indices.

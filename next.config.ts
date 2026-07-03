@@ -18,7 +18,13 @@ const cspHeader = `
 `.replace(/\s{2,}/g, ' ').trim();
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
+  // `standalone` output is required by the Cloud Run Docker build (Dockerfile
+  // copies `.next/standalone`), but Vercel's own build/tracing pipeline
+  // conflicts with it — it can produce serverless functions with an
+  // incomplete module graph (routes/actions silently missing code that's
+  // present in others). Vercel sets `VERCEL=1` during its build, so skip
+  // `standalone` there and let Vercel bundle normally.
+  output: process.env.VERCEL ? undefined : 'standalone',
   turbopack: {
     root: path.resolve(__dirname),
   },

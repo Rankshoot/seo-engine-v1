@@ -23,11 +23,13 @@ function getAnthropicClient(): Anthropic {
  *   { event: "error",        message: string }
  */
 export async function POST(req: Request) {
-  // The background-job worker calls this server-side with an internal secret so
-  // blog generation can run durably (survives client refresh / navigation).
-  // Real users continue to authenticate via Clerk exactly as before.
-  const internalSecret = process.env.INTERNAL_JOBS_SECRET;
-  const isInternal = !!internalSecret && req.headers.get("x-internal-secret") === internalSecret;
+  const user = await currentUser();
+  if (!user) {
+    return new Response(
+      `data: ${JSON.stringify({ event: "error", message: "Not authenticated" })}\n\n`,
+      { status: 401, headers: { "Content-Type": "text/event-stream" } }
+    );
+  }
 
   const body = (await req.json()) as {
     entryId?: string;
@@ -50,23 +52,7 @@ export async function POST(req: Request) {
     useDeepAnalysis?: boolean;
     deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
     customInstructions?: string;
-    /** Set by the background-job worker (internal auth) — the owning user id. */
-    userId?: string;
   };
-
-  let userId: string | undefined;
-  if (isInternal) {
-    userId = body.userId?.trim() || undefined;
-  } else {
-    const user = await currentUser();
-    userId = user?.id;
-  }
-  if (!userId) {
-    return new Response(
-      `data: ${JSON.stringify({ event: "error", message: "Not authenticated" })}\n\n`,
-      { status: 401, headers: { "Content-Type": "text/event-stream" } }
-    );
-  }
 
   if (!body.entryId && (!body.projectId || !body.keyword)) {
     return new Response(
@@ -149,7 +135,7 @@ export async function POST(req: Request) {
         }
 
         const { data: projectRow, error: pErr } = await supabaseAdmin
-          .from("projects").select("*").eq("id", projectId).eq("user_id", userId).single();
+          .from("projects").select("*").eq("id", projectId).eq("user_id", user.id).single();
 
         if (pErr || !projectRow) {
           emit({ event: "error", message: "Project not found or unauthorized" });
@@ -364,7 +350,7 @@ export async function POST(req: Request) {
           const { QuotaService } = await import("@/services/quota");
 
           // Check credit before doing work
-          const quotaStatus = await QuotaService.getUserQuotaStatus(userId);
+          const quotaStatus = await QuotaService.getUserQuotaStatus(user.id);
           if (quotaStatus.deep_analysis.remaining <= 0) {
             emit({ event: "error", message: "No Deep Analysis credits remaining." });
             controller.close();
@@ -412,7 +398,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           deepAnalysisSummary = (analysisRes.content[0] as any).text ?? "";
 
           // Deduct the credit
-          await QuotaService.deductQuota(userId, "deep_analysis", 1);
+          await QuotaService.deductQuota(user.id, "deep_analysis", 1);
         }
 
         // ── Stage 3: Outline ──────────────────────────────────────────────
@@ -515,8 +501,8 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
           // Deduct credits for the data that was used
           const { QuotaService } = await import("@/services/quota");
-          if (body.ahrefsH2s?.length) await QuotaService.deductQuota(userId, "ahrefs_h2s", 1);
-          if (body.ahrefsFaqs?.length) await QuotaService.deductQuota(userId, "ahrefs_faqs", 1);
+          if (body.ahrefsH2s?.length) await QuotaService.deductQuota(user.id, "ahrefs_h2s", 1);
+          if (body.ahrefsFaqs?.length) await QuotaService.deductQuota(user.id, "ahrefs_faqs", 1);
         }
 
         // Build the blog prompt

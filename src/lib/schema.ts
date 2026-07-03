@@ -1,4 +1,4 @@
-import type { Blog } from "./types";
+import type { Blog, BlogContentData } from "./types";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -87,12 +87,14 @@ export function parseFaqPairs(content: string): FaqPair[] {
  * Google requires an image for Article rich-result eligibility. `data:` URIs
  * and placeholder markers are useless in structured data and are skipped.
  */
+const PLACEHOLDER_IMAGE_RE = /placehold|placeholder|dummyimage|loremflickr/i;
+
 function firstContentImage(markdown: string): string | null {
   const re = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(markdown)) !== null) {
     const url = m[1];
-    if (!/placehold|placeholder|dummyimage|loremflickr/i.test(url)) return url;
+    if (!PLACEHOLDER_IMAGE_RE.test(url)) return url;
   }
   return null;
 }
@@ -108,7 +110,13 @@ export function buildArticleSchema(
   const datePublished = (blog.created_at ?? new Date().toISOString()).split("T")[0];
   const dateModified = (blog.updated_at ?? blog.created_at ?? new Date().toISOString()).split("T")[0];
   const url = domain ? `${domain}/${blog.slug}` : `/${blog.slug}`;
-  const image = firstContentImage(blog.content ?? "");
+  // Prefer the explicit cover image (set via image generation / upload); fall
+  // back to the first real image embedded in the markdown body.
+  const coverImage = (blog.content_data as BlogContentData | undefined)?.cover_image_url;
+  const image =
+    coverImage && /^https?:\/\//.test(coverImage) && !PLACEHOLDER_IMAGE_RE.test(coverImage)
+      ? coverImage
+      : firstContentImage(blog.content ?? "");
 
   return {
     "@context": "https://schema.org",

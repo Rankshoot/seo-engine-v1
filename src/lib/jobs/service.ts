@@ -176,12 +176,26 @@ export async function failJob(job: JobRecord, message: string): Promise<void> {
  * so the drainer can pick them up again. Called at the top of each drain tick.
  */
 export async function requeueStale(thresholdMs = 2 * 60 * 1000): Promise<number> {
-  const cutoff = new Date(Date.now() - thresholdMs).toISOString();
-  const { data } = await supabaseAdmin
+  const cutoffDefault = new Date(Date.now() - thresholdMs).toISOString();
+  const cutoffBlog = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 minutes for blog generate
+
+  // 1. Requeue standard stale running jobs (non-blog_generate)
+  const { data: standardStale } = await supabaseAdmin
     .from('background_jobs')
     .update({ status: 'pending', locked_at: null, updated_at: new Date().toISOString() })
     .eq('status', 'running')
-    .lt('locked_at', cutoff)
+    .neq('type', 'blog_generate')
+    .lt('locked_at', cutoffDefault)
     .select('id');
-  return (data?.length as number | undefined) ?? 0;
+
+  // 2. Requeue blog_generate stale running jobs (10 mins threshold)
+  const { data: blogStale } = await supabaseAdmin
+    .from('background_jobs')
+    .update({ status: 'pending', locked_at: null, updated_at: new Date().toISOString() })
+    .eq('status', 'running')
+    .eq('type', 'blog_generate')
+    .lt('locked_at', cutoffBlog)
+    .select('id');
+
+  return (standardStale?.length ?? 0) + (blogStale?.length ?? 0);
 }

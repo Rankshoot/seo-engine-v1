@@ -14,7 +14,12 @@ import type { JobRecord } from './types';
 async function executeClaimedJob(job: JobRecord): Promise<{ ok: boolean; error?: string }> {
   const handler = getJobHandler(job.type);
   if (!handler) {
-    await failJob({ ...job, attempts: job.max_attempts }, `No handler for job type "${job.type}"`);
+    // Retry like any other error instead of forcing an immediate permanent fail:
+    // in dev (Turbopack lazy compilation) the handler registry can be transiently
+    // unresolved on the very first claim after a server (re)start even though it's
+    // correctly registered — a retry a few seconds later self-heals. A genuinely
+    // unregistered job type still fails fast, bounded by max_attempts.
+    await failJob(job, `No handler for job type "${job.type}"`);
     return { ok: false, error: 'no_handler' };
   }
   try {

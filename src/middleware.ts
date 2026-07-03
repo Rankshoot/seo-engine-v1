@@ -92,9 +92,11 @@ const clerk = clerkMiddleware(async (auth, req) => {
     return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
-  // Securely protect all /api/v1/* routes globally (except public webhooks)
+  // Securely protect all /api/v1/* routes globally (except public webhooks and internal job calls)
   if (isApiV1 && !isPublicWebhook) {
-    if (!userId) {
+    const internalSecret = process.env.INTERNAL_JOBS_SECRET;
+    const hasInternalSecret = !!internalSecret && req.headers.get("x-internal-secret") === internalSecret;
+    if (!userId && !hasInternalSecret) {
       return new NextResponse(JSON.stringify({ success: false, error: "Unauthorized" }), {
         status: 401,
         headers: { "content-type": "application/json" },

@@ -234,7 +234,6 @@ export default function BlogGeneratorPage() {
   // entry (Generate button on the calendar / repair row). Used to warn the
   // user that editing the keyword here retargets that calendar slot instead
   // of silently generating the old keyword underneath their edits.
-  const isFromScheduledEntry = !!entryId;
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
@@ -565,19 +564,7 @@ export default function BlogGeneratorPage() {
 
   return (
     <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
-      {phase === "form" && isFromScheduledEntry && (
-        <div className="mb-4 flex items-start gap-3 rounded-xl border border-brand-action/25 bg-brand-action/8 px-4 py-3">
-          <span className="mt-0.5 shrink-0 rounded-full border border-brand-action/40 bg-brand-action/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-action">
-            From calendar
-          </span>
-          <div className="min-w-0">
-            <p className="text-[12px] text-text-secondary leading-snug">
-              This brief was scheduled on your calendar as <span className="font-semibold text-text-primary">&ldquo;{keywordParam}&rdquo;</span>.
-              You can edit any field below — if you change the keyword, this calendar slot will be updated to match.
-            </p>
-          </div>
-        </div>
-      )}
+
       {isAuditFixMode && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-status-warning/30 bg-status-warning/8 px-4 py-3">
           <span className="mt-0.5 shrink-0 rounded-full border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-warning">

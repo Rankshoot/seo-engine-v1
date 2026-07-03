@@ -14,6 +14,8 @@
  * are shared by `blog-actions.ts` (server) and `export.ts` (client).
  */
 
+import { polishBlogMarkdown } from '@/lib/blog-markdown-polish';
+
 /** Hard cap on rendered images per blog. Matches the product spec. */
 export const MAX_IMAGES_PER_BLOG = 2;
 
@@ -475,6 +477,12 @@ export async function sanitizeBlogContent(
   next = stripMetaSuggestionNotes(next);
   next = repairMarkdownTables(next);
   next = stripStrayTableArtifacts(next);
+
+  // Phase 0c — full deterministic publish-readiness polish: single H1,
+  // heading spacing/padding, GFM table normalization (column counts, missing
+  // separators, pipe wrapping), dangling code fences, artifact lines. This is
+  // what guarantees the stored draft renders cleanly in every viewer.
+  next = polishBlogMarkdown(next);
 
   // Phase 1 — strip placeholder images. These are LLM artifacts, never real.
   next = next.replace(

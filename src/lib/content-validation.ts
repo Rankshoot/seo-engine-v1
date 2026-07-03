@@ -49,6 +49,13 @@ export interface ValidateOptions {
   metaDescription?: string | null;
   /** When true (export/publish), placeholder images and a missing meta become fatal. */
   strict?: boolean;
+  /**
+   * Primary keyword the piece targets. When provided (blogs), deterministic
+   * keyword-coverage checks run: missing from H1/intro/body and stuffing
+   * (density > 3.5%) are surfaced as warnings so drift is visible in traces
+   * and retry prompts without ever blocking an otherwise-good draft.
+   */
+  focusKeyword?: string | null;
 }
 
 /** Minimum body word counts per content type (lenient for social posts). */
@@ -270,6 +277,35 @@ export function validateGeneratedContent(
     }
     if (!/^\s{0,3}##\s+(?:FAQs?|Frequently Asked Questions)/im.test(body)) {
       push("missing_faq_section", "warn", "No FAQ section heading found (AEO scoring expects one).");
+    }
+  }
+
+  // 7c. Keyword coverage (blogs with a known focus keyword). All warnings —
+  // the SEO scorer and retry prompt consume these; variants/synonyms mean a
+  // substring miss is a signal, not proof of failure.
+  const kw = (opts.focusKeyword ?? "").trim().toLowerCase();
+  if (type === "blog" && kw) {
+    const lowerBody = body.toLowerCase();
+    const occurrences = lowerBody.split(kw).length - 1;
+    if (occurrences === 0) {
+      push("keyword_absent", "warn", `Focus keyword "${opts.focusKeyword}" never appears verbatim in the body.`);
+    } else {
+      const h1 = /^\s{0,3}#\s+(.+)$/m.exec(body)?.[1] ?? "";
+      if (!h1.toLowerCase().includes(kw)) {
+        push("keyword_missing_h1", "warn", "Focus keyword missing from the H1 title.");
+      }
+      const introWords = lowerBody.replace(/^\s{0,3}#.+$/m, "").trim().split(/\s+/).slice(0, 120).join(" ");
+      if (!introWords.includes(kw)) {
+        push("keyword_missing_intro", "warn", "Focus keyword missing from the first ~100 words.");
+      }
+      const density = (occurrences * kw.split(/\s+/).length) / Math.max(1, words);
+      if (density > 0.035) {
+        push(
+          "keyword_stuffing",
+          "warn",
+          `Focus keyword density ${(density * 100).toFixed(1)}% (> 3.5%) — reads as keyword stuffing.`,
+        );
+      }
     }
   }
 

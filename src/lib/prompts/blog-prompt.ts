@@ -324,7 +324,6 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
      (e.g., ![Suggested image: HR team reviewing recruitment dashboard](image-placeholder))
    - Do NOT write "Infographic suggestion" notes, "[infographic]" placeholders, or any other meta note addressed to the writer/designer. The output must be the finished, publish-ready article — never a suggestion or instruction to add something later.
    - MARKDOWN TABLES: when you include a table, it MUST be valid GitHub-flavoured markdown — a header row, then a separator row of ONLY pipes and dashes (e.g. \`| --- | --- | --- |\`, one cell per column), then the data rows. Every row must start and end with \`|\`. Never write a malformed separator like \`|, -|, -|\`. If you cannot produce a clean table, use a bulleted list instead.
-   - NEVER emit a stray fragment of comma/dash/pipe characters (e.g. a line or trailing suffix like \`, -\`) anywhere in the article, inside or outside a table. If you are not completing a full, valid table or list on that line, do not write partial table syntax at all — finish the sentence in plain prose instead.
 
 7. NATURAL INTERLINKING & "ALSO READ" CALLOUTS:
    - Target 3–7 internal links total (NEVER more than 7), including at least one product/solution/landing page when the pool offers one. Use verified internal links only from the provided INTERNAL LINKING pool. Do NOT invent internal URLs, slugs, or pages.

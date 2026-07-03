@@ -30,21 +30,6 @@ export interface BlogPromptContext {
 }
 
 function formatAhrefsContextForPrompt(ahrefs: any): string {
-  // DEBUG: Log incoming data to terminal
-  console.log('[blog-prompt] formatAhrefsContextForPrompt called with:', {
-    hasMatchingTerms: !!ahrefs?.matchingTerms?.length,
-    hasQuestions: !!ahrefs?.questions?.length,
-    hasSerp: !!ahrefs?.serp?.length,
-    hasSecondaryKeywords: !!ahrefs?.secondaryKeywords?.length,
-    hasFaqKeywords: !!ahrefs?.faqKeywords?.length,
-    matchingTermsCount: ahrefs?.matchingTerms?.length ?? 0,
-    questionsCount: ahrefs?.questions?.length ?? 0,
-    secondaryKeywordsCount: ahrefs?.secondaryKeywords?.length ?? 0,
-    faqKeywordsCount: ahrefs?.faqKeywords?.length ?? 0,
-    secondaryKeywords: ahrefs?.secondaryKeywords?.slice(0, 3),
-    faqKeywords: ahrefs?.faqKeywords?.slice(0, 3),
-  });
-
   const matching = (ahrefs.matchingTerms ?? [])
     .slice(0, 10)
     .map((k: any) => `- ${k.keyword} (vol: ${k.volume ?? 0})`)
@@ -274,7 +259,7 @@ ${researchContextBlock}${deepAnalysisSummaryBlock}${customInstructionsBlock}
 SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 ════════════════════════════════════════
 1. WORD COUNT: Minimum ${Math.max(wordCount, 1500)} words (target ${wordCount}).
-2. TITLE KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear in the H1 title.
+2. TITLE KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear in the H1 title. Keep the title ≤ 60 characters so it never truncates in search results, and front-load the keyword (as close to the start as natural English allows).
 3. INTRO KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear within the first 100 words of the intro paragraph.
 4. KEYWORD DENSITY: Mention "${entry.focus_keyword}" naturally 1× per ~150–200 words (0.5–3% density). Spread mentions evenly — not just intro + conclusion.
 5. H2 HEADINGS: At least 5 × ## headings in the contentMarkdown (the scorer requires >= 3).
@@ -284,7 +269,9 @@ SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 9. INTERNAL LINKS: Include 3–7 internal links — NEVER more than 7 — from the INTERNAL LINKING pool wherever contextually relevant. Format: [anchor text](/slug) or absolute URL. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 3 validated internal links are available, use all available validated links instead of inventing links. Include at least one link to a relevant product / solution / landing page when the pool offers one, and finish with a short call-to-action linking to such a page.
 10. META DESCRIPTION: Exactly 150–160 characters long and MUST contain "${entry.focus_keyword}".
 11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer", "In today's rapidly evolving landscape", "unlock the power of", "delve into"). Use specific wording and practical examples instead of vague claims.
-12. HUMAN TONE: Write in a natural, human editorial tone with varied sentence rhythm, practical examples, small connective phrases, and smooth transitions. Avoid robotic, repetitive, overly polished AI-style phrasing. Keep paragraphs readable and natural. Do NOT use em-dashes (—) or en-dashes (–) to connect clauses or offset parenthetical phrases. These are a primary signature of AI-generated content and make the text look robotic. Instead, use standard commas, colons, parentheses, or break the sentence into two separate, short sentences.
+12. INFORMATION GAIN: The article must contain at least 2 things NO competitor page covers — a unique angle, a framework/checklist the reader can act on, a contrarian but defensible position, or an original synthesis of the cited data. Search engines now score "information gain"; a pure summary of what already ranks cannot outrank it.
+13. IMAGE ALT TEXT: Every image placeholder's description must be a specific, descriptive sentence fragment that names what is shown, and exactly ONE of the 2–3 image descriptions must naturally include the primary keyword. Never use generic alt text like "image", "photo" or the bare keyword alone.
+14. HUMAN TONE: Write in a natural, human editorial tone with varied sentence rhythm, practical examples, small connective phrases, and smooth transitions. Avoid robotic, repetitive, overly polished AI-style phrasing. Keep paragraphs readable and natural. Do NOT use em-dashes (—) or en-dashes (–) to connect clauses or offset parenthetical phrases. These are a primary signature of AI-generated content and make the text look robotic. Instead, use standard commas, colons, parentheses, or break the sentence into two separate, short sentences.
 
 ════════════════════════════════════════
 EDITORIAL AND FORMATTING REQUIREMENTS:
@@ -362,6 +349,8 @@ GEO-3. FACTUAL DENSITY: Include at least 6 verified, specific facts or statistic
 GEO-4. SOURCE TRANSPARENCY: Every statistic or research claim must be followed by the author/source name in parentheses: e.g. "(McKinsey, 2024)" — this mimics academic citation style that AI models trust.
 GEO-5. ENTITY CLARITY: Explicitly name the key entities (companies, tools, standards, frameworks) relevant to this topic so AI can build a knowledge graph from this page.
 GEO-6. SUMMARY SECTION: End with a "## Key Takeaways" or "## Summary" section containing 5–7 bullet points — this is the section AI models most often extract verbatim for answers.
+GEO-7. QUOTATIONS: Include 1–2 short, real quotations from named experts, official reports, or organizations (with attribution, e.g. 'According to the World Economic Forum's Future of Jobs Report, "..."'). Quoted, attributed statements measurably increase how often generative engines cite a page. Only quote text you are confident is real — never fabricate a quote.
+GEO-8. SELF-CONTAINED SECTIONS: Every H2 section must make sense when read in isolation (restate the subject noun instead of starting with "It" or "This"). AI engines extract sections out of context; pronoun-led sections lose the citation.
 
 ════════════════════════════════════════
 AEO (ANSWER ENGINE OPTIMIZATION) — must satisfy all of these for voice search and featured snippets:

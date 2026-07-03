@@ -260,6 +260,19 @@ export function validateGeneratedContent(
     push("missing_h1", "warn", "No H1 heading found.");
   }
 
+  // 7b. Blog SEO structure (non-fatal signals for logging/observability):
+  // the scorer needs ≥3 H2s and an FAQ section; catching this here means a
+  // weak draft is visible in traces even when it ships.
+  if (type === "blog") {
+    const h2Count = (body.match(/^\s{0,3}##\s+\S/gm) ?? []).length;
+    if (h2Count < 3) {
+      push("few_h2_headings", "warn", `Only ${h2Count} H2 headings (SEO scoring expects ≥ 3).`);
+    }
+    if (!/^\s{0,3}##\s+(?:FAQs?|Frequently Asked Questions)/im.test(body)) {
+      push("missing_faq_section", "warn", "No FAQ section heading found (AEO scoring expects one).");
+    }
+  }
+
   // 8. Placeholder images — warn on generation, fatal on export/publish.
   if (PLACEHOLDER_IMG_RE.test(body)) {
     push(

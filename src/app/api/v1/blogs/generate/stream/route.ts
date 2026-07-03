@@ -264,10 +264,11 @@ export async function POST(req: Request) {
             });
             const finalContent = sanitizeBlogMarkdown(sanitized.content);
 
+            const { normalizeMetaDescription: normalizeRepairMeta } = await import("@/lib/blog-markdown-polish");
             const repairPayload = {
               title: repaired.title,
               content: finalContent,
-              meta_description: analysis.summary || repaired.meta_description,
+              meta_description: normalizeRepairMeta(repaired.meta_description || analysis.summary, finalContent),
               slug: repaired.slug,
               word_count: countWords(finalContent),
               target_keyword: entry.focus_keyword,
@@ -560,16 +561,21 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
         const anthropic = getAnthropicClient();
 
-        // One streamed Claude draft → accumulated raw model text.
-        const draftOnce = async (): Promise<string> => {
+        // One streamed Claude draft → accumulated raw model text. On a retry we
+        // append what failed last time so the model corrects it instead of
+        // rolling the same dice again.
+        const draftOnce = async (correction?: string): Promise<string> => {
           let fullContent = "";
           let thinkingEmitted = false;
           resetStallTimeout();
+          const promptForAttempt = correction
+            ? `${blogPrompt}\n\nIMPORTANT — your previous draft was rejected by automated quality validation for: ${correction}. Fix these problems in this draft. Remember: output ONLY the single valid JSON object.`
+            : blogPrompt;
           const claudeStream = anthropic.messages.stream({
             model: claudeModel,
             max_tokens: 32000,
             thinking: { type: "enabled", budget_tokens: 8000 },
-            messages: [{ role: "user", content: blogPrompt }],
+            messages: [{ role: "user", content: promptForAttempt }],
             system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
           }, { signal: abortController.signal });
 
@@ -612,6 +618,11 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           });
           const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
           const finalContent = sanitizeBlogMarkdown(sanitized.content);
+          // Clamp the meta description to Google's usable window (and derive
+          // one from the intro if the model returned nothing usable) so a bad
+          // meta never ships.
+          const { normalizeMetaDescription } = await import("@/lib/blog-markdown-polish");
+          blogData = { ...blogData, meta_description: normalizeMetaDescription(blogData.meta_description, finalContent) };
           return { blogData, sanitized, finalContent };
         };
 
@@ -627,7 +638,9 @@ Respond with a concise but rich analysis (300–500 words) structured as:
               : `Re-drafting (attempt ${attempt}/${MAX_GEN_ATTEMPTS}) to fix a malformed draft…`,
           });
           wasStalled = false;
-          const fullContent = await draftOnce();
+          const fullContent = await draftOnce(
+            attempt > 1 && lastValidation ? summarizeValidation(lastValidation) : undefined
+          );
 
           emit({ event: "stage", stage: "polish", detail: "Generating images and running SEO polish…" });
           const candidate = await buildFinal(fullContent);

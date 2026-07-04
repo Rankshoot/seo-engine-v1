@@ -184,35 +184,34 @@ export function GenerateKeywordsModal({
       footer={
         phase === "prompt" ? (
           <>
-            <Button variant="ghost" onClick={onClose} disabled={generating}>
+            <Button variant="ghost" shape="pill" onClick={onClose} disabled={generating}>
               Cancel
             </Button>
             <Button
               ref={generateButtonRef}
               variant="primary"
+              shape="pill"
               onClick={() => void runGenerate()}
               loading={generating}
               disabled={generating || !hasAiCredits}
               title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
             >
-              {generating ? "Thinking…" : "Generate 5 keyword ideas"}
+              {generating ? "Thinking…" : "Generate"}
             </Button>
           </>
         ) : (
           <>
-            <Button variant="ghost" onClick={() => setPhase("prompt")} disabled={scheduling}>
-              Back
-            </Button>
-            <Button variant="secondary" onClick={() => void runGenerate()} disabled={generating || scheduling}>
+            <Button variant="secondary" shape="pill" onClick={() => void runGenerate()} disabled={generating || scheduling}>
               {generating ? <Spinner size={14} /> : "Regenerate"}
             </Button>
             <Button
               variant="primary"
+              shape="pill"
               onClick={() => void runSchedule()}
               loading={scheduling}
               disabled={scheduling || selectedCount === 0 || allScheduled}
             >
-              {allScheduled ? "Scheduled" : scheduling ? "Scheduling…" : `Schedule ${selectedCount || ""} keyword${selectedCount === 1 ? "" : "s"}`}
+              {allScheduled ? "Scheduled" : scheduling ? "Scheduling…" : "Schedule"}
             </Button>
           </>
         )
@@ -286,16 +285,14 @@ export function GenerateKeywordsModal({
                 </button>
 
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[14px] font-semibold text-text-primary">{s.keyword}</span>
-                    {state === "scheduling" && <Spinner size={12} />}
-                    {state === "scheduled" && (
-                      <span className="text-[11px] font-semibold text-status-success">Scheduled ✓</span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-[12px] leading-snug text-text-tertiary">{s.rationale}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <label className="text-[11px] font-medium text-text-tertiary">Schedule as</label>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[14px] font-semibold text-text-primary">{s.keyword}</span>
+                      {state === "scheduling" && <Spinner size={12} />}
+                      {state === "scheduled" && (
+                        <span className="text-[11px] font-semibold text-status-success">Scheduled ✓</span>
+                      )}
+                    </div>
                     <select
                       value={chosenType}
                       onChange={e =>
@@ -303,16 +300,16 @@ export function GenerateKeywordsModal({
                       }
                       disabled={state === "scheduling" || state === "scheduled"}
                       aria-label={`Content type for ${s.keyword}`}
-                      className="rounded-md border border-border-subtle bg-surface-primary px-2 py-1 text-[12px] font-medium text-text-primary focus:border-brand-action focus:outline-none disabled:opacity-60"
+                      className="shrink-0 rounded-full border border-border-subtle bg-surface-primary px-3 py-1 text-[12px] font-medium text-text-primary focus:border-brand-action focus:outline-none disabled:opacity-60"
                     >
                       {CONTENT_TYPE_OPTIONS.map(opt => (
                         <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                          {opt.value === s.recommendedType ? "  ✨ AI pick" : ""}
+                          {opt.value === s.recommendedType ? `✨ ${opt.label}` : opt.label}
                         </option>
                       ))}
                     </select>
                   </div>
+                  <p className="mt-0.5 text-[12px] leading-snug text-text-tertiary">{s.rationale}</p>
                   {state === "error" && itemErrors[s.keyword] && (
                     <p className="mt-1 text-[11px] text-status-danger">{itemErrors[s.keyword]}</p>
                   )}

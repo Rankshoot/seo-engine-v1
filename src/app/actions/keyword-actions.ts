@@ -810,7 +810,8 @@ ${existingKeywords.length ? `\nKeywords already covered on this project's calend
 ${postedTitles.length ? `\nContent ALREADY PUBLISHED on this site (from its sitemap) — do NOT suggest keywords that overlap these topics. Instead, propose fresh, complementary angles that expand the same themes the site clearly invests in:\n${postedTitles.slice(0, 150).join(' | ')}` : ''}
 
 Generate exactly 5 NEW, DIVERSE keyword ideas. Requirements:
-- Prioritise questions and phrasings people actually ask AI assistants (ChatGPT, Perplexity, Google AI Overviews) — favour high AEO/GEO potential (clear, answerable, entity-rich queries) over raw search volume.
+- KEYWORD LENGTH: Each keyword MUST be 2–3 words maximum — short, primary SEO/GEO/AEO keywords (e.g. "talent acquisition", "RPO pricing", "structured hiring"). Never use full questions or long phrases as the keyword.
+- Prioritise core terms people actually search on AI assistants (ChatGPT, Perplexity, Google AI Overviews) — favour high AEO/GEO potential (clear, entity-rich, directly answerable) over raw search volume.
 - Stay in the same topical territory the site already publishes in (so they fit the brand), but never duplicate an existing keyword or published title above — always something newer.
 - Diversify across search intent (informational/commercial/navigational), funnel stage, and angle — never 5 near-duplicates.
 - For each keyword, recommend the best content format: "blog" (most topics), "ebook" or "whitepaper" (deep, download-worthy or data-heavy topics), or "linkedin" (short opinion/thought-leadership angles).

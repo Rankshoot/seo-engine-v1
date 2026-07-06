@@ -15,9 +15,45 @@
  */
 
 import { polishBlogMarkdown } from '@/lib/blog-markdown-polish';
+import { stripForcedKeywordFiller } from '@/lib/content-validation';
 
 /** Hard cap on rendered images per blog. Matches the product spec. */
 export const MAX_IMAGES_PER_BLOG = 2;
+
+/**
+ * Citations must be recent: anything published more than this many years ago
+ * is considered stale. With a 2-year window in 2026, only 2024+ sources are
+ * acceptable. Used by both the generation prompt (instruction) and the
+ * deterministic sanitizer below (enforcement).
+ */
+export const CITATION_MAX_AGE_YEARS = 2;
+
+/** First acceptable publication year for external citations (currentYear − 2). */
+export function minCitationYear(now = new Date()): number {
+  return now.getFullYear() - CITATION_MAX_AGE_YEARS;
+}
+
+/**
+ * Detect external URLs that self-identify as stale content via a year in
+ * their path — e.g. `/2019/06/report`, `-2018-survey`, `_2020.pdf`. Bounded
+ * 4-digit match (2000–2099) so tokens like "covid-19" or product numbers
+ * never false-positive. Query strings and fragments are ignored; a URL with
+ * no year is treated as fresh (the prompt handles those).
+ */
+export function isStaleDatedUrl(url: string, minYear = minCitationYear()): boolean {
+  let path = '';
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return false;
+  }
+  const years = path.match(/(?<![0-9])(20[0-9]{2})(?![0-9])/g);
+  if (!years || years.length === 0) return false;
+  // Multiple years in one path (e.g. "/2020-2025-outlook/") → judge by the
+  // most recent one; a range ending in a fresh year is fresh content.
+  const newest = Math.max(...years.map(Number));
+  return newest < minYear;
+}
 
 /**
  * `react-markdown` does not render arbitrary HTML; `<a name="…"></a>` shows as
@@ -174,6 +210,40 @@ export function reclassifyBlogLinkSidebarLists(
     else externalOut.push(url);
   }
   return { externalLinks: externalOut, internalLinks: [...internalOut] };
+}
+
+/**
+ * Extract every REAL link from markdown, classified against the project site.
+ * This is the single source of truth for "which links are in this article" —
+ * the blog previewer's sidebar derives its External/Internal lists from the
+ * displayed content through this function, so the panel can never disagree
+ * with the links a reader actually sees in the body. Pure + client-safe.
+ *
+ * Skips images, in-page anchors (#…), mailto:/tel:. Same-site absolute URLs
+ * and relative paths are internal; every other http(s) URL is external.
+ * Order follows first appearance in the content; duplicates collapse.
+ */
+export function extractLinksFromMarkdown(
+  markdown: string,
+  projectDomainRaw?: string | null
+): { externalLinks: string[]; internalLinks: string[] } {
+  const ownHost = projectDomainRaw?.trim() ? normalizeSiteHost(projectDomainRaw) : '';
+  const external = new Set<string>();
+  const internal = new Set<string>();
+  const linkRe = /(!?)\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  for (const m of (markdown ?? '').matchAll(linkRe)) {
+    if (m[1] === '!') continue; // image, not a link
+    const href = m[2].trim();
+    if (!href || href.startsWith('#') || /^(mailto|tel):/i.test(href)) continue;
+    if (/^https?:\/\//i.test(href)) {
+      const host = getHost(href);
+      if (ownHost && host && (host === ownHost || host.endsWith(`.${ownHost}`))) internal.add(href);
+      else external.add(href);
+    } else if (href.startsWith('/') || !href.includes(':')) {
+      internal.add(href.startsWith('/') ? href : `/${href}`);
+    }
+  }
+  return { externalLinks: [...external], internalLinks: [...internal] };
 }
 
 /** A domain is credible if it's on the allow-list or ends in `.gov` / `.edu`. */
@@ -472,9 +542,11 @@ export async function sanitizeBlogContent(
   // Phase 0 — empty `<a name|id>` tags (no href) leak as visible text in Markdown preview.
   let next = stripEmptyFragmentAnchorTags(markdown);
 
-  // Phase 0b — remove writer-facing meta notes ("Infographic suggestion", …)
-  // and repair malformed markdown tables so the draft is publish-ready.
+  // Phase 0b — remove writer-facing meta notes ("Infographic suggestion", …),
+  // legacy forced-keyword filler sentences, and repair malformed markdown
+  // tables so the draft is publish-ready.
   next = stripMetaSuggestionNotes(next);
+  next = stripForcedKeywordFiller(next);
   next = repairMarkdownTables(next);
   next = stripStrayTableArtifacts(next);
 
@@ -567,7 +639,14 @@ export async function sanitizeBlogContent(
     }
   }
 
-  const liveExternals = await validateExternalUrls(externalUrls);
+  // Freshness gate: an external citation whose URL carries a stale year
+  // segment (older than the citation window) is treated exactly like a dead
+  // link — unlinked to plain anchor text and dropped from the arrays. This
+  // is the deterministic backstop behind the prompt's recency rules.
+  const staleCutoff = minCitationYear();
+  const freshExternalUrls = externalUrls.filter(u => !isStaleDatedUrl(u, staleCutoff));
+
+  const liveExternals = await validateExternalUrls(freshExternalUrls);
   const liveInternals = new Set<string>();
 
   if (internalUrls.length && ownHost) {

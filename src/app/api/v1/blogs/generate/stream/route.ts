@@ -284,8 +284,10 @@ export async function POST(req: Request) {
               article_type: "Repair",
               status: "generated" as const,
               research_sources: repaired.research_sources,
-              external_links: sanitized.externalLinks.slice(0, 7),
-              internal_links: sanitized.internalLinks.slice(0, 7),
+              // Full arrays (no cap) — these must mirror the links actually
+              // present in the content so the previewer sidebar always matches.
+              external_links: sanitized.externalLinks,
+              internal_links: sanitized.internalLinks,
               source_url: repairPlan.url,
               repair_notes: repaired.repair_notes ?? [],
               updated_at: new Date().toISOString(),
@@ -337,11 +339,28 @@ export async function POST(req: Request) {
         emit({ event: "stage", stage: "research", detail: "Gathering live SERP research and keyword context…" });
 
         const { researchKeyword } = await import("@/lib/research");
+        const { fetchPerplexityFollowUps, mergeFollowUpQuestions } = await import("@/lib/perplexity");
+
+        // SERP research and Perplexity follow-ups run in parallel — both are
+        // best-effort and neither may block generation.
         let research: any = null;
-        try {
-          research = await researchKeyword(entry.focus_keyword, project.target_region, project.target_language);
-        } catch (e) {
-          console.warn("[blog stream] Research failed, continuing:", e);
+        const [researchSettled, followUpsSettled] = await Promise.allSettled([
+          researchKeyword(entry.focus_keyword, project.target_region, project.target_language),
+          fetchPerplexityFollowUps(entry.focus_keyword, { limit: 3 }),
+        ]);
+        if (researchSettled.status === "fulfilled") {
+          research = researchSettled.value;
+        } else {
+          console.warn("[blog stream] Research failed, continuing:", researchSettled.reason);
+        }
+
+        // Follow-ups: Perplexity's live "Follow-ups" for the primary keyword,
+        // topped up from People-Also-Ask so the AEO H2 sections always have
+        // real searcher questions to answer even without a Perplexity key.
+        const perplexityFollowUps = followUpsSettled.status === "fulfilled" ? followUpsSettled.value : [];
+        const followUpQuestions = mergeFollowUpQuestions(perplexityFollowUps, research?.peopleAlsoAsk, 3);
+        if (followUpQuestions.length) {
+          emit({ event: "stage", stage: "research", detail: `Found ${followUpQuestions.length} follow-up questions searchers ask next…` });
         }
 
         let existingBlogs: { title: string; slug: string; target_keyword: string }[] = [];
@@ -349,7 +368,10 @@ export async function POST(req: Request) {
           const { data: blogs } = await supabaseAdmin
             .from("blogs").select("title, slug, target_keyword")
             .eq("project_id", projectId).in("status", ["generated", "approved", "published"])
-            .neq("entry_id", body.entryId || "").limit(15);
+            .neq("entry_id", body.entryId || "")
+            // Newest first so the internal-link pool favours the latest posts.
+            .order("created_at", { ascending: false })
+            .limit(15);
           existingBlogs = blogs ?? [];
         } catch { /* optional */ }
 
@@ -529,6 +551,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           existingBlogs: filteredExistingBlogs,
           brief: filteredBrief,
           extraInternalLinks,
+          followUpQuestions,
           ahrefsContext,
           writerNotes: mergedWriterNotes || undefined,
           brandPersona: body.brandPersona,
@@ -702,8 +725,10 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           article_type: entry.article_type,
           status: "generated" as const,
           research_sources: blogData.research_sources,
-          external_links: sanitized.externalLinks.slice(0, 7),
-          internal_links: sanitized.internalLinks.slice(0, 7),
+          // Full arrays (no cap) — these must mirror the links actually
+          // present in the content so the previewer sidebar always matches.
+          external_links: sanitized.externalLinks,
+          internal_links: sanitized.internalLinks,
           source_url: "",
           repair_notes: [] as string[],
           updated_at: new Date().toISOString(),

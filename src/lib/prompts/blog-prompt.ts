@@ -2,6 +2,7 @@ import type { ResearchContext } from '@/lib/research';
 import { formatResearchForPrompt } from '@/lib/research';
 import type { BusinessBrief, InternalLinkCandidate } from '@/lib/business-brief';
 import type { Project } from '@/lib/types';
+import { minCitationYear } from '@/lib/blog-content';
 
 export interface BlogPromptContext {
   entry: {
@@ -22,6 +23,12 @@ export interface BlogPromptContext {
    * Already ranked + capped by the caller; validated upstream when possible.
    */
   extraInternalLinks?: InternalLinkCandidate[];
+  /**
+   * Top follow-up questions real users ask after searching the primary
+   * keyword (sourced live from Perplexity, falling back to People-Also-Ask).
+   * Each becomes a dedicated, AEO-optimised H2 section in the article.
+   */
+  followUpQuestions?: string[];
   ahrefsContext?: any;
   writerNotes?: string;
   brandPersona?: string;
@@ -81,7 +88,11 @@ ${serp || '(none)'}
 }
 
 export function buildBlogPrompt(ctx: BlogPromptContext): string {
-  const { entry, project, wordCount, research, existingBlogs, brief, extraInternalLinks, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary } = ctx;
+  const { entry, project, wordCount, research, existingBlogs, brief, extraInternalLinks, followUpQuestions, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary } = ctx;
+
+  // Recency window for citations: sources must be from this year or newer.
+  const currentYear = new Date().getFullYear();
+  const freshnessFloor = minCitationYear();
 
   // 1. Internal link pool block.
   //    Site pool = brief.internal_link_candidates ∪ sitemap-derived candidates
@@ -118,20 +129,40 @@ export function buildBlogPrompt(ctx: BlogPromptContext): string {
   const siteLinks = allInternalCandidates.filter(c => c.type === 'site').slice(0, 24);
   const generatedLinks = allInternalCandidates.filter(c => c.type === 'generated').slice(0, 8);
 
+  // The site's Contact page (when present in the pool) — the closing CTA must
+  // link to it so every article ends with a clear conversion path.
+  const contactLink = siteLinks.find(l =>
+    /(^|\/)(contact(-us)?|contactus|get-in-touch|getintouch|reach-us|talk-to-us|book-a-(call|demo|meeting))(\/|$|\.)/i.test(
+      (() => { try { return new URL(l.url).pathname; } catch { return l.url; } })()
+    ) || /contact/i.test(l.topic ?? '')
+  );
+
+  const ctaInstruction = contactLink
+    ? `END the article with a short, natural call-to-action that links to the site's Contact Us page: ${contactLink.url} (this exact URL). A product/solution page link elsewhere in the body is still encouraged when the pool offers one.`
+    : `END the article with a short, natural call-to-action that links to the most relevant product/solution/landing page — fall back to the site homepage https://${project.domain} only if no better page exists.`;
+
   let internalLinksBlock = '';
   if (siteLinks.length || generatedLinks.length) {
     const siteBlock = siteLinks.length
-      ? `User's own website pages (prefer these — use the absolute URL as the link target, with natural anchor text):\n${siteLinks
+      ? `User's own website pages (prefer these — use the absolute URL as the link target, with natural anchor text; when several pages fit equally well, prefer the most recently updated one — "updated YYYY-MM-DD" in the topic marks recency):\n${siteLinks
           .map(l => `- ${l.title} · ${l.url}${l.topic ? ` (topic: ${l.topic})` : ''}`)
           .join('\n')}`
       : '';
     const generatedBlock = generatedLinks.length
-      ? `Blog posts we've generated in this project (use absolute URLs like https://${project.domain}/blog/slug or https://${project.domain}/slug):\n${generatedLinks
+      ? `Blog posts we've generated in this project (listed NEWEST FIRST — prefer linking the most recent posts; use absolute URLs like https://${project.domain}/blog/slug or https://${project.domain}/slug):\n${generatedLinks
           .map(b => `- "${b.title}" → ${b.url} (keyword: ${b.topic})`)
           .join('\n')}`
       : '';
-    internalLinksBlock = `\nINTERNAL LINKING (use 3–7 total — NEVER more than 7 — where contextually relevant, split across the two pools, placed where they genuinely help the reader. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 3 validated internal links are available, use all available validated links instead of inventing links. When the pool contains a product / solution / pricing / landing page, include at least one such link, and END the article with a short, natural call-to-action that links to the most relevant product/solution/landing page — fall back to the site homepage https://${project.domain} only if no better page exists):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
+    internalLinksBlock = `\nINTERNAL LINKING (use 3–7 total — NEVER more than 7 — where contextually relevant, split across the two pools, placed where they genuinely help the reader. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 3 validated internal links are available, use all available validated links instead of inventing links. When the pool contains a product / solution / pricing / landing page, include at least one such link. ${ctaInstruction}):\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
   }
+
+  // 1b. Live follow-up questions (Perplexity / PAA) → mandatory AEO H2 sections.
+  const followUps = (followUpQuestions ?? []).map(q => q.trim()).filter(Boolean).slice(0, 3);
+  const followUpsBlock = followUps.length
+    ? `\nSEARCHER FOLLOW-UP QUESTIONS (fetched live for "${entry.focus_keyword}" — these are the questions real users ask next after this search):\n${followUps
+        .map((q, i) => `${i + 1}. ${q}`)
+        .join('\n')}\nRULES FOR FOLLOW-UP SECTIONS (mandatory):\n- Dedicate one full ## H2 section to EACH question above, using the question itself (or a near-verbatim, natural phrasing that keeps it a question) as the H2 text.\n- Immediately under each of these H2s, write a 40–55 word snippet paragraph that fully and directly answers the question, with the first sentence in **bold** — then expand with practical detail beneath it.\n- These sections count toward (and can satisfy) the question-phrased-H2 requirements in the AEO rules below.\n- Do NOT duplicate these questions again in the FAQ section — cover different questions there.\n`
+    : '';
 
   // 2. External research context (competitor articles — for topic reference only, NOT for citation links)
   let researchContextBlock = '';
@@ -243,7 +274,7 @@ TARGET AUDIENCE: ${project.target_audience}
 INDUSTRY/NICHE:  ${project.niche}
 COMPANY:         ${project.company} (${project.domain})
 WORD COUNT:      ~${wordCount} words
-${writerNotesBlock}${briefBlock}${internalLinksBlock}
+${writerNotesBlock}${briefBlock}${internalLinksBlock}${followUpsBlock}
 
 SECONDARY KEYWORDS / H2 TOPICS:
 ${termsMatchList}
@@ -261,12 +292,12 @@ SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 1. WORD COUNT: Minimum ${Math.max(wordCount, 1500)} words (target ${wordCount}).
 2. TITLE KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear in the H1 title. Keep the title ≤ 60 characters so it never truncates in search results, and front-load the keyword (as close to the start as natural English allows).
 3. INTRO KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear within the first 100 words of the intro paragraph.
-4. KEYWORD DENSITY: Mention "${entry.focus_keyword}" naturally 1× per ~150–200 words (0.5–3% density). Spread mentions evenly — not just intro + conclusion.
+4. KEYWORD USAGE — NATURAL, NEVER FORCED: Use "${entry.focus_keyword}" only where it genuinely reads naturally (a loose target of 0.5–2% density). Content quality and usefulness ALWAYS win over density: if a section reads better with a pronoun, a synonym, or a close variant of the keyword, use that instead — it is completely fine to land under the density target. HARD RULES: never insert the keyword into consecutive or alternating paragraphs as a pattern, never append filler sentences whose only purpose is to mention the keyword, and never repeat the exact keyword phrase twice in one paragraph. A reader must never be able to tell which phrase is "the keyword".
 5. H2 HEADINGS: At least 5 × ## headings in the contentMarkdown (the scorer requires >= 3).
 6. H3 SUB-HEADINGS: At least 2 × ### headings inside long H2 body sections to organize sub-topics.
 7. FAQ SECTION: MUST have a heading that reads exactly "## FAQs" (or "## Frequently Asked Questions"). Include exactly 7 to 10 Q&A pairs, each question as a ### heading.
-8. EXTERNAL LINKS: Include 3–7 highly credible external citations — NEVER more than 7, and never fewer than 3 when credible sources for the topic exist. Format: [anchor text](https://...). Each external link must directly support the exact claim near the link. RULES: (a) Cite the PRIMARY SOURCE of the claim where possible — the actual research report, dataset, government page, or academic paper — not a blog post summarising it. (b) Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista, SHRM, LinkedIn official research, IEEE, ISO, peer-reviewed journals. (c) Prefer a specific report/article page, BUT a real, stable, well-known section or topic page on a credible domain is acceptable when you are not certain a deep link exists. The goal is REAL, working URLs — do not fabricate deep links just to look specific. (d) Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any primarily-promotional URL. (e) Only cite a URL you are confident actually exists; if unsure of a specific page, use the publication's known stable page rather than guessing — never invent a URL. (f) Never use the same URL twice.
-9. INTERNAL LINKS: Include 3–7 internal links — NEVER more than 7 — from the INTERNAL LINKING pool wherever contextually relevant. Format: [anchor text](/slug) or absolute URL. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 3 validated internal links are available, use all available validated links instead of inventing links. Include at least one link to a relevant product / solution / landing page when the pool offers one, and finish with a short call-to-action linking to such a page.
+8. EXTERNAL LINKS: Include 3–7 highly credible external citations — NEVER more than 7, and never fewer than 3 when credible sources for the topic exist. Format: [anchor text](https://...). Each external link must directly support the exact claim near the link. FRESHNESS (hard requirement): every cited statistic, report, dataset, and source page must be from ${freshnessFloor} or newer — it is currently ${currentYear} and data older than ${freshnessFloor} is stale. Never cite a pre-${freshnessFloor} report, never use a URL whose path contains a year older than ${freshnessFloor} (e.g. /2019/, -2021-report), and when a source publishes recurring editions (Future of Jobs, salary surveys, market outlooks) always cite the LATEST edition. If no fresh source exists for a claim, drop or reword the claim rather than citing stale data. RULES: (a) Cite the PRIMARY SOURCE of the claim where possible — the actual research report, dataset, government page, or academic paper — not a blog post summarising it. (b) Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista, SHRM, LinkedIn official research, IEEE, ISO, peer-reviewed journals. (c) Prefer a specific report/article page, BUT a real, stable, well-known section or topic page on a credible domain is acceptable when you are not certain a deep link exists. The goal is REAL, working URLs — do not fabricate deep links just to look specific. (d) Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any primarily-promotional URL. (e) Only cite a URL you are confident actually exists; if unsure of a specific page, use the publication's known stable page rather than guessing — never invent a URL. (f) Never use the same URL twice.
+9. INTERNAL LINKS: Include 3–7 internal links — NEVER more than 7 — from the INTERNAL LINKING pool wherever contextually relevant. Format: [anchor text](/slug) or absolute URL. Use only validated links from the provided pool. Do not invent internal URLs, slugs, or pages. If fewer than 3 validated internal links are available, use all available validated links instead of inventing links. Prefer the most recently published/updated pages when several fit equally well. Include at least one link to a relevant product / solution / landing page when the pool offers one. CLOSING CTA: ${ctaInstruction}
 10. META DESCRIPTION: Exactly 150–160 characters long and MUST contain "${entry.focus_keyword}".
 11. NO FILLER: Avoid crutch words ("In today's world", "In recent years", "As we navigate", "game-changer", "In today's rapidly evolving landscape", "unlock the power of", "delve into"). Use specific wording and practical examples instead of vague claims.
 12. INFORMATION GAIN: The article must contain at least 2 things NO competitor page covers — a unique angle, a framework/checklist the reader can act on, a contrarian but defensible position, or an original synthesis of the cited data. Search engines now score "information gain"; a pure summary of what already ranks cannot outrank it.
@@ -314,13 +345,14 @@ EDITORIAL AND FORMATTING REQUIREMENTS:
    - NEVER emit a stray fragment of comma/dash/pipe characters (e.g. a line or trailing suffix like \`, -\`) anywhere in the article, inside or outside a table. If you are not completing a full, valid table or list on that line, do not write partial table syntax at all — finish the sentence in plain prose instead.
 
 7. NATURAL INTERLINKING & "ALSO READ" CALLOUTS:
-   - Target 3–7 internal links total (NEVER more than 7), including at least one product/solution/landing page when the pool offers one. Use verified internal links only from the provided INTERNAL LINKING pool. Do NOT invent internal URLs, slugs, or pages.
+   - Target 3–7 internal links total (NEVER more than 7), including at least one product/solution/landing page when the pool offers one. Use verified internal links only from the provided INTERNAL LINKING pool. Do NOT invent internal URLs, slugs, or pages. Prefer the NEWEST pages/posts in the pool when several fit the context equally well.
    - If fewer than 3 validated internal links are available, use all available ones — never invent additional links to hit the count.
    - If a validated internal link cannot be naturally woven into the prose of the paragraphs, you MUST include a clean callout block:
      > **Also Read:** [Anchor text / Title of the related blog](https://domain/slug)
 
 8. CITATIONS & EXTERNAL LINKING:
    - Target 3–7 external citations total (NEVER more than 7, and never fewer than 3 when credible sources for the topic exist). Every external citation must directly support the exact claim near the link.
+   - RECENCY: only cite sources, reports, and datasets published in ${freshnessFloor} or later (it is ${currentYear}). Prefer the newest available edition of any recurring publication. Never present a pre-${freshnessFloor} statistic as current — if only stale data exists, omit the claim.
    - Every external citation must point to the PRIMARY SOURCE of the claim — the actual study, report, dataset, or official page — not a blog post or article that summarises it.
    - Preferred authoritative sources: .gov, .edu, WHO, CDC, World Bank, ILO, OECD, WEF, PubMed/NCBI, McKinsey, Gartner, Deloitte, PwC, EY, BCG, Bain, Accenture, Forrester, Statista (direct report pages), SHRM, LinkedIn official research reports, IEEE, ISO, peer-reviewed journals.
    - Never link to competitor blogs, vendor landing/product pages, Medium, Reddit, Quora, listicles, or any URL that is primarily promotional.
@@ -346,7 +378,7 @@ GEO (GENERATIVE ENGINE OPTIMIZATION) — must satisfy all of these so AI tools l
 GEO-1. DIRECT ANSWER FIRST: The very first paragraph (before any subheading) must contain a crisp, standalone answer to the implied search query — 2–3 sentences, no fluff. This is what AI scrapers extract.
 GEO-2. DEFINITION BOXES: When introducing any technical term or concept, include a one-line bold definition immediately after its first use: **[Term]**: [definition in ≤ 20 words].
 GEO-3. FACTUAL DENSITY: Include at least 6 verified, specific facts or statistics (with inline citation links). AI models weight fact-dense content higher for citation.
-GEO-4. SOURCE TRANSPARENCY: Every statistic or research claim must be followed by the author/source name in parentheses: e.g. "(McKinsey, 2024)" — this mimics academic citation style that AI models trust.
+GEO-4. SOURCE TRANSPARENCY: Every statistic or research claim must be followed by the author/source name AND year in parentheses: e.g. "(McKinsey, ${currentYear - 1})" — this mimics academic citation style that AI models trust. The year must be ${freshnessFloor} or later; never attribute a stat to an older year.
 GEO-5. ENTITY CLARITY: Explicitly name the key entities (companies, tools, standards, frameworks) relevant to this topic so AI can build a knowledge graph from this page.
 GEO-6. SUMMARY SECTION: End with a "## Key Takeaways" or "## Summary" section containing 5–7 bullet points — this is the section AI models most often extract verbatim for answers.
 GEO-7. QUOTATIONS: Include 1–2 short, real quotations from named experts, official reports, or organizations (with attribution, e.g. 'According to the World Economic Forum's Future of Jobs Report, "..."'). Quoted, attributed statements measurably increase how often generative engines cite a page. Only quote text you are confident is real — never fabricate a quote.

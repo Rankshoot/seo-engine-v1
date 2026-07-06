@@ -12,7 +12,8 @@ import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
-import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
+import { normalizeSiteHost, extractLinksFromMarkdown } from "@/lib/blog-content";
+import { prepareForRender } from "@/lib/content-validation";
 import { analyzeBlogContent, updateBlogCoverImage, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { normalizeMarkdownImages, BLOG_IMAGE_PLACEHOLDER_URL } from "@/services/openAiImages";
 import {
@@ -265,13 +266,19 @@ export default function BlogViewerPage() {
     [project?.domain]
   );
 
+  // The exact markdown the preview renders (recovered + artifact-stripped).
+  // Copy MD copies this string, and the sidebar link lists are derived from
+  // it — so preview, copy, and the right panel can never disagree.
+  const previewContent = useMemo(() => {
+    const raw = displayBlog?.content ?? "";
+    if (!raw) return "";
+    const prep = prepareForRender(raw, { type: "blog" });
+    return prep.ok ? prep.content : raw;
+  }, [displayBlog?.content]);
+
   const { externalLinks, internalLinks } = useMemo(
-    () => reclassifyBlogLinkSidebarLists(
-      displayBlog?.external_links ?? [],
-      displayBlog?.internal_links ?? [],
-      project?.domain
-    ),
-    [displayBlog?.external_links, displayBlog?.internal_links, project?.domain]
+    () => extractLinksFromMarkdown(previewContent, project?.domain),
+    [previewContent, project?.domain]
   );
 
   // ── Effects ─────────────────────────────────────────────────────────────
@@ -721,7 +728,9 @@ export default function BlogViewerPage() {
 
   const handleCopy = async () => {
     if (!displayBlog) return;
-    await navigator.clipboard.writeText(displayBlog.content);
+    // Copy exactly what the preview shows — never raw stored content that may
+    // carry legacy artifacts the renderer strips.
+    await navigator.clipboard.writeText(previewContent || displayBlog.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

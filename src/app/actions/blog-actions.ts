@@ -230,6 +230,8 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
         .eq('project_id', entry.project_id)
         .in('status', ['generated', 'approved', 'published'])
         .neq('entry_id', entryId)
+        // Newest first so the internal-link pool favours the latest posts.
+        .order('created_at', { ascending: false })
         .limit(15);
       existingBlogs = blogs ?? [];
     } catch {

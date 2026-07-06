@@ -368,7 +368,10 @@ export async function POST(req: Request) {
           const { data: blogs } = await supabaseAdmin
             .from("blogs").select("title, slug, target_keyword")
             .eq("project_id", projectId).in("status", ["generated", "approved", "published"])
-            .neq("entry_id", body.entryId || "").limit(15);
+            .neq("entry_id", body.entryId || "")
+            // Newest first so the internal-link pool favours the latest posts.
+            .order("created_at", { ascending: false })
+            .limit(15);
           existingBlogs = blogs ?? [];
         } catch { /* optional */ }
 

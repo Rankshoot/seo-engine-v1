@@ -2,10 +2,12 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
+import { qk } from "@/lib/query";
 import type { ContentAuditReport } from "@/lib/content-audit-studio";
 import { startUrlAudit, getActiveAuditJobs, getAuditJobOutcome, type ActiveAuditJob } from "@/app/actions/audit-jobs-actions";
 import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
@@ -17,16 +19,33 @@ import { STEPS } from "./_components/audit-config";
 import { AuditResults } from "./_components/AuditResults";
 import { AuditHistory } from "./_components/AuditHistory";
 import { GenerationStreamPanel } from "./_components/GenerationStreamPanel";
-import { useAppDispatch } from "@/lib/redux/hooks";
-import { setGeneratedMap, setGeneratedBlog } from "@/lib/redux/audit-generations-slice";
+import { useAppDispatch, useAppSelector, selectGeneratedBlogId, selectAuditSchedule, selectAuditGenerationsForProject } from "@/lib/redux/hooks";
+import { setGeneratedMap, setGeneratedBlog, normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
+import { setScheduledMap, setScheduledAudit } from "@/lib/redux/audit-schedules-slice";
+import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 
 const MAX_UPLOAD_CHARS = 200_000;
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
+/** Keeps the Content Calendar page's cached data (and its Redux refresh
+ * counter) in sync whenever a blog/schedule change happens here — otherwise
+ * the calendar shows stale state until a hard refresh. */
+function syncCalendarAfterChange(
+  queryClient: ReturnType<typeof useQueryClient>,
+  dispatch: ReturnType<typeof useAppDispatch>,
+  projectId: string
+) {
+  void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+  void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+  void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+  dispatch(calendarRefreshBump({ projectId }));
+}
+
 export default function ContentAuditStudioPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const dispatch = useAppDispatch();
+  const queryClient = useQueryClient();
 
   const [inputMode, setInputMode] = useState<"url" | "upload">("url");
   const [url, setUrl] = useState("");
@@ -44,14 +63,22 @@ export default function ContentAuditStudioPage() {
   const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors">("issues");
   const [activeJobs, setActiveJobs] = useState<ActiveAuditJob[]>([]);
 
-  const [entryId, setEntryId] = useState<string | null>(null);
-  const [scheduledDate, setScheduledDate] = useState<string | null>(null);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduledDates, setScheduledDates] = useState<Set<string>>(new Set());
 
+  // Both the "already generated" and "already scheduled" state for the active
+  // report are derived from Redux (hydrated from the server, updated
+  // optimistically on success) rather than local component state — this is
+  // what makes them survive a refresh and reopening the same audit from
+  // history instead of resetting to blank every time.
+  const auditSchedule = useAppSelector(s => (report?.url ? selectAuditSchedule(s, projectId, report.url) : null));
+  const entryId = auditSchedule?.entryId ?? null;
+  const scheduledDate = auditSchedule?.scheduledDate ?? null;
+  const generatedBlogId = useAppSelector(s => (report?.url ? selectGeneratedBlogId(s, projectId, report.url) : null));
+  const generatedMap = useAppSelector(s => selectAuditGenerationsForProject(s, projectId));
+
   const [generating, setGenerating] = useState(false);
-  const [generatedBlogId, setGeneratedBlogId] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState("");
   const [thinkingChunks, setThinkingChunks] = useState<string[]>([]);
   const [streamLog, setStreamLog] = useState<string[]>([]);
@@ -98,6 +125,21 @@ export default function ContentAuditStudioPage() {
     return () => { cancelled = true; };
   }, [projectId, dispatch]);
 
+  // Hydrate the audit-URL → calendar-schedule map (Redux) so both the active
+  // report view and Audit History rows show "Scheduled for <date>" instead of
+  // resetting to "Schedule to Calendar" on every refresh / reopen.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await contentAuditApi.scheduledMap(projectId);
+        if (!cancelled && res?.map) dispatch(setScheduledMap({ projectId, map: res.map }));
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId, dispatch]);
+
   // Resume in-flight audits after a tab-switch / refresh. The audit jobs keep
   // running server-side regardless of the client, so on return we re-attach,
   // render skeletons for what's still running, and refresh history as each
@@ -126,9 +168,12 @@ export default function ContentAuditStudioPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  // Fallback confirmation for the rare race where this report opens before the
+  // bulk generated-map hydration (above) has resolved. Only ever *adds* to
+  // Redux — never resets it — so the "View Blog" button never flickers back
+  // to "Generate Enhanced Blog" once Redux already knows the answer.
   useEffect(() => {
-    if (!report?.url || !projectId) return;
-    setGeneratedBlogId(null);
+    if (!report?.url || !projectId || generatedBlogId) return;
     const auditUrl = report.url;
     void (async () => {
       try {
@@ -137,12 +182,11 @@ export default function ContentAuditStudioPage() {
         );
         const data = (await res.json()) as { blogId?: string };
         if (data.blogId) {
-          setGeneratedBlogId(data.blogId);
           dispatch(setGeneratedBlog({ projectId, url: auditUrl, blogId: data.blogId }));
         }
       } catch { /* non-fatal */ }
     })();
-  }, [report?.url, projectId, dispatch]);
+  }, [report?.url, projectId, generatedBlogId, dispatch]);
 
   useEffect(() => {
     if (report) {
@@ -168,10 +212,7 @@ export default function ContentAuditStudioPage() {
   };
 
   const resetPostAuditState = () => {
-    setGeneratedBlogId(null);
     setGenerateError("");
-    setEntryId(null);
-    setScheduledDate(null);
     setScheduleOpen(false);
     setThinkingChunks([]);
     setStreamLog([]);
@@ -322,23 +363,6 @@ export default function ContentAuditStudioPage() {
     scheduled_from: "analyze_content",
   });
 
-  const ensureEntry = useCallback(async (): Promise<{ id: string; date: string } | { error: string }> => {
-    if (entryId) return { id: entryId, date: scheduledDate ?? "" };
-    if (!report) return { error: "No audit to schedule." };
-    const res = await calendarApi.addContentHealth(projectId, {
-      focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword || report.title,
-      auditUrl: report.url,
-      contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
-    });
-    if (!res.success || !res.data) {
-      return { error: (res as { error?: string }).error ?? "Could not add to calendar." };
-    }
-    const date = (res as { scheduled_date?: string }).scheduled_date ?? String(res.data.scheduled_date).slice(0, 10);
-    setEntryId(res.data.id);
-    void loadScheduledDates();
-    return { id: res.data.id, date };
-  }, [entryId, scheduledDate, report, projectId, loadScheduledDates]);
-
   const handleGenerate = async () => {
     if (!report) return;
     setGenerating(true);
@@ -374,8 +398,8 @@ export default function ContentAuditStudioPage() {
         }
       }
       if (blogId) {
-        setGeneratedBlogId(blogId);
         if (report?.url) dispatch(setGeneratedBlog({ projectId, url: report.url, blogId }));
+        syncCalendarAfterChange(queryClient, dispatch, projectId);
         void loadHistory();
       } else {
         setGenerateError("Generation finished without returning a blog. Check Content History.");
@@ -387,51 +411,81 @@ export default function ContentAuditStudioPage() {
     }
   };
 
-  const handleScheduleConfirm = async (date: string) => {
-    if (!report) return;
+  // Shared scheduling logic used both by the active report's Schedule button
+  // and by the inline mini-calendar on each Audit History row — so scheduling
+  // from history no longer requires opening the full audit view first.
+  const scheduleReport = async (rep: ContentAuditReport, date: string, onError?: (msg: string) => void) => {
     setScheduleSaving(true);
     try {
-      if (generatedBlogId) {
-        const res = await calendarApi.scheduleExistingBlog(projectId, { blogId: generatedBlogId, targetDate: date });
+      const blogId = generatedMap[normalizeAuditGenerationUrl(rep.url)] ?? null;
+      if (blogId) {
+        const res = await calendarApi.scheduleExistingBlog(projectId, { blogId, targetDate: date });
         if (res.success && res.data) {
-          setEntryId(res.data.id);
-          setScheduledDate(date);
+          dispatch(setScheduledAudit({ projectId, url: rep.url, entryId: res.data.id, scheduledDate: date }));
+          syncCalendarAfterChange(queryClient, dispatch, projectId);
           void loadScheduledDates();
           toast.success("Blog scheduled to calendar");
         } else {
-          setGenerateError((res as any).error ?? "Failed to schedule blog.");
+          const msg = (res as any).error ?? "Failed to schedule blog.";
+          onError?.(msg);
+          toast.error(msg);
         }
       } else {
         const res = await calendarApi.addContentHealth(projectId, {
-          focusKeyword: report.revamp_brief?.target_keyword || report.primary_keyword || report.title,
-          auditUrl: report.url,
-          contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+          focusKeyword: rep.revamp_brief?.target_keyword || rep.primary_keyword || rep.title,
+          auditUrl: rep.url,
+          contentHealthAudit: buildSnapshot(rep) as unknown as Record<string, unknown>,
           targetDate: date,
         });
         if (res.success && res.data) {
           const actualDate = (res as { scheduled_date?: string }).scheduled_date ?? String(res.data.scheduled_date).slice(0, 10);
-          setEntryId(res.data.id);
-          setScheduledDate(actualDate);
+          dispatch(setScheduledAudit({ projectId, url: rep.url, entryId: res.data.id, scheduledDate: actualDate }));
+          syncCalendarAfterChange(queryClient, dispatch, projectId);
           void loadScheduledDates();
           toast.success("Scheduled to calendar");
         } else {
-          setGenerateError((res as any).error ?? "Could not add to calendar.");
+          const msg = (res as any).error ?? "Could not add to calendar.";
+          onError?.(msg);
+          toast.error(msg);
         }
       }
     } catch (e) {
-      setGenerateError(e instanceof Error ? e.message : "Unexpected error during scheduling.");
+      const msg = e instanceof Error ? e.message : "Unexpected error during scheduling.";
+      onError?.(msg);
+      toast.error(msg);
     } finally {
       setScheduleSaving(false);
-      setScheduleOpen(false);
     }
   };
 
+  const handleScheduleConfirm = async (date: string) => {
+    if (!report) return;
+    await scheduleReport(report, date, setGenerateError);
+    setScheduleOpen(false);
+  };
+
+  // Schedules directly from an Audit History row's mini-calendar — no need to
+  // open the full audit view first.
+  const handleScheduleFromHistoryConfirm = async (item: ContentAuditHistoryItem, date: string) => {
+    const rep = item.report as unknown as ContentAuditReport | null;
+    if (!rep) return;
+    await scheduleReport(rep, date);
+  };
+
   const handleReschedule = async (date: string) => {
-    if (!entryId) return;
+    if (!entryId || !report) return;
     setScheduleSaving(true);
     try {
       const res = await calendarApi.rescheduleEntry(projectId, { entryId, date });
-      if (res.success) { setScheduledDate(date); void loadScheduledDates(); }
+      if (res.success) {
+        dispatch(setScheduledAudit({ projectId, url: report.url, entryId, scheduledDate: date }));
+        syncCalendarAfterChange(queryClient, dispatch, projectId);
+        void loadScheduledDates();
+      } else {
+        toast.error((res as any).error ?? "Failed to reschedule.");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to reschedule.");
     } finally {
       setScheduleSaving(false);
       setScheduleOpen(false);
@@ -447,7 +501,6 @@ export default function ContentAuditStudioPage() {
   };
 
   const handleGenerateFromHistory = (item: ContentAuditHistoryItem) => { openHistoryItem(item); };
-  const handleScheduleFromHistory = (item: ContentAuditHistoryItem) => { openHistoryItem(item); setScheduleOpen(true); };
   const headerActions = (
     <div
       className="relative grid grid-cols-2 w-[340px] sm:w-[360px] rounded-[12px] border border-border-subtle bg-surface-secondary/60 p-1 gap-0.5 backdrop-blur-sm shadow-sm"
@@ -704,7 +757,9 @@ export default function ContentAuditStudioPage() {
             loading={historyLoading}
             onOpen={openHistoryItem}
             onGenerateFromHistory={handleGenerateFromHistory}
-            onScheduleFromHistory={handleScheduleFromHistory}
+            onScheduleConfirm={handleScheduleFromHistoryConfirm}
+            scheduleSaving={scheduleSaving}
+            scheduledDates={scheduledDates}
           />
         )}
       </motion.div>

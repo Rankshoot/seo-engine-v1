@@ -10,7 +10,8 @@ export type CalendarKeywordOrigin =
   | "competitor_keywords"
   | "domain"
   | "content_health"
-  | "custom_keyword";
+  | "custom_keyword"
+  | "ai";
 
 export interface ResolvedCalendarOrigin {
   origin: CalendarKeywordOrigin;
@@ -36,6 +37,18 @@ export function resolveCalendarKeywordOrigin(input: {
   aiSourceFromEntry?: string | null;
   aiSourceFromKeyword?: string | null;
 }): ResolvedCalendarOrigin {
+  const isAi =
+    (input.aiSourceFromEntry && input.aiSourceFromEntry.toLowerCase().includes("ai")) ||
+    (input.aiSourceFromKeyword && input.aiSourceFromKeyword.toLowerCase().includes("ai"));
+
+  if (isAi) {
+    return {
+      origin: "ai",
+      label: "AI",
+      badgeClass: "bg-[#8b5cf6]/10 text-[#a78bfa] border-[#8b5cf6]/25",
+    };
+  }
+
   const ch = contentHealthAuditForCalendarOrigin(input.contentHealthAudit);
   if (ch) {
     return {

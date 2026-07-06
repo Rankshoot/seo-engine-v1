@@ -917,6 +917,53 @@ function inferContentType(articleType: string): ContentType {
   return 'blog';
 }
 
+export async function deleteContentAssetAction(
+  projectId: string,
+  blogId: string,
+  entryId?: string | null,
+): Promise<{ success: boolean; error?: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  // 1. Verify project ownership
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (pErr || !project) return { success: false, error: 'Project not found' };
+
+  // 2. Verify the blog exists and belongs to this project
+  const { data: blog, error: bErr } = await supabaseAdmin
+    .from('blogs')
+    .select('id, entry_id')
+    .eq('id', blogId)
+    .eq('project_id', projectId)
+    .single();
+  if (bErr || !blog) return { success: false, error: 'Content not found' };
+
+  // 3. Reset the linked calendar entry so the keyword shows Generate again
+  const linkedEntryId = entryId || blog.entry_id;
+  if (linkedEntryId) {
+    await supabaseAdmin
+      .from('calendar_entries')
+      .update({ status: 'scheduled', updated_at: new Date().toISOString() })
+      .eq('id', linkedEntryId)
+      .eq('project_id', projectId);
+  }
+
+  // 4. Delete the blog (cascades blog_deep_analyses via FK)
+  const { error: delErr } = await supabaseAdmin
+    .from('blogs')
+    .delete()
+    .eq('id', blogId)
+    .eq('project_id', projectId);
+  if (delErr) return { success: false, error: delErr.message };
+
+  return { success: true };
+}
+
 export async function unscheduleContentAction(
   projectId: string,
   blogId: string,

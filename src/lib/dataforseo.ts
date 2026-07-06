@@ -547,9 +547,9 @@ async function fetchKeywordOverview(
     auth,
     trace
   )) as {
-    tasks?: Array<{ result?: Array<{ items?: DfsIdeaItem[] }> }>;
+    tasks?: Array<{ result?: DfsIdeaItem[] }>;
   } | null;
-  const items = parsed?.tasks?.[0]?.result?.[0]?.items ?? [];
+  const items = parsed?.tasks?.[0]?.result ?? [];
   for (const it of items) {
     const kw = itemToKeyword(it, 'keyword_overview');
     if (kw) out.set(kw.keyword.toLowerCase(), kw);
@@ -1645,6 +1645,28 @@ export async function fetchKeywordVitals(
     if (!out.has(k)) out.set(k, discoveredKeywordToVitals(dk));
   }
   return out;
+}
+
+/**
+ * Like `fetchKeywordVitals` but returns the full DataForSEO record — adds
+ * keyword difficulty + CPC, which `KeywordVitals` drops. Used where the
+ * caller needs KD/CPC alongside volume (e.g. scoring freshly AI-suggested
+ * keyword ideas before the user schedules them).
+ */
+export async function fetchKeywordMetrics(
+  keywords: string[],
+  region: string,
+  language: string = 'en'
+): Promise<Map<string, DiscoveredKeyword>> {
+  const clean = [...new Set(keywords.map(k => k.trim()).filter(Boolean))];
+  const out = new Map<string, DiscoveredKeyword>();
+  if (!clean.length) return out;
+  const auth = getAuthHeader();
+  if (!auth) return out;
+  const locationCode = getLocationCode(region);
+  const languageCode = (language || 'en').trim().slice(0, 2).toLowerCase() || 'en';
+  const trace: DataForSEOTraceEntry[] = [];
+  return fetchKeywordOverview(clean, locationCode, languageCode, auth, trace);
 }
 
 /** Convert an Ahrefs keyword overview row into our common KeywordVitals shape. */

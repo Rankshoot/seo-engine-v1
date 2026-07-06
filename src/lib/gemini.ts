@@ -842,6 +842,20 @@ export async function generateBlogPost(
       )
     : [];
 
+  // Live follow-up questions (Perplexity → PAA fallback) become dedicated,
+  // AEO-optimised question H2s in the article. Best-effort — never blocks.
+  let followUpQuestions: string[] = [];
+  try {
+    const { resolveFollowUpQuestions } = await import('@/lib/perplexity');
+    followUpQuestions = await resolveFollowUpQuestions(
+      entry.focus_keyword,
+      research?.peopleAlsoAsk,
+      { limit: 3 }
+    );
+  } catch (e) {
+    console.warn('[blog-gen] follow-up questions fetch failed, continuing:', e);
+  }
+
   const prompt = buildBlogPrompt({
     entry: {
       focus_keyword: entry.focus_keyword,
@@ -854,6 +868,7 @@ export async function generateBlogPost(
     research,
     existingBlogs: filteredExistingBlogs,
     brief: filteredBrief,
+    followUpQuestions,
     ahrefsContext: ahrefsContext || undefined,
     writerNotes,
   });

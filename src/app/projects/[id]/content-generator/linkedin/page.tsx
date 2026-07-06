@@ -36,6 +36,8 @@ import {
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
 import { useUserQuota } from "@/hooks/useUserQuota";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import {
   LINKEDIN_STYLE_OPTIONS,
   LINKEDIN_VOICE_OPTIONS,
@@ -49,6 +51,7 @@ export default function LinkedInGeneratorPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const { canGenerateLinkedIn, quota, hasAiCredits } = useUserQuota();
   const studioBase = `/projects/${projectId}/content-generator`;
 
@@ -176,6 +179,12 @@ export default function LinkedInGeneratorPage() {
     if (res.success) {
       toast.success("LinkedIn post ready — opening preview.");
       void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+      if (entryId) {
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+        dispatch(calendarRefreshBump({ projectId }));
+      }
       router.push(`${studioBase}/linkedin/${res.data.id}`);
     } else {
       toast.error(res.error);

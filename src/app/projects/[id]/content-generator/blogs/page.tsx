@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -44,6 +44,8 @@ import {
 import { calendarApi } from "@/frontend/api/calendar";
 import { blogsApi } from "@/frontend/api/blogs";
 import { useUserQuota } from "@/hooks/useUserQuota";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 
 const TONES = [
   { id: "premium-educational", label: "Premium · educational" },
@@ -181,12 +183,23 @@ export default function BlogGeneratorPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const { canGenerateBlog, quota, hasAiCredits, hasAhrefsH2sCredits, hasAhrefsFaqsCredits, hasDeepAnalysisCredits } = useUserQuota();
   const base = `/projects/${projectId}`;
   const studioBase = `${base}/content-generator`;
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+
+  // Tracks whether the user is still on this drafting page. Generation keeps
+  // running (the fetch stays alive through in-app navigation), so on completion
+  // we only auto-open the finished blog if the user is STILL here — otherwise we
+  // notify with a toast instead of yanking them off whatever page they moved to.
+  const isOnPageRef = useRef(true);
+  useEffect(() => {
+    isOnPageRef.current = true;
+    return () => { isOnPageRef.current = false; };
+  }, []);
 
   const entryId = searchParams?.get("entryId");
   const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
@@ -216,6 +229,11 @@ export default function BlogGeneratorPage() {
 
   const keywordParam = searchParams?.get("keyword") || "";
   const { value: primaryKeyword, setValue: setPrimaryKeyword, isTyping: isKeywordTyping } = useKeywordParam(keywordParam);
+
+  // True when this generator was opened from an already-scheduled calendar
+  // entry (Generate button on the calendar / repair row). Used to warn the
+  // user that editing the keyword here retargets that calendar slot instead
+  // of silently generating the old keyword underneath their edits.
 
   const [phase, setPhase] = useState<Phase>("form");
   const [topic, setTopic] = useState("");
@@ -443,10 +461,36 @@ export default function BlogGeneratorPage() {
         } else if (event.event === "done") {
           setStreamProgress(1);
           setIsThinking(false);
-          toast.success("Blog generated!");
+          const blogHref = `${studioBase}/blogs/${event.blogId}`;
+          // No-refresh updates: refresh Content History + Calendar wherever they're mounted.
           void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-          router.push(`${studioBase}/blogs/${event.blogId}`);
+          void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+          dispatch(calendarRefreshBump({ projectId }));
+          if (isOnPageRef.current) {
+            // Still watching the drafting page → open the finished draft.
+            toast.success("Blog generated!");
+            router.push(blogHref);
+          } else {
+            // Navigated away while it generated → notify, never force-navigate.
+            toast.success(
+              (t) => (
+                <span className="flex items-center gap-3">
+                  <span>✅ Your blog{topic ? ` “${topic}”` : ""} is ready</span>
+                  <button
+                    type="button"
+                    onClick={() => { toast.dismiss(t.id); router.push(blogHref); }}
+                    className="rounded-md bg-brand-action px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
+                  >
+                    View blog
+                  </button>
+                </span>
+              ),
+              { duration: 8000 }
+            );
+          }
           return "done";
         } else if (event.event === "error") {
           toast.error(event.message || "Generation failed");
@@ -477,6 +521,13 @@ export default function BlogGeneratorPage() {
       } else {
         for await (const event of blogsApi.generateStream({
           entryId: finalEntryId!,
+          keyword: primaryKeyword,
+          topic,
+          audience,
+          tone: TONES.find(t => t.id === tone)?.label || tone,
+          goal,
+          ctaObjective,
+          secondaryKeywords,
           wordCount,
           ...advancedBody,
         })) {
@@ -513,6 +564,7 @@ export default function BlogGeneratorPage() {
 
   return (
     <div className={`relative space-y-10 pb-16 pl-4 pr-4 ${mounted ? "animate-slide-in-right" : ""}`}>
+
       {isAuditFixMode && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-status-warning/30 bg-status-warning/8 px-4 py-3">
           <span className="mt-0.5 shrink-0 rounded-full border border-status-warning/40 bg-status-warning/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-warning">

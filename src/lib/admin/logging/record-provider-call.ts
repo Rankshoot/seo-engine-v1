@@ -98,6 +98,26 @@ export function recordSerperCall(
   });
 }
 
+export function recordPerplexityCall(
+  endpoint: string,
+  ok: boolean,
+  latencyMs: number,
+  errorMessage?: string
+): void {
+  if (!isServer) return;
+  const ctx = mergeUsageLogContext({});
+  queueApiUsage({
+    userId: ctx.userId,
+    projectId: ctx.projectId,
+    provider: "perplexity",
+    feature: ctxFeature("perplexity", endpoint),
+    endpoint: `perplexity/${endpoint}`,
+    status: ok ? "success" : "error",
+    latencyMs,
+    errorMessage: errorMessage ?? null,
+  });
+}
+
 export function recordJinaCall(
   url: string,
   ok: boolean,

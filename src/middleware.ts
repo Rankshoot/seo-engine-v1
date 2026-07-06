@@ -70,6 +70,9 @@ const isPublicRoute = createRouteMatcher([
   "/sign-up(.*)",
   "/pending-approval(.*)",
   "/api/webhooks(.*)",
+  // Deployment-version handshake for the client self-refresh guard — must be
+  // reachable from every page (incl. marketing) with no auth.
+  "/api/version(.*)",
 ]);
 
 const isApprovalBypassRoute = createRouteMatcher([

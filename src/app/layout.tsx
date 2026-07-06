@@ -8,6 +8,7 @@ import { ReduxProvider } from "@/components/redux-provider";
 import { AppToastContainer } from "@/components/app-toast-container";
 import { ClerkThemedProvider } from "@/components/clerk-themed-provider";
 import { TooltipProvider } from "@/components/ui/Tooltip";
+import { DeploymentRefreshGuard } from "@/components/DeploymentRefreshGuard";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -66,6 +67,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
           <AppToastContainer />
           {children}
           <SpeedInsights />
+          <DeploymentRefreshGuard />
         </TooltipProvider>
       </QueryProvider>
     </ReduxProvider>

@@ -179,6 +179,41 @@ export function recoverContentFromEnvelope(raw: string): string | null {
 }
 
 /**
+ * Canned keyword-density filler sentences a legacy "AI fix" used to append to
+ * paragraphs (e.g. "For SEO, <keyword> should appear naturally in sections
+ * where the topic is being explained, compared, or operationalized."). The
+ * mechanical injector has been removed, but rows written before that still
+ * carry these lines — and they must never render, copy, or export. Each
+ * pattern anchors the template's invariant head + tail around the interpolated
+ * keyword, so real prose can't false-positive.
+ */
+const FORCED_KEYWORD_FILLER_RES: RegExp[] = [
+  /^For readers evaluating .+?, the most useful next step is to connect the recommendation back to clear business outcomes\.\s*$/gim,
+  /^A practical .+? plan should consider current demand, stakeholder expectations, and the resources required for execution\.\s*$/gim,
+  /^Teams comparing options around .+? should prioritize specific examples, measurable outcomes, and a realistic implementation path\.\s*$/gim,
+  /^When .+? is part of a broader strategy, clarity on audience intent helps the content stay useful instead of generic\.\s*$/gim,
+  /^The strongest .+? guidance usually combines market context, operational detail, and links to related resources\.\s*$/gim,
+  /^Use .+? as a planning lens, but keep the advice focused on the reader'?s concrete decision or next action\.\s*$/gim,
+  /^A well-structured .+? article should answer the main question quickly, then support it with examples and evidence\.\s*$/gim,
+  /^For SEO, .+? should appear naturally in sections where the topic is being explained, compared, or operationalized\.\s*$/gim,
+];
+
+/**
+ * Remove the legacy forced-keyword filler sentences wherever they appear
+ * (their injector placed them as standalone trailing lines of a paragraph).
+ * Pure, idempotent, and a no-op on clean content.
+ */
+export function stripForcedKeywordFiller(content: string): string {
+  if (!content) return "";
+  let out = content;
+  for (const re of FORCED_KEYWORD_FILLER_RES) {
+    re.lastIndex = 0;
+    out = out.replace(re, "");
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
  * Defensive sanitization for export / publish. Strips any leaked JSON envelope
  * lines, placeholder images, and unresolved image-placeholder markers so a
  * never-quite-perfect draft can still leave the app cleanly. Pure string work.
@@ -209,7 +244,7 @@ export function sanitizeForExport(content: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return out;
+  return stripForcedKeywordFiller(out);
 }
 
 /**
@@ -366,7 +401,9 @@ export interface RenderPreparation {
  * This repairs already-persisted broken rows at view time without a DB write.
  */
 export function prepareForRender(content: string, opts: ValidateOptions): RenderPreparation {
-  const base = (content ?? "").trim();
+  // Legacy forced-keyword filler must never render regardless of which branch
+  // returns below — stripping first keeps preview, copy, and export identical.
+  const base = stripForcedKeywordFiller((content ?? "").trim());
   const v = validateGeneratedContent(base, opts);
   if (v.ok) return { ok: true, content: base, recovered: false, validation: v };
 

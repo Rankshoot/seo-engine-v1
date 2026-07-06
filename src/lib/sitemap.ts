@@ -38,6 +38,8 @@ export interface SitemapUrlRecord {
   path: string;
   kind: SitemapUrlKind;
   title: string;
+  /** ISO date from the sitemap's <lastmod>, when declared. Null when unknown. */
+  lastmod: string | null;
 }
 
 export interface SitemapTraceEntry {
@@ -90,7 +92,7 @@ export function titleFromUrl(url: string): string {
   return words.replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function toRecords(urls: string[], domain: string): SitemapUrlRecord[] {
+function toRecords(urls: string[], domain: string, lastmodByUrl?: Map<string, string>): SitemapUrlRecord[] {
   const host = (() => {
     try {
       return new URL(normalizeDomain(domain)).hostname.replace(/^www\./, '');
@@ -118,6 +120,7 @@ function toRecords(urls: string[], domain: string): SitemapUrlRecord[] {
       path: pathOf(u),
       kind: classifyKind(u),
       title: titleFromUrl(u),
+      lastmod: lastmodByUrl?.get(u) ?? null,
     });
     if (out.length >= SITEMAP_URL_STORE_MAX) break;
   }
@@ -170,12 +173,16 @@ export async function fetchProjectSitemap(input: {
 
   let sitemapUrl = (input.sitemapUrl ?? '').trim();
   let urls: string[] = [];
+  // url → ISO <lastmod>, filled by the crawler. Lets internal-link ranking
+  // prefer the most recently published/updated pages (newest blog posts).
+  const lastmodByUrl = new Map<string, string>();
 
   if (sitemapUrl) {
     // User gave us a specific sitemap (or index). Accumulate across everything
     // it references so a user-supplied index pulls all its child sitemaps.
     urls = await crawlSitemaps([normalizeDomain(sitemapUrl)], SITEMAP_URL_STORE_MAX, {
       stopAtFirstNonEmpty: false,
+      collectLastmod: lastmodByUrl,
     });
     trace.push({ step: 'fetch_explicit', ok: urls.length > 0, detail: `${urls.length} urls from ${sitemapUrl}` });
   } else {
@@ -187,7 +194,10 @@ export async function fetchProjectSitemap(input: {
       // If robots.txt listed several sitemaps, crawl them all; otherwise crawl
       // the single discovered root.
       const roots = robotsSitemaps.length ? robotsSitemaps : [discovered];
-      urls = await crawlSitemaps(roots, SITEMAP_URL_STORE_MAX, { stopAtFirstNonEmpty: false });
+      urls = await crawlSitemaps(roots, SITEMAP_URL_STORE_MAX, {
+        stopAtFirstNonEmpty: false,
+        collectLastmod: lastmodByUrl,
+      });
     } else {
       // Last-ditch: jina's domain-based probing (in case discovery missed it).
       urls = await fetchSitemapUrls(domain, SITEMAP_URL_STORE_MAX);
@@ -196,7 +206,7 @@ export async function fetchProjectSitemap(input: {
     trace.push({ step: 'fetch_auto', ok: urls.length > 0, detail: `${urls.length} urls` });
   }
 
-  const records = toRecords(urls.filter(isContentUrl), domain);
+  const records = toRecords(urls.filter(isContentUrl), domain, lastmodByUrl);
   trace.push({
     step: 'classify',
     ok: records.length > 0,

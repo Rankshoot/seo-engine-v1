@@ -2,11 +2,13 @@ import { useDispatch, useSelector, type TypedUseSelectorHook } from "react-redux
 import type { AppDispatch, RootState } from "@/lib/redux/store";
 import { defaultPrefs, type ProjectStatsSnapshot } from "@/lib/redux/keyword-workspace-slice";
 import { normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
+import type { AuditScheduleEntry } from "@/lib/redux/audit-schedules-slice";
 
 export const useAppDispatch = () => useDispatch<AppDispatch>();
 export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
 
 const EMPTY_GENERATED_MAP: Record<string, string> = {};
+const EMPTY_SCHEDULED_MAP: Record<string, AuditScheduleEntry> = {};
 
 /** A project's audit-URL → generated-blogId map (stable empty-object fallback). */
 export function selectAuditGenerationsForProject(
@@ -23,6 +25,23 @@ export function selectGeneratedBlogId(
   url: string
 ): string | null {
   return state.auditGenerations.byProject[projectId]?.[normalizeAuditGenerationUrl(url)] ?? null;
+}
+
+/** A project's audit-URL → { entryId, scheduledDate } map (stable empty-object fallback). */
+export function selectAuditSchedulesForProject(
+  state: RootState,
+  projectId: string
+): Record<string, AuditScheduleEntry> {
+  return state.auditSchedules.byProject[projectId] ?? EMPTY_SCHEDULED_MAP;
+}
+
+/** The calendar schedule for a single audited URL, or null if not scheduled. */
+export function selectAuditSchedule(
+  state: RootState,
+  projectId: string,
+  url: string
+): AuditScheduleEntry | null {
+  return state.auditSchedules.byProject[projectId]?.[normalizeAuditGenerationUrl(url)] ?? null;
 }
 
 export function selectKeywordPrefs(state: RootState, projectId: string) {

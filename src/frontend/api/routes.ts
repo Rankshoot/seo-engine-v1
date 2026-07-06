@@ -15,6 +15,7 @@ export const V1Routes = {
   // ── Keywords ───────────────────────────────────────────────────────────────
   keywords: (projectId: string) => `/projects/${projectId}/keywords`,
   keywordsLoadMore: (projectId: string) => `/projects/${projectId}/keywords/load-more`,
+  keywordsGenerateTrending: (projectId: string) => `/projects/${projectId}/keywords/generate-trending`,
   keywordsLoadMoreAhrefs: (projectId: string) => `/projects/${projectId}/keywords/load-more-from-ahrefs`,
   keywordsDomain: (projectId: string) => `/projects/${projectId}/keywords/domain`,
   keywordsBulkStatus: (projectId: string) => `/projects/${projectId}/keywords/bulk-status`,
@@ -57,6 +58,7 @@ export const V1Routes = {
   contentAuditAnalyze: (projectId: string) => `/projects/${projectId}/content-audit/analyze`,
   contentAuditHistory: (projectId: string) => `/projects/${projectId}/content-audit/history`,
   contentAuditGeneratedMap: (projectId: string) => `/projects/${projectId}/content-audit/generated-map`,
+  contentAuditScheduledMap: (projectId: string) => `/projects/${projectId}/content-audit/scheduled-map`,
 
   // ── Blogs ─────────────────────────────────────────────────────────────────
   blog: (blogId: string) => `/blogs/${blogId}`,

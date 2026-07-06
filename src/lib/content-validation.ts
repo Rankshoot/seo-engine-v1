@@ -49,6 +49,13 @@ export interface ValidateOptions {
   metaDescription?: string | null;
   /** When true (export/publish), placeholder images and a missing meta become fatal. */
   strict?: boolean;
+  /**
+   * Primary keyword the piece targets. When provided (blogs), deterministic
+   * keyword-coverage checks run: missing from H1/intro/body and stuffing
+   * (density > 3.5%) are surfaced as warnings so drift is visible in traces
+   * and retry prompts without ever blocking an otherwise-good draft.
+   */
+  focusKeyword?: string | null;
 }
 
 /** Minimum body word counts per content type (lenient for social posts). */
@@ -172,6 +179,41 @@ export function recoverContentFromEnvelope(raw: string): string | null {
 }
 
 /**
+ * Canned keyword-density filler sentences a legacy "AI fix" used to append to
+ * paragraphs (e.g. "For SEO, <keyword> should appear naturally in sections
+ * where the topic is being explained, compared, or operationalized."). The
+ * mechanical injector has been removed, but rows written before that still
+ * carry these lines — and they must never render, copy, or export. Each
+ * pattern anchors the template's invariant head + tail around the interpolated
+ * keyword, so real prose can't false-positive.
+ */
+const FORCED_KEYWORD_FILLER_RES: RegExp[] = [
+  /^For readers evaluating .+?, the most useful next step is to connect the recommendation back to clear business outcomes\.\s*$/gim,
+  /^A practical .+? plan should consider current demand, stakeholder expectations, and the resources required for execution\.\s*$/gim,
+  /^Teams comparing options around .+? should prioritize specific examples, measurable outcomes, and a realistic implementation path\.\s*$/gim,
+  /^When .+? is part of a broader strategy, clarity on audience intent helps the content stay useful instead of generic\.\s*$/gim,
+  /^The strongest .+? guidance usually combines market context, operational detail, and links to related resources\.\s*$/gim,
+  /^Use .+? as a planning lens, but keep the advice focused on the reader'?s concrete decision or next action\.\s*$/gim,
+  /^A well-structured .+? article should answer the main question quickly, then support it with examples and evidence\.\s*$/gim,
+  /^For SEO, .+? should appear naturally in sections where the topic is being explained, compared, or operationalized\.\s*$/gim,
+];
+
+/**
+ * Remove the legacy forced-keyword filler sentences wherever they appear
+ * (their injector placed them as standalone trailing lines of a paragraph).
+ * Pure, idempotent, and a no-op on clean content.
+ */
+export function stripForcedKeywordFiller(content: string): string {
+  if (!content) return "";
+  let out = content;
+  for (const re of FORCED_KEYWORD_FILLER_RES) {
+    re.lastIndex = 0;
+    out = out.replace(re, "");
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
  * Defensive sanitization for export / publish. Strips any leaked JSON envelope
  * lines, placeholder images, and unresolved image-placeholder markers so a
  * never-quite-perfect draft can still leave the app cleanly. Pure string work.
@@ -202,7 +244,7 @@ export function sanitizeForExport(content: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return out;
+  return stripForcedKeywordFiller(out);
 }
 
 /**
@@ -258,6 +300,48 @@ export function validateGeneratedContent(
   // 7. Structure: long-form should open with an H1.
   if (type !== "linkedin" && !/^\s*#\s+\S/m.test(body)) {
     push("missing_h1", "warn", "No H1 heading found.");
+  }
+
+  // 7b. Blog SEO structure (non-fatal signals for logging/observability):
+  // the scorer needs ≥3 H2s and an FAQ section; catching this here means a
+  // weak draft is visible in traces even when it ships.
+  if (type === "blog") {
+    const h2Count = (body.match(/^\s{0,3}##\s+\S/gm) ?? []).length;
+    if (h2Count < 3) {
+      push("few_h2_headings", "warn", `Only ${h2Count} H2 headings (SEO scoring expects ≥ 3).`);
+    }
+    if (!/^\s{0,3}##\s+(?:FAQs?|Frequently Asked Questions)/im.test(body)) {
+      push("missing_faq_section", "warn", "No FAQ section heading found (AEO scoring expects one).");
+    }
+  }
+
+  // 7c. Keyword coverage (blogs with a known focus keyword). All warnings —
+  // the SEO scorer and retry prompt consume these; variants/synonyms mean a
+  // substring miss is a signal, not proof of failure.
+  const kw = (opts.focusKeyword ?? "").trim().toLowerCase();
+  if (type === "blog" && kw) {
+    const lowerBody = body.toLowerCase();
+    const occurrences = lowerBody.split(kw).length - 1;
+    if (occurrences === 0) {
+      push("keyword_absent", "warn", `Focus keyword "${opts.focusKeyword}" never appears verbatim in the body.`);
+    } else {
+      const h1 = /^\s{0,3}#\s+(.+)$/m.exec(body)?.[1] ?? "";
+      if (!h1.toLowerCase().includes(kw)) {
+        push("keyword_missing_h1", "warn", "Focus keyword missing from the H1 title.");
+      }
+      const introWords = lowerBody.replace(/^\s{0,3}#.+$/m, "").trim().split(/\s+/).slice(0, 120).join(" ");
+      if (!introWords.includes(kw)) {
+        push("keyword_missing_intro", "warn", "Focus keyword missing from the first ~100 words.");
+      }
+      const density = (occurrences * kw.split(/\s+/).length) / Math.max(1, words);
+      if (density > 0.035) {
+        push(
+          "keyword_stuffing",
+          "warn",
+          `Focus keyword density ${(density * 100).toFixed(1)}% (> 3.5%) — reads as keyword stuffing.`,
+        );
+      }
+    }
   }
 
   // 8. Placeholder images — warn on generation, fatal on export/publish.
@@ -317,7 +401,9 @@ export interface RenderPreparation {
  * This repairs already-persisted broken rows at view time without a DB write.
  */
 export function prepareForRender(content: string, opts: ValidateOptions): RenderPreparation {
-  const base = (content ?? "").trim();
+  // Legacy forced-keyword filler must never render regardless of which branch
+  // returns below — stripping first keeps preview, copy, and export identical.
+  const base = stripForcedKeywordFiller((content ?? "").trim());
   const v = validateGeneratedContent(base, opts);
   if (v.ok) return { ok: true, content: base, recovered: false, validation: v };
 

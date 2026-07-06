@@ -687,7 +687,18 @@ export async function discoverKeywords(projectId: string) {
 
   await supabaseAdmin
     .from('projects')
-    .update({ ahrefs_discovery_state: ahrefsDiscoveryState || {} })
+    .update({
+      ahrefs_discovery_state: ahrefsDiscoveryState || {},
+      // Server-side baseline for the "Project details have changed" warning —
+      // replaces the old client-only localStorage hash, which false-positived
+      // on any new browser/device that had never written it.
+      discovery_params_snapshot: {
+        domain: websiteDomain,
+        niche: nicheIndustry,
+        target_region: region,
+        target_language: language,
+      },
+    })
     .eq('id', projectId);
 
   return {
@@ -699,6 +710,156 @@ export async function discoverKeywords(projectId: string) {
     relevance: relevanceSummary,
   };
   });
+}
+
+export type SuggestedContentType = 'blog' | 'ebook' | 'whitepaper' | 'linkedin';
+
+export interface TrendingKeywordSuggestion {
+  keyword: string;
+  rationale: string;
+  /** AI's recommended content type for this keyword (drives the modal's dropdown default). */
+  recommendedType: SuggestedContentType;
+}
+
+/**
+ * Claude-generated keyword ideas for the "Generate Keywords" content-calendar
+ * modal — 5 trending, diversified blog-keyword ideas grounded in the project's
+ * business brief, enriched with DataForSEO metrics. When `userPrompt` is
+ * given, it is weighted ABOVE the general business brief (explicit user intent
+ * wins over the passive brief context whenever they'd otherwise conflict).
+ */
+export async function generateTrendingKeywordsAction(
+  projectId: string,
+  opts: { userPrompt?: string } = {}
+): Promise<
+  | { success: true; keywords: TrendingKeywordSuggestion[] }
+  | { success: false; error: string }
+> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  try {
+    const { QuotaService } = await import('@/services/quota');
+    await QuotaService.checkQuota(user.id, 'ai_credits');
+  } catch (e: any) {
+    const isQuotaError = e?.name === 'QuotaExhaustedError' || e?.message?.includes('Quota exceeded');
+    return {
+      success: false,
+      error: isQuotaError
+        ? 'QUOTA_EXCEEDED:ai_credits — You have reached your AI credit limit. Upgrade your plan to generate more keyword ideas.'
+        : (e instanceof Error ? e.message : 'AI credit check failed'),
+    };
+  }
+
+  const { data: project, error: pErr } = await supabaseAdmin
+    .from('projects')
+    .select('*')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+  if (pErr || !project) return { success: false, error: 'Project not found' };
+
+  const briefRes = await getBusinessBrief(projectId);
+  const brief = briefRes.success ? briefRes.brief : null;
+
+  const { data: existingRows } = await supabaseAdmin
+    .from('keywords')
+    .select('keyword')
+    .eq('project_id', projectId)
+    .limit(200);
+  const existingKeywords = (existingRows ?? [])
+    .map(r => String(r.keyword ?? '').trim())
+    .filter(Boolean);
+
+  // Titles of content already published on the site (from the sitemap the user
+  // configures in Settings). Feeding these lets the AI see what already exists
+  // so it proposes genuinely NEW, complementary topics instead of re-suggesting
+  // things the site already ranks for. Best-effort — degrade silently if the
+  // sitemap table isn't populated yet.
+  let postedTitles: string[] = [];
+  try {
+    const { data: sitemapRows } = await supabaseAdmin
+      .from('project_sitemap_urls')
+      .select('title, path, kind')
+      .eq('project_id', projectId)
+      .eq('kind', 'blog')
+      .limit(400);
+    postedTitles = (sitemapRows ?? [])
+      .map(r => String((r as { title?: string }).title ?? '').trim())
+      .filter(t => t.length > 3);
+  } catch { /* sitemap not configured / table absent — no-op */ }
+
+  const userPrompt = (opts.userPrompt || '').trim();
+
+  const businessContext = [
+    `Company: ${project.company || project.name || ''}`,
+    `Domain: ${project.domain || ''}`,
+    `Niche/industry: ${project.niche || 'unspecified'}`,
+    `Target audience: ${project.target_audience || 'unspecified'}`,
+    brief?.summary ? `Business summary: ${brief.summary}` : '',
+    brief?.products?.length ? `Products/offerings: ${brief.products.join(', ')}` : '',
+    brief?.usps?.length ? `Differentiators: ${brief.usps.join(', ')}` : '',
+    brief?.audiences?.length ? `Audience segments: ${brief.audiences.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+
+  const prompt = `You are an expert SEO strategist generating NEW blog keyword ideas for a content calendar.
+${userPrompt ? `\nPRIMARY INSTRUCTION — follow this first and most closely. It overrides the general business context below whenever they conflict:\n"${userPrompt}"\n` : ''}
+BUSINESS CONTEXT (background${userPrompt ? " — keep ideas relevant to this business, but the instruction above takes priority" : ''}):
+${businessContext || 'No business brief available yet.'}
+${existingKeywords.length ? `\nKeywords already covered on this project's calendar/discovery — do NOT repeat these or close variants:\n${existingKeywords.slice(0, 150).join(', ')}` : ''}
+${postedTitles.length ? `\nContent ALREADY PUBLISHED on this site (from its sitemap) — do NOT suggest keywords that overlap these topics. Instead, propose fresh, complementary angles that expand the same themes the site clearly invests in:\n${postedTitles.slice(0, 150).join(' | ')}` : ''}
+
+Generate exactly 5 NEW, DIVERSE keyword ideas. Requirements:
+- KEYWORD LENGTH: Each keyword MUST be 2–3 words maximum — short, primary SEO/GEO/AEO keywords (e.g. "talent acquisition", "RPO pricing", "structured hiring"). Never use full questions or long phrases as the keyword.
+- Prioritise core terms people actually search on AI assistants (ChatGPT, Perplexity, Google AI Overviews) — favour high AEO/GEO potential (clear, entity-rich, directly answerable) over raw search volume.
+- Stay in the same topical territory the site already publishes in (so they fit the brand), but never duplicate an existing keyword or published title above — always something newer.
+- Diversify across search intent (informational/commercial/navigational), funnel stage, and angle — never 5 near-duplicates.
+- For each keyword, recommend the best content format: "blog" (most topics), "ebook" or "whitepaper" (deep, download-worthy or data-heavy topics), or "linkedin" (short opinion/thought-leadership angles).
+
+Respond with ONLY valid JSON, no markdown fences, no commentary:
+{"keywords":[{"keyword":"...","rationale":"one short sentence on why this is a good target right now","recommendedType":"blog|ebook|whitepaper|linkedin"}]}`;
+
+  let raw: string;
+  try {
+    raw = await aiGenerate('keyword-ideation', prompt, {
+      temperature: 0.9,
+      maxOutputTokens: 1200,
+      jsonMode: true,
+      timeoutMs: 45000,
+      userId: user.id,
+      projectId,
+    });
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'AI generation failed. Please try again.' };
+  }
+
+  const SUPPORTED_TYPES: SuggestedContentType[] = ['blog', 'ebook', 'whitepaper', 'linkedin'];
+  const normalizeType = (t: unknown): SuggestedContentType => {
+    const v = String(t ?? '').trim().toLowerCase();
+    return (SUPPORTED_TYPES as string[]).includes(v) ? (v as SuggestedContentType) : 'blog';
+  };
+
+  const { parseLooseJson } = await import('@/services/ai/providers/base');
+  const parsed = parseLooseJson<{
+    keywords?: Array<{ keyword?: string; rationale?: string; recommendedType?: string }>;
+  }>(raw);
+  const keywords: TrendingKeywordSuggestion[] = (parsed?.keywords ?? [])
+    .map(k => ({
+      keyword: (k.keyword || '').trim(),
+      rationale: (k.rationale || '').trim(),
+      recommendedType: normalizeType(k.recommendedType),
+    }))
+    .filter(k => k.keyword)
+    .slice(0, 5);
+
+  if (!keywords.length) {
+    return { success: false, error: 'The AI did not return usable keyword ideas. Please try again.' };
+  }
+
+  // No paid keyword-metrics lookup here by design — the suggestion step shows
+  // the keyword + its rationale + a recommended content type only. Volume/KD are
+  // deliberately omitted so we don't spend DataForSEO credits at ideation time.
+  return { success: true, keywords };
 }
 
 /**

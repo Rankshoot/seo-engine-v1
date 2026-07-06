@@ -75,6 +75,12 @@ export async function POST(req: Request) {
 
       let wasStalled = false;
       let stallTimeoutId: NodeJS.Timeout | undefined;
+      // True when the user changed the keyword from what was scheduled.
+      // When set, the generated blog is treated as standalone — the original
+      // calendar entry is left completely untouched (stays "scheduled" for its
+      // original keyword). The blog is NOT linked back to it via entry_id.
+      // Declared outside try so the catch block can read it.
+      let keywordChanged = false;
 
       try {
         // ── Stage 1: Load context ─────────────────────────────────────────
@@ -96,7 +102,34 @@ export async function POST(req: Request) {
           }
           entry = entryRow;
           projectId = entry.project_id;
-          await supabaseAdmin.from("calendar_entries").update({ status: "generating" }).eq("id", body.entryId);
+
+          // The generator form pre-fills from this calendar entry, but the user
+          // may have edited the keyword/topic/secondary keywords before hitting
+          // Generate. Apply form values to the local entry object so generation
+          // uses them, then decide what to persist back.
+          const editedKeyword = body.keyword?.trim();
+          const originalKeyword = entry.focus_keyword as string;
+          keywordChanged = Boolean(editedKeyword && editedKeyword !== originalKeyword);
+
+          // Always apply all form values to the local entry so the prompt is correct.
+          if (editedKeyword) entry.focus_keyword = editedKeyword;
+          const editedTopic = body.topic?.trim();
+          const originalTitle = entry.title as string;
+          if (editedTopic) entry.title = editedTopic;
+          if (body.secondaryKeywords?.length) entry.secondary_keywords = body.secondaryKeywords;
+
+          if (keywordChanged) {
+            // Keyword was changed: leave the original calendar slot completely
+            // untouched. The blog will be saved as a standalone piece with no
+            // entry_id — the original scheduled keyword remains pending.
+          } else {
+            // Keyword unchanged: sync any other form edits back and mark generating.
+            const entryUpdates: Record<string, unknown> = { status: "generating" };
+            if (editedTopic && editedTopic !== originalTitle) entryUpdates.title = editedTopic;
+            if (body.secondaryKeywords && JSON.stringify(body.secondaryKeywords) !== JSON.stringify(entryRow.secondary_keywords ?? []))
+              entryUpdates.secondary_keywords = body.secondaryKeywords;
+            await supabaseAdmin.from("calendar_entries").update(entryUpdates).eq("id", body.entryId);
+          }
         } else {
           projectId = body.projectId!;
           const kw = body.keyword!;
@@ -240,18 +273,21 @@ export async function POST(req: Request) {
             });
             const finalContent = sanitizeBlogMarkdown(sanitized.content);
 
+            const { normalizeMetaDescription: normalizeRepairMeta } = await import("@/lib/blog-markdown-polish");
             const repairPayload = {
               title: repaired.title,
               content: finalContent,
-              meta_description: analysis.summary || repaired.meta_description,
+              meta_description: normalizeRepairMeta(repaired.meta_description || analysis.summary, finalContent),
               slug: repaired.slug,
               word_count: countWords(finalContent),
               target_keyword: entry.focus_keyword,
               article_type: "Repair",
               status: "generated" as const,
               research_sources: repaired.research_sources,
-              external_links: sanitized.externalLinks.slice(0, 7),
-              internal_links: sanitized.internalLinks.slice(0, 7),
+              // Full arrays (no cap) — these must mirror the links actually
+              // present in the content so the previewer sidebar always matches.
+              external_links: sanitized.externalLinks,
+              internal_links: sanitized.internalLinks,
               source_url: repairPlan.url,
               repair_notes: repaired.repair_notes ?? [],
               updated_at: new Date().toISOString(),
@@ -303,11 +339,28 @@ export async function POST(req: Request) {
         emit({ event: "stage", stage: "research", detail: "Gathering live SERP research and keyword context…" });
 
         const { researchKeyword } = await import("@/lib/research");
+        const { fetchPerplexityFollowUps, mergeFollowUpQuestions } = await import("@/lib/perplexity");
+
+        // SERP research and Perplexity follow-ups run in parallel — both are
+        // best-effort and neither may block generation.
         let research: any = null;
-        try {
-          research = await researchKeyword(entry.focus_keyword, project.target_region, project.target_language);
-        } catch (e) {
-          console.warn("[blog stream] Research failed, continuing:", e);
+        const [researchSettled, followUpsSettled] = await Promise.allSettled([
+          researchKeyword(entry.focus_keyword, project.target_region, project.target_language),
+          fetchPerplexityFollowUps(entry.focus_keyword, { limit: 3 }),
+        ]);
+        if (researchSettled.status === "fulfilled") {
+          research = researchSettled.value;
+        } else {
+          console.warn("[blog stream] Research failed, continuing:", researchSettled.reason);
+        }
+
+        // Follow-ups: Perplexity's live "Follow-ups" for the primary keyword,
+        // topped up from People-Also-Ask so the AEO H2 sections always have
+        // real searcher questions to answer even without a Perplexity key.
+        const perplexityFollowUps = followUpsSettled.status === "fulfilled" ? followUpsSettled.value : [];
+        const followUpQuestions = mergeFollowUpQuestions(perplexityFollowUps, research?.peopleAlsoAsk, 3);
+        if (followUpQuestions.length) {
+          emit({ event: "stage", stage: "research", detail: `Found ${followUpQuestions.length} follow-up questions searchers ask next…` });
         }
 
         let existingBlogs: { title: string; slug: string; target_keyword: string }[] = [];
@@ -315,7 +368,10 @@ export async function POST(req: Request) {
           const { data: blogs } = await supabaseAdmin
             .from("blogs").select("title, slug, target_keyword")
             .eq("project_id", projectId).in("status", ["generated", "approved", "published"])
-            .neq("entry_id", body.entryId || "").limit(15);
+            .neq("entry_id", body.entryId || "")
+            // Newest first so the internal-link pool favours the latest posts.
+            .order("created_at", { ascending: false })
+            .limit(15);
           existingBlogs = blogs ?? [];
         } catch { /* optional */ }
 
@@ -385,7 +441,13 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           const { formatContentHealthAuditForWriter } = await import("@/lib/content-health-calendar");
           const contentHealthRaw = (entry as any).content_health_audit;
           const auditWriterBlock = formatContentHealthAuditForWriter(contentHealthRaw);
-          mergedWriterNotes = [body.writerNotes?.trim(), auditWriterBlock || ""]
+          // Live form edits (audience/tone/goal/CTA/secondary keywords) made in the
+          // generator review step — not just whatever was stored when the entry
+          // was first scheduled.
+          const liveNotesBlock = (body.audience || body.tone || body.goal || body.ctaObjective || body.secondaryKeywords?.length)
+            ? `Audience: ${body.audience || ""}\nTone: ${body.tone || ""}\nGoal: ${body.goal || ""}\nCTA: ${body.ctaObjective || ""}\nSecondary Keywords: ${(body.secondaryKeywords || []).join(", ")}`
+            : "";
+          mergedWriterNotes = [body.writerNotes?.trim(), liveNotesBlock, auditWriterBlock || ""]
             .filter(Boolean).join("\n\n---\n\n");
         } else {
           mergedWriterNotes = `Audience: ${body.audience || ""}\nTone: ${body.tone || ""}\nGoal: ${body.goal || ""}\nCTA: ${body.ctaObjective || ""}\nSecondary Keywords: ${(body.secondaryKeywords || []).join(", ")}`;
@@ -489,6 +551,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           existingBlogs: filteredExistingBlogs,
           brief: filteredBrief,
           extraInternalLinks,
+          followUpQuestions,
           ahrefsContext,
           writerNotes: mergedWriterNotes || undefined,
           brandPersona: body.brandPersona,
@@ -530,16 +593,21 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
         const anthropic = getAnthropicClient();
 
-        // One streamed Claude draft → accumulated raw model text.
-        const draftOnce = async (): Promise<string> => {
+        // One streamed Claude draft → accumulated raw model text. On a retry we
+        // append what failed last time so the model corrects it instead of
+        // rolling the same dice again.
+        const draftOnce = async (correction?: string): Promise<string> => {
           let fullContent = "";
           let thinkingEmitted = false;
           resetStallTimeout();
+          const promptForAttempt = correction
+            ? `${blogPrompt}\n\nIMPORTANT — your previous draft was rejected by automated quality validation for: ${correction}. Fix these problems in this draft. Remember: output ONLY the single valid JSON object.`
+            : blogPrompt;
           const claudeStream = anthropic.messages.stream({
             model: claudeModel,
             max_tokens: 32000,
             thinking: { type: "enabled", budget_tokens: 8000 },
-            messages: [{ role: "user", content: blogPrompt }],
+            messages: [{ role: "user", content: promptForAttempt }],
             system: `You are an expert SEO content strategist and writer for ${project.company}. Think through the structure carefully before writing. Return ONLY valid JSON matching the required schema.`,
           }, { signal: abortController.signal });
 
@@ -582,6 +650,11 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           });
           const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
           const finalContent = sanitizeBlogMarkdown(sanitized.content);
+          // Clamp the meta description to Google's usable window (and derive
+          // one from the intro if the model returned nothing usable) so a bad
+          // meta never ships.
+          const { normalizeMetaDescription } = await import("@/lib/blog-markdown-polish");
+          blogData = { ...blogData, meta_description: normalizeMetaDescription(blogData.meta_description, finalContent) };
           return { blogData, sanitized, finalContent };
         };
 
@@ -597,7 +670,9 @@ Respond with a concise but rich analysis (300–500 words) structured as:
               : `Re-drafting (attempt ${attempt}/${MAX_GEN_ATTEMPTS}) to fix a malformed draft…`,
           });
           wasStalled = false;
-          const fullContent = await draftOnce();
+          const fullContent = await draftOnce(
+            attempt > 1 && lastValidation ? summarizeValidation(lastValidation) : undefined
+          );
 
           emit({ event: "stage", stage: "polish", detail: "Generating images and running SEO polish…" });
           const candidate = await buildFinal(fullContent);
@@ -605,6 +680,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           const verdict = validateGeneratedContent(candidate.finalContent, {
             type: "blog",
             metaDescription: candidate.blogData.meta_description,
+            focusKeyword: entry.focus_keyword,
           });
           lastValidation = verdict;
 
@@ -649,17 +725,23 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           article_type: entry.article_type,
           status: "generated" as const,
           research_sources: blogData.research_sources,
-          external_links: sanitized.externalLinks.slice(0, 7),
-          internal_links: sanitized.internalLinks.slice(0, 7),
+          // Full arrays (no cap) — these must mirror the links actually
+          // present in the content so the previewer sidebar always matches.
+          external_links: sanitized.externalLinks,
+          internal_links: sanitized.internalLinks,
           source_url: "",
           repair_notes: [] as string[],
           updated_at: new Date().toISOString(),
         };
 
+        // When the keyword was changed from what was scheduled, the generated
+        // blog is standalone — don't link it to the original calendar entry.
+        const linkedEntryId = keywordChanged ? null : (body.entryId ?? null);
+
         let blogId: string;
-        if (body.entryId) {
+        if (linkedEntryId) {
           const { data: existing } = await supabaseAdmin
-            .from("blogs").select("id").eq("entry_id", body.entryId).maybeSingle();
+            .from("blogs").select("id").eq("entry_id", linkedEntryId).maybeSingle();
 
           if (existing) {
             const { data, error } = await supabaseAdmin
@@ -668,7 +750,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
             blogId = data.id;
           } else {
             const { data, error } = await supabaseAdmin
-              .from("blogs").insert({ ...upsertPayload, entry_id: body.entryId, project_id: projectId })
+              .from("blogs").insert({ ...upsertPayload, entry_id: linkedEntryId, project_id: projectId })
               .select("id").single();
             if (error) throw error;
             blogId = data.id;
@@ -676,7 +758,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
           await supabaseAdmin
             .from("calendar_entries").update({ status: "generated", title: blogData.title })
-            .eq("id", body.entryId);
+            .eq("id", linkedEntryId);
         } else {
           const { data, error } = await supabaseAdmin
             .from("blogs").insert({ ...upsertPayload, entry_id: null, project_id: projectId })
@@ -692,7 +774,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           message = "Gateway Timeout";
         }
         console.error("[blog stream] Error:", message);
-        if (body.entryId) {
+        if (body.entryId && !keywordChanged) {
           try {
             await supabaseAdmin.from("calendar_entries").update({ status: "scheduled" }).eq("id", body.entryId);
           } catch { /* best effort */ }

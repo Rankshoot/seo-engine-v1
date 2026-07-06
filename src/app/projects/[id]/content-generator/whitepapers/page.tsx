@@ -36,6 +36,8 @@ import {
   suggestContentTopicAction,
 } from "@/app/actions/content-actions";
 import { useUserQuota } from "@/hooks/useUserQuota";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import {
   WP_DEPTH_OPTIONS,
   WP_LANG_OPTIONS,
@@ -48,6 +50,7 @@ export default function WhitepaperGeneratorPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const { canGenerateWhitepaper, quota, hasAiCredits } = useUserQuota();
   const studioBase = `/projects/${projectId}/content-generator`;
 
@@ -181,6 +184,12 @@ export default function WhitepaperGeneratorPage() {
       toast.success("Whitepaper ready — opening preview.");
       void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
+      if (entryId) {
+        void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+        void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
+        dispatch(calendarRefreshBump({ projectId }));
+      }
       router.push(`${studioBase}/whitepapers/${res.data.id}`);
     } else {
       toast.error(res.error);

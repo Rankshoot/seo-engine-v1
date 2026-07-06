@@ -4,6 +4,7 @@ export const API_USAGE_PROVIDERS = [
   "dataforseo",
   "gemini",
   "serper",
+  "perplexity",
   "jina",
   "scraper",
   "openai",

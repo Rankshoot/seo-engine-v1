@@ -92,7 +92,6 @@ export const calendarApi = {
       kd?: number;
       cpc?: number;
       intent?: string;
-      contentType?: "blog" | "ebook" | "whitepaper" | "linkedin";
     }
   ): Promise<{ success: boolean; error?: string; scheduledDate?: string; alreadyExists?: boolean }> {
     return apiPost(V1Routes.calendarApproveAi(projectId), body);

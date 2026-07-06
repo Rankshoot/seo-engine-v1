@@ -125,6 +125,10 @@ export function SharedKeywordTable<T>({
         <div className="flex-1 overflow-hidden border border-border-subtle rounded-md">
           <TableSkeleton rows={loadingRows} columns={loadingColumns} />
         </div>
+      ) : data.length === 0 && emptyState ? (
+        <div className="flex-1 min-h-0">
+          {emptyState}
+        </div>
       ) : (
         /* 3. Table Container: The ONLY element that scrolls vertically */
         <div
@@ -174,22 +178,12 @@ export function SharedKeywordTable<T>({
               </TableRow>
             </thead>
             <TableBody className="divide-y divide-border-subtle/60">
-              {data.length === 0 && emptyState ? (
-                <TableRow className="hover:bg-transparent">
-                  <TableCell
-                    colSpan={columns.length + (massSelectMode ? 1 : 0)}
-                    className="py-12 border-0"
-                  >
-                    {emptyState}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                data.map((row, index) => {
-                  const rowId = keyExtractor(row);
-                  const selectable = isSelectable ? isSelectable(row) : true;
-                  const isSelected = selectedIds.has(rowId);
+              {data.map((row, index) => {
+                const rowId = keyExtractor(row);
+                const selectable = isSelectable ? isSelectable(row) : true;
+                const isSelected = selectedIds.has(rowId);
 
-                  return (
+                return (
                   <TableRow
                     key={rowId}
                     data-table-row-key={rowId}
@@ -240,8 +234,7 @@ export function SharedKeywordTable<T>({
                     ))}
                   </TableRow>
                 );
-              })
-            )}
+              })}
               {(footerLeft || footerRight) && (
                 <TableRow className="hover:bg-transparent bg-surface-secondary/30 border-t border-border-subtle">
                   <TableCell

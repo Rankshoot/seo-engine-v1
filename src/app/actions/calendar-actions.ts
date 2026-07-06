@@ -584,23 +584,11 @@ export async function approveAISuggestionToCalendar(params: {
   kd?: number;
   cpc?: number;
   intent?: string;
-  /** Content format to schedule this keyword as. Defaults to a blog. */
-  contentType?: 'blog' | 'ebook' | 'whitepaper' | 'linkedin';
 }): Promise<{ success: boolean; error?: string; scheduledDate?: string; alreadyExists?: boolean }> {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
-  const { projectId, keyword, keywordId, page, volume = 0, kd = 0, cpc = 0, intent = '', contentType = 'blog' } = params;
-
-  // Same mapping the keyword-discovery scheduler uses, so the calendar entry
-  // routes to the correct generator (blog / ebook / whitepaper / linkedin).
-  const CONTENT_TYPE_TO_ARTICLE: Record<string, string> = {
-    blog: 'Blog article',
-    ebook: 'Ebook',
-    whitepaper: 'Whitepaper',
-    linkedin: 'LinkedIn post',
-  };
-  const articleType = CONTENT_TYPE_TO_ARTICLE[contentType] ?? 'Blog article';
+  const { projectId, keyword, keywordId, page, volume = 0, kd = 0, cpc = 0, intent = '' } = params;
 
   const { data: project } = await supabaseAdmin
     .from('projects')
@@ -680,7 +668,7 @@ export async function approveAISuggestionToCalendar(params: {
       keyword_id: resolvedKeywordId,
       scheduled_date: scheduledDate,
       title: '',
-      article_type: articleType,
+      article_type: 'Blog Post',
       slug,
       focus_keyword: keyword.trim(),
       secondary_keywords: [],

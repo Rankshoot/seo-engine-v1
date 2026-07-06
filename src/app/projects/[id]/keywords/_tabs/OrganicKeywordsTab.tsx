@@ -34,7 +34,6 @@ import { toast } from "react-hot-toast";
 import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-actions";
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
 import { useUserQuota } from "@/hooks/useUserQuota";
-import { EmptyState } from "@/components/common";
 
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
@@ -171,6 +170,13 @@ function AiScoreTooltip({ data, score }: { data: AiEvalData; score: number }) {
       </div>
     </div>
   );
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function simpleHash(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return h.toString(36);
 }
 
 // ─── COLUMN VISIBILITY ───────────────────────────────────────────────────────
@@ -382,6 +388,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
   const [orgWarnDismissed, setOrgWarnDismissed] = useState(false);
+  const [orgHasMismatch, setOrgHasMismatch] = useState(false);
   const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_organic");
 
   const [bulkScheduling, setBulkScheduling] = useState(false);
@@ -443,24 +450,21 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const project = allProjects.find(p => p.id === projectId);
   const projectDomain = project?.domain || "";
 
-  // "Project details have changed" warning — driven entirely by the server-side
-  // snapshot (`discovery_params_snapshot`, written after every successful
-  // discovery run), not localStorage. A client-only cache produced false
-  // positives on any new browser/device/account that had never written that
-  // key, even though nothing about the project had actually changed. A missing
-  // snapshot (legacy project, or discovery never run since this field shipped)
-  // is treated as "no mismatch" — we only ever warn when we can positively
-  // confirm the current settings drifted from the last discovery.
-  const orgHasMismatch = useMemo(() => {
-    const snap = project?.discovery_params_snapshot;
-    if (!project || !snap) return false;
-    return (
-      (snap.domain || "") !== (project.domain || "") ||
-      (snap.niche || "") !== (project.niche || "") ||
-      (snap.target_region || "") !== (project.target_region || "") ||
-      (snap.target_language || "") !== (project.target_language || "")
-    );
-  }, [project]);
+  const ORG_HASH_KEY = `kw_org_discovery_params_${projectId}`;
+  const orgCurrentHash = useMemo(() =>
+    project ? simpleHash([project.domain, project.niche, project.target_region, project.target_language].filter(Boolean).join("|")) : "",
+    [project]
+  );
+  useEffect(() => {
+    if (!orgCurrentHash) return;
+    const stored = localStorage.getItem(ORG_HASH_KEY);
+    if (stored === null) {
+      // No baseline yet — if keywords already exist we can't verify they match current settings
+      if (serverKeywords.length > 0) setOrgHasMismatch(true);
+      return;
+    }
+    setOrgHasMismatch(stored !== orgCurrentHash);
+  }, [orgCurrentHash, ORG_HASH_KEY, serverKeywords.length]);
 
   const toggleSortColumn = (columnId: string) => {
     const col = columnId as TableSortColumn;
@@ -537,15 +541,15 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
       console.groupEnd();
     }
     if (res.success) {
+      if (orgCurrentHash) {
+        localStorage.setItem(ORG_HASH_KEY, orgCurrentHash);
+        setOrgHasMismatch(false);
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.brief(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) }),
         queryClient.invalidateQueries({ queryKey: qk.project(projectId) }),
-        // The mismatch warning reads from the projects *list* query (`allProjects`
-        // below), not the singular one — invalidate both so the freshly-written
-        // discovery_params_snapshot clears the warning without a page refresh.
-        queryClient.invalidateQueries({ queryKey: qk.projects }),
       ]);
     } else setError(res.error ?? "Discovery failed");
     setDiscovering(false);
@@ -1067,7 +1071,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
               </button>
               <button
                 type="button"
-                onClick={() => setOrgWarnDismissed(true)}
+                onClick={() => {
+                  setOrgWarnDismissed(true);
+                  if (orgCurrentHash) localStorage.setItem(ORG_HASH_KEY, orgCurrentHash);
+                }}
                 className="inline-flex h-7 w-7 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-secondary"
                 aria-label="Dismiss"
               >
@@ -1125,11 +1132,10 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
             controls={renderControls()}
             emptyState={
               keywords.length > 0 ? (
-                <EmptyState
-                  variant="card"
-                  title="No keywords match this filter"
-                  body="Try switching the filter dropdown in the toolbar (e.g., to All or Unscheduled) to view other discovered keywords."
-                />
+                <div className="rounded-[16px] border border-border-subtle bg-surface-elevated px-5 py-6 text-center">
+                  <p className="text-[14px] font-medium text-text-secondary">No keywords match this filter.</p>
+                  <p className="mt-1 text-[12px] text-text-tertiary">Switch to another tab to see keywords.</p>
+                </div>
               ) : (
                 <div className="rounded-[22px] border border-dashed border-border-strong bg-surface-secondary py-24 text-center">
                   <div className="mb-6 flex justify-center">

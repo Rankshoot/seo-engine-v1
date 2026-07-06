@@ -4,52 +4,30 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import type { ContentAuditReport } from "@/lib/content-audit-studio";
-import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { SeverityChip, EmptyState, scoreColor } from "../_shared/ch-ui";
 import { SEVERITY_ORDER } from "./IssuesPanel";
-import { useAppSelector, selectAuditGenerationsForProject, selectAuditSchedulesForProject } from "@/lib/redux/hooks";
+import { useAppSelector, selectAuditGenerationsForProject } from "@/lib/redux/hooks";
 import { normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
 
 const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
 
 export function AuditHistory({
-  projectId, items, loading, onOpen, onGenerateFromHistory, onScheduleConfirm, scheduleSaving, scheduledDates,
+  projectId, items, loading, onOpen, onGenerateFromHistory, onScheduleFromHistory,
 }: {
   projectId: string;
   items: ContentAuditHistoryItem[];
   loading: boolean;
   onOpen: (item: ContentAuditHistoryItem) => void;
   onGenerateFromHistory: (item: ContentAuditHistoryItem) => void;
-  onScheduleConfirm: (item: ContentAuditHistoryItem, date: string) => void;
-  scheduleSaving: boolean;
-  scheduledDates: Set<string>;
+  onScheduleFromHistory: (item: ContentAuditHistoryItem) => void;
 }) {
   const router = useRouter();
   // Audit-URL → generated-blogId map (kept current by the page via Redux). Lets
   // each row decide between "Generate Enhanced Blog" and "View Blog".
   const generatedMap = useAppSelector(s => selectAuditGenerationsForProject(s, projectId));
-  // Audit-URL → { entryId, scheduledDate } map (kept current via Redux). Lets
-  // each row show "Scheduled for <date>" instead of re-offering "Schedule to
-  // Calendar" for an audit that's already on the calendar.
-  const scheduleMap = useAppSelector(s => selectAuditSchedulesForProject(s, projectId));
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
-  const [scheduleOpenUrl, setScheduleOpenUrl] = useState<string | null>(null);
-
-  // First non-scheduled date, used to seed the mini-calendar so it doesn't
-  // default to a date that's already taken.
-  const nextVacantDate = useMemo(() => {
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    for (let i = 0; i < 500; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      if (!scheduledDates.has(key)) return key;
-    }
-    return null;
-  }, [scheduledDates]);
 
   const filtered = useMemo(() => {
     let list = items;
@@ -132,7 +110,6 @@ export function AuditHistory({
           // If an enhanced blog already exists for this audited URL, show "View
           // Blog" instead of "Generate Enhanced Blog".
           const generatedBlogId = isReal ? (generatedMap[normalizeAuditGenerationUrl(item.url)] ?? null) : null;
-          const schedule = isReal ? (scheduleMap[normalizeAuditGenerationUrl(item.url)] ?? null) : null;
           const issueList = (item.report?.issues ?? []) as ContentAuditReport["issues"];
           const sortedIssues = [...issueList].sort(
             (a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99)
@@ -235,30 +212,20 @@ export function AuditHistory({
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
                         </svg>
-                        Generate Blog
+                        Generate Enhanced Blog
                       </button>
                     ) : null}
                     {isReal && (
-                      schedule ? (
-                        <span className="h-8 px-3 rounded-[8px] bg-status-success/10 border border-status-success/20 text-[12px] font-medium text-status-success flex items-center gap-1.5">
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
-                          </svg>
-                          {new Date(schedule.scheduledDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                        </span>
-                      ) : (
-                        <CalendarDatePicker
-                          open={scheduleOpenUrl === item.url}
-                          onOpenChange={v => setScheduleOpenUrl(v ? item.url : null)}
-                          currentDate={nextVacantDate}
-                          onConfirm={date => onScheduleConfirm(item, date)}
-                          saving={scheduleSaving}
-                          scheduledDates={scheduledDates}
-                          variant="pick"
-                          label="Schedule"
-                          className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong disabled:opacity-50 transition-all flex items-center gap-1.5"
-                        />
-                      )
+                      <button
+                        type="button"
+                        onClick={() => onScheduleFromHistory(item)}
+                        className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-all flex items-center gap-1.5"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                        </svg>
+                        Schedule to Calendar
+                      </button>
                     )}
                     <button
                       type="button"
@@ -269,7 +236,7 @@ export function AuditHistory({
                         <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
                         <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
                       </svg>
-                      View Audit
+                      View full audit
                     </button>
                   </div>
                 </div>

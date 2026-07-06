@@ -29,10 +29,8 @@ import { TableSkeleton } from "@/components/Skeleton";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { AddCustomKeywordModal } from "@/components/calendar/AddCustomKeywordModal";
-import { GenerateKeywordsModal } from "@/components/calendar/GenerateKeywordsModal";
 import { PageHeader, Button } from "@/components/common";
 import { Dialog } from "@/components/common/dialogs/Dialog";
-import { useUserQuota } from "@/hooks/useUserQuota";
 import { toast } from "react-hot-toast";
 
 type CalendarResponse = Awaited<ReturnType<typeof calendarApi.withBlogs>>;
@@ -298,7 +296,6 @@ export function ScheduledCalendar() {
   const dispatch = useAppDispatch();
 
   const { generatedMap } = useGeneratedContentMap(projectId);
-  const { hasAiCredits } = useUserQuota();
 
   const calendarRefreshVersion = useAppSelector((s) =>
     selectCalendarRefreshVersion(s, projectId)
@@ -315,7 +312,6 @@ export function ScheduledCalendar() {
   const [pickingDateForEntryId, setPickingDateForEntryId] = useState<string | null>(null);
   const [savingDate, setSavingDate] = useState(false);
   const [addKeywordModalDate, setAddKeywordModalDate] = useState<string | null>(null);
-  const [generateKeywordsOpen, setGenerateKeywordsOpen] = useState(false);
   const [addKeywordBusy, setAddKeywordBusy] = useState(false);
   const [removingEntryId, setRemovingEntryId] = useState<string | null>(null);
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
@@ -571,19 +567,17 @@ export function ScheduledCalendar() {
         description="Schedule approved keywords to publish dates and track asset generation."
         actions={
           <>
-            <Button
-              variant="secondary"
-              shape="pill"
-              size="md"
-              onClick={() => setGenerateKeywordsOpen(true)}
-              iconLeft={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
-                </svg>
-              }
-            >
-              Generate keywords
-            </Button>
+            {blogReady > 0 && (
+              <ProjectNavLink
+                href={`/projects/${projectId}/content-history`}
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-border-subtle bg-surface-secondary px-4 text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+              >
+                View History
+                <span className="rounded-full bg-status-success/15 px-2 py-0.5 text-[11px] font-bold text-status-success">
+                  {blogReady} ready
+                </span>
+              </ProjectNavLink>
+            )}
             <Button
               variant="primary"
               shape="pill"
@@ -755,14 +749,6 @@ export function ScheduledCalendar() {
         preselectedDate={addKeywordModalDate || null}
         onSubmit={handleAddCustomKeyword}
         busy={addKeywordBusy}
-      />
-
-      {/* ── GENERATE KEYWORDS (AI) MODAL ─────────────────────────────────── */}
-      <GenerateKeywordsModal
-        projectId={projectId}
-        open={generateKeywordsOpen}
-        onClose={() => setGenerateKeywordsOpen(false)}
-        hasAiCredits={hasAiCredits}
       />
 
       {/* ── REMOVE CONFIRMATION DIALOG ──────────────────────────────────── */}

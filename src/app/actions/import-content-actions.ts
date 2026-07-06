@@ -106,8 +106,8 @@ async function persistImportedMarkdown(
       slug,
       status: 'generated',
       research_sources: 0,
-      external_links: sanitized.externalLinks,
-      internal_links: sanitized.internalLinks,
+      external_links: sanitized.externalLinks.slice(0, 10),
+      internal_links: sanitized.internalLinks.slice(0, 12),
     })
     .select('id')
     .single();

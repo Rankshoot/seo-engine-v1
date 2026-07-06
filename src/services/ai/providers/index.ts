@@ -257,13 +257,6 @@ async function withTimeout<T>(
   }
 }
 
-function getSystemPromptWithDate(userPrompt?: string): string {
-  const currentYear = new Date().getFullYear();
-  const todayStr = new Date().toLocaleDateString("en-US", { year: 'numeric', month: 'long', day: 'numeric' });
-  const dateGuideline = `The current date is ${todayStr}. The current year is ${currentYear}. All references to "this year", "current trends", or future/past projections must be relative to ${currentYear}. Do NOT suggest or generate content referencing outdated years like 2025 as the current or upcoming year. Ensure titles, keywords, and text use ${currentYear} (or later) where applicable.`;
-  return userPrompt ? `${userPrompt}\n\n[Context: ${dateGuideline}]` : dateGuideline;
-}
-
 export async function aiGenerate(
   feature: string,
   prompt: string,
@@ -291,7 +284,6 @@ export async function aiGenerate(
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
   const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 120000;
-  const systemPrompt = getSystemPromptWithDate(opts.systemPrompt);
 
   let resultText: string;
   try {
@@ -303,7 +295,7 @@ export async function aiGenerate(
           jsonMode: opts.jsonMode,
           responseSchema: opts.responseSchema,
           useGoogleSearch: opts.useGoogleSearch,
-          systemPrompt,
+          systemPrompt: opts.systemPrompt,
           cachePrompt: opts.cachePrompt,
           retries: opts.retries,
           topP: opts.topP,
@@ -328,7 +320,7 @@ export async function aiGenerate(
             jsonMode: opts.jsonMode,
             responseSchema: opts.responseSchema,
             useGoogleSearch: opts.useGoogleSearch,
-            systemPrompt,
+            systemPrompt: opts.systemPrompt,
             cachePrompt: opts.cachePrompt,
             retries: opts.retries,
             topP: opts.topP,
@@ -378,7 +370,6 @@ export async function* aiStream(
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
   const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 120000;
-  const systemPrompt = getSystemPromptWithDate(opts.systemPrompt);
 
   const controller = timeoutMs > 0 ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
@@ -390,7 +381,7 @@ export async function* aiStream(
       maxOutputTokens: opts.maxOutputTokens,
       jsonMode: opts.jsonMode,
       useGoogleSearch: opts.useGoogleSearch,
-      systemPrompt,
+      systemPrompt: opts.systemPrompt,
       cachePrompt: opts.cachePrompt,
       retries: opts.retries,
       topP: opts.topP,
@@ -422,7 +413,7 @@ export async function* aiStream(
           maxOutputTokens: opts.maxOutputTokens,
           jsonMode: opts.jsonMode,
           useGoogleSearch: opts.useGoogleSearch,
-          systemPrompt,
+          systemPrompt: opts.systemPrompt,
           cachePrompt: opts.cachePrompt,
           retries: opts.retries,
           topP: opts.topP,
@@ -484,7 +475,6 @@ export async function aiGenerateStructured<T>(
   await checkBudgetControls(opts.userId, opts.projectId);
   const { provider, model } = await getProviderForRoute(feature);
   const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 120000;
-  const systemPrompt = getSystemPromptWithDate(opts.systemPrompt);
 
   let resultData: T;
   try {
@@ -493,7 +483,7 @@ export async function aiGenerateStructured<T>(
         provider.generateStructured(model, prompt, schema, {
           temperature: opts.temperature,
           maxOutputTokens: opts.maxOutputTokens,
-          systemPrompt,
+          systemPrompt: opts.systemPrompt,
           cachePrompt: opts.cachePrompt,
           retries: opts.retries,
           topP: opts.topP,
@@ -515,7 +505,7 @@ export async function aiGenerateStructured<T>(
           fbProvider.generateStructured(fbModel, prompt, schema, {
             temperature: opts.temperature,
             maxOutputTokens: opts.maxOutputTokens,
-            systemPrompt,
+            systemPrompt: opts.systemPrompt,
             cachePrompt: opts.cachePrompt,
             retries: opts.retries,
             topP: opts.topP,

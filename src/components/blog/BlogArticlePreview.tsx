@@ -112,13 +112,9 @@ export function EditorialPreview({
   // Render guard: never dump a raw JSON envelope. Recover leaked-envelope
   // content transparently; fall back gracefully when it can't be salvaged.
   const prep = useMemo(() => prepareForRender(blog.content ?? "", { type: "blog" }), [blog.content]);
-  // Always render the prepared content (not the raw stored string): it is the
-  // recovered markdown for salvaged rows AND has legacy artifacts (forced
-  // keyword filler lines) stripped — the same string "Copy MD" copies, so what
-  // you see is exactly what you copy.
   const effectiveBlog = useMemo(
-    () => (prep.ok ? { ...blog, content: prep.content } : blog),
-    [blog, prep.ok, prep.content],
+    () => (prep.recovered ? { ...blog, content: prep.content } : blog),
+    [blog, prep.recovered, prep.content],
   );
   const internalSet = useMemo(() => internalSetForBlog(effectiveBlog), [effectiveBlog]);
   const { heroTitle, body } = useMemo(() => stripHeroHeading(effectiveBlog), [effectiveBlog]);

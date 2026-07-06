@@ -1,8 +1,8 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const CHAR_INTERVAL_MS = 30;
-const START_DELAY_MS = 100;
+const CHAR_INTERVAL_MS = 100;
+const START_DELAY_MS = 280;
 
 export function useKeywordParam(initialKeyword: string) {
   const [value, setValue] = useState("");

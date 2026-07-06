@@ -12,7 +12,7 @@ export const mockKeywords = [
 ];
 
 export const features = [
-  { 
+  {
     icon: Search,
     sub: "Find what ranks",
     title: "Keyword Intelligence",

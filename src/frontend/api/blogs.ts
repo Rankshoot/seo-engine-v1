@@ -36,12 +36,6 @@ export const blogsApi = {
     entryId?: string;
     projectId?: string;
     keyword?: string;
-    topic?: string;
-    audience?: string;
-    tone?: string;
-    goal?: string;
-    ctaObjective?: string;
-    secondaryKeywords?: string[];
     contentHealthAudit?: Record<string, any>;
     wordCount?: number;
     writerNotes?: string;

@@ -14,46 +14,8 @@
  * are shared by `blog-actions.ts` (server) and `export.ts` (client).
  */
 
-import { polishBlogMarkdown } from '@/lib/blog-markdown-polish';
-import { stripForcedKeywordFiller } from '@/lib/content-validation';
-
 /** Hard cap on rendered images per blog. Matches the product spec. */
 export const MAX_IMAGES_PER_BLOG = 2;
-
-/**
- * Citations must be recent: anything published more than this many years ago
- * is considered stale. With a 2-year window in 2026, only 2024+ sources are
- * acceptable. Used by both the generation prompt (instruction) and the
- * deterministic sanitizer below (enforcement).
- */
-export const CITATION_MAX_AGE_YEARS = 2;
-
-/** First acceptable publication year for external citations (currentYear − 2). */
-export function minCitationYear(now = new Date()): number {
-  return now.getFullYear() - CITATION_MAX_AGE_YEARS;
-}
-
-/**
- * Detect external URLs that self-identify as stale content via a year in
- * their path — e.g. `/2019/06/report`, `-2018-survey`, `_2020.pdf`. Bounded
- * 4-digit match (2000–2099) so tokens like "covid-19" or product numbers
- * never false-positive. Query strings and fragments are ignored; a URL with
- * no year is treated as fresh (the prompt handles those).
- */
-export function isStaleDatedUrl(url: string, minYear = minCitationYear()): boolean {
-  let path = '';
-  try {
-    path = new URL(url).pathname;
-  } catch {
-    return false;
-  }
-  const years = path.match(/(?<![0-9])(20[0-9]{2})(?![0-9])/g);
-  if (!years || years.length === 0) return false;
-  // Multiple years in one path (e.g. "/2020-2025-outlook/") → judge by the
-  // most recent one; a range ending in a fresh year is fresh content.
-  const newest = Math.max(...years.map(Number));
-  return newest < minYear;
-}
 
 /**
  * `react-markdown` does not render arbitrary HTML; `<a name="…"></a>` shows as
@@ -210,40 +172,6 @@ export function reclassifyBlogLinkSidebarLists(
     else externalOut.push(url);
   }
   return { externalLinks: externalOut, internalLinks: [...internalOut] };
-}
-
-/**
- * Extract every REAL link from markdown, classified against the project site.
- * This is the single source of truth for "which links are in this article" —
- * the blog previewer's sidebar derives its External/Internal lists from the
- * displayed content through this function, so the panel can never disagree
- * with the links a reader actually sees in the body. Pure + client-safe.
- *
- * Skips images, in-page anchors (#…), mailto:/tel:. Same-site absolute URLs
- * and relative paths are internal; every other http(s) URL is external.
- * Order follows first appearance in the content; duplicates collapse.
- */
-export function extractLinksFromMarkdown(
-  markdown: string,
-  projectDomainRaw?: string | null
-): { externalLinks: string[]; internalLinks: string[] } {
-  const ownHost = projectDomainRaw?.trim() ? normalizeSiteHost(projectDomainRaw) : '';
-  const external = new Set<string>();
-  const internal = new Set<string>();
-  const linkRe = /(!?)\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
-  for (const m of (markdown ?? '').matchAll(linkRe)) {
-    if (m[1] === '!') continue; // image, not a link
-    const href = m[2].trim();
-    if (!href || href.startsWith('#') || /^(mailto|tel):/i.test(href)) continue;
-    if (/^https?:\/\//i.test(href)) {
-      const host = getHost(href);
-      if (ownHost && host && (host === ownHost || host.endsWith(`.${ownHost}`))) internal.add(href);
-      else external.add(href);
-    } else if (href.startsWith('/') || !href.includes(':')) {
-      internal.add(href.startsWith('/') ? href : `/${href}`);
-    }
-  }
-  return { externalLinks: [...external], internalLinks: [...internal] };
 }
 
 /** A domain is credible if it's on the allow-list or ends in `.gov` / `.edu`. */
@@ -468,70 +396,6 @@ interface SanitizeOpts {
  *   4. Returns a fresh `external_links` / `internal_links` array reflecting
  *      what's actually still in the content.
  */
-/**
- * Remove writer/designer-facing meta notes that must never appear in a
- * published post (e.g. "> Infographic suggestion: ...", "[infographic]").
- */
-function stripMetaSuggestionNotes(md: string): string {
-  return md
-    .split('\n')
-    .filter(line => {
-      const t = line.replace(/^\s*>?\s*/, '').trim().toLowerCase();
-      return !(
-        t.startsWith('infographic suggestion') ||
-        t.startsWith('infographic:') ||
-        t.startsWith('suggested infographic') ||
-        t.startsWith('[infographic')
-      );
-    })
-    .join('\n');
-}
-
-/**
- * Repair malformed GitHub-flavoured-markdown table separator rows. LLMs
- * sometimes emit a broken separator like `|, -|, -|, -|`, which stops the row
- * from being recognised as a table so the whole thing renders as raw pipes.
- * We detect a pipes/dashes/colons-only row that follows a header row and
- * rebuild it as a valid `| --- | --- | ... |` matching the header's columns.
- */
-function repairMarkdownTables(md: string): string {
-  const lines = md.split('\n');
-  for (let i = 1; i < lines.length; i++) {
-    const compact = lines[i].replace(/\s/g, '');
-    if (!compact || !compact.includes('-') || (compact.match(/\|/g)?.length ?? 0) < 2) continue;
-    // Only characters a separator row can legitimately (or wrongly) contain.
-    if (!/^[|:\-,]+$/.test(compact)) continue;
-    // Already a valid separator? Leave it alone.
-    if (/^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(lines[i])) continue;
-    const header = lines[i - 1];
-    if (!header || !header.includes('|')) continue;
-    const cols = header.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').length;
-    if (cols < 1) continue;
-    lines[i] = '| ' + Array.from({ length: cols }, () => '---').join(' | ') + ' |';
-  }
-  return lines.join('\n');
-}
-
-/**
- * Delete leftover comma/dash/pipe fragments the LLM occasionally drops when a
- * table it started never came together — e.g. a bare `, -` line on its own,
- * or `, -` tacked onto the end of an otherwise normal sentence or link (see
- * `repairMarkdownTables` above: this catches what that couldn't, because it
- * had no pipes to key off or no valid header row to rebuild from). No
- * legitimate sentence or markdown construct ends with a comma followed only
- * by dashes, so both patterns are safe to strip unconditionally.
- */
-function stripStrayTableArtifacts(md: string): string {
-  return md
-    .split('\n')
-    .map(line => line.replace(/,\s*-+\s*$/, ''))
-    .filter(line => {
-      const compact = line.replace(/\s/g, '');
-      return !(compact.length > 0 && compact.includes(',') && /^[|:,\-]+$/.test(compact));
-    })
-    .join('\n');
-}
-
 export async function sanitizeBlogContent(
   markdown: string,
   opts: SanitizeOpts = {}
@@ -541,20 +405,6 @@ export async function sanitizeBlogContent(
 
   // Phase 0 — empty `<a name|id>` tags (no href) leak as visible text in Markdown preview.
   let next = stripEmptyFragmentAnchorTags(markdown);
-
-  // Phase 0b — remove writer-facing meta notes ("Infographic suggestion", …),
-  // legacy forced-keyword filler sentences, and repair malformed markdown
-  // tables so the draft is publish-ready.
-  next = stripMetaSuggestionNotes(next);
-  next = stripForcedKeywordFiller(next);
-  next = repairMarkdownTables(next);
-  next = stripStrayTableArtifacts(next);
-
-  // Phase 0c — full deterministic publish-readiness polish: single H1,
-  // heading spacing/padding, GFM table normalization (column counts, missing
-  // separators, pipe wrapping), dangling code fences, artifact lines. This is
-  // what guarantees the stored draft renders cleanly in every viewer.
-  next = polishBlogMarkdown(next);
 
   // Phase 1 — strip placeholder images. These are LLM artifacts, never real.
   next = next.replace(
@@ -639,14 +489,7 @@ export async function sanitizeBlogContent(
     }
   }
 
-  // Freshness gate: an external citation whose URL carries a stale year
-  // segment (older than the citation window) is treated exactly like a dead
-  // link — unlinked to plain anchor text and dropped from the arrays. This
-  // is the deterministic backstop behind the prompt's recency rules.
-  const staleCutoff = minCitationYear();
-  const freshExternalUrls = externalUrls.filter(u => !isStaleDatedUrl(u, staleCutoff));
-
-  const liveExternals = await validateExternalUrls(freshExternalUrls);
+  const liveExternals = await validateExternalUrls(externalUrls);
   const liveInternals = new Set<string>();
 
   if (internalUrls.length && ownHost) {

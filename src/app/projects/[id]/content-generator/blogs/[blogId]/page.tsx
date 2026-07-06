@@ -12,8 +12,7 @@ import { qk, useProject, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
-import { normalizeSiteHost, extractLinksFromMarkdown } from "@/lib/blog-content";
-import { prepareForRender } from "@/lib/content-validation";
+import { normalizeSiteHost, reclassifyBlogLinkSidebarLists } from "@/lib/blog-content";
 import { analyzeBlogContent, updateBlogCoverImage, type BlogContentAnalysis } from "@/app/actions/blog-actions";
 import { normalizeMarkdownImages, BLOG_IMAGE_PLACEHOLDER_URL } from "@/services/openAiImages";
 import {
@@ -266,19 +265,13 @@ export default function BlogViewerPage() {
     [project?.domain]
   );
 
-  // The exact markdown the preview renders (recovered + artifact-stripped).
-  // Copy MD copies this string, and the sidebar link lists are derived from
-  // it — so preview, copy, and the right panel can never disagree.
-  const previewContent = useMemo(() => {
-    const raw = displayBlog?.content ?? "";
-    if (!raw) return "";
-    const prep = prepareForRender(raw, { type: "blog" });
-    return prep.ok ? prep.content : raw;
-  }, [displayBlog?.content]);
-
   const { externalLinks, internalLinks } = useMemo(
-    () => extractLinksFromMarkdown(previewContent, project?.domain),
-    [previewContent, project?.domain]
+    () => reclassifyBlogLinkSidebarLists(
+      displayBlog?.external_links ?? [],
+      displayBlog?.internal_links ?? [],
+      project?.domain
+    ),
+    [displayBlog?.external_links, displayBlog?.internal_links, project?.domain]
   );
 
   // ── Effects ─────────────────────────────────────────────────────────────
@@ -686,21 +679,6 @@ export default function BlogViewerPage() {
     }
   };
 
-  // ── Structured data (JSON-LD) copy ─────────────────────────────────────
-  const handleCopySchema = async () => {
-    if (!displayBlog) return;
-    const projectMeta = project
-      ? { domain: project.domain ?? undefined, company: project.company ?? undefined }
-      : undefined;
-    try {
-      const { buildSchemaScriptTags } = await import("@/lib/schema");
-      await navigator.clipboard.writeText(buildSchemaScriptTags(displayBlog, projectMeta));
-      toast.success("Structured data copied — paste it into your CMS <head>");
-    } catch {
-      toast.error("Could not copy structured data");
-    }
-  };
-
   // ── Edit mode handlers ─────────────────────────────────────────────────
   const handleRegenerate = async () => {
     if (!blog) return;
@@ -728,9 +706,7 @@ export default function BlogViewerPage() {
 
   const handleCopy = async () => {
     if (!displayBlog) return;
-    // Copy exactly what the preview shows — never raw stored content that may
-    // carry legacy artifacts the renderer strips.
-    await navigator.clipboard.writeText(previewContent || displayBlog.content);
+    await navigator.clipboard.writeText(displayBlog.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -1293,24 +1269,6 @@ export default function BlogViewerPage() {
             </button>
           ))}
         </div>
-      </div>
-
-      {/* Structured data */}
-      <Divider />
-      <div className="px-4 py-3.5">
-        <SLabel>Structured Data</SLabel>
-        <button
-          onClick={() => void handleCopySchema()}
-          className="w-full flex items-center justify-between rounded-[6px] px-3 py-2 text-[11px] font-medium transition-all border border-border-subtle bg-surface-tertiary text-text-tertiary hover:text-text-primary hover:border-border-default"
-        >
-          <span>Copy Article + FAQ JSON-LD</span>
-          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" />
-          </svg>
-        </button>
-        <p className="mt-1.5 text-[10px] leading-relaxed text-text-tertiary">
-          Paste into your CMS page &lt;head&gt; for rich results (schema is already embedded in HTML/MD exports).
-        </p>
       </div>
 
       {/* Publish */}

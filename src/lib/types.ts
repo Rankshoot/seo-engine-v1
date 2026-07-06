@@ -11,16 +11,6 @@ export interface Project {
   description: string;
   ahrefs_rank_tracker_project_id?: number | null;
   last_benchmarked_competitor_snapshot?: string | null;
-  /** Snapshot of { domain, niche, target_region, target_language } as of the last
-   * successful keyword discovery run — server-side source of truth for the
-   * "Project details have changed, rediscover?" warning. Null until the first
-   * discovery run after this field was added. */
-  discovery_params_snapshot?: {
-    domain: string;
-    niche: string;
-    target_region: string;
-    target_language: string;
-  } | null;
   brand_voice?: string;
   brand_values?: string;
   brand_description?: string;

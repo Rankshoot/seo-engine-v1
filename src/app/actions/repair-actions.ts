@@ -220,8 +220,8 @@ export async function repairBlogFromAudit(projectId: string, auditUrl: string) {
         slug: repaired.slug,
         status: 'generated',
         research_sources: repaired.research_sources,
-        external_links: sanitized.externalLinks,
-        internal_links: sanitized.internalLinks,
+        external_links: sanitized.externalLinks.slice(0, 10),
+        internal_links: sanitized.internalLinks.slice(0, 12),
         source_url: auditUrl,
         repair_notes: repairNotes,
       })
@@ -386,8 +386,8 @@ export async function repairBlogFromContent(
         slug: repaired.slug,
         status: 'generated',
         research_sources: repaired.research_sources,
-        external_links: sanitized.externalLinks,
-        internal_links: sanitized.internalLinks,
+        external_links: sanitized.externalLinks.slice(0, 10),
+        internal_links: sanitized.internalLinks.slice(0, 12),
         source_url: blogRow.source_url || `blog://${blogId}`,
         repair_notes: repairNotes,
       })

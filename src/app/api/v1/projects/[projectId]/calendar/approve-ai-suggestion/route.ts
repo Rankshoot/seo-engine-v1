@@ -18,11 +18,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
       kd?: number;
       cpc?: number;
       intent?: string;
-      contentType?: "blog" | "ebook" | "whitepaper" | "linkedin";
     };
     if (!body.keyword?.trim() || !body.source || !body.page) {
       return apiJson(
-        { success: false, error: "Expected { keyword, source, page, keywordId?, contentType? }" },
+        { success: false, error: "Expected { keyword, source, page, keywordId?, volume?, kd?, cpc?, intent? }" },
         { status: 400 }
       );
     }
@@ -36,7 +35,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
       kd: body.kd,
       cpc: body.cpc,
       intent: body.intent,
-      contentType: body.contentType,
     });
     return apiJson(result, { status: result.success ? 200 : 400 });
   } catch {

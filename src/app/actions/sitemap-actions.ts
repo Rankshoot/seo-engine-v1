@@ -100,33 +100,16 @@ async function persistSitemap(
 
   if (records.length) {
     // Insert in chunks to stay well under payload limits on large sites.
-    // `lastmod` is included when the sitemap declared one; if the lastmod
-    // migration hasn't been applied yet, retry the chunk without it so the
-    // sync still succeeds (graceful schema degradation).
     const CHUNK = 500;
-    let includeLastmod = true;
     for (let i = 0; i < records.length; i += CHUNK) {
-      const chunk = records.slice(i, i + CHUNK);
-      const buildRows = (withLastmod: boolean) =>
-        chunk.map(r => ({
-          project_id: projectId,
-          url: r.url,
-          path: r.path,
-          kind: r.kind,
-          title: r.title,
-          ...(withLastmod ? { lastmod: r.lastmod } : {}),
-        }));
-
-      let { error: insErr } = await supabaseAdmin
-        .from('project_sitemap_urls')
-        .insert(buildRows(includeLastmod));
-      if (insErr && includeLastmod && /lastmod|schema cache|column/i.test(insErr.message)) {
-        includeLastmod = false;
-        trace.push({ step: 'db_insert_lastmod', ok: false, detail: 'lastmod column missing — run supabase-migration-project-sitemap-lastmod.sql' });
-        ({ error: insErr } = await supabaseAdmin
-          .from('project_sitemap_urls')
-          .insert(buildRows(false)));
-      }
+      const slice = records.slice(i, i + CHUNK).map(r => ({
+        project_id: projectId,
+        url: r.url,
+        path: r.path,
+        kind: r.kind,
+        title: r.title,
+      }));
+      const { error: insErr } = await supabaseAdmin.from('project_sitemap_urls').insert(slice);
       if (insErr) {
         trace.push({ step: 'db_insert', ok: false, detail: insErr.message });
         break;

@@ -408,7 +408,7 @@ export function AuditResults({
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
                   </svg>
-                  Generate Blog
+                  Generate Enhanced Blog
                 </>
               )}
             </button>
@@ -435,7 +435,7 @@ export function AuditResults({
               saving={scheduleSaving}
               scheduledDates={scheduledDates}
               variant="pick"
-              label={scheduleSaving ? "Scheduling…" : "Schedule"}
+              label={scheduleSaving ? "Scheduling…" : "Schedule to Calendar"}
               className="h-9 px-4 rounded-[10px] border border-border-subtle bg-surface-secondary text-[13px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong disabled:opacity-50 transition-all flex items-center gap-2"
             />
           ) : (

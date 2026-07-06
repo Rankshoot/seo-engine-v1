@@ -37,25 +37,6 @@ export const keywordsApi = {
     return apiPost(V1Routes.keywordsLoadMore(projectId), { offset, limit });
   },
 
-  /** Claude-generated trending keyword ideas (5, diversified) — keyword +
-   *  rationale + an AI-recommended content type. No paid volume lookup. */
-  generateTrending(
-    projectId: string,
-    opts: { userPrompt?: string } = {}
-  ): Promise<
-    | {
-        success: true;
-        keywords: Array<{
-          keyword: string;
-          rationale: string;
-          recommendedType: "blog" | "ebook" | "whitepaper" | "linkedin";
-        }>;
-      }
-    | { success: false; error: string }
-  > {
-    return apiPost(V1Routes.keywordsGenerateTrending(projectId), { userPrompt: opts.userPrompt });
-  },
-
   loadMoreFromAhrefs(projectId: string): Promise<{
     success: boolean;
     error?: string;

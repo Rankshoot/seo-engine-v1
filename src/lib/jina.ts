@@ -44,16 +44,7 @@ export async function fetchSitemapUrls(domain: string, max = 500): Promise<strin
 export async function crawlSitemaps(
   roots: string[],
   max = 500,
-  opts: {
-    stopAtFirstNonEmpty?: boolean;
-    /**
-     * Optional collector for `<lastmod>` values: filled with url → ISO date
-     * for every returned URL whose sitemap entry declared one. Lets callers
-     * prefer recently-published/updated pages (e.g. newest blog posts) when
-     * building internal-link pools, without changing the return shape.
-     */
-    collectLastmod?: Map<string, string>;
-  } = {}
+  opts: { stopAtFirstNonEmpty?: boolean } = {}
 ): Promise<string[]> {
   const stopAtFirstNonEmpty = opts.stopAtFirstNonEmpty ?? true;
 
@@ -76,11 +67,6 @@ export async function crawlSitemaps(
     }
 
     const locs = extractLocs(xml);
-    if (opts.collectLastmod) {
-      for (const [loc, lastmod] of extractLastmods(xml)) {
-        if (!opts.collectLastmod.has(loc)) opts.collectLastmod.set(loc, lastmod);
-      }
-    }
     // Split each <loc> into: "this is another sitemap we should recurse into"
     // vs "this is a real page URL we should keep". Recognize nested sitemaps
     // by filename + content-type hint in the URL, not by the surrounding tag
@@ -153,28 +139,6 @@ function extractLocs(xml: string): string[] {
   while ((m = re.exec(xml))) {
     const url = m[1].trim();
     if (url.startsWith('http')) out.push(url);
-  }
-  return out;
-}
-
-/**
- * Extract (loc, lastmod) pairs from a sitemap's `<url>`/`<sitemap>` blocks.
- * Only entries that actually declare a parseable `<lastmod>` are returned;
- * dates are normalized to ISO strings. Regex-based on purpose — matches the
- * rest of this file's zero-dependency sitemap handling.
- */
-function extractLastmods(xml: string): Array<[string, string]> {
-  const out: Array<[string, string]> = [];
-  const blockRe = /<(?:url|sitemap)>([\s\S]*?)<\/(?:url|sitemap)>/gi;
-  let block: RegExpExecArray | null;
-  while ((block = blockRe.exec(xml))) {
-    const inner = block[1];
-    const loc = /<loc>\s*([^<]+?)\s*<\/loc>/i.exec(inner)?.[1]?.trim();
-    const lastmodRaw = /<lastmod>\s*([^<]+?)\s*<\/lastmod>/i.exec(inner)?.[1]?.trim();
-    if (!loc || !loc.startsWith('http') || !lastmodRaw) continue;
-    const parsed = new Date(lastmodRaw);
-    if (Number.isNaN(parsed.getTime())) continue;
-    out.push([loc, parsed.toISOString()]);
   }
   return out;
 }

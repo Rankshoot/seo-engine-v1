@@ -17,8 +17,28 @@ const cspHeader = `
   upgrade-insecure-requests;
 `.replace(/\s{2,}/g, ' ').trim();
 
+/**
+ * Deployment fingerprint, computed once per build. Doubles as the Next.js
+ * buildId and is inlined into the client bundle (NEXT_PUBLIC_BUILD_ID) so the
+ * running app can compare itself against `/api/version` and self-refresh when
+ * a new deploy ships — users must never need a hard refresh to get updates.
+ * Prefers the CI commit SHA (stable across build machines); falls back to a
+ * per-build timestamp.
+ */
+const deployBuildId = (
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.GITHUB_SHA ||
+  process.env.COMMIT_SHA ||
+  process.env.SHORT_SHA ||
+  Date.now().toString(36)
+).slice(0, 12);
+
 const nextConfig: NextConfig = {
   output: 'standalone',
+  env: {
+    NEXT_PUBLIC_BUILD_ID: deployBuildId,
+  },
+  generateBuildId: () => deployBuildId,
   turbopack: {
     root: path.resolve(__dirname),
   },
@@ -41,6 +61,16 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      {
+        // App pages (no file extension, not Next internals, not API): the
+        // HTML document must never be served from a stale cache — otherwise
+        // users keep getting an old deploy until they hard-refresh. Hashed
+        // /_next/static assets keep their immutable long-term caching.
+        source: "/((?!_next/|api/|.*\\..*).*)",
+        headers: [
+          { key: "Cache-Control", value: "no-store, must-revalidate" },
+        ],
+      },
       {
         source: "/:path*",
         headers: [

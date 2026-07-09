@@ -17,6 +17,7 @@ import { KeywordTableSkeleton } from "@/components/Skeleton";
 import { ColumnDef, SharedKeywordTable } from "../_components/SharedKeywordTable";
 import { toast } from "react-hot-toast";
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
+import { KD_COLOR } from "@/lib/keyword-format";
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled" | "generated";
@@ -43,9 +44,6 @@ function compactUrl(url: string): string {
     return url;
   }
 }
-
-const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function getAiGapScoreCategory(score: number): { icon: string; colorClass: string; label: string } {
   if (score >= 75) return { icon: "★", colorClass: "border-status-success/30 bg-status-success/10 text-status-success", label: "High opportunity" };
@@ -591,12 +589,24 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       align: "center",
       sortable: true,
       tooltip: "Keyword Difficulty (0–100). Higher = harder to rank.",
-      cell: (g: KeywordGap) => typeof g.kd === "number" && g.kd > 0 ? (
-        <span className={`text-[13px] font-semibold tabular-nums ${KD_COLOR(g.kd)}`}>
-          {g.kd}
-        </span>
-      ) : (
-        <span className="text-[12px] text-text-tertiary">—</span>
+      cell: (g: KeywordGap) => (
+        <div className="flex items-center justify-center gap-2">
+          {typeof g.kd === "number" && g.kd > 0 ? (
+            <>
+              <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    g.kd < 30 ? "bg-status-success" : g.kd < 60 ? "bg-status-warning" : "bg-brand-coral"
+                  }`}
+                  style={{ width: `${g.kd}%` }}
+                />
+              </div>
+              <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(g.kd)}`}>{g.kd}</span>
+            </>
+          ) : (
+            <span className="text-[13px] text-text-tertiary">—</span>
+          )}
+        </div>
       )
     },
     {
@@ -655,6 +665,12 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       )
     },
     {
+      id: "content_type",
+      header: "Content Type",
+      align: "center",
+      cell: (g: KeywordGap) => renderContentTypeSelect(g.keyword, g.ai_eval_data)
+    },
+    {
       id: "top_competitor_url",
       header: "Ranking page",
       sortable: false,
@@ -690,12 +706,6 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
           </div>
         );
       }
-    },
-    {
-      id: "content_type",
-      header: "Content Type",
-      align: "center",
-      cell: (g: KeywordGap) => renderContentTypeSelect(g.keyword, g.ai_eval_data)
     },
     {
       id: "action",

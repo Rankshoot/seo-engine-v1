@@ -34,6 +34,7 @@ import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-acti
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { EmptyState } from "@/components/common";
+import { KD_COLOR } from "@/lib/keyword-format";
 
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
@@ -81,9 +82,6 @@ function MonthlySearchesChart({ data }: { data: { month: string; volume: number 
     </div>
   );
 }
-
-const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function AI_SCORE_CATEGORY(score: number): { icon: string; cls: string; label: string } {
   if (score >= 75) return { icon: "★", cls: "border-status-success/30 bg-status-success/10 text-status-success", label: "High opportunity" };

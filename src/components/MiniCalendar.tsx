@@ -557,7 +557,7 @@ export function MiniCalendar({
               },
             });
             return (
-              <div key={idx} className="flex min-h-[152px] flex-col gap-1">
+              <div key={idx} className="group flex min-h-[152px] flex-col gap-1">
                 <span
                   className={`self-end text-[10px] font-bold leading-none ${
                     isToday ? "text-brand-action" : "text-brand-action/60"
@@ -571,37 +571,40 @@ export function MiniCalendar({
                       <DayEntryCard key={entry.id} {...cardProps(entry)} compact={stack} />
                     ))}
                   </AnimatePresence>
-                  {(overflowEntries.length > 0 || canAddMore) && (
-                    <div className="mt-auto flex items-center gap-1">
-                      {overflowEntries.length > 0 && (
-                        <DropdownMenu
-                          align="start"
-                          menuWidth="md"
-                          trigger={
-                            <button
-                              type="button"
-                              className="flex h-5 items-center justify-center rounded-[5px] border border-border-subtle bg-surface-elevated px-1.5 text-[9px] font-semibold text-text-secondary transition-colors hover:border-brand-action/40 hover:text-brand-action"
-                            >
-                              +{overflowEntries.length} more
-                            </button>
-                          }
+                  {overflowEntries.length > 0 && (
+                    <DropdownMenu
+                      align="start"
+                      menuWidth="md"
+                      trigger={
+                        <button
+                          type="button"
+                          className="flex h-5 shrink-0 items-center justify-center rounded-[5px] border border-border-subtle bg-surface-elevated px-1.5 text-[9px] font-semibold text-text-secondary transition-colors hover:border-brand-action/40 hover:text-brand-action"
                         >
-                          <div className="max-h-72 space-y-1 overflow-y-auto p-0.5">
-                            {overflowEntries.map(entry => (
-                              <DayEntryCard key={entry.id} {...cardProps(entry)} compact />
-                            ))}
-                          </div>
-                        </DropdownMenu>
-                      )}
-                      {canAddMore && (
+                          +{overflowEntries.length} more
+                        </button>
+                      }
+                    >
+                      <div className="max-h-72 space-y-1 overflow-y-auto p-0.5">
+                        {overflowEntries.map(entry => (
+                          <DayEntryCard key={entry.id} {...cardProps(entry)} compact />
+                        ))}
+                      </div>
+                    </DropdownMenu>
+                  )}
+                  {/* Collapsed until the day cell is hovered — content keeps its full
+                      height at rest, and this row grows in (shrinking the cards above)
+                      only when the user is about to interact with this date. */}
+                  {canAddMore && (
+                    <div className="grid shrink-0 grid-rows-[0fr] overflow-hidden transition-[grid-template-rows] duration-200 ease-out group-hover:grid-rows-[1fr]">
+                      <div className="min-h-0 overflow-hidden">
                         <button
                           type="button"
                           onClick={() => onEmptyDayClick!(iso)}
-                          className="flex h-5 flex-1 items-center justify-center gap-0.5 rounded-[5px] border border-dashed border-border-subtle text-[9px] font-semibold text-text-tertiary transition-colors hover:border-brand-action/40 hover:bg-brand-action/5 hover:text-brand-action"
+                          className="mt-1 flex h-5 w-full items-center justify-center gap-0.5 rounded-[5px] border border-dashed border-border-subtle text-[9px] font-semibold text-text-tertiary transition-colors hover:border-brand-action/40 hover:bg-brand-action/5 hover:text-brand-action"
                         >
                           + Add
                         </button>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>

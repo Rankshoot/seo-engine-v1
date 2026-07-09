@@ -571,40 +571,50 @@ export function MiniCalendar({
                       <DayEntryCard key={entry.id} {...cardProps(entry)} compact={stack} />
                     ))}
                   </AnimatePresence>
-                  {overflowEntries.length > 0 && (
-                    <DropdownMenu
-                      align="start"
-                      menuWidth="md"
-                      trigger={
-                        <button
-                          type="button"
-                          className="flex h-5 shrink-0 items-center justify-center rounded-[5px] border border-border-subtle bg-surface-elevated px-1.5 text-[9px] font-semibold text-text-secondary transition-colors hover:border-brand-action/40 hover:text-brand-action"
+                  {(overflowEntries.length > 0 || canAddMore) && (
+                    <div className="flex shrink-0 items-center gap-1">
+                      {overflowEntries.length > 0 && (
+                        <DropdownMenu
+                          align="start"
+                          menuWidth="md"
+                          trigger={
+                            <button
+                              type="button"
+                              className="flex h-5 shrink-0 items-center justify-center rounded-[5px] border border-border-subtle bg-surface-elevated px-1.5 text-[9px] font-semibold text-text-secondary transition-colors hover:border-brand-action/40 hover:text-brand-action"
+                            >
+                              +{overflowEntries.length} more
+                            </button>
+                          }
                         >
-                          +{overflowEntries.length} more
-                        </button>
-                      }
-                    >
-                      <div className="max-h-72 space-y-1 overflow-y-auto p-0.5">
-                        {overflowEntries.map(entry => (
-                          <DayEntryCard key={entry.id} {...cardProps(entry)} compact />
-                        ))}
-                      </div>
-                    </DropdownMenu>
-                  )}
-                  {/* Collapsed until the day cell is hovered — content keeps its full
-                      height at rest, and this row grows in (shrinking the cards above)
-                      only when the user is about to interact with this date. */}
-                  {canAddMore && (
-                    <div className="grid shrink-0 grid-rows-[0fr] overflow-hidden transition-[grid-template-rows] duration-200 ease-out group-hover:grid-rows-[1fr]">
-                      <div className="min-h-0 overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={() => onEmptyDayClick!(iso)}
-                          className="mt-1 flex h-5 w-full items-center justify-center gap-0.5 rounded-[5px] border border-dashed border-border-subtle text-[9px] font-semibold text-text-tertiary transition-colors hover:border-brand-action/40 hover:bg-brand-action/5 hover:text-brand-action"
+                          <div className="max-h-72 space-y-1 overflow-y-auto p-0.5">
+                            {overflowEntries.map(entry => (
+                              <DayEntryCard key={entry.id} {...cardProps(entry)} compact />
+                            ))}
+                          </div>
+                        </DropdownMenu>
+                      )}
+                      {/* Collapsed until the day cell is hovered — content keeps its
+                          full height at rest, and this grows in beside the "+N more"
+                          chip (or alone, below the card) only on hover. */}
+                      {canAddMore && (
+                        <div
+                          className={
+                            overflowEntries.length > 0
+                              ? "grid grid-cols-[0fr] overflow-hidden transition-[grid-template-columns] duration-200 ease-out group-hover:grid-cols-[1fr]"
+                              : "grid grid-rows-[0fr] overflow-hidden transition-[grid-template-rows] duration-200 ease-out group-hover:grid-rows-[1fr]"
+                          }
                         >
-                          + Add
-                        </button>
-                      </div>
+                          <div className="min-w-0 min-h-0 overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => onEmptyDayClick!(iso)}
+                              className="flex h-5 w-full items-center justify-center gap-0.5 whitespace-nowrap rounded-[5px] border border-dashed border-border-subtle px-1.5 text-[9px] font-semibold text-text-tertiary transition-colors hover:border-brand-action/40 hover:bg-brand-action/5 hover:text-brand-action"
+                            >
+                              + Add
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

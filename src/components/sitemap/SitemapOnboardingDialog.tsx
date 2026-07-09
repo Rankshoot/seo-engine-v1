@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Link2, X, Search, Check, Sparkles } from "lucide-react";
+import { Link2, X, Search, Check } from "lucide-react";
 import {
   getSitemapSettings,
   autoDiscoverSitemap,
@@ -124,16 +124,12 @@ export function SitemapOnboardingDialog({ projectId }: { projectId: string }) {
     <>
       <div className="fixed inset-0 z-[65] flex items-center justify-center p-4">
         <div className="absolute inset-0 bg-black/50" onClick={close} aria-hidden />
-        <div className="relative z-10 w-full max-w-md overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-xl">
+        <div className="relative z-10 w-full max-w-md overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-2xl">
           {/* Header */}
           <div className="flex items-start justify-between gap-3 px-5 pt-5">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-violet/10">
-                {phase === "confirm" ? (
-                  <Sparkles className="h-5 w-5 text-brand-violet" />
-                ) : (
-                  <Link2 className="h-5 w-5 text-brand-violet" />
-                )}
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-brand-violet/15 bg-brand-violet/10">
+                <Link2 className="h-5 w-5 text-brand-violet" />
               </div>
               <div>
                 <h2 className="text-[16px] font-semibold text-text-primary">
@@ -145,7 +141,7 @@ export function SitemapOnboardingDialog({ projectId }: { projectId: string }) {
             <button
               type="button"
               onClick={close}
-              className="flex h-8 w-8 items-center justify-center rounded-[8px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
               aria-label="Close"
             >
               <X className="h-4 w-4" />

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Button, Field, Input, Select } from "@/components/common";
+import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 
 function fmtDate(iso: string): string {
   return new Date(iso + "T12:00:00").toLocaleDateString("en-US", {
@@ -10,6 +11,23 @@ function fmtDate(iso: string): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function localTodayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Earliest date (starting today) with no entry yet scheduled on it. */
+function earliestVacantDate(scheduledDatesSet: Map<string, number>): string {
+  const base = new Date();
+  for (let i = 0; i < 500; i++) {
+    const cur = new Date(base);
+    cur.setDate(base.getDate() + i);
+    const iso = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}-${String(cur.getDate()).padStart(2, "0")}`;
+    if (!scheduledDatesSet.has(iso)) return iso;
+  }
+  return localTodayISO();
 }
 
 const SUPPORTED_ARTICLE_TYPES = [
@@ -22,8 +40,10 @@ const SUPPORTED_ARTICLE_TYPES = [
 export interface AddCustomKeywordModalProps {
   open: boolean;
   onClose: () => void;
-  /** If coming from a grid cell click, the date is pre-filled. Null = use next vacant date. */
+  /** If coming from a grid cell click, the date is pre-filled. Null = default to the next free date. */
   preselectedDate?: string | null;
+  /** date → number of entries already scheduled on that date, for the dot-indicator picker. */
+  entryCountByDate?: Map<string, number>;
   onSubmit: (data: {
     keyword: string;
     title: string;
@@ -38,24 +58,38 @@ export function AddCustomKeywordModal({
   open,
   onClose,
   preselectedDate,
+  entryCountByDate,
   onSubmit,
   busy = false,
 }: AddCustomKeywordModalProps) {
   const [keyword, setKeyword] = useState("");
   const [articleType, setArticleType] = useState("Blog Post");
+  const [selectedDate, setSelectedDate] = useState("");
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const keywordRef = useRef<HTMLInputElement>(null);
+
+  const datesMap = useMemo(() => entryCountByDate ?? new Map<string, number>(), [entryCountByDate]);
+  const scheduledDates = useMemo(() => new Set(datesMap.keys()), [datesMap]);
+  const multiScheduledDates = useMemo(
+    () => new Set([...datesMap].filter(([, count]) => count > 1).map(([date]) => date)),
+    [datesMap]
+  );
 
   useEffect(() => {
     if (!open) return;
     const timer = window.setTimeout(() => {
       setKeyword("");
       setArticleType("Blog Post");
+      setSelectedDate(preselectedDate || earliestVacantDate(datesMap));
       setError(null);
       keywordRef.current?.focus();
     }, 60);
     return () => window.clearTimeout(timer);
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, preselectedDate]);
+
+  const entriesOnSelectedDate = selectedDate ? (datesMap.get(selectedDate) ?? 0) : 0;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -69,7 +103,7 @@ export function AddCustomKeywordModal({
       title: "",
       articleType,
       writerNotes: "",
-      targetDate: preselectedDate ?? undefined,
+      targetDate: selectedDate || undefined,
     });
     if (!res.success) setError(res.error ?? "Something went wrong");
   }
@@ -82,11 +116,7 @@ export function AddCustomKeywordModal({
       closeOnBackdrop={!busy}
       closeOnEscape={!busy}
       title="Add keyword to calendar"
-      description={
-        preselectedDate
-          ? `Will be scheduled for ${fmtDate(preselectedDate)}`
-          : "Will be placed on the next free date automatically"
-      }
+      description="Choose a keyword, article type, and publish date."
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
@@ -127,6 +157,32 @@ export function AddCustomKeywordModal({
               </option>
             ))}
           </Select>
+        </Field>
+
+        <Field label="Publish date" htmlFor="ack-date">
+          <div className="flex items-center justify-between gap-3 rounded-[10px] border border-border-subtle bg-surface-secondary/50 px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-[13px] font-medium text-text-primary">
+                {selectedDate ? fmtDate(selectedDate) : "Next free date"}
+              </p>
+              {entriesOnSelectedDate > 0 && (
+                <p className="mt-0.5 text-[11px] text-status-warning">
+                  Adding alongside {entriesOnSelectedDate} existing {entriesOnSelectedDate === 1 ? "entry" : "entries"} that day
+                </p>
+              )}
+            </div>
+            <CalendarDatePicker
+              open={datePickerOpen}
+              onOpenChange={setDatePickerOpen}
+              currentDate={selectedDate}
+              onConfirm={setSelectedDate}
+              saving={busy}
+              scheduledDates={scheduledDates}
+              multiScheduledDates={multiScheduledDates}
+              variant="pick"
+              label="Change date"
+            />
+          </div>
         </Field>
 
         {error && (

@@ -164,18 +164,22 @@ export function MetricPill({
   );
 }
 
+/** Shared border/bg/text tone classes for a content type, keyed off its label. */
+export function contentTypeTone(type?: string): string {
+  const lowerType = (type || "blog").toLowerCase();
+  return lowerType === "ebook"
+    ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
+    : lowerType === "whitepaper"
+      ? "border-blue-500/30 bg-blue-500/10 text-blue-300"
+      : lowerType === "linkedin" || lowerType === "linkedin post"
+        ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
+        : "border-border-subtle bg-surface-tertiary text-text-secondary";
+}
+
 /** Content-type badge ("Ebook", "Whitepaper", "LinkedIn", "Blog"). */
 export function ContentTypeBadge({ type }: { type?: string }) {
   const safeType = type || "Blog";
-  const lowerType = safeType.toLowerCase();
-  const tone =
-    lowerType === "ebook"
-      ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
-      : lowerType === "whitepaper"
-        ? "border-blue-500/30 bg-blue-500/10 text-blue-300"
-        : lowerType === "linkedin" || lowerType === "linkedin post"
-          ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
-          : "border-border-subtle bg-surface-tertiary text-text-secondary";
+  const tone = contentTypeTone(safeType);
   return (
     <span
       className={cn(

@@ -5,7 +5,7 @@ import { isPastDate } from "@/utils/calendar-validation";
 
 /**
  * Move a calendar row to another date (used by API routes — not a Server Action).
- * One entry per day per project; cannot move while `generating`.
+ * Multiple entries may share a date; cannot move while `generating`.
  */
 export async function rescheduleCalendarEntryToDate(
   projectId: string,
@@ -73,18 +73,8 @@ export async function rescheduleCalendarEntryToDate(
       return { success: false, error: errorMsg };
     }
 
-    const { data: conflict } = await supabaseAdmin
-      .from("calendar_entries")
-      .select("id")
-      .eq("project_id", projectId)
-      .eq("scheduled_date", dateNorm)
-      .neq("id", entryId)
-      .maybeSingle();
-
-    if (conflict) {
-      errorMsg = "Another keyword is already scheduled on this date";
-      return { success: false, error: errorMsg };
-    }
+    // Multiple entries can share the same date — the caller picked this exact
+    // date on purpose (drag-and-drop or explicit reschedule).
 
     const { data, error } = await supabaseAdmin
       .from("calendar_entries")

@@ -1,17 +1,32 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect, useCallback, type DragEvent } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { CalendarOriginPills } from "@/components/CalendarOriginPills";
 import { CalendarEntry, CalendarEntryWithBlog, CONTENT_TYPE_LABEL, type ContentType } from "@/lib/types";
 import { resolveCalendarKeywordOrigin } from "@/lib/calendar-keyword-origin";
 import { getContentPreviewUrl } from "@/lib/content-routing";
 import { generatedContentKey } from "@/hooks/useGeneratedContentMap";
+import { contentTypeTone } from "@/components/content-generator/shared/section-helpers";
+import { DropdownMenu } from "@/components/common/dropdowns/DropdownMenu";
+import { cn } from "@/lib/cn";
 
 const CAL_DRAG_MIME = "application/x-seo-calendar-entry";
+/** Cards rendered directly in a day cell before the rest collapse into "+N more". */
+const MAX_VISIBLE_PER_DAY = 2;
 
 function normalizeCalDay(raw: string): string {
   return String(raw).slice(0, 10);
+}
+
+/** Short content-type code shown on every calendar card (blog/ebook/whitepaper/LinkedIn). */
+function typeShortLabel(articleType: string | undefined | null): string {
+  const t = (articleType || "").toLowerCase();
+  if (t === "ebook") return "EBOOK";
+  if (t === "whitepaper") return "WHITEPAPER";
+  if (t.includes("linkedin")) return "LINKEDIN";
+  return "BLOG";
 }
 
 function fmtVol(n: number | undefined | null): string {
@@ -26,6 +41,167 @@ function kdLabel(kd: number | undefined | null): { text: string; cls: string } {
   if (kd < 30) return { text: "Easy", cls: "text-status-success" };
   if (kd < 60) return { text: "Med", cls: "text-status-warning" };
   return { text: "Hard", cls: "text-brand-coral" };
+}
+
+interface DayEntryCardProps {
+  entry: CalendarEntryWithBlog;
+  projectId: string;
+  /** Compact rendering: used when 2+ cards share a cell, or inside the overflow list. */
+  compact: boolean;
+  isToday: boolean;
+  dndActive: boolean;
+  draggingEntryId: string | null;
+  generatingId: string | null;
+  generatedMap?: Map<string, { id: string; contentType?: string }>;
+  onDragStart: (entryId: string, e: DragEvent) => void;
+  onGenerateClick?: (entryId: string) => void;
+  onRemoveEntry?: (entryId: string, keyword: string) => void;
+}
+
+/** A single scheduled entry's card — shared by the visible day-cell stack and the overflow list. */
+function DayEntryCard({
+  entry,
+  projectId,
+  compact,
+  isToday,
+  dndActive,
+  draggingEntryId,
+  generatingId,
+  generatedMap,
+  onDragStart,
+  onGenerateClick,
+  onRemoveEntry,
+}: DayEntryCardProps) {
+  const kwData = entry.keywords as
+    | { source_type?: string | null; volume?: number | null; kd?: number | null; ai_source?: string | null }
+    | undefined;
+  const volume = kwData?.volume;
+  const kd_ = kdLabel(kwData?.kd);
+  const isGenerating = entry.status === "generating" || generatingId === entry.id;
+
+  const calendarBlogId = entry.blog?.id;
+  const historyKey = generatedMap ? generatedContentKey(entry.focus_keyword, entry.article_type ?? "blog") : "";
+  const historyEntry = generatedMap?.get(historyKey);
+  const resolvedBlogId = calendarBlogId ?? historyEntry?.id;
+
+  const isGenerated =
+    !!resolvedBlogId ||
+    entry.status === "generated" ||
+    entry.status === "downloaded" ||
+    entry.status === "approved" ||
+    entry.status === "published";
+  const origin = resolveCalendarKeywordOrigin({
+    contentHealthAudit: entry.content_health_audit,
+    keywordSourceType: kwData?.source_type,
+    articleType: entry.article_type,
+    aiSourceFromEntry: entry.ai_source,
+    aiSourceFromKeyword: kwData?.ai_source ?? null,
+  });
+  const canDragThisEntry = dndActive && !isGenerating;
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, scale: 0.96 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.96 }}
+      transition={{ duration: 0.15, ease: "easeOut" }}
+      className={cn(
+        "relative flex flex-col gap-0.5 rounded-[8px] border p-1.5",
+        compact ? "shrink-0" : "min-h-0 flex-1",
+        draggingEntryId === entry.id ? "opacity-60" : "",
+        isToday ? "border-brand-action bg-brand-action/10" : "border-brand-action/20 bg-brand-action/[0.06]"
+      )}
+    >
+      {canDragThisEntry ? (
+        <div
+          draggable
+          onDragStart={(e: DragEvent) => onDragStart(entry.id, e)}
+          aria-label={`Drag to reschedule ${entry.focus_keyword}`}
+          title="Drag to another date"
+          className="absolute left-0.5 top-0.5 z-10 cursor-grab rounded border border-transparent p-0.5 text-text-tertiary hover:border-border-subtle hover:bg-surface-hover active:cursor-grabbing"
+        >
+          <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden className="opacity-70">
+            <circle cx="3" cy="3" r="1.25" />
+            <circle cx="7" cy="3" r="1.25" />
+            <circle cx="3" cy="7" r="1.25" />
+            <circle cx="7" cy="7" r="1.25" />
+            <circle cx="3" cy="11" r="1.25" />
+            <circle cx="7" cy="11" r="1.25" />
+          </svg>
+        </div>
+      ) : null}
+      <div className="flex items-center gap-1 pl-4">
+        <span
+          className={cn(
+            "shrink-0 rounded-[3px] border px-1 py-[1px] font-mono text-[7px] font-bold uppercase leading-none tracking-wide",
+            contentTypeTone(entry.article_type)
+          )}
+          title={typeShortLabel(entry.article_type)}
+        >
+          {typeShortLabel(entry.article_type).slice(0, 2)}
+        </span>
+        <p className="line-clamp-1 flex-1 text-[11px] font-semibold leading-tight text-text-primary" title={entry.focus_keyword}>
+          {entry.focus_keyword}
+        </p>
+      </div>
+      {!compact && (
+        <>
+          <div className="origin-left">
+            <CalendarOriginPills resolved={origin} />
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            {volume != null && <span className="font-mono text-[9px] text-text-tertiary">{fmtVol(volume)}</span>}
+            {volume != null && kwData?.kd ? <span className="text-[9px] text-text-tertiary/50">·</span> : null}
+            {kwData?.kd ? <span className={`text-[9px] font-bold ${kd_.cls}`}>{kd_.text}</span> : null}
+          </div>
+        </>
+      )}
+      {isGenerated ? (
+        <ProjectNavLink
+          href={getContentPreviewUrl(projectId, resolvedBlogId || entry.blog?.id || entry.id, historyEntry?.contentType || entry.article_type)}
+          className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-status-success/15 text-status-success hover:bg-status-success/25"
+        >
+          View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
+        </ProjectNavLink>
+      ) : isGenerating ? (
+        <button
+          type="button"
+          disabled
+          className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide select-none border border-status-warning/20 text-status-warning/70 sm:py-1 sm:text-[9px]"
+        >
+          Generating…
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onGenerateClick?.(entry.id);
+          }}
+          disabled={generatingId !== null}
+          className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-brand-action/10 text-brand-action hover:bg-brand-action/20 disabled:opacity-50"
+        >
+          Generate →
+        </button>
+      )}
+      {!isGenerating && onRemoveEntry && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemoveEntry(entry.id, entry.focus_keyword);
+          }}
+          className="absolute right-1 top-1 rounded border border-border-subtle/30 bg-surface-elevated/80 p-0.5 text-text-tertiary transition-colors hover:border-brand-coral/30 hover:bg-brand-coral/10 hover:text-brand-coral"
+          title="Remove from calendar"
+        >
+          <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      )}
+    </motion.div>
+  );
 }
 
 
@@ -163,7 +339,7 @@ export function MiniCalendar({
           e.dataTransfer.dropEffect = "move";
           setDragOverIso(iso);
         },
-        onDrop: async (e: DragEvent) => {
+        onDrop: (e: DragEvent) => {
           e.preventDefault();
           if (!draggingEntryId || scheduleBusy || !onMoveEntryToDate) return;
           let entryId = draggingEntryId;
@@ -176,7 +352,10 @@ export function MiniCalendar({
           } catch {
             /* use draggingEntryId */
           }
-          await onMoveEntryToDate(entryId, iso);
+          // Fire-and-forget: the parent applies an optimistic cache update
+          // synchronously, so the card should snap to its new cell right away
+          // instead of waiting on this promise.
+          void onMoveEntryToDate(entryId, iso);
           endDragSession();
         },
       };
@@ -205,7 +384,7 @@ export function MiniCalendar({
             <p className="mt-0.5 text-[13px] text-text-tertiary">
               {entries.length} scheduled
               {dndActive ? " · Drag a card by its handle to reschedule" : ""}
-              {onEmptyDayClick ? " · Click any free date to add a keyword" : ""}
+              {onEmptyDayClick ? " · Click any date to add a keyword" : ""}
             </p>
           )}
         </div>
@@ -356,8 +535,29 @@ export function MiniCalendar({
             }
 
             const stack = dayEntries.length > 1;
+            const visibleEntries = dayEntries.slice(0, MAX_VISIBLE_PER_DAY);
+            const overflowEntries = dayEntries.slice(MAX_VISIBLE_PER_DAY);
+            const canAddMore = !schedulingKeywordId && !isPast && !!onEmptyDayClick;
+            const cardProps = (entry: CalendarEntryWithBlog) => ({
+              entry,
+              projectId,
+              isToday,
+              dndActive,
+              draggingEntryId,
+              generatingId,
+              generatedMap,
+              onGenerateClick,
+              onRemoveEntry,
+              onDragStart: (entryId: string, e: DragEvent) => {
+                e.stopPropagation();
+                setDraggingEntryId(entryId);
+                e.dataTransfer.setData(CAL_DRAG_MIME, JSON.stringify({ entryId }));
+                e.dataTransfer.setData("text/plain", entryId);
+                e.dataTransfer.effectAllowed = "move";
+              },
+            });
             return (
-              <div key={idx} className="flex min-h-[120px] flex-col gap-1">
+              <div key={idx} className="group flex min-h-[152px] flex-col gap-1">
                 <span
                   className={`self-end text-[10px] font-bold leading-none ${
                     isToday ? "text-brand-action" : "text-brand-action/60"
@@ -366,150 +566,57 @@ export function MiniCalendar({
                   {dayNum}
                 </span>
                 <div className="flex min-h-0 flex-1 flex-col gap-1">
-                  {dayEntries.map(entry => {
-                    const kwData = entry.keywords as
-                      | {
-                          source_type?: string | null;
-                          volume?: number | null;
-                          kd?: number | null;
-                          ai_source?: string | null;
-                        }
-                      | undefined;
-                    const volume = kwData?.volume;
-                    const kd_ = kdLabel(kwData?.kd);
-                    const isGenerating = entry.status === "generating" || generatingId === entry.id;
-                    
-                    const calendarBlogId = entry.blog?.id;
-                    const historyKey = generatedMap ? generatedContentKey(entry.focus_keyword, entry.article_type ?? "blog") : "";
-                    const historyEntry = generatedMap?.get(historyKey);
-                    const resolvedBlogId = calendarBlogId ?? historyEntry?.id;
-
-                    const isGenerated =
-                      !!resolvedBlogId ||
-                      entry.status === "generated" ||
-                      entry.status === "downloaded" ||
-                      entry.status === "approved" ||
-                      entry.status === "published";
-                    const origin = resolveCalendarKeywordOrigin({
-                      contentHealthAudit: entry.content_health_audit,
-                      keywordSourceType: kwData?.source_type,
-                      articleType: entry.article_type,
-                      aiSourceFromEntry: entry.ai_source,
-                      aiSourceFromKeyword: kwData?.ai_source ?? null,
-                    });
-                    const canDragThisEntry = dndActive && !isGenerating;
-
-                    return (
-                      <div
-                        key={entry.id}
-                        className={`relative flex min-h-0 flex-1 flex-col gap-0.5 rounded-[8px] border p-1.5 transition-all ${
-                          draggingEntryId === entry.id ? "opacity-75" : ""
-                        } ${
-                          isToday
-                            ? "border-brand-action bg-brand-action/10"
-                            : "border-brand-action/20 bg-brand-action/[0.06]"
-                        }`}
-                      >
-                        {canDragThisEntry ? (
-                          <div
-                            draggable
-                            onDragStart={(e: DragEvent) => {
-                              e.stopPropagation();
-                              setDraggingEntryId(entry.id);
-                              const payload = JSON.stringify({ entryId: entry.id });
-                              e.dataTransfer.setData(CAL_DRAG_MIME, payload);
-                              e.dataTransfer.setData("text/plain", entry.id);
-                              e.dataTransfer.effectAllowed = "move";
-                            }}
-                            aria-label={`Drag to reschedule ${entry.focus_keyword}`}
-                            title="Drag to another date"
-                            className="absolute left-0.5 top-0.5 z-10 cursor-grab rounded border border-transparent p-0.5 text-text-tertiary hover:border-border-subtle hover:bg-surface-hover active:cursor-grabbing"
-                          >
-                            <svg
-                              width="10"
-                              height="14"
-                              viewBox="0 0 10 14"
-                              fill="currentColor"
-                              aria-hidden
-                              className="opacity-70"
+                  <AnimatePresence initial={false} mode="popLayout">
+                    {visibleEntries.map(entry => (
+                      <DayEntryCard key={entry.id} {...cardProps(entry)} compact={stack} />
+                    ))}
+                  </AnimatePresence>
+                  {(overflowEntries.length > 0 || canAddMore) && (
+                    <div className="flex shrink-0 items-center gap-1">
+                      {overflowEntries.length > 0 && (
+                        <DropdownMenu
+                          align="start"
+                          menuWidth="md"
+                          trigger={
+                            <button
+                              type="button"
+                              className="flex h-5 shrink-0 items-center justify-center rounded-[5px] border border-border-subtle bg-surface-elevated px-1.5 text-[9px] font-semibold text-text-secondary transition-colors hover:border-brand-action/40 hover:text-brand-action"
                             >
-                              <circle cx="3" cy="3" r="1.25" />
-                              <circle cx="7" cy="3" r="1.25" />
-                              <circle cx="3" cy="7" r="1.25" />
-                              <circle cx="7" cy="7" r="1.25" />
-                              <circle cx="3" cy="11" r="1.25" />
-                              <circle cx="7" cy="11" r="1.25" />
-                            </svg>
-                          </div>
-                        ) : null}
-                        <p
-                          className={`line-clamp-2 pl-4 text-[12px] font-semibold leading-tight text-text-primary ${
-                            stack ? "text-[11px]" : ""
-                          }`}
-                          title={entry.focus_keyword}
+                              +{overflowEntries.length} more
+                            </button>
+                          }
                         >
-                          {entry.focus_keyword}
-                        </p>
-                        <div className={`origin-left ${stack ? "scale-[0.92]" : "scale-[1.0]"}`}>
-                          <CalendarOriginPills resolved={origin} />
+                          <div className="max-h-72 space-y-1 overflow-y-auto p-0.5">
+                            {overflowEntries.map(entry => (
+                              <DayEntryCard key={entry.id} {...cardProps(entry)} compact />
+                            ))}
+                          </div>
+                        </DropdownMenu>
+                      )}
+                      {/* Collapsed until the day cell is hovered — content keeps its
+                          full height at rest, and this grows in beside the "+N more"
+                          chip (or alone, below the card) only on hover. */}
+                      {canAddMore && (
+                        <div
+                          className={
+                            overflowEntries.length > 0
+                              ? "grid grid-cols-[0fr] overflow-hidden transition-[grid-template-columns] duration-200 ease-out group-hover:grid-cols-[1fr]"
+                              : "grid grid-rows-[0fr] overflow-hidden transition-[grid-template-rows] duration-200 ease-out group-hover:grid-rows-[1fr]"
+                          }
+                        >
+                          <div className="min-w-0 min-h-0 overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => onEmptyDayClick!(iso)}
+                              className="flex h-5 w-full items-center justify-center gap-0.5 whitespace-nowrap rounded-[5px] border border-dashed border-border-subtle px-1.5 text-[9px] font-semibold text-text-tertiary transition-colors hover:border-brand-action/40 hover:bg-brand-action/5 hover:text-brand-action"
+                            >
+                              + Add
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex flex-wrap items-center gap-1">
-                          {volume != null && (
-                            <span className="font-mono text-[9px] text-text-tertiary">{fmtVol(volume)}</span>
-                          )}
-                          {volume != null && kwData?.kd ? (
-                            <span className="text-[9px] text-text-tertiary/50">·</span>
-                          ) : null}
-                          {kwData?.kd ? (
-                            <span className={`text-[9px] font-bold ${kd_.cls}`}>{kd_.text}</span>
-                          ) : null}
-                        </div>
-                        {isGenerated ? (
-                          <ProjectNavLink
-                            href={getContentPreviewUrl(projectId, resolvedBlogId || entry.blog?.id || entry.id, historyEntry?.contentType || entry.article_type)}
-                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-status-success/15 text-status-success hover:bg-status-success/25"
-                          >
-                            View {CONTENT_TYPE_LABEL[(historyEntry?.contentType || entry.article_type) as ContentType] || "Blog"}
-                          </ProjectNavLink>
-                        ) : isGenerating ? (
-                          <button
-                            type="button"
-                            disabled
-                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide select-none border border-status-warning/20 text-status-warning/70 sm:py-1 sm:text-[9px]"
-                          >
-                            Generating…
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onGenerateClick?.(entry.id);
-                            }}
-                            disabled={generatingId !== null}
-                            className="mt-auto w-full rounded-[4px] py-0.5 text-center text-[8px] font-bold uppercase tracking-wide transition-colors sm:py-1 sm:text-[9px] bg-brand-action/10 text-brand-action hover:bg-brand-action/20 disabled:opacity-50"
-                          >
-                            Generate →
-                          </button>
-                        )}
-                        {!isGenerating && onRemoveEntry && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRemoveEntry(entry.id, entry.focus_keyword);
-                            }}
-                            className="absolute right-1 top-1 rounded border border-border-subtle/30 bg-surface-elevated/80 p-0.5 text-text-tertiary transition-colors hover:border-brand-coral/30 hover:bg-brand-coral/10 hover:text-brand-coral"
-                            title="Remove from calendar"
-                          >
-                            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -587,12 +694,6 @@ export function MiniCalendar({
           <span className="h-3 w-3 rounded-[3px] border border-brand-action/20 bg-brand-action/10" />
           Scheduled
         </span>
-        {onEmptyDayClick && !schedulingKeywordId ? (
-          <span className="flex items-center gap-1.5">
-            <span className="text-brand-action">+</span>
-            Click a free date to add a keyword
-          </span>
-        ) : null}
         {schedulingKeywordId ? (
           <>
             <span className="flex items-center gap-1.5">

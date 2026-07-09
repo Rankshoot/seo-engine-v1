@@ -39,6 +39,8 @@ interface PanelProps {
   onCancel: () => void;
   minDate: string;
   scheduledDates: Set<string>;
+  /** Dates with 2+ entries already scheduled — rendered with a double dot. */
+  multiScheduledDates: Set<string>;
   saving: boolean;
   position: { top: number; left: number };
   variant: "pick" | "change";
@@ -47,7 +49,7 @@ interface PanelProps {
 
 function CalendarPanel({
   panelRef, initialDate, onConfirm, onCancel,
-  minDate, scheduledDates, saving, position,
+  minDate, scheduledDates, multiScheduledDates, saving, position,
   variant, onUnschedule,
 }: PanelProps) {
   const [selected, setSelected] = useState(initialDate);
@@ -180,6 +182,7 @@ function CalendarPanel({
               const isToday  = dateStr === today;
               const isDisabled = dateStr < minDate;
               const isSched  = scheduledDates.has(dateStr) && !isSel;
+              const isMulti  = multiScheduledDates.has(dateStr);
 
               return (
                 <button
@@ -197,12 +200,16 @@ function CalendarPanel({
                 >
                   <span className="leading-none">{day}</span>
                   {isSched && (
-                    <span
-                      className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-brand-action/50"
-                    />
+                    <span className="absolute bottom-0.5 left-1/2 flex -translate-x-1/2 gap-0.5">
+                      <span className="w-1 h-1 rounded-full bg-brand-action/50" />
+                      {isMulti && <span className="w-1 h-1 rounded-full bg-brand-action/50" />}
+                    </span>
                   )}
                   {isSel && scheduledDates.has(dateStr) && (
-                    <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white/60" />
+                    <span className="absolute bottom-0.5 left-1/2 flex -translate-x-1/2 gap-0.5">
+                      <span className="w-1 h-1 rounded-full bg-white/60" />
+                      {isMulti && <span className="w-1 h-1 rounded-full bg-white/60" />}
+                    </span>
                   )}
                 </button>
               );
@@ -215,7 +222,7 @@ function CalendarPanel({
             {hasScheduledInView && (
               <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-brand-action/50" />
-                <span className="text-[10px] text-text-tertiary">Dot = date already scheduled</span>
+                <span className="text-[10px] text-text-tertiary">Dot = scheduled · two dots = multiple</span>
               </div>
             )}
 
@@ -285,6 +292,8 @@ export interface CalendarDatePickerProps {
   onConfirm: (date: string) => void;
   saving: boolean;
   scheduledDates?: Set<string>;
+  /** Dates with 2+ entries already scheduled — rendered with a double dot. */
+  multiScheduledDates?: Set<string>;
   variant?: "pick" | "change";
   /** Renders as a small pencil icon instead of a full pill button */
   iconOnly?: boolean;
@@ -302,6 +311,7 @@ export function CalendarDatePicker({
   onConfirm,
   saving,
   scheduledDates = new Set<string>(),
+  multiScheduledDates = new Set<string>(),
   variant = "pick",
   iconOnly = false,
   label,
@@ -431,6 +441,7 @@ export function CalendarDatePicker({
           onCancel={() => onOpenChange(false)}
           minDate={minDate}
           scheduledDates={scheduledDates}
+          multiScheduledDates={multiScheduledDates}
           saving={saving}
           position={panelPos}
           variant={variant}

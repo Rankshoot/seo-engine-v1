@@ -5,16 +5,15 @@ import type { CalendarEntry } from "@/lib/types";
 import { getLocalDayISOFromOffset, isPastDate } from "@/utils/calendar-validation";
 
 async function nextVacantDate(projectId: string, preferredDate?: string): Promise<string | null> {
+  // An explicit date is a deliberate user choice — honor it even if another
+  // entry already occupies that day (multiple entries can share a date).
+  if (preferredDate) return String(preferredDate).slice(0, 10);
+
   const { data: rows } = await supabaseAdmin
     .from("calendar_entries")
     .select("scheduled_date")
     .eq("project_id", projectId);
   const taken = new Set((rows ?? []).map((r) => String(r.scheduled_date).slice(0, 10)));
-
-  if (preferredDate) {
-    const d = String(preferredDate).slice(0, 10);
-    if (!taken.has(d)) return d;
-  }
 
   for (let i = 0; i < 500; i++) {
     const key = getLocalDayISOFromOffset(i);

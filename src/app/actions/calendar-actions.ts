@@ -244,18 +244,8 @@ export async function addKeywordToCalendarOnDate(
     return { success: true, data: existingKw };
   }
 
-  // Check if the target date is occupied by a DIFFERENT keyword
-  const { data: dateTaken } = await supabaseAdmin
-    .from('calendar_entries')
-    .select('id, keyword_id')
-    .eq('project_id', projectId)
-    .eq('scheduled_date', date)
-    .neq('keyword_id', keywordId)   // ignore own entry
-    .maybeSingle();
-
-  if (dateTaken) {
-    return { success: false, error: 'Another keyword is already scheduled on this date' };
-  }
+  // Multiple keywords can share the same date — no conflict check here; the
+  // caller picked this exact date on purpose (explicit schedule/reschedule).
 
   const auditPatch =
     options?.contentHealthAudit !== undefined && options?.contentHealthAudit !== null

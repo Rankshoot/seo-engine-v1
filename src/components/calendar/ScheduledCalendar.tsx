@@ -95,6 +95,7 @@ interface CalendarListRowProps {
   pickingDateForEntryId: string | null;
   savingDate: boolean;
   scheduledDatesSet: Set<string>;
+  multiScheduledDatesSet: Set<string>;
   removingEntryId: string | null;
   onPickingDateChange: (id: string | null) => void;
   onScheduleKeyword: (keywordId: string, date: string) => Promise<boolean>;
@@ -113,6 +114,7 @@ const CalendarListRow = memo(function CalendarListRow({
   pickingDateForEntryId,
   savingDate,
   scheduledDatesSet,
+  multiScheduledDatesSet,
   removingEntryId,
   onPickingDateChange,
   onScheduleKeyword,
@@ -193,6 +195,7 @@ const CalendarListRow = memo(function CalendarListRow({
               }}
               saving={savingDate}
               scheduledDates={scheduledDatesSet}
+              multiScheduledDates={multiScheduledDatesSet}
               iconOnly
             />
           </div>
@@ -366,9 +369,15 @@ export function ScheduledCalendar() {
     [allKeywords]
   );
 
-  const scheduledDatesSet = useMemo(
-    () => new Set(entries.map((e) => e.scheduled_date)),
-    [entries]
+  const entryCountByDate = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of entries) m.set(e.scheduled_date, (m.get(e.scheduled_date) ?? 0) + 1);
+    return m;
+  }, [entries]);
+  const scheduledDatesSet = useMemo(() => new Set(entryCountByDate.keys()), [entryCountByDate]);
+  const multiScheduledDatesSet = useMemo(
+    () => new Set([...entryCountByDate].filter(([, count]) => count > 1).map(([date]) => date)),
+    [entryCountByDate]
   );
 
   // ── Redux sync ────────────────────────────────────────────────────────────
@@ -415,12 +424,24 @@ export function ScheduledCalendar() {
           dispatch(
             calendarKeywordScheduled({ projectId, keywordId, date, status: "scheduled" })
           );
+          // Reflect the new date on the cache immediately — the toast and the
+          // visible calendar update happen in the same tick instead of the UI
+          // waiting on a second network round trip (refetch) after the toast.
+          queryClient.setQueryData<CalendarResponse>(CALENDAR_KEY, (old) => {
+            if (!old?.success) return old;
+            return {
+              ...old,
+              data: old.data.map((row) =>
+                row.keyword_id === keywordId ? { ...row, scheduled_date: date } : row
+              ),
+            };
+          });
           const wasRescheduled = "rescheduled" in res && res.rescheduled;
           toast.success(
             `"${kw?.keyword ?? "Keyword"}" ${wasRescheduled ? "moved to" : "scheduled for"} ${fmtDate(date)}`
           );
           setPickingDateForEntryId(null);
-          await refetchCalendar();
+          void refetchCalendar();
           void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
@@ -432,18 +453,34 @@ export function ScheduledCalendar() {
         setSavingDate(false);
       }
     },
-    [approvedKeywords, projectId, dispatch, refetchCalendar, queryClient]
+    [approvedKeywords, projectId, dispatch, refetchCalendar, queryClient, CALENDAR_KEY]
   );
 
   const handleMoveEntryToDate = useCallback(
     async (entryId: string, date: string): Promise<boolean> => {
       const entry = entries.find((e) => e.id === entryId);
       const dateNorm = normalizeCalendarDay(date);
+      if (!entry || dateNorm === entry.scheduled_date) return true;
+
+      // Optimistic move: the card snaps to its new date the instant it's
+      // dropped — the API call and refetch reconcile in the background.
+      const previous = queryClient.getQueryData<CalendarResponse>(CALENDAR_KEY);
+      queryClient.setQueryData<CalendarResponse>(CALENDAR_KEY, (old) => {
+        if (!old?.success) return old;
+        return {
+          ...old,
+          data: old.data.map((row) =>
+            row.id === entryId ? { ...row, scheduled_date: dateNorm } : row
+          ),
+        };
+      });
+      toast.success(`"${entry.focus_keyword}" moved to ${fmtDate(dateNorm)}`);
+      setPickingDateForEntryId(null);
       setSavingDate(true);
       try {
         const res = await calendarApi.rescheduleEntry(projectId, { entryId, date: dateNorm });
         if (res.success) {
-          if (res.rescheduled && entry?.keyword_id) {
+          if (res.rescheduled && entry.keyword_id) {
             dispatch(
               calendarKeywordScheduled({
                 projectId,
@@ -453,26 +490,18 @@ export function ScheduledCalendar() {
               })
             );
           }
-          if (res.rescheduled) {
-            toast.success(`"${entry?.focus_keyword ?? "Entry"}" moved to ${fmtDate(dateNorm)}`);
-          }
-          setPickingDateForEntryId(null);
-          queryClient.setQueryData<CalendarResponse>(CALENDAR_KEY, (old) => {
-            if (!old?.success) return old;
-            return {
-              ...old,
-              data: old.data.map((row) =>
-                row.id === entryId ? { ...row, scheduled_date: dateNorm } : row
-              ),
-            };
-          });
-          await refetchCalendar();
+          void refetchCalendar();
           void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
           return true;
         }
+        queryClient.setQueryData(CALENDAR_KEY, previous);
         toast.error(res.error ?? "Could not move entry");
+        return false;
+      } catch {
+        queryClient.setQueryData(CALENDAR_KEY, previous);
+        toast.error("Could not move entry");
         return false;
       } finally {
         setSavingDate(false);
@@ -499,9 +528,13 @@ export function ScheduledCalendar() {
           targetDate: data.targetDate,
         });
         if (res.success) {
+          queryClient.setQueryData<CalendarResponse>(CALENDAR_KEY, (old) => {
+            if (!old?.success) return old;
+            return { ...old, data: [...old.data, res.data] };
+          });
           toast.success(`"${data.keyword}" scheduled for ${fmtDate(res.scheduled_date)}`);
           setAddKeywordModalDate(null);
-          await refetchCalendar();
+          void refetchCalendar();
           void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
@@ -512,7 +545,7 @@ export function ScheduledCalendar() {
         setAddKeywordBusy(false);
       }
     },
-    [projectId, refetchCalendar, queryClient]
+    [projectId, refetchCalendar, queryClient, CALENDAR_KEY]
   );
 
   const handleRemoveEntry = useCallback(
@@ -530,8 +563,12 @@ export function ScheduledCalendar() {
     try {
       const res = await calendarApi.deleteEntry(projectId, entryToRemove.id);
       if (res.success) {
+        queryClient.setQueryData<CalendarResponse>(CALENDAR_KEY, (old) => {
+          if (!old?.success) return old;
+          return { ...old, data: old.data.filter((row) => row.id !== entryToRemove.id) };
+        });
         toast.success(`"${entryToRemove.keyword}" removed from calendar`);
-        await refetchCalendar();
+        void refetchCalendar();
         void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
@@ -542,7 +579,7 @@ export function ScheduledCalendar() {
       setRemovingEntryId(null);
       setEntryToRemove(null);
     }
-  }, [entryToRemove, projectId, refetchCalendar, queryClient]);
+  }, [entryToRemove, projectId, refetchCalendar, queryClient, CALENDAR_KEY]);
 
   // ── derived stats ─────────────────────────────────────────────────────────
 
@@ -717,6 +754,7 @@ export function ScheduledCalendar() {
                 pickingDateForEntryId={pickingDateForEntryId}
                 savingDate={savingDate}
                 scheduledDatesSet={scheduledDatesSet}
+                multiScheduledDatesSet={multiScheduledDatesSet}
                 removingEntryId={removingEntryId}
                 onPickingDateChange={setPickingDateForEntryId}
                 onScheduleKeyword={handleScheduleKeyword}
@@ -753,6 +791,7 @@ export function ScheduledCalendar() {
         open={addKeywordModalDate !== null}
         onClose={() => setAddKeywordModalDate(null)}
         preselectedDate={addKeywordModalDate || null}
+        entryCountByDate={entryCountByDate}
         onSubmit={handleAddCustomKeyword}
         busy={addKeywordBusy}
       />

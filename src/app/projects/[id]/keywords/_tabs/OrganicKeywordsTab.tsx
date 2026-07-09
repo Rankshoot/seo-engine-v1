@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react";
-import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, keywordsListQueryOptions, useProjects, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { Keyword, KeywordStatus, TARGET_REGIONS, KeywordSourceType, ContentType } from "@/lib/types";
@@ -317,7 +316,6 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
 export default function OrganicKeywordsTab({ projectId }: { projectId: string }) {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
-  const router = useRouter();
   const { canFetchMoreKeywords } = useUserQuota();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
@@ -624,7 +622,6 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         }`
       );
       activeState.exitMassSelect();
-      router.push(`/projects/${projectId}/content-calendar`);
     } finally {
       setBulkScheduling(false);
     }

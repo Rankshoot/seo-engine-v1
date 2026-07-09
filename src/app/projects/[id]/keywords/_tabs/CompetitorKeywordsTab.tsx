@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
-import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk, DEFAULT_QUERY_OPTIONS, useProjects } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
@@ -272,7 +271,6 @@ function ColumnToggleDropdown({
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function CompetitorKeywordsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
-  const router = useRouter();
   const dispatch = useAppDispatch();
   const prefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const COMPETITORS_KEY = qk.competitors(projectId);
@@ -412,29 +410,35 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     if (!rows.length) return;
     setBulkSchedulingGaps(true);
     setError("");
-    let anyOk = false;
+    let scheduledCount = 0;
+    let skippedCount = 0;
     try {
       for (const g of rows) {
         const k = g.keyword.toLowerCase();
-        if (calendarMap.has(k)) continue;
+        if (calendarMap.has(k)) {
+          skippedCount++;
+          continue;
+        }
         const res = await competitorsApi.blogFromOpportunity(projectId, g.keyword);
         if (res.success) {
-          anyOk = true;
+          scheduledCount++;
         } else {
           setError(res.error ?? "Could not queue an opportunity.");
         }
       }
       tableState.exitMassSelect();
-      if (anyOk) {
+      if (scheduledCount > 0) {
         void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
-        router.push(`/projects/${projectId}/content-calendar`);
+        toast.success(
+          `${scheduledCount} keyword(s) scheduled${skippedCount > 0 ? `, ${skippedCount} already on calendar` : ""}`
+        );
       }
     } finally {
       setBulkSchedulingGaps(false);
     }
-  }, [tableState, projectId, calendarMap, queryClient, router]);
+  }, [tableState, projectId, calendarMap, queryClient]);
 
   const handleRunAiScoring = useCallback(async () => {
     if (aiScoring) return;

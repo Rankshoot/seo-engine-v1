@@ -584,7 +584,18 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         list.map(k => (ids.includes(k.id) ? { ...k, status: "approved" as const } : k))
       );
       dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: ids, nextStatus: "approved" }));
-      bulkRes = await keywordsApi.bulkStatus(projectId, ids, "approved");
+      const contentTypes: Record<string, string> = {};
+      for (const id of ids) {
+        const kw = keywords.find(k => k.id === id);
+        if (!kw) continue;
+        contentTypes[id] = resolveContentType(
+          kw.keyword,
+          kw.id,
+          kw.ai_eval_data as { recommended_content_type?: string } | null,
+          activeState.rowContentTypes
+        );
+      }
+      bulkRes = await keywordsApi.bulkStatus(projectId, ids, "approved", contentTypes);
       if (!bulkRes.success) {
         if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
         for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {

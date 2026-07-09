@@ -9,7 +9,7 @@ import {
   type CompetitorKeywordsForSiteRow,
   type DataForSEOTraceEntry,
 } from '@/lib/dataforseo';
-import { Keyword, KeywordStatus } from '@/lib/types';
+import { Keyword, KeywordStatus, CONTENT_TYPE_ARTICLE_TYPE } from '@/lib/types';
 import { generateBusinessBrief, getBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 import {
@@ -1246,7 +1246,9 @@ export async function updateKeywordStatus(
 export async function bulkUpdateKeywordStatus(
   keywordIds: string[],
   status: KeywordStatus,
-  expectedProjectId?: string
+  expectedProjectId?: string,
+  /** Optional keywordId -> ContentType, so bulk scheduling uses the content type picked per row. */
+  contentTypes?: Record<string, string>
 ) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
@@ -1276,7 +1278,7 @@ export async function bulkUpdateKeywordStatus(
       void enrichKeywordInBackground(id);
     }
     const projectId = (keywords![0] as { project_id: string }).project_id;
-    const batch = await scheduleKeywordsOnVacantDates(projectId, keywordIds);
+    const batch = await scheduleKeywordsOnVacantDates(projectId, keywordIds, contentTypes);
     return {
       success: true,
       calendarScheduled: batch.scheduled.length,
@@ -2486,13 +2488,7 @@ export async function scheduleKeyword(
     return { success: false, error: 'No free calendar day found in the next 500 days.' };
   }
 
-  const CONTENT_TYPE_LABEL_MAP: Record<string, string> = {
-    blog: 'Blog article',
-    ebook: 'Ebook',
-    whitepaper: 'Whitepaper',
-    linkedin: 'LinkedIn post',
-  };
-  const articleType = CONTENT_TYPE_LABEL_MAP[payload.contentType] || 'Blog article';
+  const articleType = CONTENT_TYPE_ARTICLE_TYPE[payload.contentType as keyof typeof CONTENT_TYPE_ARTICLE_TYPE] || 'Blog article';
   const title = keywordText.trim() || 'Scheduled topic';
   const slug = keywordText
     .toLowerCase()

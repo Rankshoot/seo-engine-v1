@@ -13,7 +13,6 @@ import {
   Input,
   PageHeader,
   Select,
-  Spinner,
   Textarea,
 } from "@/components/common";
 import {
@@ -25,6 +24,9 @@ import {
   SectionHeading,
   StepRow,
   RecentHistorySkeleton,
+  AskAiButton,
+  TopicSuggestionChips,
+  useAiFillTracker,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -93,6 +95,14 @@ export default function LinkedInGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
+  const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, markAutoFillable, fillFlashClass } = useAiFillTracker();
+
+  // These start as sensible defaults — let auto-fill replace them until the
+  // user changes them by hand.
+  useEffect(() => {
+    markAutoFillable(["cta", "tone", "postStyle", "voice", "authorRole"]);
+  }, [markAutoFillable]);
 
   useEffect(() => {
     if (project?.target_audience && !audience) setAudience(project.target_audience);
@@ -124,27 +134,37 @@ export default function LinkedInGeneratorPage() {
 
   const isFormValid = emptyRequiredFields.length === 0;
 
+  // Auto-fill: completes only fields the user left empty (or defaults) —
+  // user-typed values are passed as seeds and never replaced.
   const askAi = async () => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "linkedin",
         avoidPhrases: [],
-        seedKeyword: primaryKeyword.trim() || undefined,
+        seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
+        seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
       });
-      if (res.success) {
-        setTopic(res.topic);
-        setPrimaryKeyword(res.primary_keyword);
-        if (res.audience) setAudience(res.audience);
-        if (res.post_style) setPostStyle(res.post_style as LinkedInPostStyle);
-        if (res.voice) setVoice(res.voice as "first_person" | "company");
-        if (res.author_role) setAuthorRole(res.author_role);
-        if (res.cta_objective) setCtaObjective(res.cta_objective);
-        if (res.tone) setTone(res.tone);
-        toast.success("Filled all fields for LinkedIn post template");
-      } else {
+      if (!res.success) {
         toast.error(res.error);
+        return;
       }
+      const filled: string[] = [];
+      if (res.topic && canAutoFill("topic", topic)) { setTopic(res.topic); filled.push("topic"); }
+      if (res.primary_keyword && canAutoFill("keyword", primaryKeyword)) { setPrimaryKeyword(res.primary_keyword); filled.push("keyword"); }
+      if (res.audience && canAutoFill("audience", audience)) { setAudience(res.audience); filled.push("audience"); }
+      if (res.post_style && canAutoFill("postStyle", postStyle)) { setPostStyle(res.post_style as LinkedInPostStyle); filled.push("postStyle"); }
+      if (res.voice && canAutoFill("voice", voice)) { setVoice(res.voice as "first_person" | "company"); filled.push("voice"); }
+      if (res.author_role && canAutoFill("authorRole", authorRole)) { setAuthorRole(res.author_role); filled.push("authorRole"); }
+      if (res.cta_objective && canAutoFill("cta", ctaObjective)) { setCtaObjective(res.cta_objective); filled.push("cta"); }
+      if (res.tone && canAutoFill("tone", tone)) { setTone(res.tone); filled.push("tone"); }
+      markAiFilled(filled);
+      setTopicSuggestions(prev => Array.from(new Set([res.topic, ...prev].filter(Boolean))).slice(0, 4));
+      toast.success(
+        filled.length
+          ? `AI filled ${filled.length} field${filled.length === 1 ? "" : "s"} — your entries were kept`
+          : "Suggestion ready — pick a hook below the topic field"
+      );
     } finally {
       setAskLoading(false);
     }
@@ -214,17 +234,12 @@ export default function LinkedInGeneratorPage() {
         actions={
           phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                shape="pill"
-                size="lg"
+              <AskAiButton
                 onClick={() => void askAi()}
-                disabled={askLoading || !hasAiCredits}
-                iconLeft={askLoading ? <Spinner size={14} /> : null}
-                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
-              >
-                {askLoading ? "Thinking…" : "Ask AI for a hook"}
-              </Button>
+                loading={askLoading}
+                disabled={!hasAiCredits}
+                disabledReason="You've exhausted your AI credits. Upgrade to get more."
+              />
               <button
                 onClick={goReview}
                 disabled={!isFormValid || !canGenerateLinkedIn}
@@ -331,8 +346,17 @@ export default function LinkedInGeneratorPage() {
                     id="li-topic"
                     rows={2}
                     value={topic}
-                    onChange={e => setTopic(e.target.value)}
+                    onChange={e => { setTopic(e.target.value); markUserOwned("topic"); }}
                     placeholder="Headline angle, observation, story prompt — anything to anchor the post."
+                    className={fillFlashClass("topic")}
+                  />
+                  <TopicSuggestionChips
+                    suggestions={topicSuggestions}
+                    activeTopic={topic}
+                    onPick={t => setTopic(t)}
+                    onReload={() => void askAi()}
+                    loading={askLoading}
+                    label="AI hook ideas"
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
@@ -341,9 +365,9 @@ export default function LinkedInGeneratorPage() {
                       id="li-keyword"
                       inputSize="lg"
                       value={primaryKeyword}
-                      onChange={e => setPrimaryKeyword(e.target.value)}
+                      onChange={e => { setPrimaryKeyword(e.target.value); markUserOwned("keyword"); }}
                       placeholder="ai content engine"
-                      className={isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                      className={`${isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""} ${fillFlashClass("keyword")}`}
                     />
                     {/* {keywordParam && (
                       <p className={`mt-1.5 flex items-center gap-1.5 text-[11px] transition-colors duration-300 ${isKeywordTyping ? "text-brand-action" : "text-emerald-400"}`}>
@@ -360,8 +384,9 @@ export default function LinkedInGeneratorPage() {
                       id="li-audience"
                       inputSize="lg"
                       value={audience}
-                      onChange={e => setAudience(e.target.value)}
+                      onChange={e => { setAudience(e.target.value); markUserOwned("audience"); }}
                       placeholder="Founders / Heads of Marketing"
+                      className={fillFlashClass("audience")}
                     />
                   </Field>
                 </ContentFormGrid>
@@ -372,10 +397,10 @@ export default function LinkedInGeneratorPage() {
               <SectionHeading index="02" label="Style & voice" />
               <div className="space-y-5">
                 <Field label="Post style">
-                  <ChipChoice<LinkedInPostStyle> options={LINKEDIN_STYLE_OPTIONS} value={postStyle} onChange={setPostStyle} ariaLabel="Post style" />
+                  <ChipChoice<LinkedInPostStyle> options={LINKEDIN_STYLE_OPTIONS} value={postStyle} onChange={v => { setPostStyle(v); markUserOwned("postStyle"); }} ariaLabel="Post style" />
                 </Field>
                 <Field label="Voice">
-                  <ChipChoice options={LINKEDIN_VOICE_OPTIONS} value={voice} onChange={setVoice} ariaLabel="Voice" />
+                  <ChipChoice options={LINKEDIN_VOICE_OPTIONS} value={voice} onChange={v => { setVoice(v); markUserOwned("voice"); }} ariaLabel="Voice" />
                 </Field>
                 {voice === "first_person" ? (
                   <Field label="Author role" htmlFor="li-author-role">
@@ -383,13 +408,14 @@ export default function LinkedInGeneratorPage() {
                       id="li-author-role"
                       inputSize="lg"
                       value={authorRole}
-                      onChange={e => setAuthorRole(e.target.value)}
+                      onChange={e => { setAuthorRole(e.target.value); markUserOwned("authorRole"); }}
                       placeholder="Founder · Head of Growth · CMO"
+                      className={fillFlashClass("authorRole")}
                     />
                   </Field>
                 ) : null}
                 <Field label="Tone" htmlFor="li-tone">
-                  <Select id="li-tone" inputSize="lg" value={tone} onChange={e => setTone(e.target.value)}>
+                  <Select id="li-tone" inputSize="lg" value={tone} onChange={e => { setTone(e.target.value); markUserOwned("tone"); }}>
                     {LINKEDIN_TONE_OPTIONS.map(t => (
                       <option key={t} value={t}>
                         {t}
@@ -408,8 +434,9 @@ export default function LinkedInGeneratorPage() {
                     id="li-cta"
                     rows={2}
                     value={ctaObjective}
-                    onChange={e => setCtaObjective(e.target.value)}
+                    onChange={e => { setCtaObjective(e.target.value); markUserOwned("cta"); }}
                     placeholder="Comments? DMs? Share to colleagues? Visit a link in bio? Be specific."
+                    className={fillFlashClass("cta")}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>

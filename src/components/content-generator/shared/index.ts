@@ -51,5 +51,8 @@ export { ResourcesPanel } from "./ResourcesPanel";
 export { ExportMenu } from "./ExportMenu";
 export type { ExportMenuProps } from "./ExportMenu";
 export { PreviewerScheduler } from "./PreviewerScheduler";
+export { AskAiButton, TopicSuggestionChips, useAiFillTracker } from "./AskAiAssist";
+export { AiEditPanel } from "./AiEditPanel";
+export type { AiEditPanelProps } from "./AiEditPanel";
 export * from "./validation";
 

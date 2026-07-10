@@ -21,7 +21,7 @@ import {
 } from "@/components/content-generator/shared";
 import { LinkedInFeedCard } from "@/components/content-generator/linkedin/LinkedInFeedCard";
 import { InlineAiEditOverlay } from "@/components/content-generator/shared/InlineAiEditOverlay";
-import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import { AiEditPanel } from "@/components/content-generator/shared/AiEditPanel";
 import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -611,6 +611,33 @@ export default function LinkedInViewerPage() {
       toolbarLeft={toolbarLeft}
       toolbarRight={toolbarRight}
       sidebar={sidebar}
+      sidePanel={
+        mode === "edit" ? (
+          <AiEditPanel
+            blogId={blog.id}
+            projectDomain={project?.domain ?? ""}
+            selection={aiEdit.snapshot}
+            contentType="LinkedIn Post"
+            contentPart={
+              typeof document !== "undefined" && textareaSelectionRef.current?.element
+                ? (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("hook")
+                  ? "LinkedIn Hook"
+                  : (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("body")
+                  ? "LinkedIn Body"
+                  : (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("action") || (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("cta")
+                  ? "LinkedIn CTA"
+                  : "LinkedIn Hashtags"
+                : "LinkedIn Post Body"
+            }
+            surroundingContext={composedPost}
+            renderMarkdownSnippet={md => (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+            )}
+            onDiscard={() => setAiEdit({ open: false, snapshot: null })}
+            onInsert={handleAiRewriterInsert}
+          />
+        ) : null
+      }
       sidebarWidthPx={320}
       framedCanvas={false}
       toolbarInsideCanvas
@@ -668,30 +695,6 @@ export default function LinkedInViewerPage() {
             textareaSelectionRef.current = textareaInfo;
           }
         }}
-      />
-      <BlogAiRewriterModal
-        open={aiEdit.open}
-        blogId={blog.id}
-        projectDomain={project?.domain ?? ""}
-        selection={aiEdit.snapshot}
-        contentType="LinkedIn Post"
-        contentPart={
-          typeof document !== "undefined" && textareaSelectionRef.current?.element
-            ? (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("hook")
-              ? "LinkedIn Hook"
-              : (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("body")
-              ? "LinkedIn Body"
-              : (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("action") || (textareaSelectionRef.current.element.placeholder || "").toLowerCase().includes("cta")
-              ? "LinkedIn CTA"
-              : "LinkedIn Hashtags"
-            : "LinkedIn Post Body"
-        }
-        surroundingContext={composedPost}
-        renderMarkdownSnippet={md => (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
-        )}
-        onClose={() => setAiEdit({ open: false, snapshot: null })}
-        onInsert={handleAiRewriterInsert}
       />
     </PreviewShell>
   );

@@ -28,6 +28,9 @@ import {
   SectionHeading,
   StepRow,
   StudioBreadcrumb,
+  AskAiButton,
+  TopicSuggestionChips,
+  useAiFillTracker,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
@@ -202,7 +205,6 @@ export default function BlogGeneratorPage() {
   }, []);
 
   const entryId = searchParams?.get("entryId");
-  const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
 
   // Audit-fix mode: coming from Content Health → Generate enhanced
   const auditUrl = searchParams?.get("auditUrl") || "";
@@ -243,9 +245,12 @@ export default function BlogGeneratorPage() {
   const [goal, setGoal] = useState("");
   const [ctaObjective, setCtaObjective] = useState("");
   const [wordCount, setWordCount] = useState<number>(2500);
+  const [customWordCount, setCustomWordCount] = useState<string>("");
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
+  const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, fillFlashClass } = useAiFillTracker();
   const [streamStages, setStreamStages] = useState(BASE_STREAM_STAGES);
   const [streamProgress, setStreamProgress] = useState<number | undefined>(undefined);
   const [thinkingText, setThinkingText] = useState("");
@@ -374,24 +379,46 @@ export default function BlogGeneratorPage() {
 
   const isFormValid = emptyRequiredFields.length === 0;
 
-  const askAi = async () => {
+  // Custom word count (if provided) overrides the preset chips. Clamped to a
+  // sane range so the value that reaches the generation prompt is always valid.
+  const effectiveWordCount = useMemo(() => {
+    const parsed = parseInt(customWordCount, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return wordCount;
+    return Math.min(6000, Math.max(500, parsed));
+  }, [customWordCount, wordCount]);
+
+  // Auto-fill: completes only fields the user left empty (or that a previous
+  // auto-fill wrote). User-typed values are passed as seeds and never replaced.
+  const askAi = async (opts?: { reload?: boolean }) => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "blog",
         avoidPhrases: secondaryKeywords,
-        seedKeyword: primaryKeyword.trim() || undefined,
+        seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
+        seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
+        avoidTopics: opts?.reload ? topicSuggestions : undefined,
       });
-      if (res.success) {
-        setTopic(res.topic);
-        setPrimaryKeyword(res.primary_keyword);
-        if (res.semantic_keywords.length) setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
-        if (res.goal) setGoal(res.goal);
-        if (res.cta_objective) setCtaObjective(res.cta_objective);
-        toast.success("Filled topic, keyword, and supporting cluster");
-      } else {
+      if (!res.success) {
         toast.error(res.error);
+        return;
       }
+      const filled: string[] = [];
+      if (res.topic && canAutoFill("topic", topic)) { setTopic(res.topic); filled.push("topic"); }
+      if (res.primary_keyword && canAutoFill("keyword", primaryKeyword)) { setPrimaryKeyword(res.primary_keyword); filled.push("keyword"); }
+      if (res.semantic_keywords.length && canAutoFill("secondaryKeywords", secondaryKeywords)) {
+        setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
+        filled.push("secondaryKeywords");
+      }
+      if (res.goal && canAutoFill("goal", goal)) { setGoal(res.goal); filled.push("goal"); }
+      if (res.cta_objective && canAutoFill("cta", ctaObjective)) { setCtaObjective(res.cta_objective); filled.push("cta"); }
+      markAiFilled(filled);
+      setTopicSuggestions(Array.from(new Set([res.topic, ...(res.alternate_topics ?? [])].filter(Boolean))));
+      toast.success(
+        filled.length
+          ? `AI filled ${filled.length} field${filled.length === 1 ? "" : "s"} — your entries were kept`
+          : "Topic ideas ready — pick one below the topic field"
+      );
     } finally {
       setAskLoading(false);
     }
@@ -424,22 +451,10 @@ export default function BlogGeneratorPage() {
     };
 
     try {
-      let finalEntryId = entryId;
-      if (!finalEntryId && shouldSchedule) {
-        const calRes = await calendarApi.addCustomKeyword(projectId, {
-          keyword: primaryKeyword,
-          title: `[Draft] ${topic}`,
-          articleType: "blog",
-          writerNotes: `Audience: ${audience}\nTone: ${TONES.find(t => t.id === tone)?.label}\nGoal: ${goal}\nCTA: ${ctaObjective}\nSecondary Keywords: ${secondaryKeywords.join(", ")}`,
-          targetDate: new Date().toISOString().split("T")[0],
-        });
-        if (!calRes.success) {
-          toast.error(calRes.error || "Failed to schedule blog");
-          setPhase("form");
-          return;
-        }
-        finalEntryId = calRes.data.id;
-      }
+      // Custom-keyword generations are NOT auto-scheduled — the user can
+      // schedule the finished blog from the previewer if they want to.
+      // Only calendar-driven generations (entryId present) stay linked.
+      const finalEntryId = entryId;
 
       const handleEvent = (event: any) => {
         if (event.event === "stage") {
@@ -512,7 +527,7 @@ export default function BlogGeneratorPage() {
           goal,
           ctaObjective,
           secondaryKeywords,
-          wordCount,
+          wordCount: effectiveWordCount,
           ...advancedBody,
         })) {
           const result = handleEvent(event);
@@ -528,7 +543,7 @@ export default function BlogGeneratorPage() {
           goal,
           ctaObjective,
           secondaryKeywords,
-          wordCount,
+          wordCount: effectiveWordCount,
           ...advancedBody,
         })) {
           const result = handleEvent(event);
@@ -557,7 +572,7 @@ export default function BlogGeneratorPage() {
       return "Synthesising live research, your brief, and approved keywords into a publication-ready blog post. Keep this tab open.";
     if (phase === "review")
       return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a premium draft pass before saving.";
-    return "Configure the blog angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
+    return "Fill in what you know — a keyword, a topic, or nothing at all. Auto-fill with AI completes the empty fields and never touches what you typed.";
   }, [phase]);
 
   const hasAnyAhrefsCredits = hasAhrefsH2sCredits || hasAhrefsFaqsCredits;
@@ -592,17 +607,12 @@ export default function BlogGeneratorPage() {
         actions={
           phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                shape="pill"
-                size="lg"
+              <AskAiButton
                 onClick={() => void askAi()}
-                disabled={askLoading || !hasAiCredits}
-                iconLeft={askLoading ? <Spinner size={14} /> : null}
-                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
-              >
-                {askLoading ? "Thinking…" : "Ask AI for a topic"}
-              </Button>
+                loading={askLoading}
+                disabled={!hasAiCredits}
+                disabledReason="You've exhausted your AI credits. Upgrade to get more."
+              />
               <Button
                 variant="action"
                 shape="pill"
@@ -672,7 +682,7 @@ export default function BlogGeneratorPage() {
             primaryKeyword={primaryKeyword}
             audience={audience}
             tone={TONES.find(t => t.id === tone)?.label ?? tone}
-            wordCount={wordCount}
+            wordCount={effectiveWordCount}
             goal={goal}
             ctaObjective={ctaObjective}
             secondaryKeywords={secondaryKeywords}
@@ -700,8 +710,16 @@ export default function BlogGeneratorPage() {
                     id="blog-topic"
                     inputSize="lg"
                     value={topic}
-                    onChange={e => setTopic(e.target.value)}
+                    onChange={e => { setTopic(e.target.value); markUserOwned("topic"); }}
                     placeholder="e.g. 10 Trends Shaping Recruitment Process Outsourcing in 2026"
+                    className={fillFlashClass("topic")}
+                  />
+                  <TopicSuggestionChips
+                    suggestions={topicSuggestions}
+                    activeTopic={topic}
+                    onPick={t => setTopic(t)}
+                    onReload={() => void askAi({ reload: true })}
+                    loading={askLoading}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
@@ -710,9 +728,9 @@ export default function BlogGeneratorPage() {
                       id="blog-keyword"
                       inputSize="lg"
                       value={primaryKeyword}
-                      onChange={e => setPrimaryKeyword(e.target.value)}
+                      onChange={e => { setPrimaryKeyword(e.target.value); markUserOwned("keyword"); }}
                       placeholder="recruitment process outsourcing"
-                      className={isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                      className={`${isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""} ${fillFlashClass("keyword")}`}
                     />
                   </Field>
                   <Field label="Target audience" required htmlFor="blog-audience">
@@ -730,12 +748,14 @@ export default function BlogGeneratorPage() {
                   description="Optional. We weave these naturally across the article — never as a list."
                   htmlFor="blog-secondary-keywords"
                 >
-                  <KeywordChips
-                    id="blog-secondary-keywords"
-                    value={secondaryKeywords}
-                    onChange={setSecondaryKeywords}
-                    placeholder="Type a keyword and press Enter…"
-                  />
+                  <div className={`rounded-lg ${fillFlashClass("secondaryKeywords")}`}>
+                    <KeywordChips
+                      id="blog-secondary-keywords"
+                      value={secondaryKeywords}
+                      onChange={v => { setSecondaryKeywords(v); markUserOwned("secondaryKeywords"); }}
+                      placeholder="Type a keyword and press Enter…"
+                    />
+                  </div>
                 </Field>
               </div>
             </ContentFormSection>
@@ -747,12 +767,31 @@ export default function BlogGeneratorPage() {
                   <ChipChoice options={TONES.map(t => ({ id: t.id, label: t.label }))} value={tone} onChange={setTone} ariaLabel="Tone" />
                 </Field>
                 <Field label="Target word count">
-                  <ChipChoice
-                    options={WORD_COUNT_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
-                    value={String(wordCount)}
-                    onChange={val => setWordCount(Number(val))}
-                    ariaLabel="Target word count"
-                  />
+                  <div className="space-y-3">
+                    <ChipChoice
+                      options={WORD_COUNT_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
+                      value={customWordCount ? "" : String(wordCount)}
+                      onChange={val => { setWordCount(Number(val)); setCustomWordCount(""); }}
+                      ariaLabel="Target word count"
+                    />
+                    <Input
+                      id="blog-custom-word-count"
+                      type="number"
+                      inputSize="lg"
+                      min={500}
+                      max={6000}
+                      step={100}
+                      placeholder="Custom — e.g. 800 for a short post, or leave blank to use a preset"
+                      value={customWordCount}
+                      onChange={e => setCustomWordCount(e.target.value)}
+                      className={customWordCount ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                    />
+                    {customWordCount ? (
+                      <p className="text-[11px] text-brand-action">
+                        Custom target: ~{effectiveWordCount.toLocaleString()} words (overrides the presets above)
+                      </p>
+                    ) : null}
+                  </div>
                 </Field>
                 <ContentFormGrid cols={2}>
                   <Field label="Region" htmlFor="blog-region">
@@ -785,8 +824,9 @@ export default function BlogGeneratorPage() {
                     id="blog-goal"
                     rows={3}
                     value={goal}
-                    onChange={e => setGoal(e.target.value)}
+                    onChange={e => { setGoal(e.target.value); markUserOwned("goal"); }}
                     placeholder="What should the reader walk away knowing or doing?"
+                    className={fillFlashClass("goal")}
                   />
                 </Field>
                 <Field label="CTA objective" htmlFor="blog-cta">
@@ -794,8 +834,9 @@ export default function BlogGeneratorPage() {
                     id="blog-cta"
                     rows={3}
                     value={ctaObjective}
-                    onChange={e => setCtaObjective(e.target.value)}
+                    onChange={e => { setCtaObjective(e.target.value); markUserOwned("cta"); }}
                     placeholder="What action should the conclusion steer the reader toward?"
+                    className={fillFlashClass("cta")}
                   />
                 </Field>
               </div>

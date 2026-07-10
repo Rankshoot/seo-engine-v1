@@ -186,14 +186,19 @@ export async function suggestContentTopicAction(
     contentType: ContentType;
     avoidPhrases?: string[];
     seedKeyword?: string;
+    /** Topic the user already typed — respected, never replaced. */
+    seedTopic?: string;
+    /** Topic ideas already shown — the AI won't repeat them on reload. */
+    avoidTopics?: string[];
   }
 ): Promise<
-  | { 
-      success: true; 
-      topic: string; 
-      primary_keyword: string; 
-      semantic_keywords: string[]; 
+  | {
+      success: true;
+      topic: string;
+      primary_keyword: string;
+      semantic_keywords: string[];
       rationale: string;
+      alternate_topics: string[];
       goal?: string;
       audience?: string;
       post_style?: string;
@@ -233,6 +238,7 @@ export async function suggestContentTopicAction(
         brandValues: project.brand_values,
         brandDescription: project.brand_description,
         seedKeyword: payload.seedKeyword,
+        seedTopic: payload.seedTopic,
       });
       return {
         success: true,
@@ -240,6 +246,7 @@ export async function suggestContentTopicAction(
         primary_keyword: suggestion.primary_keyword,
         semantic_keywords: [],
         rationale: 'LinkedIn feed optimization suggestion',
+        alternate_topics: [],
         audience: suggestion.audience,
         post_style: suggestion.post_style,
         voice: suggestion.voice,
@@ -274,6 +281,8 @@ export async function suggestContentTopicAction(
       usedKeywords: used,
       avoidPhrases: (payload.avoidPhrases ?? []).slice(0, 6),
       seedKeyword: payload.seedKeyword,
+      seedTopic: payload.seedTopic,
+      avoidTopics: payload.avoidTopics,
     });
     return { success: true, ...suggestion };
   } catch (e) {

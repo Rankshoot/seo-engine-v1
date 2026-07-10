@@ -14,6 +14,12 @@ export interface PreviewShellProps {
   toolbarRight?: ReactNode;
   /** Right rail rendered next to the main content. Pass `null` to hide. */
   sidebar: ReactNode | null;
+  /**
+   * When set, REPLACES the sidebar (e.g. the AI-edit assistant while in edit
+   * mode). Unlike `sidebar`, it is also shown as a docked right rail in
+   * immersive fullscreen so editing tools stay available there.
+   */
+  sidePanel?: ReactNode | null;
   /** Main content (preview / edit / raw view). */
   children: ReactNode;
   /** Show/hide the right rail. Defaults to true. */
@@ -57,6 +63,7 @@ export function PreviewShell({
   toolbarLeft,
   toolbarRight,
   sidebar,
+  sidePanel = null,
   children,
   showSidebar = true,
   sidebarWidthPx = 320,
@@ -166,7 +173,14 @@ export function PreviewShell({
   const mainRow = (
     <div className="flex flex-1 min-h-0 gap-5">
       {leftColumn}
-      {showSidebar && sidebar !== null && !(fullscreen && immersiveFullscreen) ? (
+      {sidePanel !== null ? (
+        <aside
+          className="shrink-0 rounded-[10px] border border-border-subtle bg-surface-secondary overflow-hidden"
+          style={{ width: `${sidebarWidthPx}px` }}
+        >
+          <div className="h-full min-h-0">{sidePanel}</div>
+        </aside>
+      ) : showSidebar && sidebar !== null && !(fullscreen && immersiveFullscreen) ? (
         <aside
           className="shrink-0 rounded-[10px] border border-border-subtle bg-surface-secondary overflow-hidden"
           style={{ width: `${sidebarWidthPx}px` }}
@@ -221,7 +235,19 @@ export function PreviewShell({
           </div>
         }
       >
-        <div className="h-full min-h-0">{children}</div>
+        {sidePanel !== null ? (
+          <div className="flex h-full min-h-0">
+            <div className="min-w-0 flex-1 min-h-0">{children}</div>
+            <aside
+              className="shrink-0 border-l border-border-subtle bg-surface-secondary"
+              style={{ width: `${sidebarWidthPx}px` }}
+            >
+              <div className="h-full min-h-0">{sidePanel}</div>
+            </aside>
+          </div>
+        ) : (
+          <div className="h-full min-h-0">{children}</div>
+        )}
       </ImmersiveFullscreenOverlay>
     );
   }

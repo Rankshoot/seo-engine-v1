@@ -22,7 +22,7 @@ import {
 import { WhitepaperReader } from "@/components/content-generator/whitepaper/WhitepaperReader";
 import type { TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import { InlineAiEditOverlay } from "@/components/content-generator/shared/InlineAiEditOverlay";
-import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import { AiEditPanel } from "@/components/content-generator/shared/AiEditPanel";
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import { exportWhitepaper, WHITEPAPER_EXPORT_OPTIONS } from "@/lib/content-exports";
@@ -420,6 +420,34 @@ export default function WhitepaperViewerPage() {
       toolbarLeft={toolbarLeft}
       toolbarRight={toolbarRight}
       sidebar={sidebar}
+      sidePanel={
+        mode === "edit" ? (
+          <AiEditPanel
+            blogId={blog.id}
+            projectDomain={project?.domain ?? ""}
+            selection={aiEdit.snapshot}
+            contentType="Whitepaper"
+            contentPart={
+              typeof document !== "undefined"
+                ? document.activeElement === titleRef.current
+                  ? "Cover Title"
+                  : document.activeElement === descRef.current
+                  ? "Cover Subtitle"
+                  : "Whitepaper Body"
+                : "Whitepaper Body"
+            }
+            surroundingContext={blog.content}
+            renderMarkdownSnippet={md => (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+            )}
+            onDiscard={() => {
+              setAiEdit({ open: false, snapshot: null });
+              selectionSnapshotRef.current = null;
+            }}
+            onInsert={handleAiRewriterInsert}
+          />
+        ) : null
+      }
       sidebarWidthPx={320}
       framedCanvas={false}
       toolbarInsideCanvas
@@ -444,28 +472,6 @@ export default function WhitepaperViewerPage() {
           setAiEdit({ open: true, snapshot });
           if (range) selectionSnapshotRef.current = { range };
         }}
-      />
-      <BlogAiRewriterModal
-        open={aiEdit.open}
-        blogId={blog.id}
-        projectDomain={project?.domain ?? ""}
-        selection={aiEdit.snapshot}
-        contentType="Whitepaper"
-        contentPart={
-          typeof document !== "undefined"
-            ? document.activeElement === titleRef.current
-              ? "Cover Title"
-              : document.activeElement === descRef.current
-              ? "Cover Subtitle"
-              : "Whitepaper Body"
-            : "Whitepaper Body"
-        }
-        surroundingContext={blog.content}
-        renderMarkdownSnippet={md => (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
-        )}
-        onClose={() => setAiEdit({ open: false, snapshot: null })}
-        onInsert={handleAiRewriterInsert}
       />
     </PreviewShell>
   );

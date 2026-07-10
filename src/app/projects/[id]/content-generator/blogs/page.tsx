@@ -37,6 +37,7 @@ import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/ap
 import { TARGET_REGIONS } from "@/lib/types";
 import {
   suggestContentTopicAction,
+  suggestTopicIdeasAction,
 } from "@/app/actions/content-actions";
 import {
   fetchAhrefsKeywordDataAction,
@@ -249,6 +250,7 @@ export default function BlogGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicIdeasLoading, setTopicIdeasLoading] = useState(false);
   const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
   const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, fillFlashClass } = useAiFillTracker();
   const [streamStages, setStreamStages] = useState(BASE_STREAM_STAGES);
@@ -389,7 +391,7 @@ export default function BlogGeneratorPage() {
 
   // Auto-fill: completes only fields the user left empty (or that a previous
   // auto-fill wrote). User-typed values are passed as seeds and never replaced.
-  const askAi = async (opts?: { reload?: boolean }) => {
+  const askAi = async () => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
@@ -397,7 +399,6 @@ export default function BlogGeneratorPage() {
         avoidPhrases: secondaryKeywords,
         seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
         seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
-        avoidTopics: opts?.reload ? topicSuggestions : undefined,
       });
       if (!res.success) {
         toast.error(res.error);
@@ -421,6 +422,31 @@ export default function BlogGeneratorPage() {
       );
     } finally {
       setAskLoading(false);
+    }
+  };
+
+  // "More ideas" under the topic field — ONLY refreshes the topic suggestion
+  // chips. Never touches the keyword, audience, goal, CTA, or any other
+  // field, regardless of AI-fill ownership. Uses whatever is currently in
+  // the form (plus company/project context) purely as inspiration.
+  const refreshTopicIdeas = async () => {
+    setTopicIdeasLoading(true);
+    try {
+      const res = await suggestTopicIdeasAction(projectId, {
+        contentType: "blog",
+        seedKeyword: primaryKeyword.trim() || undefined,
+        seedTopic: topic.trim() || undefined,
+        audience: audience.trim() || undefined,
+        tone: TONES.find(t => t.id === tone)?.label,
+        goal: goal.trim() || undefined,
+        ctaObjective: ctaObjective.trim() || undefined,
+        secondaryKeywords,
+        avoidTopics: topicSuggestions,
+      });
+      if (!res.success) { toast.error(res.error); return; }
+      setTopicSuggestions(res.topics);
+    } finally {
+      setTopicIdeasLoading(false);
     }
   };
 
@@ -718,8 +744,8 @@ export default function BlogGeneratorPage() {
                     suggestions={topicSuggestions}
                     activeTopic={topic}
                     onPick={t => setTopic(t)}
-                    onReload={() => void askAi({ reload: true })}
-                    loading={askLoading}
+                    onReload={() => void refreshTopicIdeas()}
+                    loading={topicIdeasLoading}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>

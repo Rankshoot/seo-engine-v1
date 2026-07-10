@@ -1804,7 +1804,7 @@ export async function upsertKeywordFromDomainSite(
 // Smaller batches = shorter output = less risk of truncation / malformed JSON.
 const AI_EVAL_BATCH = 10;
 // Max parallel batch calls — keeps wall-clock time low without hammering the API.
-const AI_EVAL_CONCURRENCY = 3;
+const AI_EVAL_CONCURRENCY = 5;
 
 /**
  * Extracts the first valid JSON array from raw text.

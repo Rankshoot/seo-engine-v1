@@ -515,6 +515,8 @@ export async function suggestContentTopicWithFlash(input: {
   seedTopic?: string;
   /** Topic ideas already shown to the user — never repeat these. */
   avoidTopics?: string[];
+  /** Other form fields already filled in (audience/tone/goal/CTA/etc) — context only, never a fill target. */
+  formContext?: string;
 }): Promise<ContentTopicSuggestion> {
   const briefBlock = input.briefSummary?.trim()
     ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
@@ -544,6 +546,10 @@ export async function suggestContentTopicWithFlash(input: {
     ? `Do NOT repeat any of these topic ideas (already suggested — give genuinely different angles):\n${input.avoidTopics.slice(0, 12).map(t => `- ${t}`).join('\n')}`
     : '';
 
+  const formContextBlock = input.formContext?.trim()
+    ? `Details the user has already filled in on this form (keep the topic and alternate_topics consistent with these — do not contradict them):\n${input.formContext.trim().slice(0, 800)}`
+    : '';
+
   const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankshoot content engine should produce next.
 
 CONTEXT
@@ -559,6 +565,8 @@ ${seedRule}
 ${seedTopicRule}
 
 ${avoidTopicsBlock}
+
+${formContextBlock}
 
 ${avoidBlock}
 

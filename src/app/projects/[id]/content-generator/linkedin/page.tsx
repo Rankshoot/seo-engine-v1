@@ -36,6 +36,7 @@ import type { LinkedInPostStyle } from "@/lib/types";
 import {
   generateLinkedInPostAction,
   suggestContentTopicAction,
+  suggestTopicIdeasAction,
 } from "@/app/actions/content-actions";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -95,6 +96,7 @@ export default function LinkedInGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicIdeasLoading, setTopicIdeasLoading] = useState(false);
   const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
   const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, markAutoFillable, fillFlashClass } = useAiFillTracker();
 
@@ -167,6 +169,28 @@ export default function LinkedInGeneratorPage() {
       );
     } finally {
       setAskLoading(false);
+    }
+  };
+
+  // "More ideas" under the topic field — ONLY refreshes the hook/topic
+  // suggestion chips. Never touches keyword, audience, tone, voice, post
+  // style, author role, or CTA, regardless of AI-fill ownership.
+  const refreshTopicIdeas = async () => {
+    setTopicIdeasLoading(true);
+    try {
+      const res = await suggestTopicIdeasAction(projectId, {
+        contentType: "linkedin",
+        seedKeyword: primaryKeyword.trim() || undefined,
+        seedTopic: topic.trim() || undefined,
+        audience: audience.trim() || undefined,
+        tone,
+        ctaObjective: ctaObjective.trim() || undefined,
+        avoidTopics: topicSuggestions,
+      });
+      if (!res.success) { toast.error(res.error); return; }
+      setTopicSuggestions(res.topics);
+    } finally {
+      setTopicIdeasLoading(false);
     }
   };
 
@@ -354,8 +378,8 @@ export default function LinkedInGeneratorPage() {
                     suggestions={topicSuggestions}
                     activeTopic={topic}
                     onPick={t => setTopic(t)}
-                    onReload={() => void askAi()}
-                    loading={askLoading}
+                    onReload={() => void refreshTopicIdeas()}
+                    loading={topicIdeasLoading}
                     label="AI hook ideas"
                   />
                 </Field>

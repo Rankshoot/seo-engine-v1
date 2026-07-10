@@ -36,6 +36,7 @@ import { TARGET_REGIONS } from "@/lib/types";
 import {
   generateEbookAction,
   suggestContentTopicAction,
+  suggestTopicIdeasAction,
 } from "@/app/actions/content-actions";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -97,6 +98,7 @@ export default function EbookGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicIdeasLoading, setTopicIdeasLoading] = useState(false);
   const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
   const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, markAutoFillable, fillFlashClass } = useAiFillTracker();
 
@@ -142,7 +144,7 @@ export default function EbookGeneratorPage() {
 
   // Auto-fill: completes only fields the user left empty (or defaults) —
   // user-typed values are passed as seeds and never replaced.
-  const askAi = async (opts?: { reload?: boolean }) => {
+  const askAi = async () => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
@@ -150,7 +152,6 @@ export default function EbookGeneratorPage() {
         avoidPhrases: secondaryKeywords,
         seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
         seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
-        avoidTopics: opts?.reload ? topicSuggestions : undefined,
       });
       if (!res.success) {
         toast.error(res.error);
@@ -174,6 +175,30 @@ export default function EbookGeneratorPage() {
       );
     } finally {
       setAskLoading(false);
+    }
+  };
+
+  // "More ideas" under the topic field — ONLY refreshes the topic suggestion
+  // chips. Never touches the keyword, audience, goal, CTA, or any other
+  // field, regardless of AI-fill ownership.
+  const refreshTopicIdeas = async () => {
+    setTopicIdeasLoading(true);
+    try {
+      const res = await suggestTopicIdeasAction(projectId, {
+        contentType: "ebook",
+        seedKeyword: primaryKeyword.trim() || undefined,
+        seedTopic: topic.trim() || undefined,
+        audience: audience.trim() || undefined,
+        tone: EBOOK_TONES.find(t => t.id === tone)?.label,
+        goal: goal.trim() || undefined,
+        ctaObjective: ctaObjective.trim() || undefined,
+        secondaryKeywords,
+        avoidTopics: topicSuggestions,
+      });
+      if (!res.success) { toast.error(res.error); return; }
+      setTopicSuggestions(res.topics);
+    } finally {
+      setTopicIdeasLoading(false);
     }
   };
 
@@ -351,8 +376,8 @@ export default function EbookGeneratorPage() {
                     suggestions={topicSuggestions}
                     activeTopic={topic}
                     onPick={t => setTopic(t)}
-                    onReload={() => void askAi({ reload: true })}
-                    loading={askLoading}
+                    onReload={() => void refreshTopicIdeas()}
+                    loading={topicIdeasLoading}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>

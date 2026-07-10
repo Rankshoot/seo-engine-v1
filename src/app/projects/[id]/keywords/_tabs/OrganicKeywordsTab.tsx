@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, keywordsListQueryOptions, useProjects, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
+import { qk, keywordsListQueryOptions, useProjects, DEFAULT_QUERY_OPTIONS, useAiScoringRunStatus } from "@/lib/query";
 import { Keyword, KeywordStatus, TARGET_REGIONS, KeywordSourceType, ContentType } from "@/lib/types";
 import {
   useAppDispatch,
@@ -381,8 +381,19 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_organic");
 
   const [bulkScheduling, setBulkScheduling] = useState(false);
-  const [aiScoring, setAiScoring] = useState(false);
+  const [startingAiScore, setStartingAiScore] = useState(false);
+  const { data: aiScoringRun } = useAiScoringRunStatus(projectId, "organic");
+  const aiScoring = startingAiScore || aiScoringRun?.status === "running";
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
+
+  // Reveal AI scores as each background batch lands instead of waiting for the
+  // whole run to finish — refetch the keyword list whenever the poll reports
+  // more completed rows (or the run just finished).
+  useEffect(() => {
+    if (aiScoringRun?.completed) {
+      void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+    }
+  }, [aiScoringRun?.completed, aiScoringRun?.status, queryClient, projectId]);
 
   const handleLoadMoreFromAhrefs = async () => {
     setLoadingMoreAhrefs(true);
@@ -830,6 +841,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         const score = kw.ai_eval_score as number | null | undefined;
         const data = kw.ai_eval_data as AiEvalData | null | undefined;
         if (!score || !data) {
+          if (aiScoringRun?.status === "running") {
+            return <span className="inline-block h-3 w-10 animate-pulse rounded bg-surface-tertiary" title="Scoring…" />;
+          }
           return <span className="text-[13px] text-text-tertiary">—</span>;
         }
         const cat = AI_SCORE_CATEGORY(score);
@@ -873,7 +887,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           kw.intent || undefined
         )
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, project, tableState]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, project, tableState, aiScoringRun?.status]);
 
   const visibleColumns = useMemo(
     () => industryColumns.filter(c => !hiddenCols.has(c.id) || c.id === "keyword" || c.id === "action"),
@@ -942,17 +956,23 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           <button
             type="button"
             onClick={async () => {
-              setAiScoring(true);
-              const res = await scoreKeywordsWithAI(projectId, {
-                keywordIds: tableState.selectedIds.size > 0 ? Array.from(tableState.selectedIds) : undefined
-              });
-              setAiScoring(false);
-              if (res.success) {
-                const failedPart = res.skipped ? ` (${res.skipped} failed to score)` : "";
-                toast.success(`AI scored ${res.scored} keyword${res.scored !== 1 ? "s" : ""}${failedPart}`);
-                void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
-              } else {
-                toast.error(res.error ?? "AI scoring failed");
+              setStartingAiScore(true);
+              try {
+                const res = await scoreKeywordsWithAI(projectId, {
+                  keywordIds: tableState.selectedIds.size > 0 ? Array.from(tableState.selectedIds) : undefined
+                });
+                if (res.success) {
+                  if (res.total > 0) {
+                    toast.success(`AI scoring started for ${res.total} keyword${res.total !== 1 ? "s" : ""} — scores will appear as they're ready`);
+                  } else {
+                    toast.success("Everything's already scored");
+                  }
+                  void queryClient.invalidateQueries({ queryKey: qk.aiScoringRun(projectId, "organic") });
+                } else {
+                  toast.error(res.error ?? "AI scoring failed");
+                }
+              } finally {
+                setStartingAiScore(false);
               }
             }}
             disabled={aiScoring || discovering || loading}

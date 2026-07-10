@@ -28,6 +28,7 @@ export {
 } from "./admin-queries";
 export { qk } from "./keys";
 export { KEYWORDS_LIST_INITIAL_LIMIT, keywordsListQueryOptions } from "./keywords-list";
+export { useAiScoringRunStatus } from "./ai-scoring-queries";
 export {
   useProject,
   useProjects,

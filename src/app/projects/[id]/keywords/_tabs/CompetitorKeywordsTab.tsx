@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, DEFAULT_QUERY_OPTIONS, useProjects } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS, useProjects, useAiScoringRunStatus } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -279,8 +279,19 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
   const [hasMoreAhrefs, setHasMoreAhrefs] = useState(true);
   const [error, setError] = useState("");
-  const [aiScoring, setAiScoring] = useState(false);
+  const [startingAiScore, setStartingAiScore] = useState(false);
+  const { data: aiScoringRun } = useAiScoringRunStatus(projectId, "competitor");
+  const aiScoring = startingAiScore || aiScoringRun?.status === "running";
   const [bulkSchedulingGaps, setBulkSchedulingGaps] = useState(false);
+
+  // Reveal AI scores as each background batch lands instead of waiting for the
+  // whole run to finish.
+  useEffect(() => {
+    if (aiScoringRun?.completed) {
+      void queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiScoringRun?.completed, aiScoringRun?.status]);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
@@ -440,19 +451,23 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
 
   const handleRunAiScoring = useCallback(async () => {
     if (aiScoring) return;
-    setAiScoring(true);
+    setStartingAiScore(true);
     try {
       const res = await scoreCompetitorKeywordsWithAI(projectId);
       if (res.success) {
-        await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
-        toast.success("AI scoring complete — scores are now visible in the AI Score column.", { id: "ai-scoring-done" });
+        if (res.total > 0) {
+          toast.success(`AI scoring started for ${res.total} keyword${res.total !== 1 ? "s" : ""} — scores will appear as they're ready`);
+        } else {
+          toast.success("Everything's already scored");
+        }
+        void queryClient.invalidateQueries({ queryKey: qk.aiScoringRun(projectId, "competitor") });
       } else {
         setError(res.error ?? "AI scoring failed");
       }
     } finally {
-      setAiScoring(false);
+      setStartingAiScore(false);
     }
-  }, [projectId, aiScoring, queryClient, COMPETITORS_KEY]);
+  }, [projectId, aiScoring, queryClient]);
 
   const articleTypeToContentType = useCallback((articleType: string): ContentType => {
     const typeMap: Record<string, ContentType> = {
@@ -660,6 +675,8 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             );
           })()}
         </Tooltip>
+      ) : aiScoringRun?.status === "running" ? (
+        <span className="inline-block h-3 w-10 animate-pulse rounded bg-surface-tertiary" title="Scoring…" />
       ) : (
         <span className="text-[12px] min-w-[200px] text-text-tertiary">—</span>
       )
@@ -714,7 +731,7 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       sortable: false,
       cell: (g: KeywordGap) => renderActionCell(g)
     }
-  ], [renderActionCell, renderContentTypeSelect, calendarMap, aiGapKeywordSet]);
+  ], [renderActionCell, renderContentTypeSelect, calendarMap, aiGapKeywordSet, aiScoringRun?.status]);
 
   const OPPORTUNITY_TAB_ITEMS = useMemo(
     () => [

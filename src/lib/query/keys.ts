@@ -12,6 +12,8 @@ export const qk = {
   domainKeywords: (id: string) => ["domainKeywords", id] as const,
   keywordDetails: (projectId: string, keywordId: string) =>
     ["keyword-details", projectId, keywordId] as const,
+  aiScoringRun: (projectId: string, scope: "organic" | "competitor") =>
+    ["ai-scoring-run", projectId, scope] as const,
 
   calendar: (id: string) => ["calendar", id] as const,
   calendarWithBlogs: (id: string) => ["calendar", id, "with-blogs"] as const,

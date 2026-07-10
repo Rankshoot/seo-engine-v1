@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import ProjectSidebar from "./ProjectSidebar";
 import { NavigationOverlay } from "@/components/NavigationOverlay";
 import { SitemapOnboardingDialog } from "@/components/sitemap/SitemapOnboardingDialog";
+import { KeywordAiScoringWatcher } from "@/components/keywords/KeywordAiScoringWatcher";
 import type { Project } from "@/lib/types";
 import { useProjects } from "@/lib/query";
 
@@ -73,6 +74,7 @@ export default function ProjectLayoutClient({
       </main>
       <NavigationOverlay />
       <SitemapOnboardingDialog projectId={projectId} />
+      <KeywordAiScoringWatcher projectId={projectId} />
     </div>
   );
 }

@@ -13,6 +13,7 @@ export * from "./cards/Card";
 export * from "./cards/StatCard";
 export * from "./typography/Typography";
 export * from "./forms/Input";
+export * from "./forms/AiFillLabelButton";
 export * from "./badges/Badge";
 export * from "./layouts/PageShell";
 export * from "./empty-states/EmptyState";

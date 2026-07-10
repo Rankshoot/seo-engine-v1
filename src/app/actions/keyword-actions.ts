@@ -9,7 +9,7 @@ import {
   type CompetitorKeywordsForSiteRow,
   type DataForSEOTraceEntry,
 } from '@/lib/dataforseo';
-import { Keyword, KeywordStatus } from '@/lib/types';
+import { Keyword, KeywordStatus, CONTENT_TYPE_ARTICLE_TYPE } from '@/lib/types';
 import { generateBusinessBrief, getBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 import {
@@ -27,6 +27,12 @@ import { enrichKeywordInBackground } from '@/lib/keyword-modal';
 import { scheduleKeywordOnFirstVacantIfNeeded, scheduleKeywordsOnVacantDates, collectEarliestVacantDates } from './calendar-actions';
 import { runWithUsageLogContext } from '@/lib/admin/logging/log-context';
 import { canUseMatchingTermsApi } from '@/lib/plan-api-access';
+import {
+  startAiScoringRun,
+  updateAiScoringRunProgress,
+  finishAiScoringRun,
+  type AiScoringScope,
+} from './ai-scoring-actions';
 
 // ─── AI Evaluation types (mirrors Keyword.ai_eval_data) ──────────────────────
 export type AiEvalData = {
@@ -1246,7 +1252,9 @@ export async function updateKeywordStatus(
 export async function bulkUpdateKeywordStatus(
   keywordIds: string[],
   status: KeywordStatus,
-  expectedProjectId?: string
+  expectedProjectId?: string,
+  /** Optional keywordId -> ContentType, so bulk scheduling uses the content type picked per row. */
+  contentTypes?: Record<string, string>
 ) {
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' };
@@ -1276,7 +1284,7 @@ export async function bulkUpdateKeywordStatus(
       void enrichKeywordInBackground(id);
     }
     const projectId = (keywords![0] as { project_id: string }).project_id;
-    const batch = await scheduleKeywordsOnVacantDates(projectId, keywordIds);
+    const batch = await scheduleKeywordsOnVacantDates(projectId, keywordIds, contentTypes);
     return {
       success: true,
       calendarScheduled: batch.scheduled.length,
@@ -1796,7 +1804,7 @@ export async function upsertKeywordFromDomainSite(
 // Smaller batches = shorter output = less risk of truncation / malformed JSON.
 const AI_EVAL_BATCH = 10;
 // Max parallel batch calls — keeps wall-clock time low without hammering the API.
-const AI_EVAL_CONCURRENCY = 3;
+const AI_EVAL_CONCURRENCY = 5;
 
 /**
  * Extracts the first valid JSON array from raw text.
@@ -1938,17 +1946,103 @@ Return a JSON array. Each element must have exactly these fields:
 Keep all string values short (summary ≤ 120 chars, each strength/weakness ≤ 80 chars) to avoid truncation.`;
 }
 
+type ParsedEval = {
+  keyword: string;
+  score: number;
+  category: string;
+  analysis: AiEvalData['analysis'];
+  reasoning: AiEvalData['reasoning'];
+  recommended_content_type?: string;
+  duplicate_of?: string | null;
+};
+
+/**
+ * Runs the batch/window Gemini scoring loop in the background (not awaited by the
+ * caller), writing scores incrementally per window and keeping a
+ * `keyword_ai_scoring_runs` status row up to date so the client can poll progress
+ * and recover the "running" state across a refresh instead of only knowing about
+ * it while the triggering request is still in flight.
+ */
+async function runAiScoringBatches<T extends { id: string; keyword: string }>(
+  projectId: string,
+  scope: AiScoringScope,
+  table: 'keywords' | 'keyword_gaps',
+  rows: T[],
+  buildPrompt: (batch: T[]) => string,
+  logLabel: string
+): Promise<void> {
+  let completed = 0;
+  const now = new Date().toISOString();
+
+  const batches: T[][] = [];
+  for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
+    batches.push(rows.slice(i, i + AI_EVAL_BATCH));
+  }
+
+  try {
+    for (let i = 0; i < batches.length; i += AI_EVAL_CONCURRENCY) {
+      const window = batches.slice(i, i + AI_EVAL_CONCURRENCY);
+      const results = await Promise.allSettled(
+        window.map(async (batch) => {
+          const prompt = buildPrompt(batch);
+          const raw = await callGeminiForEval(prompt, projectId);
+          return { batch, parsed: JSON.parse(extractJsonArray(raw)) as ParsedEval[] };
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error(`[${logLabel}] batch parse error`, result.reason instanceof Error ? result.reason.message : result.reason);
+          continue;
+        }
+
+        const { batch, parsed } = result.value;
+        const lookup = new Map(parsed.map(r => [r.keyword.toLowerCase().trim(), r]));
+
+        const updates = batch.flatMap(row => {
+          const hit = lookup.get(row.keyword.toLowerCase().trim());
+          if (!hit) return [];
+          const evalData: AiEvalData = {
+            category: hit.category,
+            analysis: hit.analysis,
+            reasoning: hit.reasoning,
+            recommended_content_type: hit.recommended_content_type,
+            duplicate_of: hit.duplicate_of,
+          };
+          return [{ id: row.id, keyword: row.keyword, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
+        });
+
+        if (updates.length) {
+          // Bulk upsert all updates in one DB round-trip
+          await supabaseAdmin
+            .from(table)
+            .upsert(
+              updates.map(u => ({ id: u.id, project_id: projectId, keyword: u.keyword, ai_eval_score: u.ai_eval_score, ai_eval_data: u.ai_eval_data, ai_eval_at: u.ai_eval_at })),
+              { onConflict: 'id', ignoreDuplicates: false }
+            );
+          completed += updates.length;
+        }
+      }
+
+      await updateAiScoringRunProgress(projectId, scope, completed);
+    }
+    await finishAiScoringRun(projectId, scope, 'done');
+  } catch (err) {
+    console.error(`[${logLabel}] scoring run failed`, err);
+    await finishAiScoringRun(projectId, scope, 'error', err instanceof Error ? err.message : String(err));
+  }
+}
+
 export async function scoreKeywordsWithAI(
   projectId: string,
   opts?: { force?: boolean; keywordIds?: string[] }
 ): Promise<{
   success: boolean;
-  scored: number;
-  skipped: number;
+  total: number;
   error?: string;
 }> {
   const user = await currentUser();
-  if (!user) return { success: false, scored: 0, skipped: 0, error: 'Not authenticated' };
+  if (!user) return { success: false, total: 0, error: 'Not authenticated' };
 
   // Ownership check
   const { data: project } = await supabaseAdmin
@@ -1957,7 +2051,7 @@ export async function scoreKeywordsWithAI(
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();
-  if (!project) return { success: false, scored: 0, skipped: 0, error: 'Project not found' };
+  if (!project) return { success: false, total: 0, error: 'Project not found' };
 
   // Load competitors
   const { data: compRows } = await supabaseAdmin
@@ -1987,76 +2081,20 @@ export async function scoreKeywordsWithAI(
   }
 
   const { data: rows, error: fetchErr } = await query;
-  if (fetchErr) return { success: false, scored: 0, skipped: 0, error: fetchErr.message };
-  if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
+  if (fetchErr) return { success: false, total: 0, error: fetchErr.message };
+  if (!rows?.length) return { success: true, total: 0 };
 
-  let scored = 0;
-  const now = new Date().toISOString();
+  await startAiScoringRun(projectId, 'organic', rows.length);
+  void runAiScoringBatches(
+    projectId,
+    'organic',
+    'keywords',
+    rows as Array<{ id: string; keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string }>,
+    (batch) => buildEvalPrompt(project, brief, competitors, batch),
+    'scoreKeywordsWithAI'
+  );
 
-  // Split all rows into batches up front
-  const batches: typeof rows[] = [];
-  for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
-    batches.push(rows.slice(i, i + AI_EVAL_BATCH));
-  }
-
-  // Process batches in parallel with a concurrency cap
-  for (let i = 0; i < batches.length; i += AI_EVAL_CONCURRENCY) {
-    const window = batches.slice(i, i + AI_EVAL_CONCURRENCY);
-    const results = await Promise.allSettled(
-      window.map(async (batch) => {
-        const prompt = buildEvalPrompt(
-          project, brief, competitors,
-          batch as Array<{keyword: string; volume: number; kd: number; cpc: number; intent: string | null; trend: string}>
-        );
-        const raw = await callGeminiForEval(prompt, projectId);
-        return { batch, parsed: JSON.parse(extractJsonArray(raw)) as Array<{
-          keyword: string;
-          score: number;
-          category: string;
-          analysis: AiEvalData['analysis'];
-          reasoning: AiEvalData['reasoning'];
-          recommended_content_type?: string;
-          duplicate_of?: string | null;
-        }>};
-      })
-    );
-
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        console.error('[scoreKeywordsWithAI] batch parse error', result.reason instanceof Error ? result.reason.message : result.reason);
-        continue;
-      }
-
-      const { batch, parsed } = result.value;
-      const lookup = new Map(parsed.map(r => [r.keyword.toLowerCase().trim(), r]));
-
-      const updates = batch.flatMap(row => {
-        const hit = lookup.get(row.keyword.toLowerCase().trim());
-        if (!hit) return [];
-        const evalData: AiEvalData = {
-          category: hit.category,
-          analysis: hit.analysis,
-          reasoning: hit.reasoning,
-          recommended_content_type: hit.recommended_content_type,
-          duplicate_of: hit.duplicate_of,
-        };
-        return [{ id: row.id as string, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
-      });
-
-      if (updates.length) {
-        // Bulk upsert all updates in one DB round-trip
-        await supabaseAdmin
-          .from('keywords')
-          .upsert(
-            updates.map(u => ({ id: u.id, project_id: projectId, keyword: batch.find(b => b.id === u.id)?.keyword ?? '', ai_eval_score: u.ai_eval_score, ai_eval_data: u.ai_eval_data, ai_eval_at: u.ai_eval_at })),
-            { onConflict: 'id', ignoreDuplicates: false }
-          );
-        scored += updates.length;
-      }
-    }
-  }
-
-  return { success: true, scored, skipped: rows.length - scored };
+  return { success: true, total: rows.length };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2167,12 +2205,11 @@ export async function scoreCompetitorKeywordsWithAI(
   opts?: { force?: boolean }
 ): Promise<{
   success: boolean;
-  scored: number;
-  skipped: number;
+  total: number;
   error?: string;
 }> {
   const user = await currentUser();
-  if (!user) return { success: false, scored: 0, skipped: 0, error: 'Not authenticated' };
+  if (!user) return { success: false, total: 0, error: 'Not authenticated' };
 
   const { data: project } = await supabaseAdmin
     .from('projects')
@@ -2180,7 +2217,7 @@ export async function scoreCompetitorKeywordsWithAI(
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();
-  if (!project) return { success: false, scored: 0, skipped: 0, error: 'Project not found' };
+  if (!project) return { success: false, total: 0, error: 'Project not found' };
 
   const { data: compRows } = await supabaseAdmin
     .from('project_competitors')
@@ -2203,76 +2240,20 @@ export async function scoreCompetitorKeywordsWithAI(
   }
 
   const { data: rows, error: fetchErr } = await query;
-  if (fetchErr) return { success: false, scored: 0, skipped: 0, error: fetchErr.message };
-  if (!rows?.length) return { success: true, scored: 0, skipped: 0 };
+  if (fetchErr) return { success: false, total: 0, error: fetchErr.message };
+  if (!rows?.length) return { success: true, total: 0 };
 
-  let scored = 0;
-  const now = new Date().toISOString();
+  await startAiScoringRun(projectId, 'competitor', rows.length);
+  void runAiScoringBatches(
+    projectId,
+    'competitor',
+    'keyword_gaps',
+    rows as Array<{ id: string; keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>,
+    (batch) => buildCompetitorEvalPrompt(project, brief, competitors, batch),
+    'scoreCompetitorKeywordsWithAI'
+  );
 
-  // Split all rows into batches up front
-  const batches: typeof rows[] = [];
-  for (let i = 0; i < rows.length; i += AI_EVAL_BATCH) {
-    batches.push(rows.slice(i, i + AI_EVAL_BATCH));
-  }
-
-  // Process batches in parallel with a concurrency cap
-  for (let i = 0; i < batches.length; i += AI_EVAL_CONCURRENCY) {
-    const window = batches.slice(i, i + AI_EVAL_CONCURRENCY);
-    const results = await Promise.allSettled(
-      window.map(async (batch) => {
-        const prompt = buildCompetitorEvalPrompt(
-          project, brief, competitors,
-          batch as Array<{ keyword: string; volume: number; kd: number; gap_type: string; competitor_weakness: number; top_competitor_domain: string }>
-        );
-        const raw = await callGeminiForEval(prompt, projectId);
-        return { batch, parsed: JSON.parse(extractJsonArray(raw)) as Array<{
-          keyword: string;
-          score: number;
-          category: string;
-          analysis: AiEvalData['analysis'];
-          reasoning: AiEvalData['reasoning'];
-          recommended_content_type?: string;
-          duplicate_of?: string | null;
-        }>};
-      })
-    );
-
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        console.error('[scoreCompetitorKeywordsWithAI] batch parse error', result.reason instanceof Error ? result.reason.message : result.reason);
-        continue;
-      }
-
-      const { batch, parsed } = result.value;
-      const lookup = new Map(parsed.map(r => [r.keyword.toLowerCase().trim(), r]));
-
-      const updates = batch.flatMap(row => {
-        const hit = lookup.get(row.keyword.toLowerCase().trim());
-        if (!hit) return [];
-        const evalData: AiEvalData = {
-          category: hit.category,
-          analysis: hit.analysis,
-          reasoning: hit.reasoning,
-          recommended_content_type: hit.recommended_content_type,
-          duplicate_of: hit.duplicate_of,
-        };
-        return [{ id: row.id as string, ai_eval_score: hit.score, ai_eval_data: evalData, ai_eval_at: now }];
-      });
-
-      if (updates.length) {
-        // Bulk upsert all updates in one DB round-trip
-        await supabaseAdmin
-          .from('keyword_gaps')
-          .upsert(
-            updates.map(u => ({ id: u.id, project_id: projectId, keyword: batch.find(b => b.id === u.id)?.keyword ?? '', ai_eval_score: u.ai_eval_score, ai_eval_data: u.ai_eval_data, ai_eval_at: u.ai_eval_at })),
-            { onConflict: 'id', ignoreDuplicates: false }
-          );
-        scored += updates.length;
-      }
-    }
-  }
-
-  return { success: true, scored, skipped: rows.length - scored };
+  return { success: true, total: rows.length };
 }
 
 function buildKeywordUpsertPayload(
@@ -2486,13 +2467,7 @@ export async function scheduleKeyword(
     return { success: false, error: 'No free calendar day found in the next 500 days.' };
   }
 
-  const CONTENT_TYPE_LABEL_MAP: Record<string, string> = {
-    blog: 'Blog article',
-    ebook: 'Ebook',
-    whitepaper: 'Whitepaper',
-    linkedin: 'LinkedIn post',
-  };
-  const articleType = CONTENT_TYPE_LABEL_MAP[payload.contentType] || 'Blog article';
+  const articleType = CONTENT_TYPE_ARTICLE_TYPE[payload.contentType as keyof typeof CONTENT_TYPE_ARTICLE_TYPE] || 'Blog article';
   const title = keywordText.trim() || 'Scheduled topic';
   const slug = keywordText
     .toLowerCase()

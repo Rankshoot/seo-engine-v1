@@ -10,11 +10,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   if (!user) return apiJson({ success: false, error: "Not authenticated" }, { status: 401 });
   const { projectId } = await params;
   try {
-    const body = (await req.json()) as { keywordIds: string[]; status: KeywordStatus };
+    const body = (await req.json()) as {
+      keywordIds: string[];
+      status: KeywordStatus;
+      contentTypes?: Record<string, string>;
+    };
     if (!Array.isArray(body.keywordIds) || !body.status) {
       return apiJson({ success: false, error: "Expected { keywordIds: string[], status }" }, { status: 400 });
     }
-    const result = await bulkUpdateKeywordStatus(body.keywordIds, body.status, projectId);
+    const result = await bulkUpdateKeywordStatus(body.keywordIds, body.status, projectId, body.contentTypes);
     return apiJson(result, { status: result.success ? 200 : 400 });
   } catch (e) {
     console.error("[POST /keywords/bulk-status]", e);

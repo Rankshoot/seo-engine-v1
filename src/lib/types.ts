@@ -103,6 +103,14 @@ export const CONTENT_TYPE_PLURAL: Record<ContentType, string> = {
   linkedin: 'LinkedIn posts',
 };
 
+/** `calendar_entries.article_type` value used when scheduling from a `ContentType`. */
+export const CONTENT_TYPE_ARTICLE_TYPE: Record<ContentType, string> = {
+  blog: 'Blog article',
+  ebook: 'Ebook',
+  whitepaper: 'Whitepaper',
+  linkedin: 'LinkedIn post',
+};
+
 /** Path segment for type-specific routes inside `/content-generator/`. */
 export const CONTENT_TYPE_SLUG: Record<ContentType, string> = {
   blog: 'blogs',

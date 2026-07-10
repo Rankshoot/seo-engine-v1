@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
-import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, DEFAULT_QUERY_OPTIONS, useProjects } from "@/lib/query";
+import { qk, DEFAULT_QUERY_OPTIONS, useProjects, useAiScoringRunStatus } from "@/lib/query";
 import type { BenchmarkState } from "@/app/actions/competitor-actions";
 import { competitorsApi } from "@/frontend/api/competitors";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -18,6 +17,7 @@ import { KeywordTableSkeleton } from "@/components/Skeleton";
 import { ColumnDef, SharedKeywordTable } from "../_components/SharedKeywordTable";
 import { toast } from "react-hot-toast";
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
+import { KD_COLOR } from "@/lib/keyword-format";
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 type OpportunityWorkspaceTab = "all" | "unscheduled" | "scheduled" | "generated";
@@ -44,9 +44,6 @@ function compactUrl(url: string): string {
     return url;
   }
 }
-
-const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function getAiGapScoreCategory(score: number): { icon: string; colorClass: string; label: string } {
   if (score >= 75) return { icon: "★", colorClass: "border-status-success/30 bg-status-success/10 text-status-success", label: "High opportunity" };
@@ -272,7 +269,6 @@ function ColumnToggleDropdown({
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function CompetitorKeywordsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
-  const router = useRouter();
   const dispatch = useAppDispatch();
   const prefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const COMPETITORS_KEY = qk.competitors(projectId);
@@ -283,8 +279,19 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
   const [hasMoreAhrefs, setHasMoreAhrefs] = useState(true);
   const [error, setError] = useState("");
-  const [aiScoring, setAiScoring] = useState(false);
+  const [startingAiScore, setStartingAiScore] = useState(false);
+  const { data: aiScoringRun } = useAiScoringRunStatus(projectId, "competitor");
+  const aiScoring = startingAiScore || aiScoringRun?.status === "running";
   const [bulkSchedulingGaps, setBulkSchedulingGaps] = useState(false);
+
+  // Reveal AI scores as each background batch lands instead of waiting for the
+  // whole run to finish.
+  useEffect(() => {
+    if (aiScoringRun?.completed) {
+      void queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiScoringRun?.completed, aiScoringRun?.status]);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
@@ -412,45 +419,55 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
     if (!rows.length) return;
     setBulkSchedulingGaps(true);
     setError("");
-    let anyOk = false;
+    let scheduledCount = 0;
+    let skippedCount = 0;
     try {
       for (const g of rows) {
         const k = g.keyword.toLowerCase();
-        if (calendarMap.has(k)) continue;
+        if (calendarMap.has(k)) {
+          skippedCount++;
+          continue;
+        }
         const res = await competitorsApi.blogFromOpportunity(projectId, g.keyword);
         if (res.success) {
-          anyOk = true;
+          scheduledCount++;
         } else {
           setError(res.error ?? "Could not queue an opportunity.");
         }
       }
       tableState.exitMassSelect();
-      if (anyOk) {
+      if (scheduledCount > 0) {
         void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
         void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
-        router.push(`/projects/${projectId}/content-calendar`);
+        toast.success(
+          `${scheduledCount} keyword(s) scheduled${skippedCount > 0 ? `, ${skippedCount} already on calendar` : ""}`
+        );
       }
     } finally {
       setBulkSchedulingGaps(false);
     }
-  }, [tableState, projectId, calendarMap, queryClient, router]);
+  }, [tableState, projectId, calendarMap, queryClient]);
 
   const handleRunAiScoring = useCallback(async () => {
     if (aiScoring) return;
-    setAiScoring(true);
+    setStartingAiScore(true);
     try {
       const res = await scoreCompetitorKeywordsWithAI(projectId);
       if (res.success) {
-        await queryClient.invalidateQueries({ queryKey: COMPETITORS_KEY });
-        toast.success("AI scoring complete — scores are now visible in the AI Score column.", { id: "ai-scoring-done" });
+        if (res.total > 0) {
+          toast.success(`AI scoring started for ${res.total} keyword${res.total !== 1 ? "s" : ""} — scores will appear as they're ready`);
+        } else {
+          toast.success("Everything's already scored");
+        }
+        void queryClient.invalidateQueries({ queryKey: qk.aiScoringRun(projectId, "competitor") });
       } else {
         setError(res.error ?? "AI scoring failed");
       }
     } finally {
-      setAiScoring(false);
+      setStartingAiScore(false);
     }
-  }, [projectId, aiScoring, queryClient, COMPETITORS_KEY]);
+  }, [projectId, aiScoring, queryClient]);
 
   const articleTypeToContentType = useCallback((articleType: string): ContentType => {
     const typeMap: Record<string, ContentType> = {
@@ -587,12 +604,24 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       align: "center",
       sortable: true,
       tooltip: "Keyword Difficulty (0–100). Higher = harder to rank.",
-      cell: (g: KeywordGap) => typeof g.kd === "number" && g.kd > 0 ? (
-        <span className={`text-[13px] font-semibold tabular-nums ${KD_COLOR(g.kd)}`}>
-          {g.kd}
-        </span>
-      ) : (
-        <span className="text-[12px] text-text-tertiary">—</span>
+      cell: (g: KeywordGap) => (
+        <div className="flex items-center justify-center gap-2">
+          {typeof g.kd === "number" && g.kd > 0 ? (
+            <>
+              <div className="h-1.5 w-10 overflow-hidden rounded-full bg-surface-tertiary">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    g.kd < 30 ? "bg-status-success" : g.kd < 60 ? "bg-status-warning" : "bg-brand-coral"
+                  }`}
+                  style={{ width: `${g.kd}%` }}
+                />
+              </div>
+              <span className={`text-[12px] font-bold tabular-nums ${KD_COLOR(g.kd)}`}>{g.kd}</span>
+            </>
+          ) : (
+            <span className="text-[13px] text-text-tertiary">—</span>
+          )}
+        </div>
       )
     },
     {
@@ -646,9 +675,17 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
             );
           })()}
         </Tooltip>
+      ) : aiScoringRun?.status === "running" ? (
+        <span className="inline-block h-3 w-10 animate-pulse rounded bg-surface-tertiary" title="Scoring…" />
       ) : (
         <span className="text-[12px] min-w-[200px] text-text-tertiary">—</span>
       )
+    },
+    {
+      id: "content_type",
+      header: "Content Type",
+      align: "center",
+      cell: (g: KeywordGap) => renderContentTypeSelect(g.keyword, g.ai_eval_data)
     },
     {
       id: "top_competitor_url",
@@ -688,19 +725,13 @@ export default function CompetitorKeywordsTab({ projectId }: { projectId: string
       }
     },
     {
-      id: "content_type",
-      header: "Content Type",
-      align: "center",
-      cell: (g: KeywordGap) => renderContentTypeSelect(g.keyword, g.ai_eval_data)
-    },
-    {
       id: "action",
       header: "Action",
       align: "center",
       sortable: false,
       cell: (g: KeywordGap) => renderActionCell(g)
     }
-  ], [renderActionCell, renderContentTypeSelect, calendarMap, aiGapKeywordSet]);
+  ], [renderActionCell, renderContentTypeSelect, calendarMap, aiGapKeywordSet, aiScoringRun?.status]);
 
   const OPPORTUNITY_TAB_ITEMS = useMemo(
     () => [

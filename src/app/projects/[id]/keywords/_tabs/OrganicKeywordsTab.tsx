@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react";
-import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { qk, keywordsListQueryOptions, useProjects, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
+import { qk, keywordsListQueryOptions, useProjects, DEFAULT_QUERY_OPTIONS, useAiScoringRunStatus } from "@/lib/query";
 import { Keyword, KeywordStatus, TARGET_REGIONS, KeywordSourceType, ContentType } from "@/lib/types";
 import {
   useAppDispatch,
@@ -35,6 +34,7 @@ import { scoreKeywordsWithAI, type AiEvalData } from "@/app/actions/keyword-acti
 import { useKeywordTableState } from "../_hooks/useKeywordTableState";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { EmptyState } from "@/components/common";
+import { KD_COLOR } from "@/lib/keyword-format";
 
 type KeywordsResponse = Awaited<ReturnType<typeof keywordsApi.list>>;
 
@@ -82,9 +82,6 @@ function MonthlySearchesChart({ data }: { data: { month: string; volume: number 
     </div>
   );
 }
-
-const KD_COLOR = (kd: number) =>
-  kd < 30 ? "text-status-success" : kd < 60 ? "text-status-warning" : "text-brand-coral";
 
 function AI_SCORE_CATEGORY(score: number): { icon: string; cls: string; label: string } {
   if (score >= 75) return { icon: "★", cls: "border-status-success/30 bg-status-success/10 text-status-success", label: "High opportunity" };
@@ -317,7 +314,6 @@ function compareKeywords(a: Keyword, b: Keyword, col: TableSortColumn, dir: Sort
 export default function OrganicKeywordsTab({ projectId }: { projectId: string }) {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
-  const router = useRouter();
   const { canFetchMoreKeywords } = useUserQuota();
   const keywordPrefs = useAppSelector(state => selectKeywordPrefs(state, projectId));
   const keywordStatuses = useAppSelector(state => selectKeywordStatuses(state, projectId));
@@ -385,8 +381,19 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
   const { hidden: hiddenCols, toggle: toggleCol } = useLocalColumnVisibility("kw_col_vis_organic");
 
   const [bulkScheduling, setBulkScheduling] = useState(false);
-  const [aiScoring, setAiScoring] = useState(false);
+  const [startingAiScore, setStartingAiScore] = useState(false);
+  const { data: aiScoringRun } = useAiScoringRunStatus(projectId, "organic");
+  const aiScoring = startingAiScore || aiScoringRun?.status === "running";
   const [loadingMoreAhrefs, setLoadingMoreAhrefs] = useState(false);
+
+  // Reveal AI scores as each background batch lands instead of waiting for the
+  // whole run to finish — refetch the keyword list whenever the poll reports
+  // more completed rows (or the run just finished).
+  useEffect(() => {
+    if (aiScoringRun?.completed) {
+      void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
+    }
+  }, [aiScoringRun?.completed, aiScoringRun?.status, queryClient, projectId]);
 
   const handleLoadMoreFromAhrefs = async () => {
     setLoadingMoreAhrefs(true);
@@ -586,7 +593,18 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         list.map(k => (ids.includes(k.id) ? { ...k, status: "approved" as const } : k))
       );
       dispatch(bulkKeywordStatusChanged({ projectId, keywordIds: ids, nextStatus: "approved" }));
-      bulkRes = await keywordsApi.bulkStatus(projectId, ids, "approved");
+      const contentTypes: Record<string, string> = {};
+      for (const id of ids) {
+        const kw = keywords.find(k => k.id === id);
+        if (!kw) continue;
+        contentTypes[id] = resolveContentType(
+          kw.keyword,
+          kw.id,
+          kw.ai_eval_data as { recommended_content_type?: string } | null,
+          activeState.rowContentTypes
+        );
+      }
+      bulkRes = await keywordsApi.bulkStatus(projectId, ids, "approved", contentTypes);
       if (!bulkRes.success) {
         if (previousData) queryClient.setQueryData(KEYWORDS_KEY, previousData);
         for (const [keywordId, previousStatus] of Object.entries(previousStatuses)) {
@@ -624,7 +642,6 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         }`
       );
       activeState.exitMassSelect();
-      router.push(`/projects/${projectId}/content-calendar`);
     } finally {
       setBulkScheduling(false);
     }
@@ -824,6 +841,9 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
         const score = kw.ai_eval_score as number | null | undefined;
         const data = kw.ai_eval_data as AiEvalData | null | undefined;
         if (!score || !data) {
+          if (aiScoringRun?.status === "running") {
+            return <span className="inline-block h-3 w-10 animate-pulse rounded bg-surface-tertiary" title="Scoring…" />;
+          }
           return <span className="text-[13px] text-text-tertiary">—</span>;
         }
         const cat = AI_SCORE_CATEGORY(score);
@@ -867,7 +887,7 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           kw.intent || undefined
         )
     }
-  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, project, tableState]);
+  ].filter(c => c.id !== "analysis_score") as ColumnDef<Keyword>[], [renderActionCell, renderContentTypeSelect, project, tableState, aiScoringRun?.status]);
 
   const visibleColumns = useMemo(
     () => industryColumns.filter(c => !hiddenCols.has(c.id) || c.id === "keyword" || c.id === "action"),
@@ -936,17 +956,23 @@ export default function OrganicKeywordsTab({ projectId }: { projectId: string })
           <button
             type="button"
             onClick={async () => {
-              setAiScoring(true);
-              const res = await scoreKeywordsWithAI(projectId, {
-                keywordIds: tableState.selectedIds.size > 0 ? Array.from(tableState.selectedIds) : undefined
-              });
-              setAiScoring(false);
-              if (res.success) {
-                const failedPart = res.skipped ? ` (${res.skipped} failed to score)` : "";
-                toast.success(`AI scored ${res.scored} keyword${res.scored !== 1 ? "s" : ""}${failedPart}`);
-                void queryClient.invalidateQueries({ queryKey: qk.keywords(projectId) });
-              } else {
-                toast.error(res.error ?? "AI scoring failed");
+              setStartingAiScore(true);
+              try {
+                const res = await scoreKeywordsWithAI(projectId, {
+                  keywordIds: tableState.selectedIds.size > 0 ? Array.from(tableState.selectedIds) : undefined
+                });
+                if (res.success) {
+                  if (res.total > 0) {
+                    toast.success(`AI scoring started for ${res.total} keyword${res.total !== 1 ? "s" : ""} — scores will appear as they're ready`);
+                  } else {
+                    toast.success("Everything's already scored");
+                  }
+                  void queryClient.invalidateQueries({ queryKey: qk.aiScoringRun(projectId, "organic") });
+                } else {
+                  toast.error(res.error ?? "AI scoring failed");
+                }
+              } finally {
+                setStartingAiScore(false);
               }
             }}
             disabled={aiScoring || discovering || loading}

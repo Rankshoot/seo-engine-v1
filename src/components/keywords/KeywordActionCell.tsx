@@ -10,6 +10,11 @@ import { keywordsApi } from "@/frontend/api/keywords";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { keywordStatusChanged, calendarKeywordScheduled } from "@/lib/redux/keyword-workspace-slice";
 
+function fmtShortDate(iso?: string): string {
+  if (!iso) return "";
+  return new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 interface KeywordActionCellProps {
   projectId: string;
   keyword: string;
@@ -88,7 +93,8 @@ export function KeywordActionCell({
     },
     onSuccess: (res) => {
       if (res.success) {
-        toast.success(`Keyword scheduled`);
+        const dateLabel = fmtShortDate(res.scheduledDate);
+        toast.success(dateLabel ? `"${keyword}" scheduled for ${dateLabel}` : `"${keyword}" scheduled`);
 
         // Move status to Approved in Redux immediately so counts/tabs update immediately
         const resolvedId = res.keywordId || keywordId;

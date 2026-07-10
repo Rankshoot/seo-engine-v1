@@ -420,6 +420,8 @@ export interface ContentTopicSuggestion {
   rationale: string;
   goal?: string;
   cta_objective?: string;
+  /** 2-3 alternative topic angles so the form can offer pickable suggestions. */
+  alternate_topics: string[];
 }
 
 interface RawTopicSuggestion {
@@ -429,6 +431,7 @@ interface RawTopicSuggestion {
   rationale?: string;
   goal?: string;
   cta_objective?: string;
+  alternate_topics?: string[];
 }
 
 /** Gemini schema dialect (`v1beta`) — same shape as `INSTANT_KEYWORD_TOPIC_SCHEMA` in `lib/gemini.ts`. */
@@ -441,8 +444,9 @@ const TOPIC_SUGGESTION_SCHEMA = {
     rationale: { type: 'STRING' },
     goal: { type: 'STRING' },
     cta_objective: { type: 'STRING' },
+    alternate_topics: { type: 'ARRAY', items: { type: 'STRING' } },
   },
-  required: ['topic', 'primary_keyword', 'semantic_keywords', 'rationale', 'goal', 'cta_objective'],
+  required: ['topic', 'primary_keyword', 'semantic_keywords', 'rationale', 'goal', 'cta_objective', 'alternate_topics'],
 } as const;
 
 /** Last-resort line scrape so a slightly malformed model reply still produces a usable suggestion. */
@@ -474,6 +478,7 @@ function looseExtractTopicSuggestion(raw: string): RawTopicSuggestion | null {
     rationale: grab('rationale') ?? undefined,
     goal: grab('goal') ?? undefined,
     cta_objective: grab('cta_objective') ?? undefined,
+    alternate_topics: grabArray('alternate_topics') ?? undefined,
   };
 }
 
@@ -487,6 +492,12 @@ function normalizeSuggestion(raw: RawTopicSuggestion): ContentTopicSuggestion {
     rationale: (raw.rationale ?? '').trim(),
     goal: (raw.goal ?? '').trim() || undefined,
     cta_objective: (raw.cta_objective ?? '').trim() || undefined,
+    alternate_topics: Array.isArray(raw.alternate_topics)
+      ? raw.alternate_topics
+          .filter((s): s is string => typeof s === 'string' && !!s.trim())
+          .map(s => s.trim())
+          .slice(0, 4)
+      : [],
   };
 }
 
@@ -500,6 +511,10 @@ export async function suggestContentTopicWithFlash(input: {
   avoidPhrases: string[];
   usedKeywords: string[];
   seedKeyword?: string;
+  /** Topic the user already typed — must be respected, not replaced. */
+  seedTopic?: string;
+  /** Topic ideas already shown to the user — never repeat these. */
+  avoidTopics?: string[];
 }): Promise<ContentTopicSuggestion> {
   const briefBlock = input.briefSummary?.trim()
     ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
@@ -521,6 +536,14 @@ export async function suggestContentTopicWithFlash(input: {
     ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one. Design the topic, semantic_keywords, and rationale specifically for this keyword.`
     : `Choose a fresh primary keyword that the brand can rank for — one that is NOT in the forbidden list above and is not a close variant of any forbidden keyword.`;
 
+  const seedTopicRule = input.seedTopic?.trim()
+    ? `The user has already written their own topic: "${input.seedTopic.trim().slice(0, 300)}". Treat it as the anchor: design semantic_keywords, goal, and cta_objective to serve THAT topic. Your "topic" field and alternate_topics should be sharper alternative phrasings or adjacent angles of the user's topic — never an unrelated subject.`
+    : '';
+
+  const avoidTopicsBlock = input.avoidTopics?.length
+    ? `Do NOT repeat any of these topic ideas (already suggested — give genuinely different angles):\n${input.avoidTopics.slice(0, 12).map(t => `- ${t}`).join('\n')}`
+    : '';
+
   const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankshoot content engine should produce next.
 
 CONTEXT
@@ -533,6 +556,10 @@ ${avoidKeywordsBlock}
 
 ${seedRule}
 
+${seedTopicRule}
+
+${avoidTopicsBlock}
+
 ${avoidBlock}
 
 Rules:
@@ -542,9 +569,10 @@ Rules:
 - rationale: 1 sentence on why this topic earns organic traffic for THIS domain.
 - goal: 1 sentence describing what the reader should know or do after reading (reader takeaway).
 - cta_objective: 1 sentence describing the action the conclusion should steer the reader toward (e.g. book a demo, download a guide, start a free trial).
+- alternate_topics: exactly 3 alternative topic titles for the same primary keyword — distinct angles (e.g. guide vs. comparison vs. trends), each usable as-is.
 
 Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
-{"topic": "...", "primary_keyword": "...", "semantic_keywords": ["..."], "rationale": "...", "goal": "...", "cta_objective": "..."}`;
+{"topic": "...", "primary_keyword": "...", "semantic_keywords": ["..."], "rationale": "...", "goal": "...", "cta_objective": "...", "alternate_topics": ["...", "...", "..."]}`;
 
   // Pass 1 — Gemini Flash with a strict response schema.
   // Temperature kept moderate so the model stays JSON-clean; bumping output
@@ -649,6 +677,8 @@ export async function suggestLinkedInInputsWithFlash(input: {
   brandValues?: string;
   brandDescription?: string;
   seedKeyword?: string;
+  /** Topic the user already typed — must be output verbatim, not replaced. */
+  seedTopic?: string;
 }): Promise<LinkedInInputsSuggestion> {
   const briefBlock = input.briefSummary?.trim()
     ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
@@ -657,6 +687,10 @@ export async function suggestLinkedInInputsWithFlash(input: {
   const seedRule = input.seedKeyword?.trim()
     ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one.`
     : `Suggest a highly relevant primary keyword (2-6 words) related to the project niche and audience.`;
+
+  const seedTopicRule = input.seedTopic?.trim()
+    ? `CRITICAL REQUIREMENT: The user has already written the post topic: "${input.seedTopic.trim().slice(0, 300)}". Output EXACTLY this text in the "topic" field. Design post_style, tone, cta_objective, and the rest to make THIS topic perform in the feed.`
+    : '';
 
   const prompt = `You are a social media SEO content strategist proposing a LinkedIn post plan.
 Suggest the form input values that will produce the best feed-native LinkedIn post next.
@@ -671,6 +705,8 @@ ${input.brandDescription ? `- Brand Description: ${input.brandDescription}` : ''
 ${briefBlock}
 
 ${seedRule}
+
+${seedTopicRule}
 
 Rules for values:
 - post_style: Must be exactly one of: "educational", "founder", "industry_insight", "storytelling", "list", "carousel". Pick the style that best fits this topic and niche.

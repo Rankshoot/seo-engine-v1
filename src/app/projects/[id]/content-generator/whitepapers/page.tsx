@@ -13,7 +13,6 @@ import {
   Input,
   PageHeader,
   Select,
-  Spinner,
   Textarea,
 } from "@/components/common";
 import {
@@ -26,6 +25,9 @@ import {
   SectionHeading,
   StepRow,
   RecentHistorySkeleton,
+  AskAiButton,
+  TopicSuggestionChips,
+  useAiFillTracker,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -96,6 +98,8 @@ export default function WhitepaperGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
+  const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, fillFlashClass } = useAiFillTracker();
 
   useEffect(() => {
     if (project?.target_audience && !audience) setAudience(project.target_audience);
@@ -130,22 +134,37 @@ export default function WhitepaperGeneratorPage() {
 
   const isFormValid = emptyRequiredFields.length === 0;
 
-  const askAi = async () => {
+  // Auto-fill: completes only fields the user left empty — user-typed values
+  // are passed as seeds and never replaced.
+  const askAi = async (opts?: { reload?: boolean }) => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "whitepaper",
         avoidPhrases: secondaryKeywords,
-        seedKeyword: primaryKeyword.trim() || undefined,
+        seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
+        seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
+        avoidTopics: opts?.reload ? topicSuggestions : undefined,
       });
-      if (res.success) {
-        setTopic(res.topic);
-        setPrimaryKeyword(res.primary_keyword);
-        if (res.semantic_keywords.length) setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
-        toast.success("Topic + supporting cluster filled");
-      } else {
+      if (!res.success) {
         toast.error(res.error);
+        return;
       }
+      const filled: string[] = [];
+      if (res.topic && canAutoFill("topic", topic)) { setTopic(res.topic); filled.push("topic"); }
+      if (res.primary_keyword && canAutoFill("keyword", primaryKeyword)) { setPrimaryKeyword(res.primary_keyword); filled.push("keyword"); }
+      if (res.semantic_keywords.length && canAutoFill("secondaryKeywords", secondaryKeywords)) {
+        setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
+        filled.push("secondaryKeywords");
+      }
+      if (res.goal && canAutoFill("problem", problem)) { setProblem(res.goal); filled.push("problem"); }
+      markAiFilled(filled);
+      setTopicSuggestions(Array.from(new Set([res.topic, ...(res.alternate_topics ?? [])].filter(Boolean))));
+      toast.success(
+        filled.length
+          ? `AI filled ${filled.length} field${filled.length === 1 ? "" : "s"} — your entries were kept`
+          : "Topic ideas ready — pick one below the topic field"
+      );
     } finally {
       setAskLoading(false);
     }
@@ -218,17 +237,12 @@ export default function WhitepaperGeneratorPage() {
         actions={
           phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                shape="pill"
-                size="lg"
+              <AskAiButton
                 onClick={() => void askAi()}
-                disabled={askLoading || !hasAiCredits}
-                iconLeft={askLoading ? <Spinner size={14} /> : null}
-                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
-              >
-                {askLoading ? "Thinking…" : "Ask AI for an angle"}
-              </Button>
+                loading={askLoading}
+                disabled={!hasAiCredits}
+                disabledReason="You've exhausted your AI credits. Upgrade to get more."
+              />
               <button
                 onClick={goReview}
                 disabled={!isFormValid || !canGenerateWhitepaper}
@@ -325,8 +339,16 @@ export default function WhitepaperGeneratorPage() {
                     id="wp-topic"
                     inputSize="lg"
                     value={topic}
-                    onChange={e => setTopic(e.target.value)}
+                    onChange={e => { setTopic(e.target.value); markUserOwned("topic"); }}
                     placeholder="e.g. The Enterprise Buyer's Guide to AI Agent Procurement"
+                    className={fillFlashClass("topic")}
+                  />
+                  <TopicSuggestionChips
+                    suggestions={topicSuggestions}
+                    activeTopic={topic}
+                    onPick={t => setTopic(t)}
+                    onReload={() => void askAi({ reload: true })}
+                    loading={askLoading}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
@@ -335,9 +357,9 @@ export default function WhitepaperGeneratorPage() {
                       id="wp-keyword"
                       inputSize="lg"
                       value={primaryKeyword}
-                      onChange={e => setPrimaryKeyword(e.target.value)}
+                      onChange={e => { setPrimaryKeyword(e.target.value); markUserOwned("keyword"); }}
                       placeholder="enterprise ai agents"
-                      className={isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                      className={`${isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""} ${fillFlashClass("keyword")}`}
                     />
                     {/* {keywordParam && (
                       <p className={`mt-1.5 flex items-center gap-1.5 text-[11px] transition-colors duration-300 ${isKeywordTyping ? "text-brand-action" : "text-emerald-400"}`}>
@@ -373,12 +395,14 @@ export default function WhitepaperGeneratorPage() {
                   description="Optional. We weave these naturally across sections."
                   htmlFor="wp-secondary"
                 >
-                  <KeywordChips
-                    id="wp-secondary"
-                    value={secondaryKeywords}
-                    onChange={setSecondaryKeywords}
-                    placeholder="Type a phrase and press Enter…"
-                  />
+                  <div className={`rounded-lg ${fillFlashClass("secondaryKeywords")}`}>
+                    <KeywordChips
+                      id="wp-secondary"
+                      value={secondaryKeywords}
+                      onChange={v => { setSecondaryKeywords(v); markUserOwned("secondaryKeywords"); }}
+                      placeholder="Type a phrase and press Enter…"
+                    />
+                  </div>
                 </Field>
               </div>
             </ContentFormSection>
@@ -391,8 +415,9 @@ export default function WhitepaperGeneratorPage() {
                     id="wp-problem"
                     rows={3}
                     value={problem}
-                    onChange={e => setProblem(e.target.value)}
+                    onChange={e => { setProblem(e.target.value); markUserOwned("problem"); }}
                     placeholder="What painful, current decision is the reader trying to make?"
+                    className={fillFlashClass("problem")}
                   />
                 </Field>
                 <Field label="Research angle" htmlFor="wp-angle">

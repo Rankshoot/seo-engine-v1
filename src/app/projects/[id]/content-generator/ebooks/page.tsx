@@ -13,7 +13,6 @@ import {
   Input,
   PageHeader,
   Select,
-  Spinner,
   Textarea,
 } from "@/components/common";
 import {
@@ -26,6 +25,9 @@ import {
   SectionHeading,
   StepRow,
   RecentHistorySkeleton,
+  AskAiButton,
+  TopicSuggestionChips,
+  useAiFillTracker,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -95,6 +97,14 @@ export default function EbookGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
+  const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, markAutoFillable, fillFlashClass } = useAiFillTracker();
+
+  // Goal + CTA start as generic defaults — let auto-fill replace them until
+  // the user edits them.
+  useEffect(() => {
+    markAutoFillable(["goal", "cta"]);
+  }, [markAutoFillable]);
 
   useEffect(() => {
     if (project?.target_audience && !audience) {
@@ -130,22 +140,38 @@ export default function EbookGeneratorPage() {
 
   const isFormValid = emptyRequiredFields.length === 0;
 
-  const askAi = async () => {
+  // Auto-fill: completes only fields the user left empty (or defaults) —
+  // user-typed values are passed as seeds and never replaced.
+  const askAi = async (opts?: { reload?: boolean }) => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "ebook",
         avoidPhrases: secondaryKeywords,
-        seedKeyword: primaryKeyword.trim() || undefined,
+        seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
+        seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
+        avoidTopics: opts?.reload ? topicSuggestions : undefined,
       });
-      if (res.success) {
-        setTopic(res.topic);
-        setPrimaryKeyword(res.primary_keyword);
-        if (res.semantic_keywords.length) setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
-        toast.success("Filled topic, keyword, and supporting cluster");
-      } else {
+      if (!res.success) {
         toast.error(res.error);
+        return;
       }
+      const filled: string[] = [];
+      if (res.topic && canAutoFill("topic", topic)) { setTopic(res.topic); filled.push("topic"); }
+      if (res.primary_keyword && canAutoFill("keyword", primaryKeyword)) { setPrimaryKeyword(res.primary_keyword); filled.push("keyword"); }
+      if (res.semantic_keywords.length && canAutoFill("secondaryKeywords", secondaryKeywords)) {
+        setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
+        filled.push("secondaryKeywords");
+      }
+      if (res.goal && canAutoFill("goal", goal)) { setGoal(res.goal); filled.push("goal"); }
+      if (res.cta_objective && canAutoFill("cta", ctaObjective)) { setCtaObjective(res.cta_objective); filled.push("cta"); }
+      markAiFilled(filled);
+      setTopicSuggestions(Array.from(new Set([res.topic, ...(res.alternate_topics ?? [])].filter(Boolean))));
+      toast.success(
+        filled.length
+          ? `AI filled ${filled.length} field${filled.length === 1 ? "" : "s"} — your entries were kept`
+          : "Topic ideas ready — pick one below the topic field"
+      );
     } finally {
       setAskLoading(false);
     }
@@ -207,7 +233,7 @@ export default function EbookGeneratorPage() {
       return "Synthesising live research, your brief, and approved keywords into a publication-ready ebook. Keep this tab open.";
     if (phase === "review")
       return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a premium draft pass before saving.";
-    return "Configure the ebook angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
+    return "Fill in what you know — a keyword, a topic, or nothing at all. Auto-fill with AI completes the empty fields and never touches what you typed.";
   }, [phase]);
 
   return (
@@ -223,17 +249,12 @@ export default function EbookGeneratorPage() {
         actions={
           phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                shape="pill"
-                size="lg"
+              <AskAiButton
                 onClick={() => void askAi()}
-                disabled={askLoading || !hasAiCredits}
-                iconLeft={askLoading ? <Spinner size={14} /> : null}
-                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
-              >
-                {askLoading ? "Thinking…" : "Ask AI for a topic"}
-              </Button>
+                loading={askLoading}
+                disabled={!hasAiCredits}
+                disabledReason="You've exhausted your AI credits. Upgrade to get more."
+              />
               <button
                 onClick={goReview}
                 disabled={!isFormValid || !canGenerateEbook}
@@ -322,8 +343,16 @@ export default function EbookGeneratorPage() {
                     id="ebook-topic"
                     inputSize="lg"
                     value={topic}
-                    onChange={e => setTopic(e.target.value)}
+                    onChange={e => { setTopic(e.target.value); markUserOwned("topic"); }}
                     placeholder="e.g. The 2026 RPO Buyer's Handbook"
+                    className={fillFlashClass("topic")}
+                  />
+                  <TopicSuggestionChips
+                    suggestions={topicSuggestions}
+                    activeTopic={topic}
+                    onPick={t => setTopic(t)}
+                    onReload={() => void askAi({ reload: true })}
+                    loading={askLoading}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
@@ -332,9 +361,9 @@ export default function EbookGeneratorPage() {
                       id="ebook-keyword"
                       inputSize="lg"
                       value={primaryKeyword}
-                      onChange={e => setPrimaryKeyword(e.target.value)}
+                      onChange={e => { setPrimaryKeyword(e.target.value); markUserOwned("keyword"); }}
                       placeholder="recruitment process outsourcing"
-                      className={isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                      className={`${isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""} ${fillFlashClass("keyword")}`}
                     />
                     {/* {keywordParam && (
                       <p className={`mt-1.5 flex items-center gap-1.5 text-[11px] transition-colors duration-300 ${isKeywordTyping ? "text-brand-action" : "text-emerald-400"}`}>
@@ -361,12 +390,14 @@ export default function EbookGeneratorPage() {
                   description="Optional. We weave these naturally across chapters — never as a list."
                   htmlFor="ebook-secondary-keywords"
                 >
-                  <KeywordChips
-                    id="ebook-secondary-keywords"
-                    value={secondaryKeywords}
-                    onChange={setSecondaryKeywords}
-                    placeholder="Type a keyword and press Enter…"
-                  />
+                  <div className={`rounded-lg ${fillFlashClass("secondaryKeywords")}`}>
+                    <KeywordChips
+                      id="ebook-secondary-keywords"
+                      value={secondaryKeywords}
+                      onChange={v => { setSecondaryKeywords(v); markUserOwned("secondaryKeywords"); }}
+                      placeholder="Type a keyword and press Enter…"
+                    />
+                  </div>
                 </Field>
               </div>
             </ContentFormSection>
@@ -442,8 +473,9 @@ export default function EbookGeneratorPage() {
                     id="ebook-goal"
                     rows={3}
                     value={goal}
-                    onChange={e => setGoal(e.target.value)}
+                    onChange={e => { setGoal(e.target.value); markUserOwned("goal"); }}
                     placeholder="What should the reader walk away knowing or doing?"
+                    className={fillFlashClass("goal")}
                   />
                 </Field>
                 <Field label="CTA objective" htmlFor="ebook-cta">
@@ -451,8 +483,9 @@ export default function EbookGeneratorPage() {
                     id="ebook-cta"
                     rows={3}
                     value={ctaObjective}
-                    onChange={e => setCtaObjective(e.target.value)}
+                    onChange={e => { setCtaObjective(e.target.value); markUserOwned("cta"); }}
                     placeholder="What action should the closing chapter steer the reader toward?"
+                    className={fillFlashClass("cta")}
                   />
                 </Field>
               </div>

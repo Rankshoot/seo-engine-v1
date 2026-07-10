@@ -27,7 +27,7 @@ import { PageTitle } from "@/components/common/typography/Typography";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
-import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import { AiEditPanel } from "@/components/content-generator/shared/AiEditPanel";
 import {
   PreviewerScheduler,
   PreviewShell,
@@ -862,7 +862,6 @@ export default function BlogViewerPage() {
 
   const researchSources  = currentBlog.research_sources ?? 0;
   const blogStatus       = asBlogStatus(currentBlog.status);
-  const statusInfo       = BLOG_STATUSES.find(s => s.value === blogStatus)!;
   const sidebarMuted     = editMode || savingContent || scoreRefreshing;
   const isInstantArticle = Boolean(blog.article_type?.startsWith("Instant ·"));
   const isImport         = blog.article_type === "Import";
@@ -1151,34 +1150,6 @@ export default function BlogViewerPage() {
       {/* Editorial metadata */}
       <Divider />
       <div className="px-4 pt-3.5 pb-1">
-        {editMode && (
-          <div className="mb-3.5">
-            <div className="flex items-center justify-between mb-1.5">
-              <SLabel>Status</SLabel>
-              {savingStatus && <SpinIcon className="w-3 h-3" />}
-            </div>
-            <div className="relative">
-              <select
-                value={blogStatus}
-                onChange={e => handleStatusChange(e.target.value as BlogStatus)}
-                disabled={savingStatus}
-                className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
-                style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
-              >
-                {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
-              <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-              </svg>
-            </div>
-            <div className="flex items-center gap-1.5 mt-1.5">
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusInfo.color }} />
-              <p className="text-[10px] text-text-tertiary">{statusInfo.hint}</p>
-            </div>
-            {statusError && <p className="mt-1 text-[10px] text-status-danger">{statusError}</p>}
-          </div>
-        )}
-
         <div className="mb-3.5">
           <SLabel>Target Keyword</SLabel>
           <p className="text-[13px] font-semibold text-text-primary leading-snug">{currentBlog.target_keyword}</p>
@@ -1336,6 +1307,66 @@ export default function BlogViewerPage() {
         toolbarLeft={toolbarLeft}
         toolbarRight={toolbarRight}
         sidebar={sidebar}
+        sidePanel={
+          editMode ? (
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="min-h-0 flex-1">
+                <AiEditPanel
+                  blogId={currentBlog.id}
+                  projectDomain={project?.domain ?? ""}
+                  selection={aiRewriter.snapshot}
+                  contentType="Blog Post"
+                  contentPart={
+                    typeof document !== "undefined"
+                      ? document.activeElement === titleEditorRef.current
+                        ? "Blog Title"
+                        : document.activeElement === descEditorRef.current
+                        ? "Meta Description"
+                        : "Blog Body"
+                      : "Blog Body"
+                  }
+                  surroundingContext={currentBlog.content}
+                  renderMarkdownSnippet={md => (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={buildMarkdownComponents(internalSetForBlog(currentBlog), ownSiteHost)}
+                      urlTransform={markdownUrlTransform}
+                    >
+                      {md}
+                    </ReactMarkdown>
+                  )}
+                  onDiscard={() => {
+                    setAiRewriter({ open: false, snapshot: null });
+                    selectionSnapshotRef.current = null;
+                  }}
+                  onInsert={handleAiRewriterInsert}
+                />
+              </div>
+              {/* Status stays reachable in edit mode (it used to live in the sidebar) */}
+              <div className="shrink-0 border-t border-border-subtle px-4 py-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <SLabel>Status</SLabel>
+                  {savingStatus && <SpinIcon className="w-3 h-3" />}
+                </div>
+                <div className="relative">
+                  <select
+                    value={blogStatus}
+                    onChange={e => handleStatusChange(e.target.value as BlogStatus)}
+                    disabled={savingStatus}
+                    className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
+                    style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
+                  >
+                    {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                  <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                  </svg>
+                </div>
+                {statusError && <p className="mt-1 text-[10px] text-status-danger">{statusError}</p>}
+              </div>
+            </div>
+          ) : null
+        }
         sidebarWidthPx={288}
         framedCanvas={false}
         toolbarInsideCanvas
@@ -1400,7 +1431,7 @@ export default function BlogViewerPage() {
 
       {/* AI edit overlays */}
       <BlogEditAiFixOverlay
-        active={editMode && !aiRewriter.open}
+        active={editMode}
         getRoots={getEditRoots}
         panelRef={blogPanelRef}
         onOpen={({ snapshot, range }) => {
@@ -1441,37 +1472,6 @@ export default function BlogViewerPage() {
           scheduling={analysisScheduling}
         />
       </Suspense>
-      <BlogAiRewriterModal
-        open={aiRewriter.open}
-        blogId={currentBlog.id}
-        projectDomain={project?.domain ?? ""}
-        selection={aiRewriter.snapshot}
-        contentType="Blog Post"
-        contentPart={
-          typeof document !== "undefined"
-            ? document.activeElement === titleEditorRef.current
-              ? "Blog Title"
-              : document.activeElement === descEditorRef.current
-              ? "Meta Description"
-              : "Blog Body"
-            : "Blog Body"
-        }
-        surroundingContext={currentBlog.content}
-        renderMarkdownSnippet={md => (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={buildMarkdownComponents(internalSetForBlog(currentBlog), ownSiteHost)}
-            urlTransform={markdownUrlTransform}
-          >
-            {md}
-          </ReactMarkdown>
-        )}
-        onClose={() => {
-          setAiRewriter({ open: false, snapshot: null });
-          selectionSnapshotRef.current = null;
-        }}
-        onInsert={handleAiRewriterInsert}
-      />
     </>
   );
 }

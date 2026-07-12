@@ -795,3 +795,111 @@ Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
   throw new Error('AI returned an unparseable response for LinkedIn suggestions. Please try again.');
 }
 
+interface RawTopicsList {
+  topics?: string[];
+}
+
+const TOPICS_LIST_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    topics: {
+      type: 'ARRAY',
+      items: { type: 'STRING' }
+    }
+  },
+  required: ['topics']
+} as const;
+
+export async function suggestMultipleTopicsWithFlash(input: {
+  contentTypeLabel: string;
+  niche: string;
+  audience: string;
+  domain: string;
+  briefSummary: string | null;
+  seedKeyword?: string;
+  avoidTopics?: string[];
+  formContext?: string;
+}): Promise<string[]> {
+  const briefBlock = input.briefSummary?.trim()
+    ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
+    : '(no cached brief)';
+
+  const seedRule = input.seedKeyword?.trim()
+    ? `CRITICAL REQUIREMENT: Every suggested topic title MUST be directly relevant to the primary keyword: "${input.seedKeyword.trim()}". You MUST ensure the topic ideas are designed specifically to rank for this keyword.`
+    : `Choose fresh topic ideas that are highly relevant to the brand's niche and audience.`;
+
+  const avoidTopicsBlock = input.avoidTopics?.length
+    ? `Do NOT repeat or duplicate any of these topic ideas (already suggested or used):\n${input.avoidTopics.slice(0, 20).map(t => `- ${t}`).join('\n')}`
+    : '';
+
+  const formContextBlock = input.formContext?.trim()
+    ? `Other details from the form context to respect (keep the topic ideas consistent with these):\n${input.formContext.trim().slice(0, 800)}`
+    : '';
+
+  const prompt = `You are an SEO content strategist suggesting exactly 5 distinct, engaging, and high-CTR ${input.contentTypeLabel} topic ideas (titles) that the Rankshoot content engine should produce next.
+
+CONTEXT
+- Domain: ${input.domain}
+- Niche: ${input.niche}
+- Target audience: ${input.audience}
+${briefBlock}
+
+${seedRule}
+
+${avoidTopicsBlock}
+
+${formContextBlock}
+
+Rules:
+- Suggest exactly 5 unique topic ideas/titles.
+- Each topic title must be completely distinct in angle (e.g., one comprehensive guide, one listicle/tips, one trends/insights, one comparative vs., one actionable checklist, one case-study-style title).
+- Make sure they are catchy, professional, SEO-optimized, and address search intent.
+- Do not repeat or rephrase any topics from the avoided list.
+
+Return JSON ONLY (no markdown fences, no commentary) with EXACTLY this structure:
+{"topics": ["Topic Idea 1", "Topic Idea 2", "Topic Idea 3", "Topic Idea 4", "Topic Idea 5"]}`;
+
+  let raw = '';
+  try {
+    raw = await aiGenerate('assistant', prompt, {
+      temperature: 0.75,
+      maxOutputTokens: 2048,
+      jsonMode: true,
+      responseSchema: TOPICS_LIST_SCHEMA as unknown as Record<string, unknown>,
+    });
+  } catch (e) {
+    console.warn(
+      '[content-studio] Flash suggestMultipleTopics call failed; retrying with Pro.',
+      e instanceof Error ? e.message : e,
+    );
+  }
+
+  const fromFlash = raw ? parseLooseJson<RawTopicsList>(raw) : null;
+  if (fromFlash && Array.isArray(fromFlash.topics) && fromFlash.topics.length > 0) {
+    return fromFlash.topics.map(t => t.trim()).filter(Boolean);
+  }
+
+  // Fallback to Pro
+  let proRaw = '';
+  try {
+    proRaw = await aiGenerate('assistant', prompt, {
+      temperature: 0.8,
+      maxOutputTokens: 2048,
+      jsonMode: true,
+      responseSchema: TOPICS_LIST_SCHEMA as unknown as Record<string, unknown>,
+    });
+  } catch (e) {
+    throw new Error(
+      `Topics generation failed (Flash + Pro): ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  const fromPro = parseLooseJson<RawTopicsList>(proRaw);
+  if (fromPro && Array.isArray(fromPro.topics) && fromPro.topics.length > 0) {
+    return fromPro.topics.map(t => t.trim()).filter(Boolean);
+  }
+
+  throw new Error('AI returned an empty or unparseable response for topic ideas.');
+}
+
+

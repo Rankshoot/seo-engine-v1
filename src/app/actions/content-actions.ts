@@ -9,6 +9,7 @@ import {
   generateLinkedInPost,
   suggestContentTopicWithFlash,
   suggestLinkedInInputsWithFlash,
+  suggestMultipleTopicsWithFlash,
 } from '@/lib/content-studio';
 import { researchKeyword } from '@/lib/research';
 import { sanitizeBlogContent } from '@/lib/blog-content';
@@ -303,8 +304,6 @@ export async function suggestTopicIdeasAction(
     contentType: ContentType;
     /** Current keyword field value, if any — always respected as an anchor. */
     seedKeyword?: string;
-    /** Current topic field value, if any — new ideas are angles/variants of it. */
-    seedTopic?: string;
     /** Other details already filled in on the form — used as context only. */
     audience?: string;
     tone?: string;
@@ -338,12 +337,12 @@ export async function suggestTopicIdeasAction(
     linkedin: 'LinkedIn post',
   };
 
-  const formContextLines: string[] = [];
-  if (payload.audience?.trim()) formContextLines.push(`Audience: ${payload.audience.trim()}`);
-  if (payload.tone?.trim()) formContextLines.push(`Tone: ${payload.tone.trim()}`);
-  if (payload.goal?.trim()) formContextLines.push(`Reader goal: ${payload.goal.trim()}`);
-  if (payload.ctaObjective?.trim()) formContextLines.push(`CTA objective: ${payload.ctaObjective.trim()}`);
-  if (payload.secondaryKeywords?.length) formContextLines.push(`Supporting keywords: ${payload.secondaryKeywords.slice(0, 8).join(', ')}`);
+  const formContextContextLines: string[] = [];
+  if (payload.audience?.trim()) formContextContextLines.push(`Audience: ${payload.audience.trim()}`);
+  if (payload.tone?.trim()) formContextContextLines.push(`Tone: ${payload.tone.trim()}`);
+  if (payload.goal?.trim()) formContextContextLines.push(`Reader goal: ${payload.goal.trim()}`);
+  if (payload.ctaObjective?.trim()) formContextContextLines.push(`CTA objective: ${payload.ctaObjective.trim()}`);
+  if (payload.secondaryKeywords?.length) formContextContextLines.push(`Supporting keywords: ${payload.secondaryKeywords.slice(0, 8).join(', ')}`);
 
   const [approved, used] = await Promise.all([
     loadApprovedKeywords(projectId),
@@ -351,21 +350,16 @@ export async function suggestTopicIdeasAction(
   ]);
 
   try {
-    const suggestion = await suggestContentTopicWithFlash({
+    const topics = await suggestMultipleTopicsWithFlash({
       contentTypeLabel: labelMap[payload.contentType],
       niche: project.niche || 'general',
       audience: project.target_audience || 'general audience',
       domain: project.domain,
       briefSummary: brief?.summary ?? null,
-      approvedKeywords: approved,
-      usedKeywords: used,
-      avoidPhrases: [],
       seedKeyword: payload.seedKeyword,
-      seedTopic: payload.seedTopic,
       avoidTopics: payload.avoidTopics,
-      formContext: formContextLines.join('\n') || undefined,
+      formContext: formContextContextLines.join('\n') || undefined,
     });
-    const topics = Array.from(new Set([suggestion.topic, ...suggestion.alternate_topics].filter(Boolean)));
     return { success: true, topics };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : 'Could not generate topic ideas' };

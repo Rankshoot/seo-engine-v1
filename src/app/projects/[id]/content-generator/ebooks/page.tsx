@@ -187,7 +187,6 @@ export default function EbookGeneratorPage() {
       const res = await suggestTopicIdeasAction(projectId, {
         contentType: "ebook",
         seedKeyword: primaryKeyword.trim() || undefined,
-        seedTopic: topic.trim() || undefined,
         audience: audience.trim() || undefined,
         tone: EBOOK_TONES.find(t => t.id === tone)?.label,
         goal: goal.trim() || undefined,

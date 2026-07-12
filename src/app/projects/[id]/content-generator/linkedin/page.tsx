@@ -181,7 +181,6 @@ export default function LinkedInGeneratorPage() {
       const res = await suggestTopicIdeasAction(projectId, {
         contentType: "linkedin",
         seedKeyword: primaryKeyword.trim() || undefined,
-        seedTopic: topic.trim() || undefined,
         audience: audience.trim() || undefined,
         tone,
         ctaObjective: ctaObjective.trim() || undefined,

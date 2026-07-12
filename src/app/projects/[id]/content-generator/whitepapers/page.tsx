@@ -180,7 +180,6 @@ export default function WhitepaperGeneratorPage() {
       const res = await suggestTopicIdeasAction(projectId, {
         contentType: "whitepaper",
         seedKeyword: primaryKeyword.trim() || undefined,
-        seedTopic: topic.trim() || undefined,
         audience: audience.trim() || undefined,
         tone: WP_DEPTH_OPTIONS.find(d => d.id === depth)?.label,
         goal: problem.trim() || undefined,

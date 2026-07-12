@@ -435,7 +435,6 @@ export default function BlogGeneratorPage() {
       const res = await suggestTopicIdeasAction(projectId, {
         contentType: "blog",
         seedKeyword: primaryKeyword.trim() || undefined,
-        seedTopic: topic.trim() || undefined,
         audience: audience.trim() || undefined,
         tone: TONES.find(t => t.id === tone)?.label,
         goal: goal.trim() || undefined,

@@ -304,43 +304,40 @@ function ahrefsResearchCalls(
 ): AhrefsResearchCall[] {
   const country = ahrefsCountry(region);
   const calls: AhrefsResearchCall[] = [];
+  const keywords = seeds.join(',');
 
-  if (queryMatching) {
-    for (const seed of seeds) {
-      calls.push({
-        endpoint: '/keywords-explorer/matching-terms',
-        label: `matching-terms:${seed}`,
-        query: {
-          country,
-          keywords: seed,
-          select: AHREFS_IDEA_SELECT,
-          limit,
-          where: matchingLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', matchingLastVolume] }) : undefined,
-          match_mode: 'terms',
-          terms: 'all',
-          order_by: 'volume:desc',
-        },
-      });
-    }
+  if (queryMatching && seeds.length) {
+    calls.push({
+      endpoint: '/keywords-explorer/matching-terms',
+      label: `matching-terms:x${seeds.length}`,
+      query: {
+        country,
+        keywords,
+        select: AHREFS_IDEA_SELECT,
+        limit,
+        where: matchingLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', matchingLastVolume] }) : undefined,
+        match_mode: 'terms',
+        terms: 'all',
+        order_by: 'volume:desc',
+      },
+    });
   }
 
-  if (queryRelated) {
-    for (const seed of seeds) {
-      calls.push({
-        endpoint: '/keywords-explorer/related-terms',
-        label: `related-terms:${seed}`,
-        query: {
-          country,
-          keywords: seed,
-          select: AHREFS_IDEA_SELECT,
-          limit,
-          where: relatedLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', relatedLastVolume] }) : undefined,
-          view_for: 'top_10',
-          terms: 'all',
-          order_by: 'volume:desc',
-        },
-      });
-    }
+  if (queryRelated && seeds.length) {
+    calls.push({
+      endpoint: '/keywords-explorer/related-terms',
+      label: `related-terms:x${seeds.length}`,
+      query: {
+        country,
+        keywords,
+        select: AHREFS_IDEA_SELECT,
+        limit,
+        where: relatedLastVolume != null ? JSON.stringify({ field: 'volume', is: ['lt', relatedLastVolume] }) : undefined,
+        view_for: 'top_10',
+        terms: 'all',
+        order_by: 'volume:desc',
+      },
+    });
   }
 
   return calls;
@@ -515,10 +512,10 @@ export async function fetchKeywordsFromAhrefs(
   }
 
   const ahrefsDiscoveryState = {
-    matching_last_volume: finalMatchingHasMore && matchingLastVolume !== 0 ? matchingLastVolume : null,
-    matching_has_more: finalMatchingHasMore && matchingLastVolume !== 0 && matchingLastVolume !== null,
-    related_last_volume: finalRelatedHasMore && relatedLastVolume !== 0 ? relatedLastVolume : null,
-    related_has_more: finalRelatedHasMore && relatedLastVolume !== 0 && relatedLastVolume !== null,
+    matching_last_volume: finalMatchingHasMore ? matchingLastVolume : null,
+    matching_has_more: finalMatchingHasMore && matchingLastVolume !== null,
+    related_last_volume: finalRelatedHasMore ? relatedLastVolume : null,
+    related_has_more: finalRelatedHasMore && relatedLastVolume !== null,
   };
 
   if (!anySuccess) {
@@ -531,7 +528,7 @@ export async function fetchKeywordsFromAhrefs(
     );
   }
 
-  if (queryMatching && !keywords.length) {
+  if (queryMatching && !keywords.length && input.matchingLastVolume == null) {
     throw new KeywordProviderError(
       'ahrefs',
       'empty',

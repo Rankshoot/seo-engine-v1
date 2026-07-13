@@ -77,12 +77,16 @@ export function openingPlainLower(md: string, maxWords: number): string {
 /** Pure SEO scoring function reused across client and server. */
 export function computeSEOScore(
   blog: Partial<Blog> & { content?: string; title?: string; meta_description?: string; target_keyword?: string; word_count?: number },
-  projectDomain?: string
+  projectDomain?: string,
+  expectedTitle?: string
 ): SEOScore {
   const kw      = normalizeKeyword(blog.target_keyword ?? "");
   const content = blog.content ?? "";
   const title   = blog.title?.toLowerCase() ?? "";
   const meta    = (blog.meta_description ?? "").toLowerCase();
+
+  const expectedTitleNorm = expectedTitle?.toLowerCase().trim() || "";
+  const isExpectedTitle = expectedTitleNorm ? (title.trim() === expectedTitleNorm) : false;
 
   const firstParaMatch = content.match(/^#.+\n+(.+)/m);
   const firstPara = firstParaMatch ? firstParaMatch[1].toLowerCase() : content.slice(0, 500).toLowerCase();
@@ -120,7 +124,7 @@ export function computeSEOScore(
     {
       key: "title_keyword",
       label: "Target keyword in title",
-      pass: keywordInText(kw, title),
+      pass: keywordInText(kw, title) || isExpectedTitle,
       points: 15,
       hint: "Include the target keyword in your H1 title",
     },

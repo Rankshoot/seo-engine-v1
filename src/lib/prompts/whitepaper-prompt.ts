@@ -215,7 +215,7 @@ OUTPUT CONTRACT — STRUCTURE
 ═══════════════════════════════════════════════════
 Produce ONE Markdown document in the exact structure below, then the ---META--- block. Use these heading levels exactly.
 
-# [Whitepaper title — credible, includes "${ctx.primaryKeyword}", no clickbait, reads like an industry report title]
+# ${ctx.topic}
 **[Subtitle — one line establishing the specific problem and audience, 20–160 characters]**
 
 > Published by ${ctx.companyName} · ${publicationDate} · Data current through ${publicationDate}

@@ -222,7 +222,7 @@ OUTPUT CONTRACT — STRUCTURE
 ═══════════════════════════════════════════════════
 Produce ONE Markdown document in this exact structure, then the ---META--- block.
 
-# [Cover title — must contain "${ctx.primaryKeyword}", ≤ 72 characters, sounds like a book title not a keyword]
+# ${ctx.topic}
 **[Cover subtitle — one crisp sentence, 20–160 characters, names the reader's transformation]**
 
 > [Author note — one sentence: who this ebook is for and what they'll walk away able to do. Mention ${ctx.companyName} once. Format as a Markdown blockquote.]

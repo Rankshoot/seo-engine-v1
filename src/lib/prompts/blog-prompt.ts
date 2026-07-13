@@ -305,7 +305,7 @@ CRITICAL OUTPUT RULE: Your response must be a single, valid JSON object ONLY. Do
 
 JSON SCHEMA:
 {
-  "title": "A compelling H1 title that MUST include the primary keyword verbatim",
+  "title": "MUST be exactly the requested ARTICLE TITLE: \"${entry.title.replace(/"/g, '\\"')}\" (do not alter, rewrite, or change this title; use it verbatim)",
   "metaDescription": "Exactly 150-160 characters long, written as a clear sentence, and MUST contain the primary keyword verbatim",
   "contentMarkdown": "Clean markdown content starting with '# [H1 Title]'. Must contain intro, modular H2/H3 sections, FAQs, and a conclusion. Do NOT leak raw JSON keys inside the markdown content.",
   "faqQuestions": ["Question 1", "Question 2", "Question 3", "Question 4", "Question 5", "Question 6", "Question 7"],
@@ -339,7 +339,7 @@ ${researchContextBlock}${deepAnalysisSummaryBlock}${customInstructionsBlock}
 SEO SCORE REQUIREMENTS — the blog must strictly satisfy all of these:
 ════════════════════════════════════════
 1. WORD COUNT: Target ${wordCount} words (aim within roughly ±10%). This is the length the user asked for — do NOT pad with filler, repetition, extra FAQs/sections, or restated points to reach a higher count, and do NOT cut substantive information short to stay under it. Every other structural requirement below (headings, FAQ count, link counts) is already scaled to fit naturally inside this word count — treat them as the ceiling for a piece this length, not extra padding to add.
-2. TITLE KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear in the H1 title. Keep the title ≤ 60 characters so it never truncates in search results, and front-load the keyword (as close to the start as natural English allows).
+2. H1 TITLE: The H1 title of the article MUST be exactly the requested ARTICLE TITLE: "${entry.title}". Do not change it, do not rephrase it, and do not make up a new title. Use it verbatim.
 3. INTRO KEYWORD: Primary keyword "${entry.focus_keyword}" MUST appear within the first 100 words of the intro paragraph.
 4. KEYWORD USAGE — NATURAL, NEVER FORCED: Use "${entry.focus_keyword}" only where it genuinely reads naturally (a loose target of 0.5–2% density). Content quality and usefulness ALWAYS win over density: if a section reads better with a pronoun, a synonym, or a close variant of the keyword, use that instead — it is completely fine to land under the density target. HARD RULES: never insert the keyword into consecutive or alternating paragraphs as a pattern, never append filler sentences whose only purpose is to mention the keyword, and never repeat the exact keyword phrase twice in one paragraph. A reader must never be able to tell which phrase is "the keyword".
 5. H2 HEADINGS: At least ${req.h2Min} × ## headings in the contentMarkdown, sized to what ${wordCount} words can actually support — do not add extra headings just to hit a bigger number.

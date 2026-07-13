@@ -656,15 +656,19 @@ export function parseGeneratedBlogJson(
 function applyDeterministicFallbackFixes(
   blog: GeneratedBlog,
   targetKeyword: string,
-  project: Project
+  project: Project,
+  expectedTitle?: string
 ): GeneratedBlog {
   let content = blog.content ?? '';
   let meta_description = blog.meta_description ?? '';
   let title = blog.title ?? '';
   const kw = targetKeyword.trim();
 
+  const expectedTitleNorm = expectedTitle?.toLowerCase().trim() || "";
+  const isExpectedTitle = expectedTitleNorm ? (title.trim() === expectedTitleNorm) : false;
+
   // 1. Title Keyword Fix
-  if (kw && !title.toLowerCase().includes(kw.toLowerCase())) {
+  if (kw && !title.toLowerCase().includes(kw.toLowerCase()) && !isExpectedTitle) {
     title = `${kw}: ${title}`;
     if (/^\s*#\s+/m.test(content)) {
       content = content.replace(/^\s*#\s+(.+)$/m, `# ${title}`);
@@ -880,7 +884,7 @@ export async function generateBlogPost(
   let currentBlogCandidate = result;
   let repairAttempts = 0;
   const maxRepairAttempts = 2;
-  let scoreObj = computeSEOScore(currentBlogCandidate, project.domain);
+  let scoreObj = computeSEOScore(currentBlogCandidate, project.domain, entry.title);
 
   while (repairAttempts < maxRepairAttempts && (scoreObj.total < 85 || ['C', 'D', 'F'].includes(scoreObj.grade))) {
     repairAttempts++;
@@ -907,13 +911,12 @@ ORIGINAL GENERATED BLOG ARTICLE:
 ${currentBlogCandidate.content}
 
 REPAIR INSTRUCTIONS:
-- You MUST fix all failed checks.
+- Ensure the H1 title is exactly "${entry.title}" verbatim (do not change or modify this title).
 - Include the exact focus keyword "${entry.focus_keyword}" verbatim in:
-  1. H1 title
-  2. First 100 words of intro
-  3. At least one H2 heading
-  4. The conclusion section
-  5. The meta description (must be exactly 150-160 characters long).
+  1. First 100 words of intro
+  2. At least one H2 heading
+  3. The conclusion section
+  4. The meta description (must be exactly 150-160 characters long).
 - Ensure a FAQ section exists under "## FAQs" with 7-10 FAQs, each question formatted as "###".
 - Maintain keyword density strictly between 0.5% and 3%. Do not keyword stuff!
 - Do not invent any new external/internal links. Use only the verified ones present in the original post.
@@ -934,7 +937,7 @@ REPAIR INSTRUCTIONS:
     try {
       const repairedRaw = await geminiGenerate(repairPrompt, 2, true, 'application/json', project.user_id, project.id);
       const repairedBlog = parseGeneratedBlogJson(repairedRaw, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
-      const newScoreObj = computeSEOScore(repairedBlog, project.domain);
+      const newScoreObj = computeSEOScore(repairedBlog, project.domain, entry.title);
 
       if (newScoreObj.total > scoreObj.total) {
         currentBlogCandidate = repairedBlog;
@@ -949,11 +952,10 @@ REPAIR INSTRUCTIONS:
     }
   }
 
-  // ── Deterministic fallback fixes ──
-  const finalBlog = applyDeterministicFallbackFixes(currentBlogCandidate, entry.focus_keyword, project);
+  const finalBlog = applyDeterministicFallbackFixes(currentBlogCandidate, entry.focus_keyword, project, entry.title);
   
   // Re-evaluate score after deterministic fallbacks
-  const finalScoreObj = computeSEOScore(finalBlog, project.domain);
+  const finalScoreObj = computeSEOScore(finalBlog, project.domain, entry.title);
 
   // Dev-only logging
   console.log('[blog-gen-seo] Quality Gate Summary:', JSON.stringify({

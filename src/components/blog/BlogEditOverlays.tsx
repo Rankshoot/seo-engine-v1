@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import {
   extractInlineMarkdownLinks,
   type BlogRewriteSelectionSnapshot,
@@ -126,64 +127,147 @@ interface BlogEditAiFixOverlayProps {
 }
 
 /**
- * Positions the "Edit with AI" button imperatively so selectionchange does not
- * trigger parent re-renders (which would reset contentEditable / React-managed children).
+ * Positions the "Edit with AI" button inside the editor body container so it
+ * scrolls with the selected text instead of floating as a fixed screen overlay.
  */
 export function BlogEditAiFixOverlay({ active, getRoots, panelRef: _panelRef, onOpen }: BlogEditAiFixOverlayProps) {
-  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+  const [btnStyle, setBtnStyle] = useState<React.CSSProperties>({ display: "none" });
+  const targetRef = useRef<HTMLElement | null>(null);
+  const lastKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    targetRef.current = target;
+  }, [target]);
 
   const tick = useCallback(() => {
-    const btn = btnRef.current;
-    if (!btn) return;
-    if (!active) { btn.style.display = "none"; return; }
+    if (!active) {
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+        setBtnStyle({ display: "none" });
+      }
+      return;
+    }
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) { btn.style.display = "none"; return; }
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+        setBtnStyle({ display: "none" });
+      }
+      return;
+    }
     const roots = getRoots().filter(Boolean) as HTMLElement[];
     const node: Node | null = sel.anchorNode;
-    if (!node) { btn.style.display = "none"; return; }
+    if (!node) {
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+        setBtnStyle({ display: "none" });
+      }
+      return;
+    }
     const walk = node.nodeType === Node.TEXT_NODE
       ? (node.parentElement as HTMLElement | null)
       : (node as HTMLElement);
-    if (!walk || !roots.some(r => r.contains(walk))) { btn.style.display = "none"; return; }
-    if (!sel.toString().trim()) { btn.style.display = "none"; return; }
+    if (!walk || !roots.some(r => r.contains(walk))) {
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+        setBtnStyle({ display: "none" });
+      }
+      return;
+    }
+    // Anchor inside the body editor container so the button scrolls with the content.
+    const bodyRoot = roots[roots.length - 1];
+    if (!bodyRoot) {
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+        setBtnStyle({ display: "none" });
+      }
+      return;
+    }
+    if (!sel.toString().trim()) {
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+        setBtnStyle({ display: "none" });
+      }
+      return;
+    }
     const rect = rangeSelectionViewportRect(sel.getRangeAt(0));
-    if (!rect) { btn.style.display = "none"; return; }
-    btn.style.display = "block";
-    btn.style.position = "fixed";
-    btn.style.top = `${rect.bottom + 6}px`;
-    btn.style.left = `${rect.left}px`;
-    btn.style.zIndex = "70";
+    if (!rect) {
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+        setBtnStyle({ display: "none" });
+      }
+      return;
+    }
+    const rootRect = bodyRoot.getBoundingClientRect();
+    const top = rect.bottom - rootRect.top + 6;
+    const left = rect.left - rootRect.left;
+    const key = `${bodyRoot === targetRef.current ? "same" : "new"}|${top.toFixed(1)}|${left.toFixed(1)}`;
+    if (key !== lastKeyRef.current) {
+      lastKeyRef.current = key;
+      if (bodyRoot !== targetRef.current) {
+        targetRef.current = bodyRoot;
+        setTarget(bodyRoot);
+      }
+      setBtnStyle({
+        display: "block",
+        position: "absolute",
+        top,
+        left,
+        zIndex: 50,
+      });
+    }
   }, [active, getRoots]);
 
   useEffect(() => {
     if (!active) {
-      const btn = btnRef.current;
-      if (btn) btn.style.display = "none";
+      if (targetRef.current) {
+        targetRef.current = null;
+        setTarget(null);
+      }
+      setBtnStyle({ display: "none" });
       return;
     }
     const schedule = () => requestAnimationFrame(tick);
     document.addEventListener("selectionchange", schedule);
     document.addEventListener("keyup", schedule);
     document.addEventListener("mouseup", schedule);
-    window.addEventListener("scroll", schedule, true);
     schedule();
     return () => {
       document.removeEventListener("selectionchange", schedule);
       document.removeEventListener("keyup", schedule);
       document.removeEventListener("mouseup", schedule);
-      window.removeEventListener("scroll", schedule, true);
     };
   }, [active, tick]);
 
-  if (!active) return null;
+  useEffect(() => {
+    if (!target) return;
+    const originalPosition = target.style.position;
+    if (getComputedStyle(target).position === "static") {
+      target.style.position = "relative";
+    }
+    return () => {
+      target.style.position = originalPosition;
+    };
+  }, [target]);
 
-  return (
+  if (!active || !target) return null;
+
+  return createPortal(
     <button
-      ref={btnRef}
       type="button"
+      contentEditable={false}
+      tabIndex={-1}
       className="pointer-events-auto rounded-full px-3 py-1.5 text-[11px] font-semibold shadow-lg transition-all"
       style={{
-        display: "none",
+        ...btnStyle,
         background: "var(--text-primary)",
         color: "var(--surface-primary)",
         border: "1px solid rgba(255,255,255,0.1)",
@@ -218,6 +302,7 @@ export function BlogEditAiFixOverlay({ active, getRoots, panelRef: _panelRef, on
       }}
     >
       ✦ Edit with AI
-    </button>
+    </button>,
+    target
   );
 }

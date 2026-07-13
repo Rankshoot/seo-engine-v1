@@ -216,7 +216,7 @@ export function AiEditPanel({
   /* ── Empty state — edit mode, nothing selected yet ─────────────────── */
   if (!selection) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+      <div data-ai-panel="true" className="flex h-full flex-col items-center justify-center gap-3 px-6 py-10 text-center">
         <span
           className="flex h-11 w-11 items-center justify-center rounded-2xl text-[18px]"
           style={{ background: "var(--surface-secondary)", border: "1px solid var(--border-subtle)" }}
@@ -234,7 +234,7 @@ export function AiEditPanel({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div data-ai-panel="true" className="flex h-full min-h-0 flex-col">
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div
         className="flex shrink-0 items-center justify-between gap-2 px-4 py-3"

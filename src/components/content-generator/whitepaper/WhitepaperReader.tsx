@@ -138,6 +138,16 @@ export function WhitepaperReader({
         .join("\n\n")
         .trim();
     },
+    setHighlightCurrentSelection: () => {
+      for (const edRef of Object.values(editorRefs.current)) {
+        if (edRef) edRef.setHighlightCurrentSelection();
+      }
+    },
+    clearHighlight: () => {
+      for (const edRef of Object.values(editorRefs.current)) {
+        if (edRef) edRef.clearHighlight();
+      }
+    },
     replaceSelection: (markdown: string) => {
       for (const edRef of Object.values(editorRefs.current)) {
         if (edRef && edRef.replaceSelection(markdown)) return true;

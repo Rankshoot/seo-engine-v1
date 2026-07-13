@@ -128,6 +128,20 @@ function showServerActionError(err: any, fallback: string) {
   }
 }
 
+function clearAllDomHighlights() {
+  if (typeof document === "undefined") return;
+  const highlights = document.querySelectorAll("mark.ai-rewrite-highlight");
+  highlights.forEach(el => {
+    const parent = el.parentNode;
+    if (parent) {
+      while (el.firstChild) {
+        parent.insertBefore(el.firstChild, el);
+      }
+      parent.removeChild(el);
+    }
+  });
+}
+
 // ─── Page component ────────────────────────────────────────────────────────
 
 export default function BlogViewerPage() {
@@ -307,6 +321,24 @@ export default function BlogViewerPage() {
       }
     }
   }, [blogQueryRes, blogId, projectId]);
+
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (!aiRewriter.open) return;
+      const target = e.target as HTMLElement;
+      const isInsideSidebar = target.closest(".ai-edit-panel") || target.closest("[data-ai-panel]");
+      if (isInsideSidebar) return;
+      if (target.textContent?.includes("Edit with AI")) return;
+      
+      clearAllDomHighlights();
+      tiptapBodyRef.current?.clearHighlight();
+    };
+
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentClick);
+    };
+  }, [aiRewriter.open]);
 
   useEffect(() => {
     if (projectQueryRes?.success && projectQueryRes.data) setProject(projectQueryRes.data);
@@ -750,6 +782,7 @@ export default function BlogViewerPage() {
   };
 
   const handleAiRewriterInsert = (rewritten: string) => {
+    clearAllDomHighlights();
     if (tiptapBodyRef.current) {
       const ok = tiptapBodyRef.current.replaceSelection(rewritten.trim());
       if (ok) {
@@ -774,8 +807,15 @@ export default function BlogViewerPage() {
       }
       range.deleteContents();
       const frag = markdownAiSnippetToDocumentFragment(rewritten.trim(), displayBlog, document, ownSiteHost);
-      range.insertNode(frag);
-      const end = frag.lastChild;
+      const mark = document.createElement("mark");
+      mark.className = "ai-rewrite-highlight";
+      mark.style.backgroundColor = "rgba(234, 179, 8, 0.25)";
+      mark.style.borderBottom = "2px solid var(--brand-action)";
+      while (frag.firstChild) {
+        mark.appendChild(frag.firstChild);
+      }
+      range.insertNode(mark);
+      const end = mark.lastChild;
       if (end) { range.setStartAfter(end); range.collapse(true); }
       const s = window.getSelection();
       s?.removeAllRanges();
@@ -1338,6 +1378,8 @@ export default function BlogViewerPage() {
                   onDiscard={() => {
                     setAiRewriter({ open: false, snapshot: null });
                     selectionSnapshotRef.current = null;
+                    clearAllDomHighlights();
+                    tiptapBodyRef.current?.clearHighlight();
                   }}
                   onInsert={handleAiRewriterInsert}
                 />
@@ -1437,6 +1479,21 @@ export default function BlogViewerPage() {
         onOpen={({ snapshot, range }) => {
           selectionSnapshotRef.current = { range };
           setAiRewriter({ open: true, snapshot });
+          clearAllDomHighlights();
+          tiptapBodyRef.current?.setHighlightCurrentSelection();
+          
+          const active = document.activeElement;
+          if (active === titleEditorRef.current || active === descEditorRef.current) {
+            try {
+              const mark = document.createElement("mark");
+              mark.className = "ai-rewrite-highlight";
+              mark.style.backgroundColor = "rgba(234, 179, 8, 0.25)";
+              mark.style.borderBottom = "2px solid var(--brand-action)";
+              range.surroundContents(mark);
+            } catch (e) {
+              console.warn("Could not wrap DOM range:", e);
+            }
+          }
         }}
       />
       <BlogImageEditOverlay

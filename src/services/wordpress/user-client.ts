@@ -32,6 +32,7 @@ export interface WordPressPublishPayload {
   excerpt?: string;
   status?: "publish" | "draft";
   coverImageUrl?: string | null;
+  categoryId?: number | null;
 }
 
 /** Application passwords are shown with spaces; WordPress accepts them with or without. */
@@ -104,6 +105,17 @@ export function createUserWordPressClient(baseUrl: string, username: string, app
       }
     },
 
+    /** Fetch all categories from WordPress */
+    async getCategories(): Promise<Array<{ id: number; name: string }>> {
+      try {
+        const res = await request<Array<{ id: number; name: string; slug: string }>>("GET", "/wp/v2/categories?per_page=100");
+        return Array.isArray(res) ? res.map(cat => ({ id: cat.id, name: cat.name })) : [];
+      } catch (e) {
+        console.error("[wordpress-client] failed to fetch categories:", e);
+        return [];
+      }
+    },
+
     /** Idempotent publish: update an existing post with the same slug, else create a new one. */
     async publishArticle(
       payload: WordPressPublishPayload,
@@ -158,7 +170,7 @@ export function createUserWordPressClient(baseUrl: string, username: string, app
         /* assume no existing post and create */
       }
 
-      const wpBody: Record<string, string | number> = {
+      const wpBody: Record<string, any> = {
         title: payload.title,
         content: payload.content,
         excerpt: payload.excerpt ?? "",
@@ -168,6 +180,10 @@ export function createUserWordPressClient(baseUrl: string, username: string, app
 
       if (featuredMediaId !== null) {
         wpBody.featured_media = featuredMediaId;
+      }
+
+      if (payload.categoryId) {
+        wpBody.categories = [payload.categoryId];
       }
 
       const res = existingId

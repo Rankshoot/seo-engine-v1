@@ -142,11 +142,11 @@ const CalendarListRow = memo(function CalendarListRow({
   const resolvedBlogId = calendarBlogId ?? historyEntry?.id;
 
   const isLocked =
-    !!resolvedBlogId ||
-    effectiveStatus === "generated" ||
-    effectiveStatus === "downloaded" ||
-    effectiveStatus === "approved" ||
-    effectiveStatus === "published";
+    !!resolvedBlogId &&
+    (effectiveStatus === "generated" ||
+      effectiveStatus === "downloaded" ||
+      effectiveStatus === "approved" ||
+      effectiveStatus === "published");
   const isGenerating  = effectiveStatus === "generating";
   const isPickingThis = pickingDateForEntryId === entry.id;
   const canReschedule = Boolean(entry.keyword_id) && !isGenerating;

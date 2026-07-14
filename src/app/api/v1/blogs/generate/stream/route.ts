@@ -52,6 +52,7 @@ export async function POST(req: Request) {
     useDeepAnalysis?: boolean;
     deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
     customInstructions?: string;
+    useRealImages?: boolean;
   };
 
   if (!body.entryId && (!body.projectId || !body.keyword)) {
@@ -643,11 +644,12 @@ Respond with a concise but rich analysis (300–500 words) structured as:
               blogData = { ...blogData, content: recovered, word_count: countWords(recovered) };
             }
           }
-          const rawContent = insertBlogImagePlaceholders(blogData.content, {
+          let rawContent = insertBlogImagePlaceholders(blogData.content, {
             title: blogData.title,
             targetKeyword: entry.focus_keyword,
             wordCount: blogData.word_count,
           });
+
           const sanitized = await sanitizeBlogContent(rawContent, { ownDomain: project.domain ?? "" });
           const finalContent = sanitizeBlogMarkdown(sanitized.content);
           // Clamp the meta description to Google's usable window (and derive
@@ -711,7 +713,77 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           return;
         }
 
-        const { blogData, sanitized, finalContent } = built;
+        let { blogData, sanitized, finalContent } = built;
+        let coverImageUrl: string | null = null;
+
+        // Run Google Image search and placeholder replacements only ONCE on the final approved content
+        if (body.useRealImages) {
+          emit({ event: "stage", stage: "polish", detail: "Searching and uploading real images…" });
+          const { searchGoogleImages } = await import("@/lib/research");
+          const { fetchAndUploadExternalImage } = await import("@/lib/server/blog-images");
+          
+          const usedImageUrls = new Set<string>();
+
+          // 1. Cover Image
+          try {
+            const coverQuery = `${entry.focus_keyword} ${blogData.title}`;
+            const images = await searchGoogleImages(coverQuery, 5);
+            if (images.length > 0) {
+              let selectedImg = images[0];
+              let uploadedUrl = await fetchAndUploadExternalImage(selectedImg.imageUrl, projectId || body.entryId || "unknown");
+              if (!uploadedUrl && images[1]) {
+                selectedImg = images[1];
+                uploadedUrl = await fetchAndUploadExternalImage(selectedImg.imageUrl, projectId || body.entryId || "unknown");
+              }
+              if (uploadedUrl) {
+                coverImageUrl = uploadedUrl;
+                usedImageUrls.add(selectedImg.imageUrl);
+              }
+            }
+          } catch (err) {
+            console.error("[blog-stream] Failed to fetch cover image", err);
+          }
+
+          // 2. Section Placeholders
+          const placeholderRegex = /!\[([^\]]+)\]\((https:\/\/placehold\.co\/[^\)]+)\)/g;
+          let match;
+          const matches: Array<{ full: string; alt: string }> = [];
+          while ((match = placeholderRegex.exec(finalContent)) !== null) {
+            matches.push({ full: match[0], alt: match[1] });
+          }
+
+          for (const item of matches) {
+            try {
+              const images = await searchGoogleImages(item.alt, 5);
+              // Find the first image that has not been used yet
+              let selectedImg = images.find(img => !usedImageUrls.has(img.imageUrl));
+              if (!selectedImg && images.length > 0) {
+                selectedImg = images[0];
+              }
+
+              if (selectedImg) {
+                let uploadedUrl = await fetchAndUploadExternalImage(selectedImg.imageUrl, projectId || body.entryId || "unknown");
+                if (!uploadedUrl) {
+                  const fallbackImg = images.find(img => img.imageUrl !== selectedImg?.imageUrl && !usedImageUrls.has(img.imageUrl));
+                  if (fallbackImg) {
+                    uploadedUrl = await fetchAndUploadExternalImage(fallbackImg.imageUrl, projectId || body.entryId || "unknown");
+                    if (uploadedUrl) {
+                      selectedImg = fallbackImg;
+                    }
+                  }
+                }
+                
+                if (uploadedUrl) {
+                  finalContent = finalContent.replace(item.full, `![${item.alt}](${uploadedUrl})`);
+                  usedImageUrls.add(selectedImg.imageUrl);
+                }
+              }
+            } catch (err) {
+              console.error(`[blog-stream] Failed to fetch section image for "${item.alt}"`, err);
+            }
+          }
+        }
+
         const finalWordCount = countWords(finalContent);
 
         // ── Save to DB ────────────────────────────────────────────────────
@@ -732,6 +804,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           source_url: "",
           repair_notes: [] as string[],
           updated_at: new Date().toISOString(),
+          content_data: coverImageUrl ? { cover_image_url: coverImageUrl } : {},
         };
 
         // When the keyword was changed from what was scheduled, the generated

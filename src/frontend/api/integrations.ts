@@ -143,7 +143,10 @@ export const integrationsApi = {
    * specific provider when more than one is connected; otherwise the server
    * uses the connected integration.
    */
-  publishToCms(blogId: string, cmsType?: string): Promise<{
+  publishToCms(
+    blogId: string,
+    options?: { cmsType?: string; categoryId?: number }
+  ): Promise<{
     success: boolean;
     error?: string;
     documentId?: string;
@@ -151,6 +154,18 @@ export const integrationsApi = {
     strapiUrl?: string;
     cmsType?: string;
   }> {
-    return apiPost(V1Routes.blogPublishCms(blogId), cmsType ? { cms_type: cmsType } : {});
+    return apiPost(V1Routes.blogPublishCms(blogId), {
+      cms_type: options?.cmsType,
+      categoryId: options?.categoryId,
+    });
+  },
+
+  /** Fetch all categories from the user's WordPress integration. */
+  getWordPressCategories(): Promise<{
+    success: boolean;
+    error?: string;
+    categories?: Array<{ id: number; name: string }>;
+  }> {
+    return apiGet("/integrations/user-wordpress/categories");
   },
 };

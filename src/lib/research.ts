@@ -66,7 +66,7 @@ async function serperPost(endpoint: string, body: object): Promise<unknown> {
     }
     recordSerperCall(endpoint, true, latencyMs);
     return res.json();
-  } catch (e) {
+} catch (e) {
     recordSerperCall(
       endpoint,
       false,
@@ -76,6 +76,19 @@ async function serperPost(endpoint: string, body: object): Promise<unknown> {
     return null;
   }
 }
+
+export async function searchGoogleImages(query: string, num = 10): Promise<{ title: string; imageUrl: string; sourceUrl: string }[]> {
+  const res = await serperPost('images', { q: query, num, tbs: "il:cl" }) as { images?: Array<{ title?: string; imageUrl?: string; link?: string }> };
+  if (!res || !res.images || !Array.isArray(res.images)) {
+    return [];
+  }
+  return res.images.map(img => ({
+    title: img.title || '',
+    imageUrl: img.imageUrl || '',
+    sourceUrl: img.link || '',
+  }));
+}
+
 
 export async function researchKeyword(
   keyword: string,

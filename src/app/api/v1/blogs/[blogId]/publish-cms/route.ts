@@ -39,9 +39,11 @@ export async function POST(
   // Resolve the user's CMS integration. An optional { cms_type } in the body
   // targets a specific provider when more than one is connected.
   let requestedCms: string | undefined;
+  let categoryId: number | undefined;
   try {
-    const body = (await req.json().catch(() => null)) as { cms_type?: string } | null;
+    const body = (await req.json().catch(() => null)) as { cms_type?: string; categoryId?: number } | null;
     requestedCms = body?.cms_type?.trim() || undefined;
+    categoryId = body?.categoryId ?? undefined;
   } catch {
     /* no body — fall back to the connected integration */
   }
@@ -156,6 +158,7 @@ export async function POST(
         excerpt: buildExcerpt(contentWithoutTitle),
         status: "publish",
         coverImageUrl,
+        categoryId,
       });
       result = { documentId: r.documentId, slug: r.slug };
       publishedUrl = r.link ?? `${integration.base_url}/?p=${r.documentId}`;

@@ -52,6 +52,67 @@ export async function uploadSingleBase64Image(url: string, blogId: string): Prom
 }
 
 /**
+ * Fetches an image from an external URL and uploads it to Supabase Storage.
+ * Returns the new Supabase public URL.
+ */
+export async function fetchAndUploadExternalImage(url: string, blogId: string): Promise<string | null> {
+  if (!url || !url.startsWith("http")) return null;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[blog-images] failed to fetch external image: ${res.status} ${res.statusText}`);
+      return null;
+    }
+    
+    const mimeType = res.headers.get("content-type") || "image/jpeg";
+    if (!mimeType.startsWith("image/")) {
+      console.warn(`[blog-images] URL did not return an image. Content-Type: ${mimeType}`);
+      return null;
+    }
+
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    const ext = mimeType.split("/")[1] || "jpeg";
+    const fileName = `${blogId}/real_image_${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${ext}`;
+
+    // Ensure bucket exists
+    try {
+      await supabaseAdmin.storage.createBucket("blog-images", {
+        public: true,
+        allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"],
+      });
+    } catch (e) {
+      // Ignore
+    }
+
+    const { error } = await supabaseAdmin.storage
+      .from("blog-images")
+      .upload(fileName, buffer, {
+        contentType: mimeType,
+        cacheControl: "31536000",
+        upsert: true,
+      });
+
+    if (error) {
+      console.error("[blog-images] failed to upload external image to Supabase", error);
+      return null;
+    }
+
+    const { data: { publicUrl } } = supabaseAdmin.storage
+      .from("blog-images")
+      .getPublicUrl(fileName);
+
+    return publicUrl;
+  } catch (error) {
+    console.error("[blog-images] error processing external image", error);
+    return null;
+  }
+}
+
+
+/**
  * Scans markdown content for inline base64 images, uploads them to Supabase Storage,
  * and replaces the base64 source blocks with public cloud URLs.
  */

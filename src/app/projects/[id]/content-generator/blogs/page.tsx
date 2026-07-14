@@ -275,6 +275,8 @@ export default function BlogGeneratorPage() {
   const [competitorError, setCompetitorError] = useState("");
   // Custom Instructions
   const [customInstructions, setCustomInstructions] = useState("");
+  // Real Images
+  const [useRealImages, setUseRealImages] = useState(true);
 
   const { data: history } = useQuery({
     queryKey: qk.contentStudioHistory(projectId),
@@ -473,6 +475,7 @@ export default function BlogGeneratorPage() {
       useDeepAnalysis: useDeepAnalysis && competitorPages.length > 0,
       deepAnalysisPages: useDeepAnalysis ? competitorPages : [],
       customInstructions: customInstructions.trim() || undefined,
+      useRealImages,
     };
 
     try {
@@ -720,6 +723,7 @@ export default function BlogGeneratorPage() {
             useDeepAnalysis={useDeepAnalysis}
             competitorPagesCount={competitorPages.length}
             customInstructions={customInstructions}
+            useRealImages={useRealImages}
           />
         ) : (
           <ContentForm>
@@ -995,6 +999,14 @@ export default function BlogGeneratorPage() {
                     ) : null}
                   </AdvancedOptionRow>
 
+                  {/* Real Images */}
+                  <AdvancedOptionRow
+                    label="Include real internet images"
+                    description="Automatically search Google to find a high-quality real image (like a photo or illustration) and insert it as the main cover image, rather than relying solely on AI."
+                    checked={useRealImages}
+                    onChange={setUseRealImages}
+                  />
+
                   {/* Custom Instructions */}
                   <div className="rounded-xl border border-border-subtle bg-surface-elevated p-4">
                     <p className="text-[13px] font-semibold text-text-primary mb-0.5">Custom instructions</p>
@@ -1046,7 +1058,7 @@ function ReviewView({
   topic, primaryKeyword, audience, tone, wordCount, goal, ctaObjective,
   secondaryKeywords, regionLabel, languageLabel,
   hasBrandPersona, useAhrefsData, ahrefsH2sCount, ahrefsFaqsCount,
-  useDeepAnalysis, competitorPagesCount, customInstructions,
+  useDeepAnalysis, competitorPagesCount, customInstructions, useRealImages,
 }: {
   topic: string;
   primaryKeyword: string;
@@ -1065,6 +1077,7 @@ function ReviewView({
   useDeepAnalysis: boolean;
   competitorPagesCount: number;
   customInstructions: string;
+  useRealImages: boolean;
 }) {
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: "Topic", value: topic },
@@ -1093,6 +1106,7 @@ function ReviewView({
   if (hasBrandPersona) activeFeatures.push("Brand persona");
   if (useAhrefsData) activeFeatures.push(`Keyword intelligence (${ahrefsH2sCount} H2s, ${ahrefsFaqsCount} FAQs)`);
   if (useDeepAnalysis) activeFeatures.push(`Deep analysis (${competitorPagesCount} pages)`);
+  if (useRealImages) activeFeatures.push("Real internet images");
   if (customInstructions.trim()) activeFeatures.push("Custom instructions");
 
   return (

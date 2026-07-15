@@ -9,6 +9,7 @@ import type { Project } from "@/lib/types";
 import { RefreshCw, Check, AlertCircle, Palette, Upload, Wand2, X } from "lucide-react";
 import { StrapiIntegrationSection } from "@/components/settings/StrapiIntegrationSection";
 import { SitemapInternalLinkingSection } from "@/components/settings/SitemapInternalLinkingSection";
+import { ProjectMemorySection } from "@/components/settings/ProjectMemorySection";
 import { getGSCConnection, disconnectGSC, syncGSCMetrics } from "@/app/actions/gsc-actions";
 
 // ─── option lists ────────────────────────────────────────────────────────────
@@ -503,6 +504,9 @@ export default function ProjectSettingsPage() {
 
       {/* ── Sitemap & Internal Linking ───────────────────────────────────────── */}
       <SitemapInternalLinkingSection />
+
+      {/* ── Project Memory (Rankshoot AI) ────────────────────────────────────── */}
+      <ProjectMemorySection />
 
       {/* ── Integrations ─────────────────────────────────────────────────────── */}
       <section className="space-y-3">

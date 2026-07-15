@@ -375,6 +375,27 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       .update({ status: 'generated', title: blogData.title })
       .eq('id', entryId);
 
+    // Rankshoot AI memory: learn from this blog AFTER the response (covered
+    // topic + durable style/preference learnings via one cheap Flash call).
+    // Fire-and-forget — a failure here can never affect the returned blog.
+    try {
+      const { after } = await import('next/server');
+      const memoryInput = {
+        projectId: entry.project_id,
+        userId: project.user_id,
+        focusKeyword: entry.focus_keyword,
+        title: blogData.title,
+        blogMarkdown: finalContent,
+        source: 'blog_generate' as const,
+      };
+      after(async () => {
+        const { updateProjectMemoryAfterBlog } = await import('@/lib/ai-memory');
+        await updateProjectMemoryAfterBlog(memoryInput);
+      });
+    } catch (memErr) {
+      console.warn('[blog] memory learning scheduling failed:', memErr);
+    }
+
     return { success: true, data: blog };
   } catch (e: unknown) {
     await supabaseAdmin

@@ -357,16 +357,33 @@ export async function POST(req: Request) {
         const { researchKeyword } = await import("@/lib/research");
         const { fetchPerplexityFollowUps, mergeFollowUpQuestions } = await import("@/lib/perplexity");
         const { researchCredibleSources } = await import("@/lib/deep-research");
+        const {
+          loadProjectMemory,
+          formatProjectMemoryForPrompt,
+          loadGlobalHeuristics,
+          formatGlobalHeuristicsForPrompt,
+        } = await import("@/lib/ai-memory");
 
-        // SERP research, Perplexity follow-ups, and the deep-research pass run in
-        // parallel — all are best-effort and none may block generation.
+        // SERP research, Perplexity follow-ups, the deep-research pass, and the
+        // Rankshoot AI memory load run in parallel — all are best-effort and
+        // none may block generation.
         let research: any = null;
         let verifiedSources: import("@/lib/deep-research").DeepResearchResult | null = null;
-        const [researchSettled, followUpsSettled, deepResearchSettled] = await Promise.allSettled([
+        const [researchSettled, followUpsSettled, deepResearchSettled, memorySettled, heuristicsSettled] = await Promise.allSettled([
           researchKeyword(entry.focus_keyword, project.target_region, project.target_language),
           fetchPerplexityFollowUps(entry.focus_keyword, { limit: 3 }),
           researchCredibleSources(entry.focus_keyword),
+          loadProjectMemory(projectId),
+          loadGlobalHeuristics(),
         ]);
+
+        // Project memory + global heuristics → prompt blocks ("" when empty).
+        const projectMemoryBlock = memorySettled.status === "fulfilled"
+          ? formatProjectMemoryForPrompt(memorySettled.value)
+          : "";
+        const globalHeuristicsBlock = heuristicsSettled.status === "fulfilled"
+          ? formatGlobalHeuristicsForPrompt(heuristicsSettled.value)
+          : "";
         if (researchSettled.status === "fulfilled") {
           research = researchSettled.value;
         } else {
@@ -590,6 +607,8 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           brandPersona: body.brandPersona,
           customInstructions: body.customInstructions,
           deepAnalysisSummary,
+          projectMemoryBlock,
+          globalHeuristicsBlock,
         });
 
         // ── Stage 4 + 5: Draft → parse → validate, with bounded auto-retry ──
@@ -889,6 +908,28 @@ Respond with a concise but rich analysis (300–500 words) structured as:
         }
 
         emit({ event: "done", blogId });
+
+        // Rankshoot AI memory: learn from this blog AFTER the response — one
+        // cheap Flash call recording the covered topic + any durable style/
+        // preference learnings. Fire-and-forget via next's `after`; a failure
+        // here can never affect the generation the user just received.
+        try {
+          const { after } = await import("next/server");
+          const memoryInput = {
+            projectId,
+            userId: user.id,
+            focusKeyword: entry.focus_keyword as string,
+            title: blogData.title as string,
+            blogMarkdown: finalContent,
+            source: "blog_generate" as const,
+          };
+          after(async () => {
+            const { updateProjectMemoryAfterBlog } = await import("@/lib/ai-memory");
+            await updateProjectMemoryAfterBlog(memoryInput);
+          });
+        } catch (memErr) {
+          console.warn("[blog stream] memory learning scheduling failed:", memErr);
+        }
       } catch (err: any) {
         let message = err instanceof Error ? err.message : "Generation failed";
         if (wasStalled || err?.name === "AbortError" || err?.name === "APIConnectionTimeoutError" || err?.message?.includes("aborted")) {

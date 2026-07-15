@@ -42,6 +42,17 @@ export interface BlogPromptContext {
   customInstructions?: string;
   deepAnalysisSummary?: string;
   /**
+   * Pre-formatted PROJECT MEMORY block (from formatProjectMemoryForPrompt) —
+   * what the Rankshoot AI has learned about this project: covered topics,
+   * style learnings, user preferences. "" / undefined when there's no memory.
+   */
+  projectMemoryBlock?: string;
+  /**
+   * Pre-formatted LEARNED WRITING GUIDANCE block (from
+   * formatGlobalHeuristicsForPrompt) — anonymized global style patterns.
+   */
+  globalHeuristicsBlock?: string;
+  /**
    * Verified facts + credible source URLs from a live deep-research pass
    * (see `researchCredibleSources`). When present, the article is built on this
    * real data and external citations are restricted to these exact URLs.
@@ -101,7 +112,7 @@ ${serp || '(none)'}
 }
 
 export function buildBlogPrompt(ctx: BlogPromptContext): string {
-  const { entry, project, wordCount, keywordIntent, funnelStage, research, existingBlogs, brief, extraInternalLinks, followUpQuestions, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary, verifiedSources } = ctx;
+  const { entry, project, wordCount, keywordIntent, funnelStage, research, existingBlogs, brief, extraInternalLinks, followUpQuestions, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary, verifiedSources, projectMemoryBlock, globalHeuristicsBlock } = ctx;
 
   // Recency window for citations: sources must be from this year or newer.
   const currentYear = new Date().getFullYear();
@@ -325,7 +336,7 @@ TARGET AUDIENCE: ${project.target_audience}
 INDUSTRY/NICHE:  ${project.niche}
 COMPANY:         ${project.company} (${project.domain})
 WORD COUNT:      ~${wordCount} words (stay within roughly ±10%; never pad with filler or restated points to hit a number, never cut substance to stay under)
-${writerNotesBlock}${briefBlock}${internalLinksBlock}${followUpsBlock}
+${writerNotesBlock}${briefBlock}${projectMemoryBlock ?? ''}${globalHeuristicsBlock ?? ''}${internalLinksBlock}${followUpsBlock}
 
 SECONDARY KEYWORDS / TOPICS TO WORK IN NATURALLY:
 ${termsMatchList}

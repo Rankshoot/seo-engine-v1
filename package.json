@@ -60,6 +60,7 @@
     "react-markdown": "^10.1.0",
     "react-redux": "^9.2.0",
     "remark-gfm": "^4.0.1",
+    "sharp": "^0.35.3",
     "sonner": "^2.0.7",
     "stripe": "^22.2.0",
     "svix": "^1.95.2",

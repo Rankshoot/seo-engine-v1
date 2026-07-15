@@ -9,6 +9,9 @@ export const API_USAGE_PROVIDERS = [
   "scraper",
   "openai",
   "claude",
+  "openverse",
+  "wikimedia",
+  "pexels",
 ] as const;
 
 export type ApiUsageProvider = (typeof API_USAGE_PROVIDERS)[number];

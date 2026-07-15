@@ -98,6 +98,35 @@ export function recordSerperCall(
   });
 }
 
+/**
+ * Logs a licensed-image-search API call (Openverse / Wikimedia / Pexels) to
+ * `api_usage_logs`. Openverse and Wikimedia are free; Pexels is free-tier — all
+ * estimated at $0 (see cost-estimates.ts) so image sourcing never distorts the
+ * budget totals. `resultCount` is captured in metadata for debugging thin results.
+ */
+export function recordImageSearchCall(
+  provider: "openverse" | "wikimedia" | "pexels",
+  ok: boolean,
+  latencyMs: number,
+  resultCount?: number,
+  errorMessage?: string
+): void {
+  if (!isServer) return;
+  const ctx = mergeUsageLogContext({});
+  queueApiUsage({
+    userId: ctx.userId,
+    projectId: ctx.projectId,
+    provider,
+    feature: ctxFeature(provider, "image_search"),
+    endpoint: `${provider}/images`,
+    status: ok ? "success" : "error",
+    latencyMs,
+    estimatedCostUsd: estimateApiCallCostUsd(provider),
+    errorMessage: errorMessage ?? null,
+    metadata: resultCount != null ? { resultCount } : undefined,
+  });
+}
+
 export function recordPerplexityCall(
   endpoint: string,
   ok: boolean,

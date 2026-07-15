@@ -715,36 +715,55 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
         let { blogData, sanitized, finalContent } = built;
         let coverImageUrl: string | null = null;
+        const imageCredits: import("@/lib/images/image-search").ImageCredit[] = [];
 
-        // Run Google Image search and placeholder replacements only ONCE on the final approved content
+        // Source copyright-safe images (Openverse/Wikimedia/Pexels), convert to
+        // webp, and record attribution — run ONCE on the final approved content.
         if (body.useRealImages) {
-          emit({ event: "stage", stage: "polish", detail: "Searching and uploading real images…" });
-          const { searchGoogleImages } = await import("@/lib/research");
-          const { fetchAndUploadExternalImage } = await import("@/lib/server/blog-images");
-          
-          const usedImageUrls = new Set<string>();
+          emit({ event: "stage", stage: "polish", detail: "Sourcing and uploading licensed images…" });
+          const { searchLicensedImages } = await import("@/lib/images/image-search");
+          const { fetchConvertAndUploadImage } = await import("@/lib/server/blog-images");
+          const imgBlogId = projectId || body.entryId || "unknown";
 
-          // 1. Cover Image
-          try {
-            const coverQuery = `${entry.focus_keyword} ${blogData.title}`;
-            const images = await searchGoogleImages(coverQuery, 5);
-            if (images.length > 0) {
-              let selectedImg = images[0];
-              let uploadedUrl = await fetchAndUploadExternalImage(selectedImg.imageUrl, projectId || body.entryId || "unknown");
-              if (!uploadedUrl && images[1]) {
-                selectedImg = images[1];
-                uploadedUrl = await fetchAndUploadExternalImage(selectedImg.imageUrl, projectId || body.entryId || "unknown");
-              }
-              if (uploadedUrl) {
-                coverImageUrl = uploadedUrl;
-                usedImageUrls.add(selectedImg.imageUrl);
+          const usedSourceUrls = new Set<string>();
+
+          // Tries each candidate image until one fetches+converts+uploads cleanly.
+          // Records the license/attribution of whichever candidate succeeded.
+          const uploadFirstWorking = async (
+            candidates: import("@/lib/images/image-search").LicensedImage[],
+            placement: "cover" | "section"
+          ): Promise<string | null> => {
+            for (const img of candidates) {
+              const key = img.imageUrl.split("?")[0].toLowerCase();
+              if (usedSourceUrls.has(key)) continue;
+              const uploaded = await fetchConvertAndUploadImage(img.imageUrl, imgBlogId);
+              if (uploaded) {
+                usedSourceUrls.add(key);
+                imageCredits.push({
+                  storedUrl: uploaded.publicUrl,
+                  author: img.author,
+                  license: img.license,
+                  licenseUrl: img.licenseUrl,
+                  sourcePage: img.sourcePage,
+                  provider: img.provider,
+                  placement,
+                });
+                return uploaded.publicUrl;
               }
             }
+            return null;
+          };
+
+          // 1. Cover image
+          try {
+            const coverQuery = `${entry.focus_keyword} ${blogData.title}`;
+            const images = await searchLicensedImages(coverQuery, 6);
+            coverImageUrl = await uploadFirstWorking(images, "cover");
           } catch (err) {
             console.error("[blog-stream] Failed to fetch cover image", err);
           }
 
-          // 2. Section Placeholders
+          // 2. Section placeholders
           const placeholderRegex = /!\[([^\]]+)\]\((https:\/\/placehold\.co\/[^\)]+)\)/g;
           let match;
           const matches: Array<{ full: string; alt: string }> = [];
@@ -754,34 +773,25 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
           for (const item of matches) {
             try {
-              const images = await searchGoogleImages(item.alt, 5);
-              // Find the first image that has not been used yet
-              let selectedImg = images.find(img => !usedImageUrls.has(img.imageUrl));
-              if (!selectedImg && images.length > 0) {
-                selectedImg = images[0];
-              }
-
-              if (selectedImg) {
-                let uploadedUrl = await fetchAndUploadExternalImage(selectedImg.imageUrl, projectId || body.entryId || "unknown");
-                if (!uploadedUrl) {
-                  const fallbackImg = images.find(img => img.imageUrl !== selectedImg?.imageUrl && !usedImageUrls.has(img.imageUrl));
-                  if (fallbackImg) {
-                    uploadedUrl = await fetchAndUploadExternalImage(fallbackImg.imageUrl, projectId || body.entryId || "unknown");
-                    if (uploadedUrl) {
-                      selectedImg = fallbackImg;
-                    }
-                  }
-                }
-                
-                if (uploadedUrl) {
-                  finalContent = finalContent.replace(item.full, `![${item.alt}](${uploadedUrl})`);
-                  usedImageUrls.add(selectedImg.imageUrl);
-                }
+              const images = await searchLicensedImages(item.alt, 6);
+              const uploadedUrl = await uploadFirstWorking(images, "section");
+              if (uploadedUrl) {
+                finalContent = finalContent.replace(item.full, `![${item.alt}](${uploadedUrl})`);
               }
             } catch (err) {
               console.error(`[blog-stream] Failed to fetch section image for "${item.alt}"`, err);
             }
           }
+        }
+
+        // Append a visible credit line for any image whose license requires it
+        // (CC-BY family / Wikimedia). Travels with the content to every publish
+        // target. CC0 / Pexels images are stored in content_data but not forced
+        // into a credit line.
+        if (imageCredits.length) {
+          const { buildImageCreditsMarkdown } = await import("@/lib/images/image-search");
+          const creditsBlock = buildImageCreditsMarkdown(imageCredits);
+          if (creditsBlock) finalContent = `${finalContent.trimEnd()}${creditsBlock}`;
         }
 
         const finalWordCount = countWords(finalContent);
@@ -804,7 +814,10 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           source_url: "",
           repair_notes: [] as string[],
           updated_at: new Date().toISOString(),
-          content_data: coverImageUrl ? { cover_image_url: coverImageUrl } : {},
+          content_data: {
+            ...(coverImageUrl ? { cover_image_url: coverImageUrl } : {}),
+            ...(imageCredits.length ? { image_credits: imageCredits } : {}),
+          },
         };
 
         // When the keyword was changed from what was scheduled, the generated

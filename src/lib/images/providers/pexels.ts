@@ -53,10 +53,14 @@ export async function searchPexels(query: string, count: number): Promise<Licens
     for (const p of photos) {
       const imageUrl = p.src?.large2x || p.src?.large || p.src?.original;
       if (!imageUrl) continue;
+      // A missing alt must NOT fall back to the search query — that would
+      // make the caller's relevance check trivially pass for a photo we know
+      // nothing about.
+      if (!p.alt?.trim()) continue;
       out.push({
         imageUrl,
         thumbnailUrl: p.src?.large,
-        title: p.alt || query,
+        title: p.alt,
         sourcePage: p.url || "",
         author: p.photographer || "Pexels",
         license: "Pexels License",

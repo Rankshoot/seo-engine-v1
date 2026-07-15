@@ -6,9 +6,15 @@ import type { LicensedImage } from "@/lib/images/image-search";
  *
  * Commons hosts public-domain and CC-licensed media. We use the MediaWiki API's
  * search generator over the File namespace (6) and pull `imageinfo` with
- * `extmetadata`, which carries LicenseShortName, Artist, and LicenseUrl so we
- * can attribute. The API is free and needs no key; Wikimedia asks only for a
- * descriptive User-Agent.
+ * `extmetadata`, which carries LicenseShortName/Artist/LicenseUrl. Commons'
+ * search API has no server-side license filter, so we filter client-side to
+ * anything genuinely reusable (public domain, CC0, or a real CC license) and
+ * explicitly reject "fair use" / non-free / unlicensed results. Some accepted
+ * results (CC-BY variants) legally require attribution; the product does not
+ * render a visible credit (by design), but license/author/source are still
+ * captured and persisted to `content_data.image_credits` as an internal
+ * compliance record. The API is free and needs no key; Wikimedia asks only
+ * for a descriptive User-Agent.
  */
 
 const COMMONS_ENDPOINT = "https://commons.wikimedia.org/w/api.php";
@@ -69,14 +75,21 @@ export async function searchWikimedia(query: string, count: number): Promise<Lic
       const info = page.imageinfo?.[0];
       const url = info?.url;
       if (!url || !IMAGE_EXT.test(url)) continue;
+      // A missing title must NOT fall back to the search query — that would
+      // make the caller's relevance check trivially pass for an image we
+      // know nothing about.
+      if (!page.title?.trim()) continue;
       const meta = info?.extmetadata ?? {};
-      const license = stripHtml(meta.LicenseShortName?.value) || "See source";
-      // Skip anything that isn't clearly reusable (e.g. "Fair use").
-      if (/fair use|non-free|copyright/i.test(license)) continue;
+      const license = stripHtml(meta.LicenseShortName?.value) || "";
+      // Reject anything not clearly reusable: no license info, "fair use",
+      // non-free, or plain "copyright". A bare "CC" without a recognizable
+      // public-domain/CC-license token is also rejected as unverifiable.
+      if (!license || /fair use|non-free|all rights reserved|^copyright/i.test(license)) continue;
+      if (!/public domain|pd-|cc0|cc[- ]?by/i.test(license)) continue;
       out.push({
         imageUrl: url,
         thumbnailUrl: info?.thumburl,
-        title: (page.title || query).replace(/^File:/, "").replace(IMAGE_EXT, ""),
+        title: page.title.replace(/^File:/, "").replace(IMAGE_EXT, ""),
         sourcePage: info?.descriptionurl || url,
         author: stripHtml(meta.Artist?.value) || "Wikimedia Commons",
         license,

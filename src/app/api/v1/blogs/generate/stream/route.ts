@@ -160,6 +160,21 @@ export async function POST(req: Request) {
           brief = briefRow?.brief ?? null;
         } catch { /* optional */ }
 
+        // Keyword intent + funnel stage feed the content-archetype picker so the
+        // article's structure adapts to search intent. Best-effort; never blocks.
+        // Skipped when the user changed the keyword (the stored intent no longer
+        // matches) — the archetype picker then derives shape from the keyword text.
+        let keywordIntent: string | null = null;
+        let keywordFunnelStage: string | null = null;
+        try {
+          if (!keywordChanged && entry.keyword_id) {
+            const { data: kwRow } = await supabaseAdmin
+              .from("keywords").select("intent, funnel_stage").eq("id", entry.keyword_id).maybeSingle();
+            keywordIntent = kwRow?.intent ?? null;
+            keywordFunnelStage = kwRow?.funnel_stage ?? null;
+          }
+        } catch { /* optional */ }
+
         // ── Surgical repair branch (Content Audit Studio → Generate Enhanced) ──
         // When the calendar entry carries a content-health audit in repair mode,
         // we DON'T regenerate from scratch — we surgically fix the audited issues
@@ -341,18 +356,32 @@ export async function POST(req: Request) {
 
         const { researchKeyword } = await import("@/lib/research");
         const { fetchPerplexityFollowUps, mergeFollowUpQuestions } = await import("@/lib/perplexity");
+        const { researchCredibleSources } = await import("@/lib/deep-research");
 
-        // SERP research and Perplexity follow-ups run in parallel — both are
-        // best-effort and neither may block generation.
+        // SERP research, Perplexity follow-ups, and the deep-research pass run in
+        // parallel — all are best-effort and none may block generation.
         let research: any = null;
-        const [researchSettled, followUpsSettled] = await Promise.allSettled([
+        let verifiedSources: import("@/lib/deep-research").DeepResearchResult | null = null;
+        const [researchSettled, followUpsSettled, deepResearchSettled] = await Promise.allSettled([
           researchKeyword(entry.focus_keyword, project.target_region, project.target_language),
           fetchPerplexityFollowUps(entry.focus_keyword, { limit: 3 }),
+          researchCredibleSources(entry.focus_keyword),
         ]);
         if (researchSettled.status === "fulfilled") {
           research = researchSettled.value;
         } else {
           console.warn("[blog stream] Research failed, continuing:", researchSettled.reason);
+        }
+
+        // Deep research → verified facts + approved citation URLs the writer must
+        // build on and cite. Best-effort; the prompt degrades gracefully if empty.
+        if (deepResearchSettled.status === "fulfilled") {
+          verifiedSources = deepResearchSettled.value;
+          if (verifiedSources.sources.length) {
+            emit({ event: "stage", stage: "research", detail: `Verified ${verifiedSources.sources.length} credible sources with ${verifiedSources.facts.length} data points…` });
+          }
+        } else {
+          console.warn("[blog stream] Deep research failed, continuing:", deepResearchSettled.reason);
         }
 
         // Follow-ups: Perplexity's live "Follow-ups" for the primary keyword,
@@ -548,7 +577,10 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           },
           project,
           wordCount: body.wordCount ?? 2500,
+          keywordIntent,
+          funnelStage: keywordFunnelStage,
           research,
+          verifiedSources,
           existingBlogs: filteredExistingBlogs,
           brief: filteredBrief,
           extraInternalLinks,
@@ -754,10 +786,13 @@ Respond with a concise but rich analysis (300–500 words) structured as:
             return null;
           };
 
-          // 1. Cover image
+          // 1. Cover image — search on the focus keyword (concise), with the
+          // article title as a secondary fallback. The old `keyword + full title`
+          // query was too specific and returned nothing from the CC catalogs.
           try {
-            const coverQuery = `${entry.focus_keyword} ${blogData.title}`;
-            const images = await searchLicensedImages(coverQuery, 6);
+            const images = await searchLicensedImages(entry.focus_keyword, 6, {
+              fallbackQuery: blogData.title,
+            });
             coverImageUrl = await uploadFirstWorking(images, "cover");
           } catch (err) {
             console.error("[blog-stream] Failed to fetch cover image", err);
@@ -773,7 +808,11 @@ Respond with a concise but rich analysis (300–500 words) structured as:
 
           for (const item of matches) {
             try {
-              const images = await searchLicensedImages(item.alt, 6);
+              // Search the section heading, falling back to the focus keyword so
+              // a niche heading still gets a relevant on-topic photo.
+              const images = await searchLicensedImages(item.alt, 6, {
+                fallbackQuery: entry.focus_keyword,
+              });
               const uploadedUrl = await uploadFirstWorking(images, "section");
               if (uploadedUrl) {
                 finalContent = finalContent.replace(item.full, `![${item.alt}](${uploadedUrl})`);
@@ -784,15 +823,11 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           }
         }
 
-        // Append a visible credit line for any image whose license requires it
-        // (CC-BY family / Wikimedia). Travels with the content to every publish
-        // target. CC0 / Pexels images are stored in content_data but not forced
-        // into a credit line.
-        if (imageCredits.length) {
-          const { buildImageCreditsMarkdown } = await import("@/lib/images/image-search");
-          const creditsBlock = buildImageCreditsMarkdown(imageCredits);
-          if (creditsBlock) finalContent = `${finalContent.trimEnd()}${creditsBlock}`;
-        }
+        // No visible "Image credits" block: `searchLicensedImages` only ever
+        // returns CC0 / public-domain / Pexels-License images (see
+        // image-search.ts), none of which require a displayed attribution, so
+        // there is nothing that legally needs to be shown. `imageCredits` is
+        // still persisted below (content_data) as an internal sourcing record.
 
         const finalWordCount = countWords(finalContent);
 

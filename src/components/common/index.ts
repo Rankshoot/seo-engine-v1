@@ -16,13 +16,14 @@ export * from "./forms/Input";
 export * from "./forms/AiFillLabelButton";
 export * from "./badges/Badge";
 export * from "./layouts/PageShell";
+export * from "./layouts/DataRegion";
 export * from "./empty-states/EmptyState";
 export * from "./loaders/Spinner";
 export * from "./dialogs/Dialog";
 export * from "./dropdowns/DropdownMenu";
 
 // Re-exports of existing primitives so callers can import everything from one place.
-export { Skeleton, TableSkeleton, BusinessBriefSkeleton, CardGridSkeleton, StatStripSkeleton } from "@/components/Skeleton";
+export { Skeleton, TableSkeleton, BusinessBriefSkeleton, CardGridSkeleton, StatStripSkeleton, ListRowsSkeleton } from "@/components/Skeleton";
 export { DataTable } from "@/components/DataTable";
 export type { ColumnDef, DataTableProps } from "@/components/DataTable";
 export { Tooltip, InfoIcon } from "@/components/Tooltip";

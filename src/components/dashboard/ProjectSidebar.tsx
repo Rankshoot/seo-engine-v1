@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Logo } from "@/components/brand/Logo";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { qk } from "@/lib/query";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
@@ -342,6 +343,7 @@ export default function ProjectSidebar({
               <Logo size="sm" />
             </Link>
             <div className="flex items-center gap-1">
+              <NotificationCenter />
               {/* Mobile close button */}
               {setMobileOpen && (
                 <button

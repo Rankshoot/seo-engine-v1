@@ -139,6 +139,38 @@ export function CardGridSkeleton({ count = 6 }: { count?: number }) {
   );
 }
 
+/**
+ * Row-list skeleton — mirrors the stacked-row layout used by "Today's content",
+ * content history, calendar, and audit lists. Wrap in the SAME bordered card the
+ * real list uses so the skeleton lands in the exact position of the content.
+ */
+export function ListRowsSkeleton({
+  rows = 3,
+  withLeadingIcon = true,
+  rowClassName = "px-4 py-3.5",
+}: {
+  rows?: number;
+  withLeadingIcon?: boolean;
+  rowClassName?: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-elevated divide-y divide-border-subtle/60">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className={`flex items-center gap-3 ${rowClassName}`}>
+          {withLeadingIcon && (
+            <Skeleton className="h-8 w-8 shrink-0" rounded="lg" style={{ animationDelay: `${i * 70}ms` }} />
+          )}
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-3.5 w-1/2" rounded="sm" style={{ animationDelay: `${i * 70}ms` }} />
+            <Skeleton className="h-3 w-1/3" rounded="sm" style={{ animationDelay: `${i * 70 + 40}ms` }} />
+          </div>
+          <Skeleton className="h-6 w-20 shrink-0" rounded="full" style={{ animationDelay: `${i * 70 + 60}ms` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Stat strip skeleton — used while project stats are loading. */
 export function StatStripSkeleton({ count = 4 }: { count?: number }) {
   return (

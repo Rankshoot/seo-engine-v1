@@ -50,6 +50,8 @@ import { blogsApi } from "@/frontend/api/blogs";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
+import { useFormDraft } from "@/hooks/useFormDraft";
+import { useNotify } from "@/hooks/useNotify";
 
 const TONES = [
   { id: "premium-educational", label: "Premium · educational" },
@@ -205,6 +207,12 @@ export default function BlogGeneratorPage() {
     return () => { isOnPageRef.current = false; };
   }, []);
 
+  // Notification-center wiring: each generation gets a stable key so its
+  // "running" entry is upgraded in place to "ready"/"failed", and an OS
+  // notification fires on completion if the user has navigated away.
+  const notify = useNotify();
+  const genKeyRef = useRef<string>("");
+
   const entryId = searchParams?.get("entryId");
 
   // Audit-fix mode: coming from Content Health → Generate enhanced
@@ -278,6 +286,48 @@ export default function BlogGeneratorPage() {
   // Real Images
   const [useRealImages, setUseRealImages] = useState(true);
 
+  // ── Draft persistence ──────────────────────────────────────────────────
+  // Restore an in-progress form when the user navigates away and comes back
+  // (or refreshes). Only active for a plain, fresh session — when the generator
+  // is opened from a calendar entry or an audit-fix link, those URL-driven flows
+  // own the form and we don't want a stale draft fighting them.
+  const hasUrlContext = !!entryId || !!auditUrl || !!keywordParam;
+  const { clearDraft, hadDraft } = useFormDraft(
+    "blog",
+    projectId,
+    {
+      primaryKeyword, topic, secondaryKeywords, audience, tone, goal, ctaObjective,
+      wordCount, customWordCount, region, language, useBrandPersona, brandPersona,
+      useAhrefsData, useDeepAnalysis, customInstructions, useRealImages,
+    },
+    {
+      enabled: phase === "form" && !hasUrlContext,
+      apply: (d) => {
+        if (hasUrlContext) return;
+        if (typeof d.primaryKeyword === "string" && d.primaryKeyword) setPrimaryKeyword(d.primaryKeyword);
+        if (typeof d.topic === "string") setTopic(d.topic);
+        if (Array.isArray(d.secondaryKeywords)) setSecondaryKeywords(d.secondaryKeywords as string[]);
+        if (typeof d.audience === "string") setAudience(d.audience);
+        if (typeof d.tone === "string") setTone(d.tone as (typeof TONES)[number]["id"]);
+        if (typeof d.goal === "string") setGoal(d.goal);
+        if (typeof d.ctaObjective === "string") setCtaObjective(d.ctaObjective);
+        if (typeof d.wordCount === "number") setWordCount(d.wordCount);
+        if (typeof d.customWordCount === "string") setCustomWordCount(d.customWordCount);
+        if (typeof d.region === "string") setRegion(d.region);
+        if (typeof d.language === "string") setLanguage(d.language);
+        if (typeof d.useBrandPersona === "boolean") setUseBrandPersona(d.useBrandPersona);
+        if (typeof d.brandPersona === "string") setBrandPersona(d.brandPersona);
+        if (typeof d.useAhrefsData === "boolean") setUseAhrefsData(d.useAhrefsData);
+        if (typeof d.useDeepAnalysis === "boolean") setUseDeepAnalysis(d.useDeepAnalysis);
+        if (typeof d.customInstructions === "string") setCustomInstructions(d.customInstructions);
+        if (typeof d.useRealImages === "boolean") setUseRealImages(d.useRealImages);
+      },
+    },
+  );
+  // When a draft was restored, skip the project auto-seed below so it doesn't
+  // overwrite the user's saved region / language / brand persona.
+  const draftRestored = hadDraft && !hasUrlContext;
+
   const { data: history } = useQuery({
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
@@ -291,6 +341,9 @@ export default function BlogGeneratorPage() {
 
   // Set defaults from project
   useEffect(() => {
+    // A restored draft already carries the user's region / language / brand
+    // persona — don't clobber it with project defaults.
+    if (draftRestored) return;
     if (project?.target_audience && !audience) setAudience(project.target_audience);
     const tr = project?.target_region?.toLowerCase();
     if (tr && TARGET_REGIONS.some(r => r.code === tr)) setRegion(tr);
@@ -467,6 +520,20 @@ export default function BlogGeneratorPage() {
     setIsThinking(false);
     setStreamStages(stages.map(s => ({ ...s })));
 
+    // Register this generation in the notification center so the user can leave
+    // the page and still track it (and get pinged when it's done).
+    const genKey = `blog:${projectId}:${Date.now()}`;
+    genKeyRef.current = genKey;
+    const genLabel = topic.trim() || primaryKeyword.trim() || "your blog";
+    notify({
+      key: genKey,
+      status: "running",
+      title: "Generating blog…",
+      body: genLabel,
+      projectId,
+      os: false,
+    });
+
     const advancedBody = {
       brandPersona: useBrandPersona && brandPersona.trim() ? brandPersona.trim() : undefined,
       useAhrefsData: useAhrefsData && (ahrefsH2s.length > 0 || ahrefsFaqs.length > 0),
@@ -504,6 +571,8 @@ export default function BlogGeneratorPage() {
         } else if (event.event === "done") {
           setStreamProgress(1);
           setIsThinking(false);
+          // Blog is saved — the in-progress form draft is no longer needed.
+          clearDraft();
           const blogHref = `${studioBase}/blogs/${event.blogId}`;
           // No-refresh updates: refresh Content History + Calendar wherever they're mounted.
           void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
@@ -512,6 +581,17 @@ export default function BlogGeneratorPage() {
           void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
           void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
           dispatch(calendarRefreshBump({ projectId }));
+          // Upgrade the notification-center entry to "ready"; OS-notify only if
+          // the user has moved on (they don't need a desktop ping if they're here).
+          notify({
+            key: genKeyRef.current,
+            status: "success",
+            title: "Blog ready",
+            body: genLabel,
+            href: blogHref,
+            projectId,
+            os: !isOnPageRef.current,
+          });
           if (isOnPageRef.current) {
             // Still watching the drafting page → open the finished draft.
             toast.success("Blog generated!");
@@ -537,6 +617,14 @@ export default function BlogGeneratorPage() {
           return "done";
         } else if (event.event === "error") {
           toast.error(event.message || "Generation failed");
+          notify({
+            key: genKeyRef.current,
+            status: "error",
+            title: "Blog generation failed",
+            body: event.message || genLabel,
+            projectId,
+            os: !isOnPageRef.current,
+          });
           setPhase("form");
           setIsThinking(false);
           setStreamProgress(undefined);
@@ -580,10 +668,26 @@ export default function BlogGeneratorPage() {
       }
 
       toast.error("Generation ended unexpectedly. Please try again.");
+      notify({
+        key: genKeyRef.current,
+        status: "error",
+        title: "Blog generation failed",
+        body: genLabel,
+        projectId,
+        os: !isOnPageRef.current,
+      });
       setPhase("form");
       setStreamProgress(undefined);
     } catch {
       toast.error("An error occurred during generation");
+      notify({
+        key: genKeyRef.current,
+        status: "error",
+        title: "Blog generation failed",
+        body: genLabel,
+        projectId,
+        os: !isOnPageRef.current,
+      });
       setPhase("form");
       setStreamProgress(undefined);
     }

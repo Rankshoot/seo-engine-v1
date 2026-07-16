@@ -11,6 +11,8 @@ import {
 import { dataRestSlice, type DataRestState } from "@/lib/redux/data-rest-slice";
 import { auditGenerationsSlice } from "@/lib/redux/audit-generations-slice";
 import { auditSchedulesSlice } from "@/lib/redux/audit-schedules-slice";
+import { formDraftsSlice } from "@/lib/redux/form-drafts-slice";
+import { notificationsSlice } from "@/lib/redux/notifications-slice";
 
 const STORAGE_KEY = "seo-engine:redux:v1";
 
@@ -22,10 +24,17 @@ const rootReducer = combineReducers({
   auditGenerations: auditGenerationsSlice.reducer,
   // Audit-URL → calendar-schedule map. Not persisted (rehydrated from the server).
   auditSchedules: auditSchedulesSlice.reducer,
+  // Content-generator form drafts. Persisted so in-progress forms survive
+  // navigation and refresh.
+  formDrafts: formDraftsSlice.reducer,
+  // App notification center. Persisted so "your blog is ready" survives refresh.
+  notifications: notificationsSlice.reducer,
 });
 
 type RootStateFromReducer = ReturnType<typeof rootReducer>;
-type PersistedState = Partial<Pick<RootStateFromReducer, "keywordWorkspace" | "contentHealthAudit">>;
+type PersistedState = Partial<
+  Pick<RootStateFromReducer, "keywordWorkspace" | "contentHealthAudit" | "formDrafts" | "notifications">
+>;
 
 function sanitizeContentHealthForPersist(
   ch: ContentHealthAuditState | undefined
@@ -83,6 +92,8 @@ function persistState(state: RootStateFromReducer) {
     const persisted: PersistedState = stripLegacyApiCaches({
       keywordWorkspace: state.keywordWorkspace,
       contentHealthAudit: sanitizeContentHealthForPersist(state.contentHealthAudit),
+      formDrafts: state.formDrafts,
+      notifications: state.notifications,
     });
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
   } catch {

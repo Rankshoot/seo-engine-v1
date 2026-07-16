@@ -221,6 +221,15 @@ export function normalizeDomain(raw: string): string {
 const BLOG_PATH_REGEX =
   /\/(blog|blogs|resources|articles?|posts?|insights|news|stories|learn|guides?|tutorials?|help\/articles?)\/[^/?#]+/i;
 
+/** Whether a URL's path looks like an individual blog post (has a slug after a blog prefix). */
+export function looksLikeBlogPostUrl(url: string): boolean {
+  try {
+    return BLOG_PATH_REGEX.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 /** Sitemap paths we'd expect on a site that publishes a blog. */
 const BLOG_INDEX_PATHS = [
   '/blog',

@@ -34,20 +34,6 @@ export interface ImageCredit {
   placement: "cover" | "section";
 }
 
-/**
- * Whether a license legally requires a visible attribution (true for CC-BY and
- * its variants; false for CC0/public domain/Pexels License). `searchLicensedImages`
- * pulls from the full legally-reusable pool, which includes CC-BY results — the
- * product deliberately does NOT render a credits block in article content, so
- * this is used only to decide what goes into the internal `content_data.image_credits`
- * compliance record, never to build user-facing text.
- */
-export function requiresAttribution(license: string): boolean {
-  const l = license.toLowerCase();
-  if (l.includes("cc0") || l.includes("public domain") || l.includes("pexels")) return false;
-  return true;
-}
-
 function dedupeByUrl(images: LicensedImage[]): LicensedImage[] {
   const seen = new Set<string>();
   const out: LicensedImage[] = [];
@@ -81,15 +67,6 @@ const IMAGE_QUERY_STOPWORDS = new Set([
   'importance', 'essential', 'overview', 'introduction', 'role', 'need', 'needs',
   'knowing', 'reason', 'reasons', 'more', 'most', 'all', 'every', 'each', 'must',
 ]);
-
-/**
- * Reduces a headline/alt-text/keyword into a concise, photo-searchable query:
- * lowercased, punctuation-free, stopwords + generic filler removed, capped to
- * `maxWords` meaningful tokens. Returns "" if nothing meaningful remains.
- */
-export function conciseImageQuery(raw: string, maxWords = 4): string {
-  return significantTokens(raw).slice(0, maxWords).join(' ');
-}
 
 /** Lowercased, punctuation-stripped, stopword-filtered tokens (order preserved). */
 function significantTokens(raw: string): string[] {

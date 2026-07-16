@@ -1,5 +1,5 @@
 import { CalendarEntry, Project } from './types';
-import { ResearchContext, formatResearchForPrompt } from './research';
+import { ResearchContext } from './research';
 import type { BusinessBrief } from './business-brief';
 import { buildBlogPrompt } from './prompts/blog-prompt';
 import { buildKeywordIntentPrompt } from './prompts/keyword-intent-prompt';
@@ -11,10 +11,6 @@ import {
   type FunnelStage,
 } from '@/lib/keyword-funnel';
 import { countWordsInMarkdown, stripEmptyFragmentAnchorTags, validateExternalUrl, humanizeDashes } from '@/lib/blog-content';
-import {
-  extractGeminiTokenUsage,
-  recordGeminiCall,
-} from '@/lib/admin/logging/record-provider-call';
 import { computeSEOScore } from './seo-analyzer';
 
 import { aiGenerate, aiGenerateStructured } from '@/services/ai/providers';
@@ -43,43 +39,6 @@ function safeHost(url: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Render optional keyword + SERP context into a prompt-ready block.
- * Kept here (not in research.ts) so the gemini prompt is the single place
- * that decides how this data influences the article.
- */
-function formatAhrefsContextForPrompt(ctx: {
-  ideas: Array<{ keyword: string; volume: number; difficulty: number | null; cpc: number | null }>;
-  serp: Array<{ position: number; url: string; title: string; domain: string; domain_rating: number | null; traffic: number | null }>;
-}): string {
-  const lines: string[] = [];
-  lines.push('=== KEYWORD + SERP CONTEXT (live research data — use to expand topical coverage) ===\n');
-
-  if (ctx.ideas.length) {
-    lines.push('ADJACENT QUERIES TO ANSWER (from matching-terms + related-terms + search-suggestions):');
-    lines.push('Each is a real search with monthly Google volume. Answer at least 6 of these naturally inside the article body or FAQ — do NOT just append them as a bulleted list.');
-    ctx.ideas.slice(0, 24).forEach(k => {
-      const kdLabel = k.difficulty != null ? ` · KD ${k.difficulty}` : '';
-      lines.push(`• "${k.keyword}" — ${k.volume.toLocaleString()} searches/mo${kdLabel}`);
-    });
-    lines.push('');
-  }
-
-  if (ctx.serp.length) {
-    lines.push('LIVE TOP-10 SERP:');
-    lines.push('These are the pages currently winning for the target keyword. Beat them by going deeper on whatever they cover, AND covering at least one angle they miss.');
-    ctx.serp.slice(0, 10).forEach(p => {
-      const dr = p.domain_rating != null ? ` · DR ${Math.round(p.domain_rating)}` : '';
-      const traffic = p.traffic ? ` · ~${p.traffic.toLocaleString()} mo traffic` : '';
-      lines.push(`#${p.position} — "${p.title}" — ${p.domain}${dr}${traffic}`);
-    });
-    lines.push('');
-  }
-
-  lines.push('=== END KEYWORD + SERP CONTEXT ===');
-  return lines.join('\n');
 }
 
 export async function geminiGenerate(
@@ -712,17 +671,6 @@ function applyDeterministicFallbackFixes(
   };
 }
 
-function slugFromTopic(topic: string): string {
-  const base = topic
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 10)
-    .join('-');
-  return base || 'article';
-}
 
 export async function generateBlogPost(
   entry: CalendarEntry,
@@ -767,14 +715,6 @@ export async function generateBlogPost(
   const validatedInternalLinks = validatedInternalResults
     .filter((r): r is PromiseFulfilledResult<{ candidate: typeof allInternalCandidates[number]; ok: boolean }> => r.status === 'fulfilled' && r.value.ok)
     .map(r => r.value.candidate);
-
-  const siteLinks = validatedInternalLinks
-    .filter(c => c.type === 'site')
-    .slice(0, 12);
-
-  const generatedLinks = validatedInternalLinks
-    .filter(c => c.type === 'generated')
-    .slice(0, 8);
 
   const filteredBrief = brief
     ? {
@@ -1077,6 +1017,12 @@ export interface RepairBlogInput {
     category?: string;
   }>;
   contentGaps: string[];
+  /**
+   * What the top-ranking blog posts for this keyword do better — the concrete
+   * advantages the enhanced version must match or beat to outrank them. Sourced
+   * from the deep audit's competitor scrape (DataForSEO SERP → scrape top 5).
+   */
+  competitorInsights?: Array<{ url: string; advantages: string[] }>;
   /** URLs on the user's own site we can link to. Must be verbatim — LLM won't invent. */
   internalLinkPool: string[];
   /** Best-guess primary keyword this page is trying to rank for. */
@@ -1401,15 +1347,6 @@ export async function analyzeKeywordGapStrategy(
 
   return { analysisMarkdown, clusterKeywords };
 }
-
-const INSTANT_KEYWORD_TOPIC_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    keyword: { type: 'STRING' },
-    topic: { type: 'STRING' },
-  },
-  required: ['keyword', 'topic'],
-} as const;
 
 /**
  * One keyword grounded in the project's website domain, then one article topic that targets that keyword (no web search).

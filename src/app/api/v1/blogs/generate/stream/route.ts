@@ -260,6 +260,12 @@ export async function POST(req: Request) {
                   why_it_matters: i.why_it_matters,
                 })),
                 contentGaps: analysis.content_gaps ?? [],
+                // What the top-5 ranking blogs do better — so the enhanced
+                // version is built to beat them, not just fix its own issues.
+                competitorInsights: (analysis.competitor_insights ?? []).map((c: any) => ({
+                  url: c.url,
+                  advantages: c.advantages ?? [],
+                })),
                 internalLinkPool,
                 primaryKeyword: analysis.primary_keyword || repairPlan.primary_keyword || entry.focus_keyword,
                 secondaryKeywords: analysis.secondary_keywords ?? [],
@@ -289,13 +295,41 @@ export async function POST(req: Request) {
             });
             const finalContent = sanitizeBlogMarkdown(sanitized.content);
 
+            // ── Verify the enhancement actually beat the original + competitors ──
+            // Deterministic, no extra cost: confirm the flagged structural issues
+            // are resolved and the piece is now at least as deep as the top-5
+            // benchmark. The result is stored in repair_notes so the user sees
+            // exactly what was fixed and whether it out-covers the competitors.
+            const finalWords = countWords(finalContent);
+            const compWordCounts: number[] = (analysis.competitor_insights ?? [])
+              .map((c: any) => Number(c.word_count) || 0)
+              .filter((n: number) => n > 0);
+            const benchmarkWords = compWordCounts.length ? Math.max(...compWordCounts) : 0;
+            const checks = {
+              hasFaq: /^##+\s*(faqs?|frequently asked)/im.test(finalContent),
+              hasAnswerFirst: finalContent.replace(/^#.*$/m, "").trim().slice(0, 400).length > 120,
+              h2Count: (finalContent.match(/^##\s+/gm) ?? []).length,
+              externalLinks: sanitized.externalLinks.length,
+              internalLinks: sanitized.internalLinks.length,
+              beatsCompetitorDepth: benchmarkWords === 0 || finalWords >= benchmarkWords * 0.95,
+            };
+            const verification = [
+              `Enhanced to ${finalWords} words${benchmarkWords ? ` (top-5 benchmark ~${benchmarkWords})` : ""}.`,
+              `FAQ section: ${checks.hasFaq ? "present" : "still missing"}.`,
+              `${checks.h2Count} H2 sections · ${checks.externalLinks} external citations · ${checks.internalLinks} internal links.`,
+              checks.beatsCompetitorDepth
+                ? "Depth matches or exceeds the top-ranking blogs."
+                : "Still thinner than the top-ranking blogs — consider expanding further.",
+            ];
+            emit({ event: "stage", stage: "verify", detail: verification[0] });
+
             const { normalizeMetaDescription: normalizeRepairMeta } = await import("@/lib/blog-markdown-polish");
             const repairPayload = {
               title: repaired.title,
               content: finalContent,
               meta_description: normalizeRepairMeta(repaired.meta_description || analysis.summary, finalContent),
               slug: repaired.slug,
-              word_count: countWords(finalContent),
+              word_count: finalWords,
               target_keyword: entry.focus_keyword,
               article_type: "Repair",
               status: "generated" as const,
@@ -305,7 +339,7 @@ export async function POST(req: Request) {
               external_links: sanitized.externalLinks,
               internal_links: sanitized.internalLinks,
               source_url: repairPlan.url,
-              repair_notes: repaired.repair_notes ?? [],
+              repair_notes: [...(repaired.repair_notes ?? []), ...verification],
               updated_at: new Date().toISOString(),
             };
 

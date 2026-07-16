@@ -8,6 +8,8 @@ export type JobStatus = 'pending' | 'running' | 'done' | 'failed';
 
 export type JobType =
   | 'content_audit'
+  // Site-wide LLM-free health scan — one job per chunk of URLs.
+  | 'site_audit_scan'
   // reserved for later phases:
   | 'keyword_discovery'
   | 'blog_generate'
@@ -44,6 +46,12 @@ export interface ContentAuditJobPayload {
   focusKeyword?: string;
   /** How the audit was started — drives the persisted `_source`. */
   origin?: 'url' | 'batch' | 'upload';
+}
+
+/** Payload for a `site_audit_scan` job — one chunk of URLs to quick-scan. */
+export interface SiteAuditScanJobPayload {
+  projectId: string;
+  urls: string[];
 }
 
 export const JOB_SELECT =

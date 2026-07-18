@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
+import { useFormDraft } from "@/hooks/useFormDraft";
+import { useNotify } from "@/hooks/useNotify";
 import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -108,7 +110,35 @@ export default function EbookGeneratorPage() {
     markAutoFillable(["goal", "cta"]);
   }, [markAutoFillable]);
 
+  // Draft persistence — restore an in-progress form after navigating away/back
+  // (only for a fresh session, not calendar/keyword-driven opens).
+  const hasUrlContext = !!entryId || !!keywordParam;
+  const { clearDraft, hadDraft } = useFormDraft(
+    "ebook",
+    projectId,
+    { primaryKeyword, topic, secondaryKeywords, audience, tone, goal, ctaObjective, chapterDepth, customWordCount, region, language },
+    {
+      enabled: phase === "form" && !hasUrlContext,
+      apply: (d) => {
+        if (hasUrlContext) return;
+        if (typeof d.primaryKeyword === "string" && d.primaryKeyword) setPrimaryKeyword(d.primaryKeyword);
+        if (typeof d.topic === "string") setTopic(d.topic);
+        if (Array.isArray(d.secondaryKeywords)) setSecondaryKeywords(d.secondaryKeywords as string[]);
+        if (typeof d.audience === "string") setAudience(d.audience);
+        if (typeof d.tone === "string") setTone(d.tone as (typeof EBOOK_TONES)[number]["id"]);
+        if (typeof d.goal === "string") setGoal(d.goal);
+        if (typeof d.ctaObjective === "string") setCtaObjective(d.ctaObjective);
+        if (typeof d.chapterDepth === "string") setChapterDepth(d.chapterDepth as (typeof EBOOK_DEPTH_OPTIONS)[number]["id"]);
+        if (typeof d.customWordCount === "string") setCustomWordCount(d.customWordCount);
+        if (typeof d.region === "string") setRegion(d.region);
+        if (typeof d.language === "string") setLanguage(d.language);
+      },
+    },
+  );
+  const draftRestored = hadDraft && !hasUrlContext;
+
   useEffect(() => {
+    if (draftRestored) return;
     if (project?.target_audience && !audience) {
       setAudience(project.target_audience);
     }
@@ -209,8 +239,13 @@ export default function EbookGeneratorPage() {
     setPhase("review");
   };
 
+  const notify = useNotify();
+
   const runGeneration = async () => {
     setPhase("generating");
+    const genLabel = topic.trim() || primaryKeyword.trim() || "your ebook";
+    const genKey = `task:ebook:${projectId}:${Date.now()}`;
+    notify({ key: genKey, status: "running", title: "Generating ebook…", body: genLabel, projectId, os: false });
     const res = await generateEbookAction(projectId, {
       topic,
       primaryKeyword,
@@ -230,6 +265,8 @@ export default function EbookGeneratorPage() {
       console.log("[ebook] trace:", res.trace);
     }
     if (res.success) {
+      clearDraft();
+      notify({ key: genKey, status: "success", title: "Ebook ready", body: genLabel, href: `${studioBase}/ebooks/${res.data.id}`, projectId, os: true });
       toast.success("Ebook ready — opening preview.");
       void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
@@ -241,6 +278,7 @@ export default function EbookGeneratorPage() {
       }
       router.push(`${studioBase}/ebooks/${res.data.id}`);
     } else {
+      notify({ key: genKey, status: "error", title: "Ebook generation failed", body: res.error || genLabel, projectId, os: true });
       toast.error(res.error);
       setPhase("form");
     }

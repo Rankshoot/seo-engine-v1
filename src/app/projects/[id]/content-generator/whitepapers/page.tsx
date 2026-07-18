@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
+import { useFormDraft } from "@/hooks/useFormDraft";
+import { useNotify } from "@/hooks/useNotify";
 import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -103,7 +105,38 @@ export default function WhitepaperGeneratorPage() {
   const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
   const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, fillFlashClass } = useAiFillTracker();
 
+  // Draft persistence — restore an in-progress form after navigating away/back
+  // (only for a fresh session, not calendar/keyword-driven opens).
+  const hasUrlContext = !!entryId || !!keywordParam;
+  const { clearDraft, hadDraft } = useFormDraft(
+    "whitepaper",
+    projectId,
+    { primaryKeyword, topic, secondaryKeywords, audience, industry, problem, angle, objective, depth, customWordCount, region, language },
+    {
+      enabled: phase === "form" && !hasUrlContext,
+      apply: (d) => {
+        if (hasUrlContext) return;
+        if (typeof d.primaryKeyword === "string" && d.primaryKeyword) setPrimaryKeyword(d.primaryKeyword);
+        if (typeof d.topic === "string") setTopic(d.topic);
+        if (Array.isArray(d.secondaryKeywords)) setSecondaryKeywords(d.secondaryKeywords as string[]);
+        if (typeof d.audience === "string") setAudience(d.audience);
+        if (typeof d.industry === "string") setIndustry(d.industry);
+        if (typeof d.problem === "string") setProblem(d.problem);
+        if (typeof d.angle === "string") setAngle(d.angle);
+        if (typeof d.objective === "string") setObjective(d.objective);
+        if (typeof d.depth === "string") setDepth(d.depth as (typeof WP_DEPTH_OPTIONS)[number]["id"]);
+        if (typeof d.customWordCount === "string") setCustomWordCount(d.customWordCount);
+        if (typeof d.region === "string") setRegion(d.region);
+        if (typeof d.language === "string") setLanguage(d.language);
+      },
+    },
+  );
+  const draftRestored = hadDraft && !hasUrlContext;
+
   useEffect(() => {
+    // A restored draft already carries the user's audience/region/language —
+    // don't clobber it with project defaults.
+    if (draftRestored) return;
     if (project?.target_audience && !audience) setAudience(project.target_audience);
     if (project?.niche && !industry) setIndustry(project.niche);
     const tr = project?.target_region?.toLowerCase();
@@ -201,8 +234,13 @@ export default function WhitepaperGeneratorPage() {
     setPhase("review");
   };
 
+  const notify = useNotify();
+
   const runGeneration = async () => {
     setPhase("generating");
+    const genLabel = topic.trim() || primaryKeyword.trim() || "your whitepaper";
+    const genKey = `task:wp:${projectId}:${Date.now()}`;
+    notify({ key: genKey, status: "running", title: "Generating whitepaper…", body: genLabel, projectId, os: false });
     const res = await generateWhitepaperAction(projectId, {
       topic,
       primaryKeyword,
@@ -223,6 +261,8 @@ export default function WhitepaperGeneratorPage() {
       console.log("[whitepaper] trace:", res.trace);
     }
     if (res.success) {
+      clearDraft();
+      notify({ key: genKey, status: "success", title: "Whitepaper ready", body: genLabel, href: `${studioBase}/whitepapers/${res.data.id}`, projectId, os: true });
       toast.success("Whitepaper ready — opening preview.");
       void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
@@ -234,6 +274,7 @@ export default function WhitepaperGeneratorPage() {
       }
       router.push(`${studioBase}/whitepapers/${res.data.id}`);
     } else {
+      notify({ key: genKey, status: "error", title: "Whitepaper generation failed", body: res.error || genLabel, projectId, os: true });
       toast.error(res.error);
       setPhase("form");
     }

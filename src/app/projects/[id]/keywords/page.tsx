@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import dynamicComponent from "next/dynamic";
 import { KeywordTableSkeleton } from "@/components/Skeleton";
 import { KeywordTabSwitcher } from "./_components/KeywordTabSwitcher";
+import { KeywordsPageHeader } from "./_components/KeywordsPageHeader";
 
 const OrganicKeywordsTab = dynamicComponent(() => import("./_tabs/OrganicKeywordsTab"));
 const CompetitorKeywordsTab = dynamicComponent(() => import("./_tabs/CompetitorKeywordsTab"));
@@ -20,44 +21,24 @@ export default async function UnifiedKeywordDiscoveryPage({ params, searchParams
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] relative bg-background">
-      {/* ── Sticky Header ─────────────────────────────────────────────── */}
-      <header className="shrink-0 z-40 bg-surface-primary/95 backdrop-blur-md px-2  pb-0">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          {/* Title area */}
-          <div className="min-w-0 flex-1">
-  
-
-            <h1 className="text-[28px] sm:text-[34px] font-semibold tracking-tight text-text-primary leading-none">
-              Find & Schedule Keywords
-            </h1>
-            <p className="mt-2 text-[13px] text-text-tertiary max-w-[520px] leading-relaxed">
-              Discover real search demand, analyze keyword difficulty, and identify competitor gaps to approve for your content calendar.
-            </p>
-          </div>
-
-          {/* Tab switcher */}
-          <div className="flex flex-wrap items-center gap-3 shrink-0 pb-1">
-            <Suspense
-              fallback={
-                <div className="inline-flex rounded-[12px] border border-border-subtle bg-surface-secondary/60 p-1 gap-1">
-                  <div className="h-9 w-36 rounded-[8px] bg-surface-elevated animate-pulse" />
-                  <div className="h-9 w-40 rounded-[8px] bg-surface-elevated animate-pulse" />
-                </div>
-              }
-            >
-              <KeywordTabSwitcher projectId={id} activeTab={activeTab} />
-            </Suspense>
-          </div>
-        </div>
-
-        {/* Gradient separator — replaces the hard border */}
-        <div className="mt-5 h-px bg-gradient-to-r from-transparent via-border-subtle to-transparent" />
-        {/* Subtle brand glow under active area */}
-        <div className="h-px bg-gradient-to-r from-transparent via-brand-action/30 to-transparent" />
-      </header>
+      {/* ── Header (static — shared with loading.tsx) ─────────────────── */}
+      <KeywordsPageHeader
+        tabs={
+          <Suspense
+            fallback={
+              <div className="inline-flex rounded-[12px] border border-border-subtle bg-surface-secondary/60 p-1 gap-1">
+                <div className="h-9 w-36 rounded-[8px] bg-surface-tertiary animate-pulse" />
+                <div className="h-9 w-40 rounded-[8px] bg-surface-tertiary animate-pulse" />
+              </div>
+            }
+          >
+            <KeywordTabSwitcher projectId={id} activeTab={activeTab} />
+          </Suspense>
+        }
+      />
 
       {/* ── Content ───────────────────────────────────────────────────── */}
-      <section className="flex-1 flex flex-col min-h-0 px-2 pt-5 pb-">
+      <section className="flex-1 flex flex-col min-h-0 px-2 pt-5">
         <div className="w-full flex-1 flex flex-col min-h-0">
           <Suspense key={activeTab} fallback={<KeywordTableSkeleton />}>
             {activeTab === "organic" ? (

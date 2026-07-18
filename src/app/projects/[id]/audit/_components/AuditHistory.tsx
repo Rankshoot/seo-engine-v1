@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import type { ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import type { ContentAuditReport } from "@/lib/content-audit-studio";
@@ -12,12 +13,27 @@ import { normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice
 
 const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
 
+/** First URL path segment as a category key (e.g. ".../hr-glossary/x" → "hr-glossary"). */
+function categoryOf(url: string): string {
+  try { return new URL(url).pathname.split("/").filter(Boolean)[0] ?? "other"; }
+  catch { return "other"; }
+}
+function categoryLabel(key: string): string {
+  return key.replace(/[-_]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
 export function AuditHistory({
-  projectId, items, loading, onOpen, onGenerateFromHistory, onScheduleConfirm, scheduleSaving, scheduledDates,
+  projectId, items, loading, total, hasMore, loadingMore, onLoadMore, newUrls,
+  onOpen, onGenerateFromHistory, onScheduleConfirm, scheduleSaving, scheduledDates,
 }: {
   projectId: string;
   items: ContentAuditHistoryItem[];
   loading: boolean;
+  total?: number;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+  newUrls?: Set<string>;
   onOpen: (item: ContentAuditHistoryItem) => void;
   onGenerateFromHistory: (item: ContentAuditHistoryItem) => void;
   onScheduleConfirm: (item: ContentAuditHistoryItem, date: string) => void;
@@ -25,6 +41,12 @@ export function AuditHistory({
   scheduledDates: Set<string>;
 }) {
   const router = useRouter();
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Anchor for scroll preservation: the first partly-visible row and its offset
+  // from the top of the scroll box. Restored after the list changes so new rows
+  // arriving during a scan never yank the user's position or their open row.
+  const anchorRef = useRef<{ url: string; top: number } | null>(null);
   // Audit-URL → generated-blogId map (kept current by the page via Redux). Lets
   // each row decide between "Generate Enhanced Blog" and "View Blog".
   const generatedMap = useAppSelector(s => selectAuditGenerationsForProject(s, projectId));
@@ -34,6 +56,7 @@ export function AuditHistory({
   const scheduleMap = useAppSelector(s => selectAuditSchedulesForProject(s, projectId));
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
   const [scheduleOpenUrl, setScheduleOpenUrl] = useState<string | null>(null);
 
@@ -51,8 +74,18 @@ export function AuditHistory({
     return null;
   }, [scheduledDates]);
 
+  const filtersActive = search.trim().length > 0 || severityFilter !== "all" || categoryFilter !== "all";
+
+  // Categories present in the loaded rows (first URL path segment), for the filter.
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const i of items) counts.set(categoryOf(i.url), (counts.get(categoryOf(i.url)) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([key]) => key);
+  }, [items]);
+
   const filtered = useMemo(() => {
     let list = items;
+    if (categoryFilter !== "all") list = list.filter(i => categoryOf(i.url) === categoryFilter);
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(i =>
@@ -61,9 +94,52 @@ export function AuditHistory({
     }
     if (severityFilter !== "all") list = list.filter(i => i.severity === severityFilter);
     return list;
-  }, [items, search, severityFilter]);
+  }, [items, search, severityFilter, categoryFilter]);
 
-  if (loading) {
+  // Infinite scroll — auto-load the next page when the sentinel nears the
+  // viewport. Disabled while filtering (client-side search only spans loaded
+  // rows), where a "Load more" button widens the pool instead.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore || filtersActive || !onLoadMore) return;
+    const obs = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) onLoadMore(); },
+      { root: scrollRef.current, rootMargin: "300px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, filtersActive, onLoadMore, items.length]);
+
+  // Remember the first visible row as the scroll anchor. Called on scroll and
+  // before the list updates. Null when the user is at the very top, so brand-new
+  // rows are free to animate in there.
+  const captureAnchor = () => {
+    const el = scrollRef.current;
+    if (!el) { anchorRef.current = null; return; }
+    if (el.scrollTop <= 8) { anchorRef.current = null; return; }
+    const rows = el.querySelectorAll<HTMLElement>("[data-row-url]");
+    for (const row of rows) {
+      if (row.offsetTop + row.offsetHeight > el.scrollTop) {
+        anchorRef.current = { url: row.dataset.rowUrl ?? "", top: row.offsetTop - el.scrollTop };
+        break;
+      }
+    }
+  };
+
+  // After the list changes (new rows prepended during a scan, or a row
+  // expanded), restore the anchored row to the same position so the view never
+  // jumps out from under the user.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = anchorRef.current;
+    if (!el || !anchor || !anchor.url) return;
+    const row = el.querySelector<HTMLElement>(`[data-row-url="${CSS.escape(anchor.url)}"]`);
+    if (row) el.scrollTop = row.offsetTop - anchor.top;
+  }, [items, expandedUrl]);
+
+  // Skeleton only on the very first load (never while scanning/refreshing, so
+  // already-audited rows stay visible and new ones animate in on top).
+  if (loading && !items.length) {
     return (
       <div className="space-y-2">
         {[1, 2, 3].map(i => <div key={i} className="h-16 rounded-[12px] bg-surface-elevated border border-border-subtle animate-pulse" />)}
@@ -87,7 +163,7 @@ export function AuditHistory({
         <svg className="w-4 h-4 text-text-tertiary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
         </svg>
-        Audit History ({items.length})
+        Audit History ({total ?? items.length})
       </h2>
 
       <div className="flex gap-2 mb-3 flex-wrap">
@@ -103,6 +179,17 @@ export function AuditHistory({
             className="w-full h-8 pl-8 pr-3 rounded-[8px] border border-border-subtle bg-surface-elevated text-[12px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/40 transition-all"
           />
         </div>
+        {categories.length > 1 && (
+          <select
+            value={categoryFilter}
+            onChange={e => setCategoryFilter(e.target.value)}
+            className="h-8 px-2 rounded-[8px] border border-border-subtle bg-surface-elevated text-[12px] text-text-secondary focus:outline-none focus:border-brand-violet/40 max-w-[180px]"
+            title="Filter by category"
+          >
+            <option value="all">All categories</option>
+            {categories.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}
+          </select>
+        )}
         <div className="flex gap-1">
           {SEVERITY_OPTS.map(s => (
             <button
@@ -121,11 +208,13 @@ export function AuditHistory({
 
       {filtered.length === 0 && <p className="text-[13px] text-text-tertiary py-4 text-center">No results match your filters.</p>}
 
-      <div className="space-y-2">
-        {filtered.slice(0, 20).map(item => {
+      <div ref={scrollRef} onScroll={captureAnchor} className="space-y-2 max-h-[70vh] overflow-y-auto pr-1" style={{ overflowAnchor: "none" }}>
+        <AnimatePresence initial={false}>
+        {filtered.map(item => {
           const score = item.overall_score || item.health_score;
           const color = scoreColor(score);
           const isExpanded = expandedUrl === item.url;
+          const isNew = newUrls?.has(item.url) ?? false;
           // Only real, completed audits ('ok') can be enhanced/scheduled — never a
           // page we flagged as non-article / unreachable.
           const isReal = (((item.report as ContentAuditReport | null)?.page_status as string | undefined) ?? "ok") === "ok";
@@ -139,16 +228,38 @@ export function AuditHistory({
           );
 
           return (
-            <div key={item.url} className="rounded-[12px] border border-border-subtle bg-surface-elevated overflow-hidden transition-all">
+            <motion.div
+              key={item.url}
+              data-row-url={item.url}
+              layout
+              initial={{ opacity: 0, y: -14, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+              className={`rounded-[12px] border overflow-hidden transition-colors ${
+                isNew ? "border-brand-violet/60 ring-1 ring-brand-violet/30 bg-brand-violet/[0.04]" : "border-border-subtle bg-surface-elevated"
+              }`}
+            >
               <div
                 className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-hover transition-colors"
-                onClick={() => setExpandedUrl(isExpanded ? null : item.url)}
+                onClick={() => { captureAnchor(); setExpandedUrl(isExpanded ? null : item.url); }}
               >
                 <div className="shrink-0">
                   <span className="text-[16px] font-bold tabular-nums" style={{ color }}>{score}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-semibold text-text-primary leading-snug truncate">{item.title || item.url}</p>
+                  <p className="text-[13px] font-semibold text-text-primary leading-snug truncate flex items-center gap-2">
+                    {isNew && (
+                      <span className="inline-flex items-center gap-1 shrink-0 rounded-full bg-brand-violet/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-brand-violet">
+                        <span className="relative flex h-1.5 w-1.5">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-violet opacity-75" />
+                          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand-violet" />
+                        </span>
+                        New
+                      </span>
+                    )}
+                    <span className="truncate">{item.title || item.url}</span>
+                  </p>
                   <div className="flex items-center gap-2">
                     <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${item.source === "upload" ? "text-brand-violet" : "text-text-tertiary"}`}>
                       {item.source === "upload" ? (
@@ -274,10 +385,34 @@ export function AuditHistory({
                   </div>
                 </div>
               )}
-            </div>
+            </motion.div>
           );
         })}
+        </AnimatePresence>
+
+        {/* Pagination — infinite-scroll sentinel + explicit "Load more" fallback. */}
+        {hasMore && !filtersActive && (
+          <div ref={sentinelRef} className="pt-3 flex justify-center">
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="inline-flex items-center gap-1.5 h-8 px-4 rounded-full border border-border-subtle bg-surface-elevated text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-secondary disabled:opacity-60 transition-all"
+            >
+              {loadingMore ? (
+                <><span className="inline-block h-3 w-3 animate-spin rounded-full border-[2px] border-border-subtle border-t-text-secondary" /> Loading…</>
+              ) : (
+                <>Load more ({(total ?? items.length) - items.length} left)</>
+              )}
+            </button>
+          </div>
+        )}
+        {!hasMore && !filtersActive && items.length > HISTORY_VISIBLE_HINT && (
+          <p className="pt-3 pb-1 text-center text-[11px] text-text-tertiary">That&apos;s all {total ?? items.length} audits.</p>
+        )}
       </div>
     </div>
   );
 }
+
+const HISTORY_VISIBLE_HINT = 10;

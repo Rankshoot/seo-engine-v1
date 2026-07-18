@@ -47,6 +47,7 @@ export async function repairBlogPost(
     originalMarkdown,
     issues,
     contentGaps,
+    competitorInsights,
     internalLinkPool,
     primaryKeyword,
     secondaryKeywords,
@@ -85,6 +86,15 @@ export async function repairBlogPost(
   const gapsBlock = contentGaps.length
     ? contentGaps.map(g => `- ${g}`).join("\n")
     : "(the LLM did not flag explicit content gaps)";
+
+  // What the top-ranking blog posts do better — the bar to clear to outrank them.
+  const competitorBlock = (competitorInsights ?? [])
+    .filter(c => c.advantages?.length)
+    .map((c, idx) => `Top blog #${idx + 1} (${c.url}):\n${c.advantages.map(a => `   - ${a}`).join("\n")}`)
+    .join("\n");
+  const competitorSection = competitorBlock
+    ? `BEAT THE TOP-RANKING BLOGS FOR "${primaryKeyword}" — these are the pages currently outranking this one. The enhanced version MUST cover everything they do AND add depth/angles they miss, so it becomes the most complete answer on the topic:\n${competitorBlock}\n\n`
+    : "";
 
   const fullBundle = Boolean(contentAnalysisBundle);
 
@@ -189,7 +199,7 @@ REGION: ${project.target_region}
 ${analysisOverview ? `${analysisOverview}\n\n` : ""}AUDIT ISSUES TO FIX (address every row):
 ${issueBlock}
 
-${rubricSection}${quickWinsSection}MISSING SUBTOPICS TO COVER:
+${rubricSection}${quickWinsSection}${competitorSection}MISSING SUBTOPICS TO COVER:
 ${gapsBlock}
 
 INTERNAL LINK POOL (you MUST use at least 2 of these, verbatim):

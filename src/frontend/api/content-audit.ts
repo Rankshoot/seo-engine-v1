@@ -38,8 +38,15 @@ export const contentAuditApi = {
     return apiPost(V1Routes.contentAuditAnalyze(projectId), { url, ...opts });
   },
 
-  history(projectId: string): Promise<{ success: boolean; error?: string; items: ContentAuditHistoryItem[] }> {
-    return apiGet(V1Routes.contentAuditHistory(projectId));
+  history(
+    projectId: string,
+    opts?: { limit?: number; offset?: number }
+  ): Promise<{ success: boolean; error?: string; items: ContentAuditHistoryItem[]; total: number; hasMore: boolean }> {
+    const qs = new URLSearchParams();
+    if (opts?.limit != null) qs.set('limit', String(opts.limit));
+    if (opts?.offset != null) qs.set('offset', String(opts.offset));
+    const q = qs.toString();
+    return apiGet(`${V1Routes.contentAuditHistory(projectId)}${q ? `?${q}` : ''}`);
   },
 
   /** Map of audited URL → generated ("enhanced") blogId for this project. */

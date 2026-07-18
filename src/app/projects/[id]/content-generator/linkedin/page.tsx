@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
+import { useFormDraft } from "@/hooks/useFormDraft";
+import { useNotify } from "@/hooks/useNotify";
 import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -106,7 +108,34 @@ export default function LinkedInGeneratorPage() {
     markAutoFillable(["cta", "tone", "postStyle", "voice", "authorRole"]);
   }, [markAutoFillable]);
 
+  // Draft persistence — restore an in-progress form after navigating away/back
+  // (only for a fresh session, not calendar/keyword-driven opens).
+  const hasUrlContext = !!entryId || !!keywordParam;
+  const { clearDraft, hadDraft } = useFormDraft(
+    "linkedin",
+    projectId,
+    { primaryKeyword, topic, audience, tone, postStyle, voice, authorRole, ctaObjective, region, language },
+    {
+      enabled: phase === "form" && !hasUrlContext,
+      apply: (d) => {
+        if (hasUrlContext) return;
+        if (typeof d.primaryKeyword === "string" && d.primaryKeyword) setPrimaryKeyword(d.primaryKeyword);
+        if (typeof d.topic === "string") setTopic(d.topic);
+        if (typeof d.audience === "string") setAudience(d.audience);
+        if (typeof d.tone === "string") setTone(d.tone as (typeof LINKEDIN_TONE_OPTIONS)[number]);
+        if (typeof d.postStyle === "string") setPostStyle(d.postStyle as LinkedInPostStyle);
+        if (d.voice === "first_person" || d.voice === "company") setVoice(d.voice);
+        if (typeof d.authorRole === "string") setAuthorRole(d.authorRole);
+        if (typeof d.ctaObjective === "string") setCtaObjective(d.ctaObjective);
+        if (typeof d.region === "string") setRegion(d.region);
+        if (typeof d.language === "string") setLanguage(d.language);
+      },
+    },
+  );
+  const draftRestored = hadDraft && !hasUrlContext;
+
   useEffect(() => {
+    if (draftRestored) return;
     if (project?.target_audience && !audience) setAudience(project.target_audience);
     const tr = project?.target_region?.toLowerCase();
     if (tr && TARGET_REGIONS.some(r => r.code === tr)) setRegion(tr);
@@ -201,8 +230,13 @@ export default function LinkedInGeneratorPage() {
     setPhase("review");
   };
 
+  const notify = useNotify();
+
   const runGeneration = async () => {
     setPhase("generating");
+    const genLabel = topic.trim() || primaryKeyword.trim() || "your LinkedIn post";
+    const genKey = `task:linkedin:${projectId}:${Date.now()}`;
+    notify({ key: genKey, status: "running", title: "Generating LinkedIn post…", body: genLabel, projectId, os: false });
     const res = await generateLinkedInPostAction(projectId, {
       topic,
       primaryKeyword,
@@ -220,6 +254,8 @@ export default function LinkedInGeneratorPage() {
       console.log("[linkedin] trace:", res.trace);
     }
     if (res.success) {
+      clearDraft();
+      notify({ key: genKey, status: "success", title: "LinkedIn post ready", body: genLabel, href: `${studioBase}/linkedin/${res.data.id}`, projectId, os: true });
       toast.success("LinkedIn post ready — opening preview.");
       void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
       if (entryId) {
@@ -230,6 +266,7 @@ export default function LinkedInGeneratorPage() {
       }
       router.push(`${studioBase}/linkedin/${res.data.id}`);
     } else {
+      notify({ key: genKey, status: "error", title: "LinkedIn post generation failed", body: res.error || genLabel, projectId, os: true });
       toast.error(res.error);
       setPhase("form");
     }

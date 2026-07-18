@@ -18,6 +18,7 @@ import { motion } from "framer-motion";
 import { STEPS } from "./_components/audit-config";
 import { AuditResults } from "./_components/AuditResults";
 import { AuditHistory } from "./_components/AuditHistory";
+import { SiteScanBar } from "./_components/SiteScanBar";
 import { GenerationStreamPanel } from "./_components/GenerationStreamPanel";
 import { useAppDispatch, useAppSelector, selectGeneratedBlogId, selectAuditSchedule, selectAuditGenerationsForProject } from "@/lib/redux/hooks";
 import { setGeneratedMap, setGeneratedBlog, normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
@@ -60,6 +61,13 @@ export default function ContentAuditStudioPage() {
   const [reportSource, setReportSource] = useState<"url" | "upload">("url");
   const [history, setHistory] = useState<ContentAuditHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  // URLs freshly audited since the last view — drives the "New" badge + row
+  // enter animation. Each fades out on a short timer so the marker feels live.
+  const [newAuditUrls, setNewAuditUrls] = useState<Set<string>>(new Set());
+  const newFlagTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [activeTab, setActiveTab] = useState<"issues" | "rubric" | "competitors">("issues");
   const [activeJobs, setActiveJobs] = useState<ActiveAuditJob[]>([]);
 
@@ -90,16 +98,82 @@ export default function ContentAuditStudioPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
+  const HISTORY_PAGE = 30;
+
+  // Flags a URL as "new" for a few seconds (badge + enter animation), then fades it.
+  const flagNew = useCallback((urls: string[]) => {
+    if (!urls.length) return;
+    setNewAuditUrls(prev => {
+      const next = new Set(prev);
+      urls.forEach(u => next.add(u));
+      return next;
+    });
+    urls.forEach(u => {
+      const timers = newFlagTimers.current;
+      const existing = timers.get(u);
+      if (existing) clearTimeout(existing);
+      timers.set(u, setTimeout(() => {
+        setNewAuditUrls(prev => { const n = new Set(prev); n.delete(u); return n; });
+        timers.delete(u);
+      }, 6000));
+    });
+  }, []);
+
+  // Initial / full load — replaces the list with the first page.
   const loadHistory = useCallback(async () => {
     if (!projectId) return;
     setHistoryLoading(true);
     try {
-      const res = await contentAuditApi.history(projectId);
-      if (res.success) setHistory(res.items);
+      const res = await contentAuditApi.history(projectId, { limit: HISTORY_PAGE, offset: 0 });
+      if (res.success) {
+        setHistory(res.items);
+        setHistoryTotal(res.total);
+        setHistoryHasMore(res.hasMore);
+      }
     } finally {
       setHistoryLoading(false);
     }
   }, [projectId]);
+
+  // Load the next page and append (used by "Load more" / infinite scroll).
+  const loadMoreHistory = useCallback(async () => {
+    if (!projectId) return;
+    setHistoryLoadingMore(true);
+    try {
+      const res = await contentAuditApi.history(projectId, { limit: HISTORY_PAGE, offset: history.length });
+      if (res.success) {
+        setHistory(prev => {
+          const seen = new Set(prev.map(i => i.url));
+          return [...prev, ...res.items.filter(i => !seen.has(i.url))];
+        });
+        setHistoryTotal(res.total);
+        setHistoryHasMore(res.hasMore);
+      }
+    } finally {
+      setHistoryLoadingMore(false);
+    }
+  }, [projectId, history.length]);
+
+  // Silent top-refresh (while a scan runs): fetch the newest page and merge —
+  // brand-new audits animate in at the top, already-loaded pages are preserved.
+  const refreshHistoryTop = useCallback(async () => {
+    if (!projectId) return;
+    const res = await contentAuditApi.history(projectId, { limit: HISTORY_PAGE, offset: 0 });
+    if (!res.success) return;
+    setHistory(prev => {
+      const prevUrls = new Set(prev.map(i => i.url));
+      const brandNew = res.items.filter(i => !prevUrls.has(i.url));
+      if (brandNew.length) flagNew(brandNew.map(i => i.url));
+      // Overlay updated rows onto existing ones, prepend brand-new, keep the rest.
+      const byUrl = new Map(prev.map(i => [i.url, i]));
+      res.items.forEach(i => byUrl.set(i.url, i));
+      const merged = Array.from(byUrl.values());
+      merged.sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0));
+      return merged;
+    });
+    setHistoryTotal(res.total);
+    setHistoryHasMore(prev => prev || res.hasMore);
+  }, [projectId, flagNew]);
 
   const loadScheduledDates = useCallback(async () => {
     if (!projectId) return;
@@ -158,8 +232,12 @@ export default function ContentAuditStudioPage() {
         if (cancelled) return;
         setActiveJobs(r.jobs);
         try {
-          const hist = await contentAuditApi.history(projectId);
-          if (!cancelled && hist.success) setHistory(hist.items);
+          const hist = await contentAuditApi.history(projectId, { limit: HISTORY_PAGE, offset: 0 });
+          if (!cancelled && hist.success) {
+            setHistory(hist.items);
+            setHistoryTotal(hist.total);
+            setHistoryHasMore(hist.hasMore);
+          }
         } catch { /* ignore */ }
         if (r.jobs.length === 0) return;
       }
@@ -285,8 +363,12 @@ export default function ContentAuditStudioPage() {
       // saved to history (a non-article page we deliberately skipped), so we show
       // the right warning instead of a phantom "couldn't load" error.
       const outcome = await getAuditJobOutcome(projectId, started.jobId);
-      const hist = await contentAuditApi.history(projectId);
-      if (hist.success) setHistory(hist.items);
+      const hist = await contentAuditApi.history(projectId, { limit: HISTORY_PAGE, offset: 0 });
+      if (hist.success) {
+        setHistory(hist.items);
+        setHistoryTotal(hist.total);
+        setHistoryHasMore(hist.hasMore);
+      }
 
       if (outcome.success && outcome.status === "failed") {
         setError(outcome.error || "The audit could not complete. Please try again.");
@@ -751,10 +833,19 @@ export default function ContentAuditStudioPage() {
         )}
 
         {!analyzing && (
+          <SiteScanBar projectId={projectId} onProgress={refreshHistoryTop} />
+        )}
+
+        {!analyzing && (
           <AuditHistory
             projectId={projectId}
             items={history}
             loading={historyLoading}
+            total={historyTotal}
+            hasMore={historyHasMore}
+            loadingMore={historyLoadingMore}
+            onLoadMore={loadMoreHistory}
+            newUrls={newAuditUrls}
             onOpen={openHistoryItem}
             onGenerateFromHistory={handleGenerateFromHistory}
             onScheduleConfirm={handleScheduleFromHistoryConfirm}

@@ -14,7 +14,7 @@
 
 import { z } from 'zod';
 import { hybridReadUrl } from '@/services/hybridScraper';
-import { readUrlViaJinaReader } from '@/lib/jina';
+import { readUrlViaJinaReader, looksLikeBlogPostUrl } from '@/lib/jina';
 import { aiGenerateStructured } from '@/services/ai/providers';
 import {
   fetchKeywordVitals,
@@ -22,6 +22,62 @@ import {
 } from '@/lib/dataforseo';
 import type { KeywordVitals } from '@/lib/dataforseo';
 import { locationCodeFromTargetRegion } from '@/lib/types';
+import { supabaseAdmin } from '@/lib/supabase';
+import type { BusinessBrief } from '@/lib/business-brief';
+import { loadProjectMemory } from '@/lib/ai-memory';
+
+/**
+ * Loads the project's business use-case (brief + AI memory) and formats it into
+ * a prompt block so the audit judges content against how well it serves THIS
+ * business — its audience, offerings, USPs, voice, and known preferences — not
+ * just generic SEO/GEO/AEO. Best-effort: returns "" when there's nothing to add
+ * (uploaded content with no project, missing brief, etc.), so the audit still
+ * runs its generic checks unchanged.
+ */
+async function loadAuditUseCaseBlock(projectId: string): Promise<string> {
+  if (!projectId) return '';
+  try {
+    const [briefRes, memory] = await Promise.all([
+      supabaseAdmin.from('project_briefs').select('brief').eq('project_id', projectId).maybeSingle(),
+      loadProjectMemory(projectId, 20),
+    ]);
+    const brief = (briefRes.data?.brief ?? null) as BusinessBrief | null;
+
+    // Only the entries that describe the business's goals/voice/preferences are
+    // useful to an auditor — skip "topic covered" / "activity" bookkeeping.
+    const relevantMemory = memory
+      .filter((m) => ['preference', 'style', 'audience_insight'].includes(m.kind))
+      .map((m) => m.content.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+
+    if (!brief && !relevantMemory.length) return '';
+
+    const lines: string[] = [];
+    if (brief) {
+      if (brief.summary) lines.push(`- What the business does: ${brief.summary}`);
+      if (brief.audiences?.length) lines.push(`- Who they serve (target audience): ${brief.audiences.slice(0, 6).join(' | ')}`);
+      if (brief.products?.length) lines.push(`- What they offer: ${brief.products.slice(0, 10).join(', ')}`);
+      if (brief.usps?.length) lines.push(`- Their edge (USPs): ${brief.usps.slice(0, 6).join(' | ')}`);
+      if (brief.tone) lines.push(`- Brand voice: ${brief.tone}`);
+    }
+    if (relevantMemory.length) {
+      lines.push(`- Known preferences / style learnings for this project:\n${relevantMemory.map((m) => `    • ${m}`).join('\n')}`);
+    }
+    if (!lines.length) return '';
+
+    return `\nBUSINESS USE-CASE CONTEXT (audit how well this content serves THIS specific business, not only generic SEO):
+${lines.join('\n')}
+
+Weight your audit by fit to this business, not just technical SEO:
+- Does the content speak to the audience above and address the real problems they search for?
+- Does it reflect the brand voice and the known preferences, and position the business's offerings/USPs where it reads naturally (never forced or salesy)?
+- Where content is generically competent but a POOR FIT for this audience/use-case, raise a specific issue for it (category "content") and reflect it in the plain_language_verdict.
+Do NOT invent business facts that are not stated above, and do not demand the content name the company if that would read as promotional.\n`;
+  } catch {
+    return '';
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -111,6 +167,8 @@ export interface ContentAuditReport {
   is_blog_post?: boolean;
   content_type_verdict?: string;
   non_blog_warning?: string;
+  /** 'quick' = LLM-free site-scan tier; 'deep' (or absent) = full audit. */
+  tier?: 'quick' | 'deep';
 }
 
 export interface PersistedContentAudit {
@@ -233,6 +291,33 @@ interface StructuralSignals {
   publish_date: string | null;
 }
 
+/** Strips markdown heading markers + emphasis: "## **Frequently Asked...**" → "Frequently Asked...". */
+function stripHeadingMarkup(line: string): string {
+  return line.replace(/^#{1,6}\s+/, '').replace(/[*_`~]/g, '').trim();
+}
+
+const FAQ_HEADING_RE = /\b(faqs?|frequently[- ]asked[- ]questions?|common questions|q\s*&\s*a|questions?\s*(and|&)\s*answers)\b/i;
+
+/** Extracts stripped heading texts from raw markdown. */
+function markdownHeadingTexts(markdown: string): string[] {
+  return (markdown.match(/^#{1,6}\s+.+$/gm) ?? []).map(stripHeadingMarkup);
+}
+
+function countQuestionHeadings(headingTexts: string[]): number {
+  return headingTexts.filter(t => t.endsWith('?')).length;
+}
+
+/**
+ * A page has an FAQ section when a heading names it (FAQ / "Frequently Asked
+ * Questions" / "Common Questions" / "Q&A"), OR when it has a cluster of 3+
+ * question-form headings — a Q&A block that serves the same purpose even
+ * without a literal FAQ label. Emphasis is already stripped by the caller.
+ */
+function detectFaqFromHeadings(headingTexts: string[]): boolean {
+  if (headingTexts.some(t => FAQ_HEADING_RE.test(t))) return true;
+  return countQuestionHeadings(headingTexts) >= 3;
+}
+
 function extractSignals(
   markdown: string,
   url: string,
@@ -247,8 +332,12 @@ function extractSignals(
   let headingCount = mdHeadings.length;
   let h2Count = (markdown.match(/^##\s+.+$/gm) ?? []).length;
   let h3Count = (markdown.match(/^###\s+.+$/gm) ?? []).length;
-  let faqSection = /^##+\s*(faqs?|frequently asked questions)\b/im.test(markdown);
-  let questionHeadings = mdHeadings.filter(h => /\?/.test(h)).length >= 2;
+  // Detect from NORMALIZED heading text (emphasis stripped) so a CMS wrapping a
+  // heading in **bold**/_italics_ — e.g. "## **Frequently Asked Questions**" —
+  // no longer hides the FAQ + question-heading signals.
+  const headingTexts = mdHeadings.map(stripHeadingMarkup);
+  let faqSection = detectFaqFromHeadings(headingTexts);
+  let questionHeadings = countQuestionHeadings(headingTexts) >= 2;
 
   // Pasted prose often has NO markdown markers — headings are bare lines. Derive
   // structure heuristically so content-quality / GEO / AEO aren't wrongly zeroed.
@@ -423,10 +512,18 @@ async function scrapeTopCompetitors(
   try {
     const { urls } = await fetchGoogleOrganicSerpTopUrls(keyword, {
       locationCode,
-      limit: 6,
+      limit: 10,
       excludeHosts: excludeHost ? [excludeHost] : [],
     });
-    serpUrls = urls.slice(0, 5).map(u => ({ url: u.url, position: u.position, title: u.title }));
+    // We compare against the top-ranking BLOG POSTS for this keyword. Prefer
+    // URLs that look like articles; fall back to raw SERP order if the SERP is
+    // thin on blogs, so we always have something to benchmark against.
+    const ranked = urls.map(u => ({ url: u.url, position: u.position, title: u.title }));
+    const blogFirst = [
+      ...ranked.filter(u => looksLikeBlogPostUrl(u.url)),
+      ...ranked.filter(u => !looksLikeBlogPostUrl(u.url)),
+    ];
+    serpUrls = blogFirst.slice(0, 5);
   } catch {
     return [];
   }
@@ -434,8 +531,8 @@ async function scrapeTopCompetitors(
   if (!serpUrls.length) return [];
 
   const results: ScrapedCompetitor[] = [];
-  // Scrape top 3 in parallel via Jina (free)
-  const toScrape = serpUrls.slice(0, 3);
+  // Scrape the top 5 benchmark posts in parallel via Jina (free).
+  const toScrape = serpUrls;
   const scraped = await Promise.allSettled(
     toScrape.map(u => readUrlViaJinaReader(u.url, { timeoutMs: 20_000 }))
   );
@@ -449,7 +546,7 @@ async function scrapeTopCompetitors(
 
     const wordCount = md.split(/\s+/).filter(Boolean).length;
     const h2Count = (md.match(/^##\s+/gm) ?? []).length;
-    const hasFaq = /^##+\s*(faqs?|frequently asked)/im.test(md);
+    const hasFaq = detectFaqFromHeadings(markdownHeadingTexts(md));
     const hasSchema = /"@type"/i.test(md);
     const compTitle = extractTitle(md) || meta.title || meta.url;
 
@@ -466,6 +563,55 @@ async function scrapeTopCompetitors(
   }
 
   return results;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Article gate — "is this a real blog post / article?"
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Decides whether a page is a real blog post/article using its OWN declared
+ * semantics — schema.org JSON-LD @type + OpenGraph og:type + a publish date —
+ * plus homepage + length signals. It never guesses from URL patterns. Shared by
+ * BOTH the deep audit and the site scan. Returns true when the page is NOT an
+ * article.
+ *
+ * Two strictness modes:
+ * - default (deep audit, single URL the user chose): reject only pages that
+ *   look non-article — permissive, so an unmarked-up article the user pasted a
+ *   link to still gets audited.
+ * - `strict` (site-wide scan): require a POSITIVE article signal (article schema,
+ *   og:type=article, or a publish date). This keeps a bulk scan to blog posts
+ *   only, so wordy landing/product pages with no article markup are skipped.
+ */
+function isNonArticlePage(
+  rawHtml: RawHtmlSignals,
+  signals: StructuralSignals,
+  effectiveUrl: string,
+  opts: { strict?: boolean } = {},
+): boolean {
+  const ARTICLE_SCHEMA = /\b(article|blogposting|newsarticle|techarticle|scholarlyarticle|liveblogposting|report)\b/i;
+  const NON_ARTICLE_SCHEMA = /\b(website|collectionpage|itemlist|organization|localbusiness|corporation|product|searchresultspage|profilepage|aboutpage|contactpage)\b/i;
+  const hasArticleSchema = rawHtml.schemaTypes.some(t => ARTICLE_SCHEMA.test(t));
+  const hasNonArticleSchema = !hasArticleSchema && rawHtml.schemaTypes.some(t => NON_ARTICLE_SCHEMA.test(t));
+  const articleSignal = hasArticleSchema || rawHtml.ogType === 'article' || Boolean(rawHtml.publishDate);
+
+  let isHomepage = false;
+  try { isHomepage = new URL(effectiveUrl).pathname.replace(/\/+$/, '') === ''; } catch { /* leave false */ }
+
+  // Strict (bulk scan): must positively look like a blog post — either declared
+  // article semantics OR a blog-post URL path (robust for JS-heavy sites whose
+  // schema/meta the raw-HTML fetch can't read). Never the homepage or too thin.
+  if (opts.strict) {
+    const looksLikeBlog = articleSignal || looksLikeBlogPostUrl(effectiveUrl);
+    return !looksLikeBlog || isHomepage || signals.word_count < 250;
+  }
+
+  const declaredNonContent =
+    (rawHtml.ogType !== null &&
+      ['website', 'product', 'profile', 'product.group', 'business.business'].includes(rawHtml.ogType)) ||
+    hasNonArticleSchema;
+  return !articleSignal && (declaredNonContent || isHomepage || signals.word_count < 250);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -728,6 +874,7 @@ async function runAiAnalysis(
   vitals: KeywordVitals | undefined,
   projectId: string,
   isUploaded = false,
+  useCaseBlock = '',
 ): Promise<z.infer<typeof AuditAnalysisSchema>> {
   const contentSnippet = markdown.slice(0, 14_000);
   const tailSnippet = markdown.length > 22_000 ? markdown.slice(-6_000) : '';
@@ -760,7 +907,7 @@ Competitor #${i + 1} (rank ~${c.rank}): ${c.url}
 Analyze the ${isUploaded ? 'pasted content' : 'blog post'} below and produce a comprehensive, actionable audit. This audit will be used to generate a revamped version of this content.
 ${pastedModeBanner}
 TARGET AUDIENCE: The output will be read by the content's author/owner — a business person, not an SEO expert. Use plain English. Explain any SEO/GEO/AEO term you use in a brief parenthetical.
-
+${useCaseBlock}
 ${isUploaded ? 'SOURCE: pasted content (no live URL)' : `BLOG URL: ${url}`}
 
 CURRENT DATE: ${currentDate} — use this to assess content freshness and flag outdated information.
@@ -931,42 +1078,14 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
   // guesses the content TYPE from URL patterns (no "/blog/ = article" rules);
   // it runs BEFORE any paid call below. Uploaded/pasted content always passes
   // (the user explicitly provided an article).
-  if (!isUploaded) {
-    // Positive article signals — the page's OWN declared semantics.
-    const ARTICLE_SCHEMA = /\b(article|blogposting|newsarticle|techarticle|scholarlyarticle|liveblogposting|report)\b/i;
-    // Schema that a real blog post is essentially never marked up as. Used only
-    // as a negative signal, and only when no article schema is present.
-    const NON_ARTICLE_SCHEMA = /\b(website|collectionpage|itemlist|organization|localbusiness|corporation|product|searchresultspage|profilepage|aboutpage|contactpage)\b/i;
-    const hasArticleSchema = rawHtml.schemaTypes.some(t => ARTICLE_SCHEMA.test(t));
-    const hasNonArticleSchema = !hasArticleSchema && rawHtml.schemaTypes.some(t => NON_ARTICLE_SCHEMA.test(t));
-    const articleSignal = hasArticleSchema || rawHtml.ogType === 'article' || Boolean(rawHtml.publishDate);
-
-    const declaredNonContent =
-      (rawHtml.ogType !== null &&
-        ['website', 'product', 'profile', 'product.group', 'business.business'].includes(rawHtml.ogType)) ||
-      hasNonArticleSchema;
-
-    // Root path ("/") is the homepage — a real article never lives there. This
-    // is a structural fact about the resolved URL, not URL-pattern guessing, and
-    // it catches wordy homepages (like a company landing page) that declare no
-    // og:type at all — the case that was still slipping through and burning credits.
-    let isHomepage = false;
-    try {
-      isHomepage = new URL(effectiveUrl).pathname.replace(/\/+$/, '') === '';
-    } catch { /* leave false */ }
-
-    const isNonContent = !articleSignal && (declaredNonContent || isHomepage || signals.word_count < 250);
-
-    if (isNonContent) {
-      trace.push({
-        step: 'content_gate',
-        ok: false,
-        detail: `non-article page (og:type=${rawHtml.ogType ?? 'none'}, schema=[${rawHtml.schemaTypes.join(',') || 'none'}], homepage=${isHomepage}, words=${signals.word_count}) — skipped paid analysis`,
-        ms: 0,
-      });
-      return { record: nonContentRecord(url, signals, rawHtml), trace };
-    }
-    trace.push({ step: 'content_gate', ok: true, detail: 'looks like an article — proceeding', ms: 0 });
+  if (!isUploaded && isNonArticlePage(rawHtml, signals, effectiveUrl)) {
+    trace.push({
+      step: 'content_gate',
+      ok: false,
+      detail: `non-article page (og:type=${rawHtml.ogType ?? 'none'}, schema=[${rawHtml.schemaTypes.join(',') || 'none'}], words=${signals.word_count}) — skipped paid analysis`,
+      ms: 0,
+    });
+    return { record: nonContentRecord(url, signals, rawHtml), trace };
   }
 
   // 4. Keyword vitals lookup
@@ -1011,11 +1130,14 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
     trace.push({ step: 'competitor_scrape', ok: false, detail: String(e), ms: Date.now() - t3 });
   }
 
-  // 6. AI analysis
+  // 6. AI analysis — grounded in the project's business use-case (brief + memory)
+  //    so the audit judges fit to THIS business, not just generic SEO.
+  const useCaseBlock = await loadAuditUseCaseBlock(projectId);
+  if (useCaseBlock) trace.push({ step: 'use_case_context', ok: true, detail: 'brief + memory loaded', ms: 0 });
   const t4 = Date.now();
   let aiResult: z.infer<typeof AuditAnalysisSchema>;
   try {
-    aiResult = await runAiAnalysis(effectiveUrl, pageMarkdown, signals, rawHtml, competitors, vitals, projectId, isUploaded);
+    aiResult = await runAiAnalysis(effectiveUrl, pageMarkdown, signals, rawHtml, competitors, vitals, projectId, isUploaded, useCaseBlock);
     trace.push({ step: 'ai_analysis', ok: true, ms: Date.now() - t4 });
   } catch (e) {
     trace.push({ step: 'ai_analysis', ok: false, detail: String(e), ms: Date.now() - t4 });
@@ -1143,6 +1265,108 @@ export async function auditContentUrl(input: AuditStudioInput): Promise<AuditStu
       scraped_markdown: pageMarkdown.length > 50_000 ? pageMarkdown.slice(0, 50_000) : pageMarkdown,
     },
     trace,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quick scan — LLM-free tier for site-wide auditing (hundreds/thousands of URLs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rule-based issues straight from the deterministic quality rubric — no LLM. */
+function rubricToIssues(rubric: QualityRubricRow[]): ContentAuditIssue[] {
+  const CAT: Record<string, IssueCategory> = {
+    direct_answer: 'geo', heading_structure: 'content', faq_section: 'aeo',
+    article_schema: 'seo', internal_links: 'seo', external_citations: 'geo',
+    content_depth: 'content', question_headings: 'aeo',
+  };
+  return rubric.filter(r => r.status !== 'pass').map(r => ({
+    id: r.id,
+    category: CAT[r.id] ?? 'content',
+    severity: r.status === 'fail' ? 'high' : 'low',
+    title: r.label,
+    detail: r.detail,
+    impact: r.status === 'fail' ? 'Likely hurting search visibility or AI citation.' : 'Minor polish opportunity.',
+    fix: r.detail,
+  }));
+}
+
+/** A short, human display keyword from the title (for the UI list, not scoring). */
+function derivePrimaryKeywordFromTitle(title: string): string {
+  const stop = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'to', 'of', 'in', 'on', 'with', 'your', 'how', 'what', 'why', 'best', 'guide', 'ways', 'tips']);
+  return title.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 2 && !stop.has(w)).slice(0, 4).join(' ');
+}
+
+/**
+ * Lightweight, LLM-FREE health scan of a single URL — the cost-effective tier
+ * for scanning an entire site. Scrapes the page once and runs ONLY the
+ * deterministic scorers + rule-based rubric (no Claude, no DataForSEO, no
+ * competitor scraping). Returns the same PersistedContentAudit shape as a full
+ * audit (marked tier: 'quick') so results share the Audit History table + UI; a
+ * later deep audit simply upgrades the same row. Returns null for pages that
+ * shouldn't be stored (unreadable, site root, or too thin to be an article).
+ */
+export async function quickScanUrl(url: string): Promise<PersistedContentAudit | null> {
+  const pre = await preflight(url);
+  if (pre.status === 'broken') return brokenRecord(url, pre.reason);
+  const effectiveUrl = pre.finalUrl;
+
+  const [page, rawHtml] = await Promise.all([
+    hybridReadUrl(effectiveUrl, { timeoutMs: 20_000 }),
+    fetchRawHtmlSignals(effectiveUrl),
+  ]);
+  if (!page.ok || page.markdown.trim().length < 160) return null;
+
+  const signals = extractSignals(page.markdown, effectiveUrl, rawHtml, false);
+  if (rawHtml.title && !signals.title) signals.title = rawHtml.title;
+
+  // Blog-only gate (strict): a bulk scan only scores pages that positively look
+  // like a blog post (article schema / og:type=article / publish date). Skips
+  // homepages and landing/product/category pages that lack article markup.
+  if (isNonArticlePage(rawHtml, signals, effectiveUrl, { strict: true })) return null;
+
+  const displayKeyword = derivePrimaryKeywordFromTitle(signals.title);
+  const scores: ContentAuditScores = {
+    // Scoring uses no keyword (deriving one from the title then checking the
+    // title for it would be circular) — title presence alone is credited.
+    seo: computeSeoScore(signals, rawHtml, ''),
+    geo: computeGeoScore(signals),
+    aeo: computeAeoScore(signals, rawHtml),
+    content_quality: computeContentQualityScore(signals, undefined),
+    keyword_relevance: computeKeywordRelevanceScore(undefined),
+    freshness: computeFreshnessScore(signals),
+    overall: 0,
+  };
+  scores.overall = computeOverallScore(scores);
+  const overall = scores.overall;
+
+  const rubric = buildQualityRubric(signals, rawHtml);
+  const issues = rubricToIssues(rubric);
+  const failCount = issues.filter(i => i.severity === 'high').length;
+  const band = overall >= 70 ? 'in good shape' : overall >= 45 ? 'has room to improve' : 'needs work';
+
+  const report: ContentAuditReport = {
+    version: 3, url: effectiveUrl,
+    title: signals.title || rawHtml.title || url,
+    word_count: signals.word_count,
+    publish_date_detected: signals.publish_date,
+    primary_keyword: displayKeyword,
+    secondary_keywords: [],
+    scores, issues,
+    competitor_insights: [], revamp_brief: emptyRevamp(displayKeyword),
+    quality_rubric: rubric, keyword_data: null,
+    page_status: 'ok',
+    plain_language_verdict: `Quick scan: this page ${band} (health ${overall}/100), ${failCount} priority issue${failCount === 1 ? '' : 's'} flagged. Run a deep audit for competitor gaps and a rewrite brief.`,
+    summary: '', analyzed_at: new Date().toISOString(),
+    is_blog_post: true, content_type_verdict: 'Blog Post', non_blog_warning: '',
+    tier: 'quick',
+  };
+
+  return {
+    url: effectiveUrl, title: report.title, primary_keyword: displayKeyword,
+    word_count: signals.word_count, health_score: overall, severity: report.scores.overall >= 70 ? 'low' : report.scores.overall >= 45 ? 'medium' : 'high',
+    analysis: report,
+    scraped_markdown: page.markdown.length > 50_000 ? page.markdown.slice(0, 50_000) : page.markdown,
   };
 }
 

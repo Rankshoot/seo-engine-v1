@@ -2,13 +2,21 @@ import { recordImageSearchCall } from "@/lib/admin/logging/record-provider-call"
 import type { LicensedImage } from "@/lib/images/image-search";
 
 /**
- * Openverse — the primary licensed-image source.
+ * Openverse — a licensed-image source.
  *
  * Openverse (https://openverse.org, run by WordPress.org) aggregates ~700M
  * openly-licensed and public-domain images and exposes a free JSON API. We
- * request only images that are safe for a commercial brand to reuse AND modify
- * via `license_type=commercial,modification`, and we carry the returned license
- * + creator + landing page so the blog can attribute correctly.
+ * request `license_type=commercial,modification` (CC0, PDM, and all CC-BY
+ * variants that permit commercial reuse + modification) — this is the full
+ * legally-reusable pool. CC0/PDM coverage alone is far too thin for real
+ * business/editorial topics (tested: 0 results for "employee retention
+ * strategies"), so CC-BY is included for actual production coverage.
+ *
+ * IMPORTANT — this means some results legally require attribution. The
+ * product does not render a visible credit block (by design), so every
+ * result's license/author/source is still captured on `LicensedImage` and
+ * persisted to `content_data.image_credits` as an internal compliance record
+ * even though it isn't shown on the page. See image-search.ts.
  *
  * Auth is optional: anonymous requests work at a lower rate limit. If
  * OPENVERSE_CLIENT_ID / OPENVERSE_CLIENT_SECRET are set we could exchange them
@@ -47,6 +55,7 @@ export async function searchOpenverse(query: string, count: number): Promise<Lic
   const params = new URLSearchParams({
     q: query,
     page_size: String(Math.min(Math.max(count, 1), 20)),
+    // Full legally-reusable pool (CC0/PDM + CC-BY variants). See file header.
     license_type: "commercial,modification",
     mature: "false",
   });
@@ -70,10 +79,14 @@ export async function searchOpenverse(query: string, count: number): Promise<Lic
 
     return results
       .filter((r) => r.url && r.url.startsWith("http"))
+      // A missing title must NOT be backfilled with the search query — that
+      // would make the caller's relevance check trivially pass for an image
+      // we know nothing about. Untitled results are simply unverifiable.
+      .filter((r) => Boolean(r.title?.trim()))
       .map((r) => ({
         imageUrl: r.url as string,
         thumbnailUrl: r.thumbnail,
-        title: r.title || query,
+        title: r.title as string,
         sourcePage: r.foreign_landing_url || r.url || "",
         author: r.creator || "Unknown",
         license: formatLicense(r.license, r.license_version),

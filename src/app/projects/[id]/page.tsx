@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { PageHeader } from "@/components/common";
+import { PageHeader, DataRegion, ListRowsSkeleton, EmptyState } from "@/components/common";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -173,10 +173,11 @@ export default function ProjectOverviewPage() {
     return "active";
   }, [stats]);
 
-  if (!project) {
-    if (!projectFetched) return <OverviewSkeleton />;
-    return null;
-  }
+  // Static chrome (breadcrumb + header + section frames) always renders. Only
+  // the data-bearing regions swap a position-matched skeleton for content, so
+  // there is no full-page skeleton and no position jump on load. If the project
+  // was fetched and genuinely doesn't exist, show a not-found state (not blank).
+  const projectMissing = projectFetched && !project;
 
   return (
     <div className="pb-20">
@@ -186,11 +187,15 @@ export default function ProjectOverviewPage() {
           <Link href="/projects" className="hover:text-text-secondary transition-colors">Projects</Link>
           <ChevronRight className="h-3 w-3 opacity-40" />
           <Globe2 className="h-3 w-3" />
-          <span className="font-mono text-text-tertiary">{project.domain}</span>
+          {project ? (
+            <span className="font-mono text-text-tertiary">{project.domain}</span>
+          ) : (
+            <Skeleton className="h-3 w-32" rounded="full" />
+          )}
         </div>
         <PageHeader
-          title={project.name}
-          description={`${project.domain} · Content engine overview`}
+          title={project ? project.name : <Skeleton className="h-7 w-56" rounded="lg" />}
+          description={project ? `${project.domain} · Content engine overview` : undefined}
           actions={
             <>
               <ProjectNavLink
@@ -215,6 +220,20 @@ export default function ProjectOverviewPage() {
         <div className="h-px bg-gradient-to-r from-transparent via-brand-action/20 to-transparent" />
       </div>
 
+      {projectMissing ? (
+        <EmptyState
+          title="Project not found"
+          body="This project may have been deleted or you don't have access to it."
+          action={
+            <Link
+              href="/projects"
+              className="inline-flex items-center gap-1.5 rounded-full bg-brand-violet px-4 py-1.5 text-[12.5px] font-semibold text-white transition-all hover:-translate-y-0.5"
+            >
+              Back to projects
+            </Link>
+          }
+        />
+      ) : (
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -257,21 +276,18 @@ export default function ProjectOverviewPage() {
             </ProjectNavLink>
           </div>
 
-          {calLoading ? (
-            <div className="space-y-2">
-              {[1, 2].map(i => (
-                <div key={i} className="h-[60px] w-full rounded-xl border border-border-subtle bg-surface-elevated animate-pulse" />
-              ))}
-            </div>
-          ) : todayEntries.length > 0 ? (
+          <DataRegion
+            loading={calLoading}
+            isEmpty={todayEntries.length === 0}
+            skeleton={<ListRowsSkeleton rows={2} />}
+            empty={<EmptyToday projectId={id} phase={phase} />}
+          >
             <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-elevated divide-y divide-border-subtle/60">
               {todayEntries.map(entry => (
                 <TodayEntryRow key={entry.id} entry={entry} projectId={id} />
               ))}
             </div>
-          ) : (
-            <EmptyToday projectId={id} phase={phase} />
-          )}
+          </DataRegion>
         </section>
 
         {/* ── Upcoming content ── */}
@@ -359,6 +375,7 @@ export default function ProjectOverviewPage() {
         {/* ── Content Health widget ── */}
         <ContentHealthWidget projectId={id} />
       </motion.div>
+      )}
     </div>
   );
 }
@@ -927,31 +944,3 @@ function EmptyToday({ projectId, phase }: { projectId: string; phase: ProjectPha
   );
 }
 
-/* ─────────── Skeleton ─────────── */
-
-function OverviewSkeleton() {
-  return (
-    <div className="pb-20 -mt-6 lg:-mt-8">
-      <div className="h-24 border-b border-border-subtle bg-surface-primary/90 -mx-6 lg:-mx-8 px-6 lg:px-8 mb-6 pt-6 lg:pt-8">
-        <Skeleton className="h-4 w-40 mb-2" />
-        <Skeleton className="h-7 w-56" />
-      </div>
-      <div className="px-4 space-y-6">
-        <div className="grid grid-cols-2 gap-px rounded-xl border border-border-subtle bg-border-subtle md:grid-cols-4">
-          {[0, 1, 2, 3].map(i => (
-            <div key={i} className="bg-surface-elevated p-4 space-y-2">
-              <Skeleton className="h-3 w-20" />
-              <Skeleton className="h-6 w-10" />
-            </div>
-          ))}
-        </div>
-        <Skeleton className="h-24 w-full rounded-xl" />
-        <div className="space-y-2">
-          <Skeleton className="h-5 w-36 mb-3" />
-          <Skeleton className="h-[60px] w-full rounded-xl" />
-          <Skeleton className="h-[60px] w-full rounded-xl" />
-        </div>
-      </div>
-    </div>
-  );
-}

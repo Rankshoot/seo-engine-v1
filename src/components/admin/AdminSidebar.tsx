@@ -51,6 +51,12 @@ const navItems: {
     match: (p) => p.startsWith("/admin/ai-logs"),
   },
   {
+    label: "AI Memory",
+    href: "/admin/ai-memory",
+    minRole: "support",
+    match: (p) => p.startsWith("/admin/ai-memory"),
+  },
+  {
     label: "Errors",
     href: "/admin/errors",
     minRole: "admin",

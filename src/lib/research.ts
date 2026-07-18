@@ -90,6 +90,44 @@ export async function searchGoogleImages(query: string, num = 10): Promise<{ tit
 }
 
 
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  domain: string;
+}
+
+/**
+ * Serper web search biased toward primary-source material (reports, studies,
+ * datasets, surveys). Used as the deep-research fallback when no Perplexity key
+ * is configured, so blogs can still be grounded in real, credible source URLs.
+ */
+export async function searchCredibleWeb(
+  keyword: string,
+  region = 'us',
+  language = 'en'
+): Promise<WebSearchResult[]> {
+  const q = `${keyword} statistics OR report OR study OR research OR survey`;
+  const web = await serperPost('search', { q, gl: region, hl: language, num: 15 });
+  const organic = (web as { organic?: SerperResultRow[] } | null)?.organic ?? [];
+  return organic
+    .map((r): WebSearchResult | null => {
+      const url = typeof r.link === 'string' ? r.link : '';
+      if (!url) return null;
+      let domain = typeof r.domain === 'string' ? r.domain : '';
+      if (!domain) {
+        try { domain = new URL(url).hostname; } catch { domain = ''; }
+      }
+      return {
+        title: typeof r.title === 'string' ? r.title : '',
+        url,
+        snippet: typeof r.snippet === 'string' ? r.snippet : '',
+        domain: domain.replace(/^www\./, ''),
+      };
+    })
+    .filter((r): r is WebSearchResult => r !== null);
+}
+
 export async function researchKeyword(
   keyword: string,
   region = 'us',

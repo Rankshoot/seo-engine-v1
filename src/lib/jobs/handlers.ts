@@ -7,13 +7,19 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase';
-import type { ContentAuditJobPayload, SiteAuditScanJobPayload, JobRecord } from './types';
+import type {
+  ContentAuditJobPayload,
+  SiteAuditScanJobPayload,
+  BlogGenerateJobPayload,
+  JobRecord,
+} from './types';
 
 export type JobHandler = (job: JobRecord) => Promise<Record<string, unknown>>;
 
 const handlers: Record<string, JobHandler> = {
   content_audit: runContentAuditJob,
   site_audit_scan: runSiteAuditScanJob,
+  blog_generate: runBlogGenerateJob,
 };
 
 export function getJobHandler(type: string): JobHandler | null {
@@ -146,4 +152,46 @@ async function runSiteAuditScanJob(job: JobRecord): Promise<Record<string, unkno
   }
 
   return { scanned, skipped, total: p.urls.length };
+}
+
+/**
+ * Durable blog generation. Runs the shared `runBlogGeneration` core to
+ * completion server-side — independent of the client — so the blog is produced
+ * and saved even if the user refreshes or closes the tab. The resolved blog id
+ * is stored in the job `result` so the client poller can link to it.
+ *
+ * Idempotency: the pipeline upserts the blog by entry_id (calendar-linked) so a
+ * retried job converges; the enqueue idempotency_key prevents duplicate paid
+ * runs for the same request.
+ */
+async function runBlogGenerateJob(job: JobRecord): Promise<Record<string, unknown>> {
+  const p = job.payload as unknown as BlogGenerateJobPayload;
+  const userId = p.userId || job.user_id;
+  if (!userId) throw new Error('blog_generate job missing userId');
+  if (!p.entryId && (!p.projectId || !p.keyword)) {
+    throw new Error('blog_generate job needs entryId OR { projectId, keyword }');
+  }
+
+  const { runBlogGeneration } = await import('@/lib/blog-generation/generate-blog');
+  const { blogId } = await runBlogGeneration({ ...p, userId });
+
+  // Closed-tab OS notification: reaches the user even if the app/browser is
+  // closed. The client watcher handles the app-open case; the service worker
+  // suppresses this push when a tab is already focused, so no double-notify.
+  try {
+    const { sendPushToUser } = await import('@/lib/server/web-push-server');
+    const url = p.projectId
+      ? `/projects/${p.projectId}/content-generator/blogs/${blogId}`
+      : '/';
+    await sendPushToUser(userId, {
+      title: 'Blog ready',
+      body: p.label ? `“${p.label}” has finished generating.` : 'Your blog has finished generating.',
+      url,
+      tag: `blogjob:${job.id}`,
+    });
+  } catch {
+    /* push is best-effort — never fail the job over a notification */
+  }
+
+  return { blogId, label: p.label ?? '' };
 }

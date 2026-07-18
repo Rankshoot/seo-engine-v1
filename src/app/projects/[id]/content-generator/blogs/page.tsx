@@ -52,6 +52,7 @@ import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 import { useFormDraft } from "@/hooks/useFormDraft";
 import { useNotify } from "@/hooks/useNotify";
+import { startBlogGeneration } from "@/app/actions/blog-jobs-actions";
 
 const TONES = [
   { id: "premium-educational", label: "Premium · educational" },
@@ -207,11 +208,10 @@ export default function BlogGeneratorPage() {
     return () => { isOnPageRef.current = false; };
   }, []);
 
-  // Notification-center wiring: each generation gets a stable key so its
-  // "running" entry is upgraded in place to "ready"/"failed", and an OS
-  // notification fires on completion if the user has navigated away.
+  // Notification-center wiring: the durable job's id keys its "running" entry so
+  // the TaskNotificationWatcher can upgrade it to "ready"/"failed" + OS ping.
   const notify = useNotify();
-  const genKeyRef = useRef<string>("");
+  const submittingRef = useRef(false);
 
   const entryId = searchParams?.get("entryId");
 
@@ -247,6 +247,7 @@ export default function BlogGeneratorPage() {
   // of silently generating the old keyword underneath their edits.
 
   const [phase, setPhase] = useState<Phase>("form");
+  const [submitting, setSubmitting] = useState(false);
   const [topic, setTopic] = useState("");
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
@@ -283,8 +284,6 @@ export default function BlogGeneratorPage() {
   const [competitorError, setCompetitorError] = useState("");
   // Custom Instructions
   const [customInstructions, setCustomInstructions] = useState("");
-  // Real Images
-  const [useRealImages, setUseRealImages] = useState(true);
 
   // ── Draft persistence ──────────────────────────────────────────────────
   // Restore an in-progress form when the user navigates away and comes back
@@ -298,7 +297,7 @@ export default function BlogGeneratorPage() {
     {
       primaryKeyword, topic, secondaryKeywords, audience, tone, goal, ctaObjective,
       wordCount, customWordCount, region, language, useBrandPersona, brandPersona,
-      useAhrefsData, useDeepAnalysis, customInstructions, useRealImages,
+      useAhrefsData, useDeepAnalysis, customInstructions,
     },
     {
       enabled: phase === "form" && !hasUrlContext,
@@ -320,7 +319,6 @@ export default function BlogGeneratorPage() {
         if (typeof d.useAhrefsData === "boolean") setUseAhrefsData(d.useAhrefsData);
         if (typeof d.useDeepAnalysis === "boolean") setUseDeepAnalysis(d.useDeepAnalysis);
         if (typeof d.customInstructions === "string") setCustomInstructions(d.customInstructions);
-        if (typeof d.useRealImages === "boolean") setUseRealImages(d.useRealImages);
       },
     },
   );
@@ -510,30 +508,10 @@ export default function BlogGeneratorPage() {
   };
 
   const runGeneration = async () => {
-    const stages = buildStages(useDeepAnalysis);
-    const stageOrder = useDeepAnalysis ? STAGE_ORDER_DEEP : STAGE_ORDER_BASE;
-    const stageCumulative = buildCumulative(stages);
-
-    setPhase("generating");
-    setStreamProgress(0);
-    setThinkingText("");
-    setIsThinking(false);
-    setStreamStages(stages.map(s => ({ ...s })));
-
-    // Register this generation in the notification center so the user can leave
-    // the page and still track it (and get pinged when it's done).
-    const genKey = `blog:${projectId}:${Date.now()}`;
-    genKeyRef.current = genKey;
+    if (submittingRef.current) return;
     const genLabel = topic.trim() || primaryKeyword.trim() || "your blog";
-    notify({
-      key: genKey,
-      status: "running",
-      title: "Generating blog…",
-      body: genLabel,
-      projectId,
-      os: false,
-    });
 
+    // Advanced options → durable-job payload (same shape the stream route used).
     const advancedBody = {
       brandPersona: useBrandPersona && brandPersona.trim() ? brandPersona.trim() : undefined,
       useAhrefsData: useAhrefsData && (ahrefsH2s.length > 0 || ahrefsFaqs.length > 0),
@@ -542,100 +520,20 @@ export default function BlogGeneratorPage() {
       useDeepAnalysis: useDeepAnalysis && competitorPages.length > 0,
       deepAnalysisPages: useDeepAnalysis ? competitorPages : [],
       customInstructions: customInstructions.trim() || undefined,
-      useRealImages,
     };
 
+    // Enqueue a DURABLE background job. Generation now runs server-side to
+    // completion regardless of the client — the user can refresh, close the tab,
+    // or queue several blogs at once. The TaskNotificationWatcher (mounted in the
+    // project shell) polls the job and fires the notification + OS ping on
+    // completion, wherever the user has navigated to.
+    submittingRef.current = true;
+    setSubmitting(true);
     try {
-      // Custom-keyword generations are NOT auto-scheduled — the user can
-      // schedule the finished blog from the previewer if they want to.
-      // Only calendar-driven generations (entryId present) stay linked.
-      const finalEntryId = entryId;
-
-      const handleEvent = (event: any) => {
-        if (event.event === "stage") {
-          const stageIdx = stageOrder.indexOf(event.stage as StreamStage);
-          const progressAtStage = stageIdx === 0 ? 0.02 : stageCumulative[stageIdx - 1];
-          setStreamProgress(progressAtStage);
-          if (event.stage === "polish") setIsThinking(false);
-          if (event.detail) {
-            setStreamStages(prev => prev.map(s => s.id === event.stage ? { ...s, detail: event.detail } : s));
-          }
-          return null;
-        } else if (event.event === "thinking") {
-          setIsThinking(true);
-          setThinkingText(prev => prev + event.chunk);
-          return null;
-        } else if (event.event === "thinking_done") {
-          setIsThinking(false);
-          return null;
-        } else if (event.event === "done") {
-          setStreamProgress(1);
-          setIsThinking(false);
-          // Blog is saved — the in-progress form draft is no longer needed.
-          clearDraft();
-          const blogHref = `${studioBase}/blogs/${event.blogId}`;
-          // No-refresh updates: refresh Content History + Calendar wherever they're mounted.
-          void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-          dispatch(calendarRefreshBump({ projectId }));
-          // Upgrade the notification-center entry to "ready"; OS-notify only if
-          // the user has moved on (they don't need a desktop ping if they're here).
-          notify({
-            key: genKeyRef.current,
-            status: "success",
-            title: "Blog ready",
-            body: genLabel,
-            href: blogHref,
-            projectId,
-            os: !isOnPageRef.current,
-          });
-          if (isOnPageRef.current) {
-            // Still watching the drafting page → open the finished draft.
-            toast.success("Blog generated!");
-            router.push(blogHref);
-          } else {
-            // Navigated away while it generated → notify, never force-navigate.
-            toast.success(
-              (t) => (
-                <span className="flex items-center gap-3">
-                  <span>✅ Your blog{topic ? ` “${topic}”` : ""} is ready</span>
-                  <button
-                    type="button"
-                    onClick={() => { toast.dismiss(t.id); router.push(blogHref); }}
-                    className="rounded-md bg-brand-action px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
-                  >
-                    View blog
-                  </button>
-                </span>
-              ),
-              { duration: 8000 }
-            );
-          }
-          return "done";
-        } else if (event.event === "error") {
-          toast.error(event.message || "Generation failed");
-          notify({
-            key: genKeyRef.current,
-            status: "error",
-            title: "Blog generation failed",
-            body: event.message || genLabel,
-            projectId,
-            os: !isOnPageRef.current,
-          });
-          setPhase("form");
-          setIsThinking(false);
-          setStreamProgress(undefined);
-          return "error";
-        }
-        return null;
-      };
-
-      if (!finalEntryId) {
-        for await (const event of blogsApi.generateStreamDirect({
-          projectId: projectId!,
+      const res = await startBlogGeneration(
+        projectId,
+        {
+          ...(entryId ? { entryId } : {}),
           keyword: primaryKeyword,
           topic,
           audience,
@@ -645,51 +543,42 @@ export default function BlogGeneratorPage() {
           secondaryKeywords,
           wordCount: effectiveWordCount,
           ...advancedBody,
-        })) {
-          const result = handleEvent(event);
-          if (result === "done" || result === "error") return;
-        }
-      } else {
-        for await (const event of blogsApi.generateStream({
-          entryId: finalEntryId!,
-          keyword: primaryKeyword,
-          topic,
-          audience,
-          tone: TONES.find(t => t.id === tone)?.label || tone,
-          goal,
-          ctaObjective,
-          secondaryKeywords,
-          wordCount: effectiveWordCount,
-          ...advancedBody,
-        })) {
-          const result = handleEvent(event);
-          if (result === "done" || result === "error") return;
-        }
+          label: genLabel,
+        },
+        `blog:${projectId}:${entryId || primaryKeyword || "kw"}:${Date.now()}`,
+      );
+
+      if (!res.success || !res.jobId) {
+        toast.error(res.error || "Could not start generation. Please try again.");
+        return;
       }
 
-      toast.error("Generation ended unexpectedly. Please try again.");
+      // Form no longer needed — clear the saved draft and register the running
+      // job so the bell shows it immediately (the watcher upgrades it to ready).
+      clearDraft();
       notify({
-        key: genKeyRef.current,
-        status: "error",
-        title: "Blog generation failed",
+        key: `task:${res.jobId}`,
+        status: "running",
+        title: "Generating blog…",
         body: genLabel,
         projectId,
-        os: !isOnPageRef.current,
+        os: false,
       });
+
+      // Refresh the surfaces that will show the finished blog once it lands.
+      void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+
+      toast.success(
+        "Generating in the background — we'll notify you when it's ready. Feel free to keep working or queue another.",
+        { duration: 6000 },
+      );
       setPhase("form");
-      setStreamProgress(undefined);
     } catch {
-      toast.error("An error occurred during generation");
-      notify({
-        key: genKeyRef.current,
-        status: "error",
-        title: "Blog generation failed",
-        body: genLabel,
-        projectId,
-        os: !isOnPageRef.current,
-      });
-      setPhase("form");
-      setStreamProgress(undefined);
+      toast.error("Could not start generation. Please try again.");
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -772,14 +661,14 @@ export default function BlogGeneratorPage() {
                 shape="pill"
                 size="lg"
                 onClick={() => void runGeneration()}
-                disabled={!canGenerateBlog}
+                disabled={!canGenerateBlog || submitting}
                 title={
                   !canGenerateBlog
                     ? `Blog limit reached (${quota?.blogs.used}/${quota?.blogs.effectiveLimit}). Upgrade your plan to generate more.`
                     : undefined
                 }
               >
-                Generate blog
+                {submitting ? "Starting…" : "Generate blog"}
               </Button>
             </div>
           ) : null
@@ -827,7 +716,6 @@ export default function BlogGeneratorPage() {
             useDeepAnalysis={useDeepAnalysis}
             competitorPagesCount={competitorPages.length}
             customInstructions={customInstructions}
-            useRealImages={useRealImages}
           />
         ) : (
           <ContentForm>
@@ -1103,14 +991,6 @@ export default function BlogGeneratorPage() {
                     ) : null}
                   </AdvancedOptionRow>
 
-                  {/* Real Images */}
-                  <AdvancedOptionRow
-                    label="Include real internet images"
-                    description="Automatically search Google to find a high-quality real image (like a photo or illustration) and insert it as the main cover image, rather than relying solely on AI."
-                    checked={useRealImages}
-                    onChange={setUseRealImages}
-                  />
-
                   {/* Custom Instructions */}
                   <div className="rounded-xl border border-border-subtle bg-surface-elevated p-4">
                     <p className="text-[13px] font-semibold text-text-primary mb-0.5">Custom instructions</p>
@@ -1162,7 +1042,7 @@ function ReviewView({
   topic, primaryKeyword, audience, tone, wordCount, goal, ctaObjective,
   secondaryKeywords, regionLabel, languageLabel,
   hasBrandPersona, useAhrefsData, ahrefsH2sCount, ahrefsFaqsCount,
-  useDeepAnalysis, competitorPagesCount, customInstructions, useRealImages,
+  useDeepAnalysis, competitorPagesCount, customInstructions,
 }: {
   topic: string;
   primaryKeyword: string;
@@ -1181,7 +1061,6 @@ function ReviewView({
   useDeepAnalysis: boolean;
   competitorPagesCount: number;
   customInstructions: string;
-  useRealImages: boolean;
 }) {
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: "Topic", value: topic },
@@ -1210,7 +1089,6 @@ function ReviewView({
   if (hasBrandPersona) activeFeatures.push("Brand persona");
   if (useAhrefsData) activeFeatures.push(`Keyword intelligence (${ahrefsH2sCount} H2s, ${ahrefsFaqsCount} FAQs)`);
   if (useDeepAnalysis) activeFeatures.push(`Deep analysis (${competitorPagesCount} pages)`);
-  if (useRealImages) activeFeatures.push("Real internet images");
   if (customInstructions.trim()) activeFeatures.push("Custom instructions");
 
   return (

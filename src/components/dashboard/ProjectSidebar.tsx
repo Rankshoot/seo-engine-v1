@@ -370,6 +370,13 @@ export default function ProjectSidebar({
         )}
       </div>
 
+      {/* Collapsed-mode notification bell (expanded mode shows it in the header) */}
+      {isCollapsed && (
+        <div className="relative z-[70] flex justify-center border-b border-border-subtle/40 py-2">
+          <NotificationCenter />
+        </div>
+      )}
+
       {/* ── Project switcher ── */}
       <div className={`relative z-[60] transition-all duration-300 ease-in-out ${isCollapsed ? "px-2 py-2" : "px-3 py-3"}`} ref={dropdownRef}>
         <button

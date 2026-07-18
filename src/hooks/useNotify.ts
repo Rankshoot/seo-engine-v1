@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { useAppDispatch } from "@/lib/redux/hooks";
+import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { pushNotification, type NotificationStatus } from "@/lib/redux/notifications-slice";
 import { showOsNotification } from "@/lib/web-notify";
 
@@ -26,33 +25,41 @@ export interface NotifyInput {
  */
 export function useNotify(): (input: NotifyInput) => void {
   const dispatch = useAppDispatch();
-  const router = useRouter();
+  const prefs = useAppSelector((s) => s.notifications.prefs);
+  const inApp = prefs?.inApp ?? true;
+  const push = prefs?.push ?? false;
 
   return useCallback(
     (input: NotifyInput) => {
-      dispatch(
-        pushNotification({
-          id: `ntf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          key: input.key,
-          status: input.status,
-          title: input.title,
-          body: input.body,
-          href: input.href,
-          projectId: input.projectId,
-          createdAt: new Date().toISOString(),
-          read: false,
-        }),
-      );
+      // In-app bell (respects the "In-app notifications" toggle).
+      if (inApp) {
+        dispatch(
+          pushNotification({
+            id: `ntf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            key: input.key,
+            status: input.status,
+            title: input.title,
+            body: input.body,
+            href: input.href,
+            projectId: input.projectId,
+            createdAt: new Date().toISOString(),
+            read: false,
+          }),
+        );
+      }
 
-      const wantsOs = input.os !== false && (input.status === "success" || input.status === "error");
+      // Client-side OS notification for the app-open case (respects the
+      // "Desktop push" toggle). When the app is closed, the server-sent push
+      // covers it; the service worker suppresses this one if a tab is focused.
+      const wantsOs = push && input.os !== false && (input.status === "success" || input.status === "error");
       if (wantsOs) {
         showOsNotification(input.title, {
           body: input.body,
           tag: input.key,
-          onClick: input.href ? () => router.push(input.href!) : undefined,
+          url: input.href,
         });
       }
     },
-    [dispatch, router],
+    [dispatch, inApp, push],
   );
 }

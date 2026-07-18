@@ -24,13 +24,26 @@ export interface AppNotification {
   read: boolean;
 }
 
+/** Per-device notification preferences (independent toggles). */
+export interface NotificationPrefs {
+  /** In-app bell + toasts. */
+  inApp: boolean;
+  /** Desktop/OS push (works even when the app is closed). Opt-in. */
+  push: boolean;
+}
+
 export interface NotificationsState {
   items: AppNotification[];
   /** Whether the user has dismissed the "enable OS notifications" prompt. */
   osPromptDismissed: boolean;
+  prefs: NotificationPrefs;
 }
 
-const initialState: NotificationsState = { items: [], osPromptDismissed: false };
+const initialState: NotificationsState = {
+  items: [],
+  osPromptDismissed: false,
+  prefs: { inApp: true, push: false },
+};
 
 const MAX_ITEMS = 50;
 
@@ -67,6 +80,14 @@ export const notificationsSlice = createSlice({
     dismissOsPrompt(state) {
       state.osPromptDismissed = true;
     },
+    setNotificationPref(
+      state,
+      action: PayloadAction<{ key: keyof NotificationPrefs; value: boolean }>,
+    ) {
+      // Guard against older persisted state that predates `prefs`.
+      if (!state.prefs) state.prefs = { inApp: true, push: false };
+      state.prefs[action.payload.key] = action.payload.value;
+    },
   },
 });
 
@@ -77,4 +98,5 @@ export const {
   removeNotification,
   clearNotifications,
   dismissOsPrompt,
+  setNotificationPref,
 } = notificationsSlice.actions;

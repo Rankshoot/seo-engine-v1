@@ -15,7 +15,9 @@ import {
   isValidElement,
   Children,
   useState,
+  useEffect,
 } from "react";
+import { createPortal } from "react-dom";
 import { BLOG_IMAGE_PLACEHOLDER_URL } from "@/services/openAiImages";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -214,57 +216,91 @@ function isPdfHref(href: string): boolean {
   return /\.pdf(\?|#|$)/i.test(href);
 }
 
-function PdfPreviewer({ href, label }: { href: string; label: string }) {
-  const filename = (() => {
-    try { return decodeURIComponent(new URL(href).pathname.split("/").filter(Boolean).pop() ?? "document.pdf"); }
-    catch { return label || "document.pdf"; }
-  })();
+function pdfFilename(href: string, label: string): string {
+  try {
+    return decodeURIComponent(new URL(href).pathname.split("/").filter(Boolean).pop() ?? "document.pdf");
+  } catch {
+    return label || "document.pdf";
+  }
+}
 
-  const displayTitle = label || filename;
-
-  // Frame the PDF through our same-origin proxy. Most PDF hosts (Supabase
-  // Storage, CDNs, the sites we audit) send X-Frame-Options / frame-ancestors,
-  // which makes a direct cross-origin <iframe src={pdf}> render "This content is
-  // blocked". The proxy streams the bytes from our own origin with no framing
-  // restriction, so the inline preview works reliably.
+/** Full-screen modal that previews the PDF — opened on demand from the inline
+ *  chip, so the document never wedges itself between paragraphs. */
+function PdfModal({ href, title, onClose }: { href: string; title: string; onClose: () => void }) {
+  // Frame the PDF through our same-origin proxy. Most PDF hosts send
+  // X-Frame-Options / frame-ancestors, which makes a direct cross-origin iframe
+  // render "This content is blocked". The proxy streams the bytes from our own
+  // origin (allowed by the app CSP's `frame-src 'self'`).
   const previewSrc = `/api/pdf-proxy?url=${encodeURIComponent(href)}#toolbar=0&navpanes=0`;
 
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onEsc);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onEsc);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={title}>
+      <button type="button" aria-label="Close preview" onClick={onClose} className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" />
+      <div className="relative flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-[0_24px_80px_rgba(0,0,0,0.4)]">
+        <div className="flex items-center justify-between gap-4 border-b border-border-subtle px-5 py-3">
+          <span className="truncate text-[14px] font-semibold text-text-primary">{title}</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href={href}
+              download
+              className="inline-flex h-8 items-center justify-center rounded-full border border-border-default bg-surface-primary px-4 text-[12.5px] font-semibold text-text-primary transition-colors hover:border-brand-violet/40 hover:text-brand-violet"
+            >
+              Download
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <iframe src={previewSrc} className="w-full flex-1 border-none bg-surface-primary" title={title} allowFullScreen />
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Inline PDF link — flows with the paragraph text as a chip; clicking opens the
+ *  preview modal. Replaces the old inline embedded viewer that broke the text. */
+function PdfLinkChip({ href, label }: { href: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  const displayTitle = label || pdfFilename(href, label);
+
   return (
-    <span className="my-8 block overflow-hidden rounded-[16px] border border-border-subtle bg-surface-elevated shadow-sm not-italic no-underline">
-      {/* PDF Viewer — proxied through our origin so the host's cross-origin
-          framing restrictions don't block it. Uses a plain <iframe> (allowed by
-          the app CSP's `frame-src 'self'`); <object> is intentionally avoided
-          because the CSP sets `object-src 'none'`. */}
-      <iframe
-        src={previewSrc}
-        className="w-full border-none block bg-surface-primary"
-        style={{ height: "600px" }}
-        title={displayTitle}
-        allowFullScreen
-      />
-
-      {/* PDF Download Bar */}
-      <span className="flex items-center justify-between gap-4 border-t border-border-subtle bg-surface-primary px-6 py-4 flex-wrap">
-        <span
-          className="text-[14px] font-bold tracking-tight"
-          style={{ color: "var(--brand-coral, #ff7759)" }}
-        >
-          {displayTitle}
-        </span>
-
-        <a
-          href={href}
-          download
-          className="inline-flex h-9 items-center justify-center rounded-full px-5 text-[13px] font-semibold text-white transition-all hover:opacity-90 active:scale-95"
-          style={{
-            backgroundColor: "#22252a",
-            border: "1px solid var(--brand-coral, #ff7759)",
-          }}
-        >
-          Download
-        </a>
-      </span>
-    </span>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title="Preview PDF"
+        className="mx-0.5 inline-flex items-baseline gap-1 rounded-sm px-0.5 font-medium underline underline-offset-[3px] align-baseline transition-colors hover:opacity-80"
+        style={{ color: "var(--brand-coral)", textDecorationStyle: "dotted", textDecorationColor: "currentColor" }}
+      >
+        <svg className="relative top-px inline h-3 w-3 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+        </svg>
+        {displayTitle}
+      </button>
+      {open && <PdfModal href={href} title={displayTitle} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
@@ -291,9 +327,11 @@ export function buildMarkdownComponents(
     const isHttp = /^https?:\/\//i.test(href);
     const label = typeof children === "string" ? children : flattenChildren(children);
 
-    // Render PDF links as an embedded PDF previewer instead of an inline text link.
+    // Render PDF links as an inline chip that flows with the paragraph text and
+    // opens a preview modal on click — instead of an embedded viewer wedged
+    // between paragraphs, which broke the reading flow.
     if (isHttp && isPdfHref(href)) {
-      return <PdfPreviewer href={href} label={label} />;
+      return <PdfLinkChip href={href} label={label} />;
     }
 
     const host = isHttp ? linkHostName(href) : null;

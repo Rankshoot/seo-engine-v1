@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Check, CheckCheck, X, Loader2, CircleAlert, ExternalLink } from "lucide-react";
@@ -11,15 +12,13 @@ import {
   removeNotification,
   clearNotifications,
   dismissOsPrompt,
+  setNotificationPref,
   type AppNotification,
 } from "@/lib/redux/notifications-slice";
-import { useClickOutside } from "@/hooks/useClickOutside";
-import {
-  osNotificationPermission,
-  requestOsNotificationPermission,
-  type OsPermission,
-} from "@/lib/web-notify";
+import { enablePush, webPushSupported } from "@/lib/web-push-client";
+import { showOsNotification } from "@/lib/web-notify";
 import { formatRelativeTime } from "@/utils/format";
+import toast from "react-hot-toast";
 
 function StatusDot({ status }: { status: AppNotification["status"] }) {
   if (status === "running")
@@ -37,25 +36,56 @@ function StatusDot({ status }: { status: AppNotification["status"] }) {
  * dispatched via `useNotify`), lets the user jump to the result, and offers a
  * one-click "enable OS notifications" prompt.
  */
-export function NotificationCenter({ collapsed = false }: { collapsed?: boolean }) {
+export function NotificationCenter() {
   const dispatch = useAppDispatch();
   const router = useRouter();
   const items = useAppSelector((s) => s.notifications.items);
   const osPromptDismissed = useAppSelector((s) => s.notifications.osPromptDismissed);
+  const pushEnabled = useAppSelector((s) => s.notifications.prefs?.push ?? false);
 
   const [open, setOpen] = useState(false);
-  const [perm, setPerm] = useState<OsPermission>("default");
-  const ref = useRef<HTMLDivElement | null>(null);
-  useClickOutside(ref, () => setOpen(false), open);
+  const [supported, setSupported] = useState(true);
+  const [enabling, setEnabling] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click. The panel is portaled to <body>, so it isn't a DOM
+  // child of the button's wrapper — check both refs explicitly.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+    };
+  }, [open]);
 
   const unread = useMemo(() => items.filter((i) => !i.read).length, [items]);
 
-  // Re-read the live browser permission each time the panel opens (avoids a
-  // setState-in-effect and any SSR hydration mismatch on first render).
+  // Position the panel with viewport-fixed coordinates measured from the bell,
+  // so it escapes the narrow sidebar's clipping/stacking (was overlapping the
+  // nav + project switcher). Clamp so it never runs off-screen.
   const handleOpen = useCallback(() => {
-    setPerm(osNotificationPermission());
+    setSupported(webPushSupported());
+    const willOpen = !open;
+    if (willOpen && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      const width = 320;
+      const gap = 8;
+      const left = Math.max(gap, Math.min(rect.left, window.innerWidth - width - gap));
+      const top = Math.min(rect.bottom + gap, window.innerHeight - 120);
+      setPos({ top, left });
+    }
     setOpen((v) => !v);
-  }, []);
+  }, [open]);
 
   const handleItemClick = useCallback(
     (n: AppNotification) => {
@@ -69,40 +99,44 @@ export function NotificationCenter({ collapsed = false }: { collapsed?: boolean 
   );
 
   const enableOs = useCallback(async () => {
-    const result = await requestOsNotificationPermission();
-    setPerm(result);
-    if (result !== "default") dispatch(dismissOsPrompt());
+    setEnabling(true);
+    try {
+      const res = await enablePush();
+      if (res.ok) {
+        dispatch(setNotificationPref({ key: "push", value: true }));
+        dispatch(dismissOsPrompt());
+        showOsNotification("Notifications on", {
+          body: "You'll be notified here when your content is ready.",
+          tag: "rankshoot-test",
+        });
+        toast.success(
+          res.closedTab
+            ? "Desktop notifications enabled"
+            : "Desktop notifications on (delivered while Rankshoot is open on this browser).",
+        );
+      } else {
+        toast.error(res.error ?? "Could not enable desktop notifications");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not enable desktop notifications");
+    } finally {
+      setEnabling(false);
+    }
   }, [dispatch]);
 
-  const showOsPrompt = perm === "default" && !osPromptDismissed;
+  const showOsPrompt = supported && !pushEnabled && !osPromptDismissed;
 
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onClick={handleOpen}
-        aria-label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}
-        aria-expanded={open}
-        className="relative flex items-center justify-center w-7 h-7 rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-all"
-      >
-        <Bell className="w-4 h-4" />
-        {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand-violet px-1 text-[9px] font-bold leading-none text-white ring-2 ring-surface-secondary">
-            {unread > 9 ? "9+" : unread}
-          </span>
-        )}
-      </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -6, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.98 }}
-            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className={`absolute z-[120] mt-2 w-[320px] overflow-hidden rounded-[14px] border border-border-subtle bg-surface-elevated shadow-[0_12px_40px_rgba(0,0,0,0.18)] ${
-              collapsed ? "left-full ml-2 top-0" : "right-0"
-            }`}
+  const panel = (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          ref={panelRef}
+          initial={{ opacity: 0, y: -6, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -6, scale: 0.98 }}
+          transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+          style={{ top: pos.top, left: pos.left, transformOrigin: "top left" }}
+          className="fixed z-[9999] w-[320px] overflow-hidden rounded-[14px] border border-border-subtle bg-surface-elevated shadow-[0_12px_40px_rgba(0,0,0,0.28)]"
             role="dialog"
             aria-label="Notifications"
           >
@@ -143,9 +177,10 @@ export function NotificationCenter({ collapsed = false }: { collapsed?: boolean 
                     <button
                       type="button"
                       onClick={enableOs}
-                      className="rounded-full bg-brand-violet px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-brand-action-hover"
+                      disabled={enabling}
+                      className="rounded-full bg-brand-violet px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-brand-action-hover disabled:opacity-60"
                     >
-                      Enable
+                      {enabling ? "Enabling…" : "Enable"}
                     </button>
                     <button
                       type="button"
@@ -210,6 +245,29 @@ export function NotificationCenter({ collapsed = false }: { collapsed?: boolean 
           </motion.div>
         )}
       </AnimatePresence>
+  );
+
+  return (
+    <div className="relative">
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={handleOpen}
+        aria-label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}
+        aria-expanded={open}
+        className="relative flex items-center justify-center w-7 h-7 rounded-[6px] text-text-tertiary hover:text-text-primary hover:bg-surface-hover transition-all"
+      >
+        <Bell className="w-4 h-4" />
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand-violet px-1 text-[9px] font-bold leading-none text-white ring-2 ring-surface-secondary">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+
+      {/* Portaled to <body> so it escapes the sidebar's stacking contexts and
+          renders above the project switcher and everything else. */}
+      {typeof document !== "undefined" ? createPortal(panel, document.body) : null}
     </div>
   );
 }

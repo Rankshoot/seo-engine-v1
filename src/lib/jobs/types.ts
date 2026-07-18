@@ -54,5 +54,35 @@ export interface SiteAuditScanJobPayload {
   urls: string[];
 }
 
+/**
+ * Payload for a `blog_generate` job — mirrors the blog-generator form so the
+ * durable job produces the same blog the streaming route would, but survives
+ * the user refreshing or closing the tab.
+ */
+export interface BlogGenerateJobPayload {
+  userId: string;
+  entryId?: string;
+  projectId?: string;
+  keyword?: string;
+  topic?: string;
+  audience?: string;
+  tone?: string;
+  goal?: string;
+  ctaObjective?: string;
+  secondaryKeywords?: string[];
+  wordCount?: number;
+  writerNotes?: string;
+  contentHealthAudit?: Record<string, unknown>;
+  brandPersona?: string;
+  useAhrefsData?: boolean;
+  ahrefsH2s?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+  ahrefsFaqs?: Array<{ keyword: string; volume: number; difficulty: number | null }>;
+  useDeepAnalysis?: boolean;
+  deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
+  customInstructions?: string;
+  /** A human label (topic/keyword) surfaced by the client while polling. */
+  label?: string;
+}
+
 export const JOB_SELECT =
   'id, project_id, user_id, type, status, idempotency_key, payload, result, error, attempts, max_attempts, run_after, locked_at, created_at, updated_at, finished_at';

@@ -4,6 +4,8 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { generateContentCalendar } from '@/lib/gemini';
 import { CalendarEntry, CONTENT_TYPE_ARTICLE_TYPE } from '@/lib/types';
+import { extractCalendarFocusKeyword } from '@/lib/content-health-calendar';
+import type { BlogAuditAnalysis } from '@/lib/content-audit';
 
 export async function generateCalendar(projectId: string, startDate: string) {
   const user = await currentUser();
@@ -472,7 +474,25 @@ export async function addContentHealthKeywordToCalendar(
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' as const };
 
-  const focusRaw = opts.focusKeyword.trim();
+  // Prefer a short, rankable keyword derived from the audit snapshot (falls back
+  // to the page slug) over whatever the caller passed — the caller often sends
+  // the full blog title, which reads badly on the calendar and previously caused
+  // the row to fuzzy-bind to an unrelated keyword. `extractCalendarFocusKeyword`
+  // is the single source of truth for "what keyword does this audited URL map to".
+  const snapshot = (opts.contentHealthAudit ?? null) as {
+    url?: string; title?: string; primary_keyword?: string; analysis?: BlogAuditAnalysis;
+  } | null;
+  const derivedFromSnapshot =
+    snapshot?.url && snapshot?.analysis
+      ? extractCalendarFocusKeyword({
+          url: snapshot.url,
+          title: snapshot.title ?? '',
+          primary_keyword: snapshot.primary_keyword ?? opts.focusKeyword ?? '',
+          analysis: snapshot.analysis,
+        }).trim()
+      : '';
+
+  const focusRaw = (derivedFromSnapshot || opts.focusKeyword || '').trim();
   if (!focusRaw) return { success: false, error: 'No focus keyword for this audit row' as const };
 
   const { data: project, error: pErr } = await supabaseAdmin
@@ -496,29 +516,15 @@ export async function addContentHealthKeywordToCalendar(
   if (kws?.length) {
     const byNorm = new Map(kws.map(k => [normKw(k.keyword), k]));
     const bySlug = new Map(kws.map(k => [slugKey(k.keyword), k]));
-    const exact = byNorm.get(normKw(focusRaw));
+    // Link to an existing keyword ONLY on an exact (normalized or slug-exact)
+    // match. The previous loose substring match caused a content-health refresh of
+    // ".../oilfield-operations-leadership-hiring" to bind to an unrelated
+    // "hiring" keyword row (wrong keyword + wrong volume on the calendar).
+    const exact = byNorm.get(normKw(focusRaw)) ?? bySlug.get(slugKey(focusRaw));
     if (exact) {
       keywordId = exact.id;
       canonical = exact.keyword;
       secondary = (exact.secondary_keywords as string[]) ?? [];
-    } else {
-      const slugHit = bySlug.get(slugKey(focusRaw));
-      if (slugHit) {
-        keywordId = slugHit.id;
-        canonical = slugHit.keyword;
-        secondary = (slugHit.secondary_keywords as string[]) ?? [];
-      } else {
-        const fs = slugKey(focusRaw);
-        for (const k of kws) {
-          const ks = slugKey(k.keyword);
-          if (fs && (fs.includes(ks) || ks.includes(fs))) {
-            keywordId = k.id;
-            canonical = k.keyword;
-            secondary = (k.secondary_keywords as string[]) ?? [];
-            break;
-          }
-        }
-      }
     }
   }
 

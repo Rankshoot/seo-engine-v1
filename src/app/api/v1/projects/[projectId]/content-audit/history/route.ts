@@ -63,11 +63,20 @@ export async function GET(
       plain_language_verdict: (analysis?.plain_language_verdict as string) ?? '',
       report: analysis ?? null,
       source: ((analysis?._source as string) === 'upload' ? 'upload' : 'url') as 'url' | 'upload',
+      // Only the LLM-free site-scan tier stamps 'quick'; a deep audit never sets
+      // this field, so absence means 'deep' (including legacy pre-tier rows).
+      tier: (analysis?.tier === 'quick' ? 'quick' : 'deep') as 'quick' | 'deep',
     };
   });
 
   const total = count ?? items.length;
-  return apiJson({ success: true, items, total, hasMore: offset + items.length < total });
+  // This endpoint is polled every few seconds while a site scan runs, so it must
+  // never be served from the browser/proxy cache — otherwise freshly-scanned
+  // pages don't appear until a hard refresh (the "5 done but 0 shown" bug).
+  return apiJson(
+    { success: true, items, total, hasMore: offset + items.length < total },
+    { headers: { 'Cache-Control': 'no-store, must-revalidate' } }
+  );
 }
 
 export async function DELETE(

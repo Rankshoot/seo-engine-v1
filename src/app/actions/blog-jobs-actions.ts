@@ -1,8 +1,11 @@
 'use server';
 
+import { after } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { enqueueJob } from '@/lib/jobs/enqueue';
+import { getActiveJobs, requeueStale } from '@/lib/jobs/service';
+import { runJob } from '@/lib/jobs/runner';
 import type { BlogGenerateJobPayload } from '@/lib/jobs/types';
 
 // Active-job polling + outcome now live in the generic `task-actions.ts`
@@ -67,4 +70,54 @@ export async function startBlogGeneration(
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : 'Could not start generation' };
   }
+}
+
+export interface ActiveEnhanceJob {
+  jobId: string;
+  auditUrl: string;
+  status: string;
+}
+
+/**
+ * Active (pending/running) *enhanced* blog generations for a project — i.e.
+ * `blog_generate` jobs launched from Content Audit Studio (they carry an
+ * `auditUrl`). Drives the shared "Generating…" button state on the audit page +
+ * every matching Audit History row, and lets it resume after a refresh. Also
+ * self-heals pending jobs (after the response) like the audit-job poller, so a
+ * generation keeps advancing even without the cron drain.
+ */
+export async function getActiveEnhanceJobs(projectId: string): Promise<{
+  success: boolean;
+  jobs: ActiveEnhanceJob[];
+}> {
+  const owner = await ensureOwner(projectId);
+  if (!owner.ok) return { success: false, jobs: [] };
+  const jobs = await getActiveJobs(projectId, ['blog_generate']);
+
+  if (jobs.length > 0) {
+    try {
+      after(async () => {
+        try {
+          await requeueStale();
+          for (const j of jobs) {
+            if (j.status === 'pending') {
+              try { await runJob(j.id); } catch { /* retried on the next poll */ }
+            }
+          }
+        } catch { /* best-effort backstop */ }
+      });
+    } catch { /* not inside a request scope */ }
+  }
+
+  return {
+    success: true,
+    jobs: jobs
+      .map(j => ({
+        jobId: j.id,
+        auditUrl: typeof j.payload?.auditUrl === 'string' ? (j.payload.auditUrl as string) : '',
+        status: j.status,
+      }))
+      // Only enhance generations (which stamp an auditUrl) belong to the audit page.
+      .filter(j => j.auditUrl),
+  };
 }

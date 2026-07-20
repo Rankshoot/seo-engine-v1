@@ -18,6 +18,7 @@ import { calendarApi } from "@/frontend/api/calendar";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { Dialog } from "@/components/common/dialogs/Dialog";
 import { deleteContentAssetAction, unscheduleContentAction } from "@/app/actions/content-actions";
+import { getActiveProjectTasks } from "@/app/actions/task-actions";
 import toast from "react-hot-toast";
 
 type SortKey = "updated" | "created" | "words" | "title";
@@ -188,6 +189,52 @@ const HistoryRow = memo(function HistoryRow({
             Delete
           </button>
         </div>
+      </td>
+    </tr>
+  );
+});
+
+/**
+ * A live placeholder row for a blog that is currently generating in the
+ * background (durable job). Shows the topic/keyword the user entered plus a
+ * "Generating…" affordance in place of View, so they can see exactly what's
+ * being worked on. Swapped for the real row (in place, no refresh) when the job
+ * finishes and the history query refetches.
+ */
+const GeneratingRow = memo(function GeneratingRow({ label }: { label: string }) {
+  return (
+    <tr className="bg-brand-action/[0.04] animate-slide-up-bounce">
+      <td className="px-3 py-2.5 text-center align-middle">
+        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-border-strong border-t-brand-action" />
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <ContentTypeBadge type="Blog" />
+      </td>
+      <td className="px-4 py-2.5 align-middle min-w-0 max-w-[min(28rem,40vw)]">
+        <span className="block truncate text-[13px] font-medium text-text-primary" title={label}>
+          {label || "Generating blog…"}
+        </span>
+        <div className="mt-1.5 h-2 w-2/3 rounded bg-surface-tertiary animate-pulse" />
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <div className="h-3 w-24 rounded bg-surface-tertiary animate-pulse" />
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <span className="inline-flex rounded-full border border-brand-action/30 bg-brand-action/10 px-2 py-0.5 text-[10px] font-semibold text-brand-action">
+          generating
+        </span>
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <div className="h-3 w-8 rounded bg-surface-tertiary animate-pulse" />
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <div className="h-3 w-16 rounded bg-surface-tertiary animate-pulse" />
+      </td>
+      <td className="px-4 py-2.5 align-middle text-right">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-action/30 bg-brand-action/10 px-4 py-1.5 text-[12px] font-medium text-brand-action whitespace-nowrap">
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand-action/40 border-t-brand-action" />
+          Generating…
+        </span>
       </td>
     </tr>
   );
@@ -459,6 +506,40 @@ export function HistoryTab() {
     }
   }, [data, page]);
 
+  // ── Live "generating" rows ──────────────────────────────────────────────────
+  // Poll the durable background jobs so a blog queued from the generator shows as
+  // a live row here, then swaps to the finished post in place when it completes.
+  const { data: activeTasksData } = useQuery({
+    queryKey: ["active-content-tasks", projectId],
+    queryFn: () => getActiveProjectTasks(projectId),
+    enabled: !!projectId,
+    refetchInterval: (q) => {
+      const tasks = (q.state.data as { tasks?: { type: string }[] } | undefined)?.tasks ?? [];
+      return tasks.some((t) => t.type === "blog_generate") ? 4000 : 10000;
+    },
+    refetchOnWindowFocus: true,
+  });
+  const activeBlogJobs = useMemo(
+    () => (activeTasksData?.tasks ?? []).filter((t) => t.type === "blog_generate"),
+    [activeTasksData],
+  );
+
+  // When a job leaves the active set it just finished — refetch history so the
+  // real row replaces its placeholder, and toast the user (useNotify only writes
+  // to the bell, so the on-page toast is our responsibility).
+  const prevJobIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const current = new Set(activeBlogJobs.map((j) => j.jobId));
+    const completed = [...prevJobIdsRef.current].filter((id) => !current.has(id));
+    if (completed.length > 0) {
+      void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+      setPage(1);
+      toast.success(completed.length === 1 ? "Your blog is ready" : `${completed.length} blogs are ready`);
+    }
+    prevJobIdsRef.current = current;
+  }, [activeBlogJobs, projectId, queryClient]);
+
   const totalCount = data?.success ? data.total : 0;
   const counts = data?.success ? data.counts : { blog: 0, ebook: 0, whitepaper: 0, linkedin: 0 };
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -602,11 +683,11 @@ export function HistoryTab() {
 
       </div>
 
-      {isLoading || (allRows.length === 0 && isFetching) ? (
+      {(isLoading || (allRows.length === 0 && isFetching)) && activeBlogJobs.length === 0 ? (
         <div className="flex-1 min-h-0 rounded-[16px] border border-border-subtle bg-surface-elevated overflow-hidden">
           <TableSkeleton rows={8} columns={6} />
         </div>
-      ) : allRows.length === 0 ? (
+      ) : allRows.length === 0 && activeBlogJobs.length === 0 ? (
         <div className="flex-1 min-h-0">
           <EmptyState
             title={isEmptyStateForNoContent ? "No content generated yet" : "No assets match these filters"}
@@ -640,6 +721,13 @@ export function HistoryTab() {
                   <th className="px-4 py-3 text-right whitespace-nowrap w-[1%]">Actions</th>
                 </tr>
               </thead>
+              {activeBlogJobs.length > 0 && (
+                <tbody className="divide-y divide-border-subtle">
+                  {activeBlogJobs.map((job) => (
+                    <GeneratingRow key={job.jobId} label={job.label} />
+                  ))}
+                </tbody>
+              )}
               <HistoryTableBody
                 rows={allRows}
                 offset={0}

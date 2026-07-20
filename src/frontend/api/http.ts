@@ -21,9 +21,17 @@ export async function readApiJson<T>(res: Response, url?: string): Promise<T> {
   }
 }
 
-export async function apiGet<T = unknown>(path: string): Promise<T> {
+export async function apiGet<T = unknown>(
+  path: string,
+  opts?: { noStore?: boolean }
+): Promise<T> {
   const url = resolveUrl(path);
-  const res = await fetch(url, { credentials: "same-origin" });
+  // `noStore` bypasses the browser HTTP cache for endpoints that are polled and
+  // must always reflect the latest server state (e.g. audit history during a scan).
+  const res = await fetch(url, {
+    credentials: "same-origin",
+    ...(opts?.noStore ? { cache: "no-store" as RequestCache } : {}),
+  });
   return readApiJson<T>(res, url);
 }
 

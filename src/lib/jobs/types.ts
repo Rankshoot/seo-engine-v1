@@ -82,6 +82,12 @@ export interface BlogGenerateJobPayload {
   customInstructions?: string;
   /** A human label (topic/keyword) surfaced by the client while polling. */
   label?: string;
+  /**
+   * When this generation is an "enhanced" rewrite launched from Content Audit
+   * Studio, the audited page URL. Lets the audit page map active generation jobs
+   * back to their audit row so the shared "Generating…" button state resolves.
+   */
+  auditUrl?: string;
 }
 
 export const JOB_SELECT =

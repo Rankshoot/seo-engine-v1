@@ -570,10 +570,13 @@ export default function BlogGeneratorPage() {
       void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
 
       toast.success(
-        "Generating in the background — we'll notify you when it's ready. Feel free to keep working or queue another.",
-        { duration: 6000 },
+        "Generating in the background — we'll notify you when it's ready.",
+        { duration: 5000 },
       );
-      setPhase("form");
+      // Switch to Content History rather than dumping the user back on the empty
+      // form: the queued blog shows there as a live "Generating…" row and swaps to
+      // the finished post in place (no refresh) when the durable job completes.
+      router.push(`/projects/${projectId}/content-history`);
     } catch {
       toast.error("Could not start generation. Please try again.");
     } finally {

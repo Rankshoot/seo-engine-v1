@@ -8,10 +8,12 @@ import type { ContentAuditReport } from "@/lib/content-audit-studio";
 import { CalendarDatePicker } from "@/components/CalendarDatePicker";
 import { SeverityChip, EmptyState, scoreColor } from "../_shared/ch-ui";
 import { SEVERITY_ORDER } from "./IssuesPanel";
-import { useAppSelector, selectAuditGenerationsForProject, selectAuditSchedulesForProject } from "@/lib/redux/hooks";
+import { useAppSelector, selectAuditGenerationsForProject, selectAuditGeneratingForProject, selectAuditSchedulesForProject } from "@/lib/redux/hooks";
 import { normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
 
 const SEVERITY_OPTS = ["all", "critical", "high", "medium", "low"] as const;
+const TIER_OPTS = ["all", "deep", "quick"] as const;
+const TIER_LABEL: Record<(typeof TIER_OPTS)[number], string> = { all: "All", deep: "Deep audit", quick: "Quick scan" };
 
 /** First URL path segment as a category key (e.g. ".../hr-glossary/x" → "hr-glossary"). */
 function categoryOf(url: string): string {
@@ -24,7 +26,7 @@ function categoryLabel(key: string): string {
 
 export function AuditHistory({
   projectId, items, loading, total, hasMore, loadingMore, onLoadMore, newUrls,
-  onOpen, onGenerateFromHistory, onScheduleConfirm, scheduleSaving, scheduledDates,
+  onOpen, onDeepAudit, onGenerateFromHistory, onScheduleConfirm, scheduleSaving, scheduledDates,
 }: {
   projectId: string;
   items: ContentAuditHistoryItem[];
@@ -35,6 +37,8 @@ export function AuditHistory({
   onLoadMore?: () => void;
   newUrls?: Set<string>;
   onOpen: (item: ContentAuditHistoryItem) => void;
+  /** Runs a fresh DEEP audit for a quick-scanned row (replaces its quick data). */
+  onDeepAudit: (item: ContentAuditHistoryItem) => void;
   onGenerateFromHistory: (item: ContentAuditHistoryItem) => void;
   onScheduleConfirm: (item: ContentAuditHistoryItem, date: string) => void;
   scheduleSaving: boolean;
@@ -50,6 +54,10 @@ export function AuditHistory({
   // Audit-URL → generated-blogId map (kept current by the page via Redux). Lets
   // each row decide between "Generate Enhanced Blog" and "View Blog".
   const generatedMap = useAppSelector(s => selectAuditGenerationsForProject(s, projectId));
+  // Audit-URL → in-flight generation jobId map (shared with the full-audit view
+  // via Redux). Lets a row show a disabled "Generating…" button in lock-step with
+  // the open report, and survives refresh because the page re-hydrates it.
+  const generatingMap = useAppSelector(s => selectAuditGeneratingForProject(s, projectId));
   // Audit-URL → { entryId, scheduledDate } map (kept current via Redux). Lets
   // each row show "Scheduled for <date>" instead of re-offering "Schedule to
   // Calendar" for an audit that's already on the calendar.
@@ -57,6 +65,7 @@ export function AuditHistory({
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [tierFilter, setTierFilter] = useState<(typeof TIER_OPTS)[number]>("all");
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
   const [scheduleOpenUrl, setScheduleOpenUrl] = useState<string | null>(null);
 
@@ -74,7 +83,14 @@ export function AuditHistory({
     return null;
   }, [scheduledDates]);
 
-  const filtersActive = search.trim().length > 0 || severityFilter !== "all" || categoryFilter !== "all";
+  const filtersActive = search.trim().length > 0 || severityFilter !== "all" || categoryFilter !== "all" || tierFilter !== "all";
+
+  // Counts per audit depth for the Depth filter labels (deep = anything not quick).
+  const tierCounts = useMemo(() => {
+    let quick = 0;
+    for (const i of items) if ((i.tier ?? "deep") === "quick") quick++;
+    return { all: items.length, quick, deep: items.length - quick };
+  }, [items]);
 
   // Categories present in the loaded rows (first URL path segment), for the filter.
   const categories = useMemo(() => {
@@ -93,8 +109,9 @@ export function AuditHistory({
       );
     }
     if (severityFilter !== "all") list = list.filter(i => i.severity === severityFilter);
+    if (tierFilter !== "all") list = list.filter(i => (i.tier ?? "deep") === tierFilter);
     return list;
-  }, [items, search, severityFilter, categoryFilter]);
+  }, [items, search, severityFilter, categoryFilter, tierFilter]);
 
   // Infinite scroll — auto-load the next page when the sentinel nears the
   // viewport. Disabled while filtering (client-side search only spans loaded
@@ -166,43 +183,83 @@ export function AuditHistory({
         Audit History ({total ?? items.length})
       </h2>
 
-      <div className="flex gap-2 mb-3 flex-wrap">
-        <div className="relative flex-1 min-w-[160px]">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
-          </svg>
-          <input
-            type="text"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search by URL or keyword…"
-            className="w-full h-8 pl-8 pr-3 rounded-[8px] border border-border-subtle bg-surface-elevated text-[12px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/40 transition-all"
-          />
-        </div>
-        {categories.length > 1 && (
-          <select
-            value={categoryFilter}
-            onChange={e => setCategoryFilter(e.target.value)}
-            className="h-8 px-2 rounded-[8px] border border-border-subtle bg-surface-elevated text-[12px] text-text-secondary focus:outline-none focus:border-brand-violet/40 max-w-[180px]"
-            title="Filter by category"
-          >
-            <option value="all">All categories</option>
-            {categories.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}
-          </select>
-        )}
-        <div className="flex gap-1">
-          {SEVERITY_OPTS.map(s => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setSeverityFilter(s)}
-              className={`h-8 px-3 rounded-[8px] text-[11px] font-medium transition-all ${
-                severityFilter === s ? "bg-brand-violet text-white" : "border border-border-subtle bg-surface-elevated text-text-tertiary hover:text-text-primary"
-              }`}
+      <div className="mb-4 space-y-2.5">
+        {/* Search + category + clear */}
+        <div className="flex gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[200px]">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by URL or keyword…"
+              className="w-full h-9 pl-8 pr-3 rounded-[10px] border border-border-subtle bg-surface-elevated text-[12px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-violet/40 transition-all"
+            />
+          </div>
+          {categories.length > 1 && (
+            <select
+              value={categoryFilter}
+              onChange={e => setCategoryFilter(e.target.value)}
+              className="h-9 px-2.5 rounded-[10px] border border-border-subtle bg-surface-elevated text-[12px] text-text-secondary focus:outline-none focus:border-brand-violet/40 max-w-[180px]"
+              title="Filter by category"
             >
-              {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
+              <option value="all">All categories</option>
+              {categories.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}
+            </select>
+          )}
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={() => { setSearch(""); setSeverityFilter("all"); setCategoryFilter("all"); setTierFilter("all"); }}
+              className="h-9 px-3 rounded-[10px] border border-border-subtle bg-surface-elevated text-[12px] font-medium text-text-tertiary hover:text-text-primary transition-all inline-flex items-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+              Clear
             </button>
-          ))}
+          )}
+        </div>
+
+        {/* Labelled segmented filters — each group has its own label so the two
+            "All" options can't be confused for one another. */}
+        <div className="flex gap-x-5 gap-y-2 flex-wrap items-center">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary">Depth</span>
+            <div className="inline-flex gap-0.5 rounded-[10px] border border-border-subtle bg-surface-secondary/60 p-0.5">
+              {TIER_OPTS.map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTierFilter(t)}
+                  className={`h-7 px-2.5 rounded-[8px] text-[11px] font-semibold transition-all inline-flex items-center gap-1 ${
+                    tierFilter === t ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle" : "text-text-tertiary hover:text-text-secondary"
+                  }`}
+                >
+                  {TIER_LABEL[t]}
+                  <span className={`tabular-nums ${tierFilter === t ? "text-text-tertiary" : "text-text-tertiary/70"}`}>{tierCounts[t]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-text-tertiary">Severity</span>
+            <div className="inline-flex gap-0.5 rounded-[10px] border border-border-subtle bg-surface-secondary/60 p-0.5">
+              {SEVERITY_OPTS.map(s => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSeverityFilter(s)}
+                  className={`h-7 px-2.5 rounded-[8px] text-[11px] font-semibold transition-all ${
+                    severityFilter === s ? "bg-surface-elevated text-text-primary shadow-sm ring-1 ring-border-subtle" : "text-text-tertiary hover:text-text-secondary"
+                  }`}
+                >
+                  {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -215,12 +272,15 @@ export function AuditHistory({
           const color = scoreColor(score);
           const isExpanded = expandedUrl === item.url;
           const isNew = newUrls?.has(item.url) ?? false;
+          const tier = item.tier ?? "deep";
+          const isQuick = tier === "quick";
           // Only real, completed audits ('ok') can be enhanced/scheduled — never a
           // page we flagged as non-article / unreachable.
           const isReal = (((item.report as ContentAuditReport | null)?.page_status as string | undefined) ?? "ok") === "ok";
           // If an enhanced blog already exists for this audited URL, show "View
           // Blog" instead of "Generate Enhanced Blog".
           const generatedBlogId = isReal ? (generatedMap[normalizeAuditGenerationUrl(item.url)] ?? null) : null;
+          const isGenerating = isReal && !generatedBlogId && Boolean(generatingMap[normalizeAuditGenerationUrl(item.url)]);
           const schedule = isReal ? (scheduleMap[normalizeAuditGenerationUrl(item.url)] ?? null) : null;
           const issueList = (item.report?.issues ?? []) as ContentAuditReport["issues"];
           const sortedIssues = [...issueList].sort(
@@ -272,6 +332,11 @@ export function AuditHistory({
                   </div>
                 </div>
                 <div className="shrink-0 flex items-center gap-2">
+                  {isQuick && (
+                    <span className="inline-flex items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                      Quick scan
+                    </span>
+                  )}
                   {item.severity && item.severity !== "none" && <SeverityChip severity={item.severity} />}
                   <span className="text-[10px] text-text-tertiary">{new Date(item.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
                   <svg className={`w-4 h-4 text-text-tertiary shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -325,63 +390,90 @@ export function AuditHistory({
                   </div>
 
                   <div className="px-4 py-3 border-t border-border-subtle/30 flex items-center gap-2 flex-wrap bg-surface-secondary/20">
-                    {generatedBlogId ? (
+                    {isQuick ? (
+                      // Quick-scan rows only ran fixed, LLM-free parameters — no
+                      // competitor data or rewrite brief exists yet. A deep audit
+                      // is required before this URL can be scheduled or enhanced.
                       <button
                         type="button"
-                        onClick={() => router.push(`/projects/${projectId}/content-history/${generatedBlogId}`)}
-                        className="h-8 px-3 rounded-[8px] bg-status-success text-white text-[12px] font-semibold hover:opacity-90 transition-all flex items-center gap-1.5"
-                      >
-                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
-                        </svg>
-                        View Blog
-                      </button>
-                    ) : isReal ? (
-                      <button
-                        type="button"
-                        onClick={() => onGenerateFromHistory(item)}
+                        onClick={() => onDeepAudit(item)}
                         className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
                       >
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607z" />
                         </svg>
-                        Generate Blog
+                        Deep Audit
                       </button>
-                    ) : null}
-                    {isReal && (
-                      schedule ? (
-                        <span className="h-8 px-3 rounded-[8px] bg-status-success/10 border border-status-success/20 text-[12px] font-medium text-status-success flex items-center gap-1.5">
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                    ) : (
+                      <>
+                        {generatedBlogId ? (
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/projects/${projectId}/content-history/${generatedBlogId}`)}
+                            className="h-8 px-3 rounded-[8px] bg-status-success text-white text-[12px] font-semibold hover:opacity-90 transition-all flex items-center gap-1.5"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+                            </svg>
+                            View Blog
+                          </button>
+                        ) : isGenerating ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="h-8 px-3 rounded-[8px] bg-brand-violet/70 text-white text-[12px] font-semibold flex items-center gap-1.5 cursor-default"
+                          >
+                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/50 border-t-white" />
+                            Generating…
+                          </button>
+                        ) : isReal ? (
+                          <button
+                            type="button"
+                            onClick={() => onGenerateFromHistory(item)}
+                            className="h-8 px-3 rounded-[8px] bg-brand-violet text-white text-[12px] font-semibold hover:bg-brand-violet/90 transition-all flex items-center gap-1.5"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09z" />
+                            </svg>
+                            Generate Blog
+                          </button>
+                        ) : null}
+                        {isReal && (
+                          schedule ? (
+                            <span className="h-8 px-3 rounded-[8px] bg-status-success/10 border border-status-success/20 text-[12px] font-medium text-status-success flex items-center gap-1.5">
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
+                              </svg>
+                              {new Date(schedule.scheduledDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                            </span>
+                          ) : (
+                            <CalendarDatePicker
+                              open={scheduleOpenUrl === item.url}
+                              onOpenChange={v => setScheduleOpenUrl(v ? item.url : null)}
+                              currentDate={nextVacantDate}
+                              onConfirm={date => onScheduleConfirm(item, date)}
+                              saving={scheduleSaving}
+                              scheduledDates={scheduledDates}
+                              variant="pick"
+                              label="Schedule"
+                              className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong disabled:opacity-50 transition-all flex items-center gap-1.5"
+                            />
+                          )
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onOpen(item)}
+                          className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-tertiary hover:text-text-primary transition-all flex items-center gap-1.5"
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
                           </svg>
-                          {new Date(schedule.scheduledDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                        </span>
-                      ) : (
-                        <CalendarDatePicker
-                          open={scheduleOpenUrl === item.url}
-                          onOpenChange={v => setScheduleOpenUrl(v ? item.url : null)}
-                          currentDate={nextVacantDate}
-                          onConfirm={date => onScheduleConfirm(item, date)}
-                          saving={scheduleSaving}
-                          scheduledDates={scheduledDates}
-                          variant="pick"
-                          label="Schedule"
-                          className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong disabled:opacity-50 transition-all flex items-center gap-1.5"
-                        />
-                      )
+                          View full audit
+                        </button>
+                      </>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => onOpen(item)}
-                      className="h-8 px-3 rounded-[8px] border border-border-subtle bg-surface-secondary text-[12px] font-medium text-text-tertiary hover:text-text-primary transition-all flex items-center gap-1.5"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
-                      </svg>
-                      View Audit
-                    </button>
                   </div>
                 </div>
               )}

@@ -13,9 +13,17 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
  */
 export interface AuditGenerationsState {
   byProject: Record<string, Record<string, string>>;
+  /**
+   * Audited URLs with an in-flight enhanced-blog generation, keyed by project →
+   * normalized audit URL → durable jobId. This is the SHARED source of truth for
+   * the "Generating…" button state, so the full-audit view and every Audit
+   * History row for the same URL stay in lock-step (and survive a refresh, since
+   * the page re-hydrates it from the active durable jobs on mount).
+   */
+  generatingByProject: Record<string, Record<string, string>>;
 }
 
-const initialState: AuditGenerationsState = { byProject: {} };
+const initialState: AuditGenerationsState = { byProject: {}, generatingByProject: {} };
 
 /** Canonical key for an audit URL (drop hash + trailing slash, lower-case). */
 export function normalizeAuditGenerationUrl(url: string): string {
@@ -47,8 +55,46 @@ export const auditGenerationsSlice = createSlice({
       if (!url || !blogId) return;
       const bucket = (state.byProject[projectId] ??= {});
       bucket[normalizeAuditGenerationUrl(url)] = blogId;
+      // A completed generation is no longer "generating".
+      delete state.generatingByProject[projectId]?.[normalizeAuditGenerationUrl(url)];
+    },
+    /** Replace a project's full url→jobId "currently generating" map (from active-job poll). */
+    setAuditGeneratingMap(
+      state,
+      action: PayloadAction<{ projectId: string; map: Record<string, string> }>
+    ) {
+      const { projectId, map } = action.payload;
+      const normalized: Record<string, string> = {};
+      for (const [url, jobId] of Object.entries(map)) {
+        if (url && jobId) normalized[normalizeAuditGenerationUrl(url)] = jobId;
+      }
+      state.generatingByProject[projectId] = normalized;
+    },
+    /** Mark one audited URL as generating (optimistic, on click). */
+    setAuditGenerating(
+      state,
+      action: PayloadAction<{ projectId: string; url: string; jobId: string }>
+    ) {
+      const { projectId, url, jobId } = action.payload;
+      if (!url || !jobId) return;
+      const bucket = (state.generatingByProject[projectId] ??= {});
+      bucket[normalizeAuditGenerationUrl(url)] = jobId;
+    },
+    /** Clear the generating flag for one audited URL (job finished/failed). */
+    clearAuditGenerating(
+      state,
+      action: PayloadAction<{ projectId: string; url: string }>
+    ) {
+      const { projectId, url } = action.payload;
+      delete state.generatingByProject[projectId]?.[normalizeAuditGenerationUrl(url)];
     },
   },
 });
 
-export const { setGeneratedMap, setGeneratedBlog } = auditGenerationsSlice.actions;
+export const {
+  setGeneratedMap,
+  setGeneratedBlog,
+  setAuditGeneratingMap,
+  setAuditGenerating,
+  clearAuditGenerating,
+} = auditGenerationsSlice.actions;

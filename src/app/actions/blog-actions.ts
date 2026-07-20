@@ -8,7 +8,7 @@ import { ArticleLibraryEntry, Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWi
 import type { BusinessBrief } from '@/lib/business-brief';
 import { insertBlogImagePlaceholders } from '@/services/openAiImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
-import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan } from '@/lib/content-health-calendar';
+import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan, buildContentAnalysisBundle } from '@/lib/content-health-calendar';
 import { hybridReadUrl } from '@/services/hybridScraper';
 import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
@@ -131,6 +131,11 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
         brief,
         project,
         wordCount: Math.min(4000, Math.max(1200, countWords(fresh.markdown) + 200)),
+        // Same full-enhancement upgrade as the durable "Generate Enhanced" job —
+        // carries the audit's quality_rubric so regenerating stays consistent
+        // with the original enhance run rather than falling back to a thinner,
+        // issues-only repair pass.
+        contentAnalysisBundle: buildContentAnalysisBundle(repairPlan),
       });
 
       const preserveTitle = !repairTitleNeedsRepairFlag(analysis) && Boolean(repairPlan.title);
@@ -158,6 +163,10 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       }
       const finalContent = sanitized.content;
       const finalWordCount = countWords(finalContent);
+      // Guard against leaked prompt-instruction text landing in the subtitle
+      // (e.g. "…META_NEEDS_REPAIR is false.") — regenerates from the body if so.
+      const { normalizeMetaDescription } = await import('@/lib/blog-markdown-polish');
+      const cleanMetaDescription = normalizeMetaDescription(finalMetaDescription, finalContent);
 
       const { data: existing } = await supabaseAdmin
         .from('blogs')
@@ -168,7 +177,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       const upsertPayload = {
         title: finalTitle,
         content: finalContent,
-        meta_description: finalMetaDescription,
+        meta_description: cleanMetaDescription,
         slug: repaired.slug,
         word_count: finalWordCount,
         target_keyword: entry.focus_keyword,

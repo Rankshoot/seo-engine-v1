@@ -97,6 +97,49 @@ export function parseContentHealthRepairPlan(raw: unknown): ContentHealthAuditSn
   return o as ContentHealthAuditSnapshot;
 }
 
+const REPAIR_SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+/**
+ * Builds `repairBlogPost`'s `contentAnalysisBundle` from a Content Health
+ * repair plan — the same shape the blog-viewer's "Analyse content" flow
+ * already uses to unlock FULL ENHANCEMENT mode (unconditional FAQ, 3–8
+ * external citations, 2+ internal links, rubric-gap enforcement) instead of
+ * the more conservative "only touch what's explicitly flagged" repair mode.
+ *
+ * Content Audit Studio's deep audit already computes a full quality_rubric —
+ * this just carries it (plus a synthesized verdict/quick-wins) into the
+ * writer prompt, so the enhanced blog is held to every scoring dimension the
+ * audit itself checks, not only the freeform issues the LLM happened to list.
+ */
+export function buildContentAnalysisBundle(plan: ContentHealthAuditSnapshot): {
+  summary: string;
+  plain_language_verdict: string;
+  conclusion_verdict: string;
+  conclusion_summary: string;
+  quick_wins: string[];
+  quality_rubric: Array<{ label: string; detail: string; status: 'pass' | 'warn' | 'fail' }>;
+} {
+  const a = plan.analysis;
+  const verdictText = a.plain_language_verdict?.trim() || a.summary?.trim() || '';
+  const score = typeof plan.health_score === 'number' ? plan.health_score : 0;
+  const conclusion_verdict = score >= 80 ? 'strong' : score >= 55 ? 'needs_improvement' : 'underperforming';
+
+  const quick_wins = [...(a.issues ?? [])]
+    .sort((x, y) => (REPAIR_SEVERITY_RANK[x.severity] ?? 9) - (REPAIR_SEVERITY_RANK[y.severity] ?? 9))
+    .map(i => i.fix?.trim() || i.label?.trim())
+    .filter((w): w is string => Boolean(w))
+    .slice(0, 6);
+
+  return {
+    summary: a.summary || '',
+    plain_language_verdict: verdictText,
+    conclusion_verdict,
+    conclusion_summary: verdictText,
+    quick_wins,
+    quality_rubric: (a.quality_rubric ?? []).map(r => ({ label: r.label, detail: r.detail, status: r.status })),
+  };
+}
+
 function wordCount(s: string): number {
   return s.split(/\s+/).filter(Boolean).length;
 }

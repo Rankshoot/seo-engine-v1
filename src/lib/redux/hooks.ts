@@ -27,6 +27,23 @@ export function selectGeneratedBlogId(
   return state.auditGenerations.byProject[projectId]?.[normalizeAuditGenerationUrl(url)] ?? null;
 }
 
+/** A project's audit-URL → in-flight generation jobId map (stable empty-object fallback). */
+export function selectAuditGeneratingForProject(
+  state: RootState,
+  projectId: string
+): Record<string, string> {
+  return state.auditGenerations.generatingByProject[projectId] ?? EMPTY_GENERATED_MAP;
+}
+
+/** True when the given audited URL currently has an in-flight enhanced generation. */
+export function selectIsAuditGenerating(
+  state: RootState,
+  projectId: string,
+  url: string
+): boolean {
+  return Boolean(state.auditGenerations.generatingByProject[projectId]?.[normalizeAuditGenerationUrl(url)]);
+}
+
 /** A project's audit-URL → { entryId, scheduledDate } map (stable empty-object fallback). */
 export function selectAuditSchedulesForProject(
   state: RootState,

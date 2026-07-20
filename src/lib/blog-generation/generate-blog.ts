@@ -171,7 +171,7 @@ export async function runBlogGeneration(
         // never hits the gateway timeout.
         const auditData = params.contentHealthAudit || (entry ? (entry as any).content_health_audit : null);
         if (auditData) {
-          const { parseContentHealthRepairPlan } = await import("@/lib/content-health-calendar");
+          const { parseContentHealthRepairPlan, buildContentAnalysisBundle } = await import("@/lib/content-health-calendar");
           const repairPlan = parseContentHealthRepairPlan(auditData);
           if (repairPlan) {
             emit({ event: "stage", stage: "repair_scrape", detail: "Reading the original article…" });
@@ -259,6 +259,13 @@ export async function runBlogGeneration(
                 brief,
                 project,
                 wordCount: Math.min(4500, Math.max(1400, countWords(cleanedMarkdown) + 250)),
+                // Carries the deep audit's full quality_rubric into the writer
+                // prompt and switches on FULL ENHANCEMENT mode (unconditional
+                // FAQ, 3–8 external citations, 2+ internal links) so the
+                // enhanced blog satisfies every scoring dimension the audit
+                // itself checks — not only the freeform issues it listed —
+                // and re-audits well instead of just resolving the issue list.
+                contentAnalysisBundle: buildContentAnalysisBundle(repairPlan),
               },
               {
                 // Forward Claude's streaming chunks as thinking events so the
@@ -897,11 +904,15 @@ function sanitizeBlogMarkdown(markdown: string): string {
     .replace(/!\[[^\]]*\]\(\s*IMAGE_PLACEHOLDER\s*\)\s*\n?/gi, "")
     .replace(/Image placeholder missing a source\. Use edit mode to regenerate this image\./gi, "");
 
-  const metaIdx = cleaned.indexOf("---META---");
-  if (metaIdx !== -1) cleaned = cleaned.substring(0, metaIdx);
+  // Cut the trailing metadata block tolerantly (variant separators like
+  // `META---`, `---META`, `## META---`, or the `{"meta_description":…}` object
+  // itself) so none of it renders as a heading/paragraph in the article body.
+  const metaCut = cleaned.search(/\n[^\S\n]*#{0,6}[^\S\n]*(?:-{2,}\s*META|META\s*-{2,})|\{\s*"meta_description"/i);
+  if (metaCut !== -1) cleaned = cleaned.slice(0, metaCut);
 
   return cleaned
-    .replace(/^\s*"(?:external_links|internal_links|meta_description|slug|title|contentMarkdown)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm, "")
+    .replace(/^\s*"(?:external_links|internal_links|meta_description|slug|title|contentMarkdown|repair_notes)"\s*:\s*(?:\[.*?\]|"[^"]*")\s*,?\s*$/gm, "")
     .replace(/^\s*[{}]\s*$/gm, "")
+    .replace(/\n[^\S\n]*#{0,6}[^\S\n]*-*\s*META\s*-*\s*$/i, "")
     .replace(/\n{3,}/g, "\n\n").trim();
 }

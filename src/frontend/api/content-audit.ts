@@ -15,6 +15,8 @@ export interface ContentAuditHistoryItem {
   plain_language_verdict: string;
   report: ContentAuditReport | null;
   source?: 'url' | 'upload';
+  /** 'quick' = LLM-free site-scan tier (fixed parameters, no competitor data); 'deep' = full audit. */
+  tier: 'quick' | 'deep';
 }
 
 export interface AnalyzeResponse {
@@ -46,7 +48,8 @@ export const contentAuditApi = {
     if (opts?.limit != null) qs.set('limit', String(opts.limit));
     if (opts?.offset != null) qs.set('offset', String(opts.offset));
     const q = qs.toString();
-    return apiGet(`${V1Routes.contentAuditHistory(projectId)}${q ? `?${q}` : ''}`);
+    // Polled during site scans — always fetch fresh so newly-scanned pages appear.
+    return apiGet(`${V1Routes.contentAuditHistory(projectId)}${q ? `?${q}` : ''}`, { noStore: true });
   },
 
   /** Map of audited URL → generated ("enhanced") blogId for this project. */

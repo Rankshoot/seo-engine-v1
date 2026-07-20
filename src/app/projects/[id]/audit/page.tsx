@@ -1,15 +1,15 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { contentAuditApi, type ContentAuditHistoryItem } from "@/frontend/api/content-audit";
 import { calendarApi } from "@/frontend/api/calendar";
-import { blogsApi } from "@/frontend/api/blogs";
 import { qk } from "@/lib/query";
 import type { ContentAuditReport } from "@/lib/content-audit-studio";
 import { startUrlAudit, getActiveAuditJobs, getAuditJobOutcome, type ActiveAuditJob } from "@/app/actions/audit-jobs-actions";
+import { startBlogGeneration, getActiveEnhanceJobs } from "@/app/actions/blog-jobs-actions";
 import type { ContentHealthAuditSnapshot } from "@/lib/content-health-calendar";
 import type { BlogAuditAnalysis } from "@/lib/content-audit";
 import { Spinner, StepIndicator } from "./_shared/ch-ui";
@@ -19,9 +19,8 @@ import { STEPS } from "./_components/audit-config";
 import { AuditResults } from "./_components/AuditResults";
 import { AuditHistory } from "./_components/AuditHistory";
 import { SiteScanBar } from "./_components/SiteScanBar";
-import { GenerationStreamPanel } from "./_components/GenerationStreamPanel";
-import { useAppDispatch, useAppSelector, selectGeneratedBlogId, selectAuditSchedule, selectAuditGenerationsForProject } from "@/lib/redux/hooks";
-import { setGeneratedMap, setGeneratedBlog, normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
+import { useAppDispatch, useAppSelector, selectGeneratedBlogId, selectAuditSchedule, selectAuditGenerationsForProject, selectIsAuditGenerating } from "@/lib/redux/hooks";
+import { setGeneratedMap, setGeneratedBlog, setAuditGeneratingMap, setAuditGenerating, normalizeAuditGenerationUrl } from "@/lib/redux/audit-generations-slice";
 import { setScheduledMap, setScheduledAudit } from "@/lib/redux/audit-schedules-slice";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
 
@@ -45,6 +44,7 @@ function syncCalendarAfterChange(
 
 export default function ContentAuditStudioPage() {
   const { id: projectId } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
 
@@ -85,12 +85,16 @@ export default function ContentAuditStudioPage() {
   const scheduledDate = auditSchedule?.scheduledDate ?? null;
   const generatedBlogId = useAppSelector(s => (report?.url ? selectGeneratedBlogId(s, projectId, report.url) : null));
   const generatedMap = useAppSelector(s => selectAuditGenerationsForProject(s, projectId));
+  // Shared "is this URL generating" state (Redux) — the same value drives the
+  // full-audit view's Generate button AND every Audit History row for this URL,
+  // and it survives a refresh because the poll below re-hydrates it from the
+  // active durable jobs. No more local `generating` flag that only the open
+  // report knew about.
+  const generating = useAppSelector(s => (report?.url ? selectIsAuditGenerating(s, projectId, report.url) : false));
 
-  const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
-  const [thinkingChunks, setThinkingChunks] = useState<string[]>([]);
-  const [streamLog, setStreamLog] = useState<string[]>([]);
-  const [showStreamPanel, setShowStreamPanel] = useState(false);
+  // Bumped after starting a generation to (re)start the active-generation poll.
+  const [enhancePollKick, setEnhancePollKick] = useState(0);
 
   const [warning, setWarning] = useState("");
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -246,6 +250,52 @@ export default function ContentAuditStudioPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  // Resume/track in-flight ENHANCED generations. Enhanced blogs run as durable
+  // `blog_generate` jobs (stamped with their audit URL), so on mount we re-attach
+  // to any still running — the shared "Generating…" button state survives a
+  // refresh — and when one finishes we re-hydrate the generated-blog map (flips
+  // both surfaces to "View Blog"), refresh history, and sync the calendar. The
+  // loop stops when nothing is generating and restarts when `enhancePollKick`
+  // bumps (i.e. right after starting a new generation).
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    const activeUrls = new Set<string>();
+    void (async () => {
+      const seedMap: Record<string, string> = {};
+      const first = await getActiveEnhanceJobs(projectId);
+      if (cancelled || !first.success) return;
+      first.jobs.forEach(j => { seedMap[j.auditUrl] = j.jobId; activeUrls.add(normalizeAuditGenerationUrl(j.auditUrl)); });
+      dispatch(setAuditGeneratingMap({ projectId, map: seedMap }));
+      if (first.jobs.length === 0) return;
+      while (!cancelled) {
+        await sleep(4000);
+        if (cancelled) return;
+        const r = await getActiveEnhanceJobs(projectId);
+        if (cancelled || !r.success) return;
+        const curMap: Record<string, string> = {};
+        const curUrls = new Set<string>();
+        r.jobs.forEach(j => { curMap[j.auditUrl] = j.jobId; curUrls.add(normalizeAuditGenerationUrl(j.auditUrl)); });
+        // Replacing the whole map clears any URL that just finished.
+        dispatch(setAuditGeneratingMap({ projectId, map: curMap }));
+        const finished = [...activeUrls].some(u => !curUrls.has(u));
+        if (finished) {
+          try {
+            const gm = await contentAuditApi.generatedMap(projectId);
+            if (!cancelled && gm?.map) dispatch(setGeneratedMap({ projectId, map: gm.map }));
+          } catch { /* non-fatal */ }
+          syncCalendarAfterChange(queryClient, dispatch, projectId);
+          void loadHistory();
+        }
+        activeUrls.clear();
+        curUrls.forEach(u => activeUrls.add(u));
+        if (r.jobs.length === 0) return;
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, enhancePollKick]);
+
   // Fallback confirmation for the rare race where this report opens before the
   // bulk generated-map hydration (above) has resolved. Only ever *adds* to
   // Redux — never resets it — so the "View Blog" button never flickers back
@@ -292,9 +342,6 @@ export default function ContentAuditStudioPage() {
   const resetPostAuditState = () => {
     setGenerateError("");
     setScheduleOpen(false);
-    setThinkingChunks([]);
-    setStreamLog([]);
-    setShowStreamPanel(false);
   };
 
   const handleAnalyze = async (targetUrl?: string) => {
@@ -445,51 +492,43 @@ export default function ContentAuditStudioPage() {
     scheduled_from: "analyze_content",
   });
 
+  // Enqueue a DURABLE enhanced-blog generation and return immediately. The job
+  // runs server-side (resumable, idempotent), so the enhanced blog completes even
+  // if the user refreshes, switches tabs, or closes the app — and the shared
+  // `generating` state + notifications come from the same durable-job rail the
+  // main blog generator uses. `auditUrl` is stamped so the active-generation poll
+  // can map the job back to this report's row.
   const handleGenerate = async () => {
     if (!report) return;
-    setGenerating(true);
     setGenerateError("");
-    setThinkingChunks([]);
-    setStreamLog(["Starting generation…"]);
-    setShowStreamPanel(true);
-    try {
-      let blogId: string | null = null;
-      const streamPayload = entryId
-        ? { entryId, wordCount: report.revamp_brief?.recommended_word_count ?? 2500 }
-        : {
-            projectId,
-            keyword: report.primary_keyword || report.title,
-            contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
-            wordCount: report.revamp_brief?.recommended_word_count ?? 2500,
-          };
+    const auditUrl = report.url;
+    const label = report.primary_keyword || report.title || auditUrl;
+    const wordCount = report.revamp_brief?.recommended_word_count ?? 2500;
+    const idempotencyKey = `enhance:${projectId}:${normalizeAuditGenerationUrl(auditUrl)}`;
 
-      for await (const ev of blogsApi.generateStream(streamPayload)) {
-        if (ev.event === "stage") {
-          const label = ev.detail ?? ev.stage;
-          setStreamLog(prev => [...prev, label]);
-        } else if (ev.event === "thinking") {
-          setThinkingChunks(prev => [...prev, ev.chunk]);
-        } else if (ev.event === "thinking_done") {
-          setStreamLog(prev => [...prev, "AI reasoning complete"]);
-        } else if (ev.event === "done") {
-          blogId = ev.blogId;
-          setStreamLog(prev => [...prev, "Blog saved successfully"]);
-        } else if (ev.event === "error") {
-          setGenerateError(ev.message || "Generation failed.");
-          return;
-        }
+    const payload = entryId
+      ? { entryId, wordCount, auditUrl, label }
+      : {
+          keyword: report.primary_keyword || report.title,
+          contentHealthAudit: buildSnapshot(report) as unknown as Record<string, unknown>,
+          wordCount,
+          auditUrl,
+          label,
+        };
+
+    try {
+      const started = await startBlogGeneration(projectId, payload, idempotencyKey);
+      if (!started.success || !started.jobId) {
+        setGenerateError(started.error ?? "Could not start generation. Please try again.");
+        return;
       }
-      if (blogId) {
-        if (report?.url) dispatch(setGeneratedBlog({ projectId, url: report.url, blogId }));
-        syncCalendarAfterChange(queryClient, dispatch, projectId);
-        void loadHistory();
-      } else {
-        setGenerateError("Generation finished without returning a blog. Check Content History.");
-      }
+      // Optimistically mark generating so both surfaces flip instantly, then let
+      // the poll take over (it re-hydrates the map + resolves the finished blog).
+      dispatch(setAuditGenerating({ projectId, url: auditUrl, jobId: started.jobId }));
+      setEnhancePollKick(k => k + 1);
+      toast.success("Generating enhanced blog in the background — we'll notify you when it's ready.");
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : "Unexpected error during generation.");
-    } finally {
-      setGenerating(false);
     }
   };
 
@@ -583,6 +622,41 @@ export default function ContentAuditStudioPage() {
   };
 
   const handleGenerateFromHistory = (item: ContentAuditHistoryItem) => { openHistoryItem(item); };
+
+  // Quick-scanned rows only ran fixed, LLM-free parameters (no competitor data,
+  // no rewrite brief) — always re-run a full DEEP audit for this URL rather than
+  // opening the thin quick-scan report. Reuses the same durable-job flow as the
+  // "Audit a URL" box, so it's resilient to refresh and shows in Audit History
+  // once done (now tier: 'deep', unlocking Generate/Schedule/View full audit).
+  const handleDeepAuditFromHistory = (item: ContentAuditHistoryItem) => {
+    setUrl(item.url);
+    setInputMode("url");
+    void handleAnalyze(item.url);
+  };
+
+  // Deep-link support: when the Content Calendar routes a content-health "refresh"
+  // entry here (`?url=…`), open that page's full audit automatically — from
+  // history if we already have it, otherwise re-run the audit. Runs once per URL
+  // param, after history has loaded so a present row is matched instead of paying
+  // for a re-audit.
+  const deepLinkDoneRef = useRef<string | null>(null);
+  useEffect(() => {
+    const paramUrl = searchParams.get("url");
+    if (!paramUrl || historyLoading) return;
+    if (deepLinkDoneRef.current === paramUrl) return;
+    deepLinkDoneRef.current = paramUrl;
+    const norm = (u: string) => u.replace(/#.*$/, "").replace(/\/+$/, "").toLowerCase();
+    const match = history.find(i => norm(i.url) === norm(paramUrl));
+    if (match) {
+      openHistoryItem(match);
+    } else {
+      setUrl(paramUrl);
+      setInputMode("url");
+      void handleAnalyze(paramUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, historyLoading, history]);
+
   const headerActions = (
     <div
       className="relative grid grid-cols-2 w-[340px] sm:w-[360px] rounded-[12px] border border-border-subtle bg-surface-secondary/60 p-1 gap-0.5 backdrop-blur-sm shadow-sm"
@@ -796,15 +870,6 @@ export default function ContentAuditStudioPage() {
           )}
         </div>
 
-        {showStreamPanel && (
-          <GenerationStreamPanel
-            stages={streamLog}
-            thinkingChunks={thinkingChunks}
-            isGenerating={generating}
-            onClose={() => setShowStreamPanel(false)}
-          />
-        )}
-
         {report && (
           <div ref={resultsRef} className="scroll-mt-28">
             <AuditResults
@@ -847,6 +912,7 @@ export default function ContentAuditStudioPage() {
             onLoadMore={loadMoreHistory}
             newUrls={newAuditUrls}
             onOpen={openHistoryItem}
+            onDeepAudit={handleDeepAuditFromHistory}
             onGenerateFromHistory={handleGenerateFromHistory}
             onScheduleConfirm={handleScheduleFromHistoryConfirm}
             scheduleSaving={scheduleSaving}

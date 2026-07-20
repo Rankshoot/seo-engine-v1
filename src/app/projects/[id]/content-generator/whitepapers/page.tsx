@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useKeywordParam } from "@/hooks/useKeywordParam";
+import { useFormDraft } from "@/hooks/useFormDraft";
+import { useNotify } from "@/hooks/useNotify";
 import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
@@ -13,7 +15,6 @@ import {
   Input,
   PageHeader,
   Select,
-  Spinner,
   Textarea,
 } from "@/components/common";
 import {
@@ -26,6 +27,9 @@ import {
   SectionHeading,
   StepRow,
   RecentHistorySkeleton,
+  AskAiButton,
+  TopicSuggestionChips,
+  useAiFillTracker,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { calendarApi } from "@/frontend/api/calendar";
@@ -34,6 +38,7 @@ import { TARGET_REGIONS } from "@/lib/types";
 import {
   generateWhitepaperAction,
   suggestContentTopicAction,
+  suggestTopicIdeasAction,
 } from "@/app/actions/content-actions";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -96,8 +101,42 @@ export default function WhitepaperGeneratorPage() {
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicIdeasLoading, setTopicIdeasLoading] = useState(false);
+  const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
+  const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, fillFlashClass } = useAiFillTracker();
+
+  // Draft persistence — restore an in-progress form after navigating away/back
+  // (only for a fresh session, not calendar/keyword-driven opens).
+  const hasUrlContext = !!entryId || !!keywordParam;
+  const { clearDraft, hadDraft } = useFormDraft(
+    "whitepaper",
+    projectId,
+    { primaryKeyword, topic, secondaryKeywords, audience, industry, problem, angle, objective, depth, customWordCount, region, language },
+    {
+      enabled: phase === "form" && !hasUrlContext,
+      apply: (d) => {
+        if (hasUrlContext) return;
+        if (typeof d.primaryKeyword === "string" && d.primaryKeyword) setPrimaryKeyword(d.primaryKeyword);
+        if (typeof d.topic === "string") setTopic(d.topic);
+        if (Array.isArray(d.secondaryKeywords)) setSecondaryKeywords(d.secondaryKeywords as string[]);
+        if (typeof d.audience === "string") setAudience(d.audience);
+        if (typeof d.industry === "string") setIndustry(d.industry);
+        if (typeof d.problem === "string") setProblem(d.problem);
+        if (typeof d.angle === "string") setAngle(d.angle);
+        if (typeof d.objective === "string") setObjective(d.objective);
+        if (typeof d.depth === "string") setDepth(d.depth as (typeof WP_DEPTH_OPTIONS)[number]["id"]);
+        if (typeof d.customWordCount === "string") setCustomWordCount(d.customWordCount);
+        if (typeof d.region === "string") setRegion(d.region);
+        if (typeof d.language === "string") setLanguage(d.language);
+      },
+    },
+  );
+  const draftRestored = hadDraft && !hasUrlContext;
 
   useEffect(() => {
+    // A restored draft already carries the user's audience/region/language —
+    // don't clobber it with project defaults.
+    if (draftRestored) return;
     if (project?.target_audience && !audience) setAudience(project.target_audience);
     if (project?.niche && !industry) setIndustry(project.niche);
     const tr = project?.target_region?.toLowerCase();
@@ -130,24 +169,60 @@ export default function WhitepaperGeneratorPage() {
 
   const isFormValid = emptyRequiredFields.length === 0;
 
+  // Auto-fill: completes only fields the user left empty — user-typed values
+  // are passed as seeds and never replaced.
   const askAi = async () => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "whitepaper",
         avoidPhrases: secondaryKeywords,
-        seedKeyword: primaryKeyword.trim() || undefined,
+        seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
+        seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
       });
-      if (res.success) {
-        setTopic(res.topic);
-        setPrimaryKeyword(res.primary_keyword);
-        if (res.semantic_keywords.length) setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
-        toast.success("Topic + supporting cluster filled");
-      } else {
+      if (!res.success) {
         toast.error(res.error);
+        return;
       }
+      const filled: string[] = [];
+      if (res.topic && canAutoFill("topic", topic)) { setTopic(res.topic); filled.push("topic"); }
+      if (res.primary_keyword && canAutoFill("keyword", primaryKeyword)) { setPrimaryKeyword(res.primary_keyword); filled.push("keyword"); }
+      if (res.semantic_keywords.length && canAutoFill("secondaryKeywords", secondaryKeywords)) {
+        setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
+        filled.push("secondaryKeywords");
+      }
+      if (res.goal && canAutoFill("problem", problem)) { setProblem(res.goal); filled.push("problem"); }
+      markAiFilled(filled);
+      setTopicSuggestions(Array.from(new Set([res.topic, ...(res.alternate_topics ?? [])].filter(Boolean))));
+      toast.success(
+        filled.length
+          ? `AI filled ${filled.length} field${filled.length === 1 ? "" : "s"} — your entries were kept`
+          : "Topic ideas ready — pick one below the topic field"
+      );
     } finally {
       setAskLoading(false);
+    }
+  };
+
+  // "More ideas" under the topic field — ONLY refreshes the topic suggestion
+  // chips. Never touches the keyword, audience, problem statement, or any
+  // other field, regardless of AI-fill ownership.
+  const refreshTopicIdeas = async () => {
+    setTopicIdeasLoading(true);
+    try {
+      const res = await suggestTopicIdeasAction(projectId, {
+        contentType: "whitepaper",
+        seedKeyword: primaryKeyword.trim() || undefined,
+        audience: audience.trim() || undefined,
+        tone: WP_DEPTH_OPTIONS.find(d => d.id === depth)?.label,
+        goal: problem.trim() || undefined,
+        secondaryKeywords,
+        avoidTopics: topicSuggestions,
+      });
+      if (!res.success) { toast.error(res.error); return; }
+      setTopicSuggestions(res.topics);
+    } finally {
+      setTopicIdeasLoading(false);
     }
   };
 
@@ -159,8 +234,13 @@ export default function WhitepaperGeneratorPage() {
     setPhase("review");
   };
 
+  const notify = useNotify();
+
   const runGeneration = async () => {
     setPhase("generating");
+    const genLabel = topic.trim() || primaryKeyword.trim() || "your whitepaper";
+    const genKey = `task:wp:${projectId}:${Date.now()}`;
+    notify({ key: genKey, status: "running", title: "Generating whitepaper…", body: genLabel, projectId, os: false });
     const res = await generateWhitepaperAction(projectId, {
       topic,
       primaryKeyword,
@@ -181,6 +261,8 @@ export default function WhitepaperGeneratorPage() {
       console.log("[whitepaper] trace:", res.trace);
     }
     if (res.success) {
+      clearDraft();
+      notify({ key: genKey, status: "success", title: "Whitepaper ready", body: genLabel, href: `${studioBase}/whitepapers/${res.data.id}`, projectId, os: true });
       toast.success("Whitepaper ready — opening preview.");
       void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
       void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
@@ -192,6 +274,7 @@ export default function WhitepaperGeneratorPage() {
       }
       router.push(`${studioBase}/whitepapers/${res.data.id}`);
     } else {
+      notify({ key: genKey, status: "error", title: "Whitepaper generation failed", body: res.error || genLabel, projectId, os: true });
       toast.error(res.error);
       setPhase("form");
     }
@@ -218,17 +301,12 @@ export default function WhitepaperGeneratorPage() {
         actions={
           phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                shape="pill"
-                size="lg"
+              <AskAiButton
                 onClick={() => void askAi()}
-                disabled={askLoading || !hasAiCredits}
-                iconLeft={askLoading ? <Spinner size={14} /> : null}
-                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
-              >
-                {askLoading ? "Thinking…" : "Ask AI for an angle"}
-              </Button>
+                loading={askLoading}
+                disabled={!hasAiCredits}
+                disabledReason="You've exhausted your AI credits. Upgrade to get more."
+              />
               <button
                 onClick={goReview}
                 disabled={!isFormValid || !canGenerateWhitepaper}
@@ -325,8 +403,16 @@ export default function WhitepaperGeneratorPage() {
                     id="wp-topic"
                     inputSize="lg"
                     value={topic}
-                    onChange={e => setTopic(e.target.value)}
+                    onChange={e => { setTopic(e.target.value); markUserOwned("topic"); }}
                     placeholder="e.g. The Enterprise Buyer's Guide to AI Agent Procurement"
+                    className={fillFlashClass("topic")}
+                  />
+                  <TopicSuggestionChips
+                    suggestions={topicSuggestions}
+                    activeTopic={topic}
+                    onPick={t => setTopic(t)}
+                    onReload={() => void refreshTopicIdeas()}
+                    loading={topicIdeasLoading}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
@@ -335,9 +421,9 @@ export default function WhitepaperGeneratorPage() {
                       id="wp-keyword"
                       inputSize="lg"
                       value={primaryKeyword}
-                      onChange={e => setPrimaryKeyword(e.target.value)}
+                      onChange={e => { setPrimaryKeyword(e.target.value); markUserOwned("keyword"); }}
                       placeholder="enterprise ai agents"
-                      className={isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                      className={`${isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""} ${fillFlashClass("keyword")}`}
                     />
                     {/* {keywordParam && (
                       <p className={`mt-1.5 flex items-center gap-1.5 text-[11px] transition-colors duration-300 ${isKeywordTyping ? "text-brand-action" : "text-emerald-400"}`}>
@@ -373,12 +459,14 @@ export default function WhitepaperGeneratorPage() {
                   description="Optional. We weave these naturally across sections."
                   htmlFor="wp-secondary"
                 >
-                  <KeywordChips
-                    id="wp-secondary"
-                    value={secondaryKeywords}
-                    onChange={setSecondaryKeywords}
-                    placeholder="Type a phrase and press Enter…"
-                  />
+                  <div className={`rounded-lg ${fillFlashClass("secondaryKeywords")}`}>
+                    <KeywordChips
+                      id="wp-secondary"
+                      value={secondaryKeywords}
+                      onChange={v => { setSecondaryKeywords(v); markUserOwned("secondaryKeywords"); }}
+                      placeholder="Type a phrase and press Enter…"
+                    />
+                  </div>
                 </Field>
               </div>
             </ContentFormSection>
@@ -391,8 +479,9 @@ export default function WhitepaperGeneratorPage() {
                     id="wp-problem"
                     rows={3}
                     value={problem}
-                    onChange={e => setProblem(e.target.value)}
+                    onChange={e => { setProblem(e.target.value); markUserOwned("problem"); }}
                     placeholder="What painful, current decision is the reader trying to make?"
+                    className={fillFlashClass("problem")}
                   />
                 </Field>
                 <Field label="Research angle" htmlFor="wp-angle">

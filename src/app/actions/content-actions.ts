@@ -9,6 +9,7 @@ import {
   generateLinkedInPost,
   suggestContentTopicWithFlash,
   suggestLinkedInInputsWithFlash,
+  suggestMultipleTopicsWithFlash,
 } from '@/lib/content-studio';
 import { researchKeyword } from '@/lib/research';
 import { sanitizeBlogContent } from '@/lib/blog-content';
@@ -186,14 +187,19 @@ export async function suggestContentTopicAction(
     contentType: ContentType;
     avoidPhrases?: string[];
     seedKeyword?: string;
+    /** Topic the user already typed — respected, never replaced. */
+    seedTopic?: string;
+    /** Topic ideas already shown — the AI won't repeat them on reload. */
+    avoidTopics?: string[];
   }
 ): Promise<
-  | { 
-      success: true; 
-      topic: string; 
-      primary_keyword: string; 
-      semantic_keywords: string[]; 
+  | {
+      success: true;
+      topic: string;
+      primary_keyword: string;
+      semantic_keywords: string[];
       rationale: string;
+      alternate_topics: string[];
       goal?: string;
       audience?: string;
       post_style?: string;
@@ -233,6 +239,7 @@ export async function suggestContentTopicAction(
         brandValues: project.brand_values,
         brandDescription: project.brand_description,
         seedKeyword: payload.seedKeyword,
+        seedTopic: payload.seedTopic,
       });
       return {
         success: true,
@@ -240,6 +247,7 @@ export async function suggestContentTopicAction(
         primary_keyword: suggestion.primary_keyword,
         semantic_keywords: [],
         rationale: 'LinkedIn feed optimization suggestion',
+        alternate_topics: [],
         audience: suggestion.audience,
         post_style: suggestion.post_style,
         voice: suggestion.voice,
@@ -274,10 +282,87 @@ export async function suggestContentTopicAction(
       usedKeywords: used,
       avoidPhrases: (payload.avoidPhrases ?? []).slice(0, 6),
       seedKeyword: payload.seedKeyword,
+      seedTopic: payload.seedTopic,
+      avoidTopics: payload.avoidTopics,
     });
     return { success: true, ...suggestion };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : 'Could not generate suggestion' };
+  }
+}
+
+// ─── "More topic ideas" — topic-only, never touches other fields ──────────
+//
+// Deliberately separate from suggestContentTopicAction (the Auto-fill-with-AI
+// action). This one ONLY returns topic strings for the suggestion chips —
+// it must never fill/overwrite the keyword, audience, goal, CTA, or any
+// other field, no matter what the caller currently holds in those fields.
+
+export async function suggestTopicIdeasAction(
+  projectId: string,
+  payload: {
+    contentType: ContentType;
+    /** Current keyword field value, if any — always respected as an anchor. */
+    seedKeyword?: string;
+    /** Other details already filled in on the form — used as context only. */
+    audience?: string;
+    tone?: string;
+    goal?: string;
+    ctaObjective?: string;
+    secondaryKeywords?: string[];
+    /** Ideas already shown to the user — ask for genuinely different ones. */
+    avoidTopics?: string[];
+  }
+): Promise<{ success: true; topics: string[] } | { success: false; error: string }> {
+  const user = await currentUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const projRes = await loadProjectAndBrief(projectId, user.id);
+  if (!projRes.ok) return { success: false, error: projRes.error };
+  const { project, brief } = projRes;
+
+  try {
+    await QuotaService.deductQuota(user.id, 'ai_credits', 1);
+  } catch (e) {
+    if (e instanceof QuotaExhaustedError) {
+      return { success: false, error: 'QUOTA_EXCEEDED:ai_credits — You have used all your AI helper credits. Upgrade your plan to use Ask AI.' };
+    }
+    console.warn('[suggestTopicIdeasAction] ai_credits deduction failed (soft fail):', e);
+  }
+
+  const labelMap: Record<ContentType, string> = {
+    blog: 'blog article',
+    ebook: 'ebook',
+    whitepaper: 'whitepaper',
+    linkedin: 'LinkedIn post',
+  };
+
+  const formContextContextLines: string[] = [];
+  if (payload.audience?.trim()) formContextContextLines.push(`Audience: ${payload.audience.trim()}`);
+  if (payload.tone?.trim()) formContextContextLines.push(`Tone: ${payload.tone.trim()}`);
+  if (payload.goal?.trim()) formContextContextLines.push(`Reader goal: ${payload.goal.trim()}`);
+  if (payload.ctaObjective?.trim()) formContextContextLines.push(`CTA objective: ${payload.ctaObjective.trim()}`);
+  if (payload.secondaryKeywords?.length) formContextContextLines.push(`Supporting keywords: ${payload.secondaryKeywords.slice(0, 8).join(', ')}`);
+
+  const [approved, used] = await Promise.all([
+    loadApprovedKeywords(projectId),
+    loadUsedKeywords(projectId),
+  ]);
+
+  try {
+    const topics = await suggestMultipleTopicsWithFlash({
+      contentTypeLabel: labelMap[payload.contentType],
+      niche: project.niche || 'general',
+      audience: project.target_audience || 'general audience',
+      domain: project.domain,
+      briefSummary: brief?.summary ?? null,
+      seedKeyword: payload.seedKeyword,
+      avoidTopics: payload.avoidTopics,
+      formContext: formContextContextLines.join('\n') || undefined,
+    });
+    return { success: true, topics };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Could not generate topic ideas' };
   }
 }
 

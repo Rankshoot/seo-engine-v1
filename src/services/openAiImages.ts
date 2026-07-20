@@ -178,9 +178,8 @@ export function insertBlogImagePlaceholders(
   // 2nd, 4th, 6th … H2 (inserted images are not headings, so H2 ordering is stable).
   for (let nth = 2; nth <= h2s.length && inserted < MAX_PLACEHOLDERS; nth += 2) {
     if (SKIP.test(h2s[nth - 1])) continue;
-    const alt = inserted === 0
-      ? `${input.targetKeyword} — section illustration`
-      : `${input.targetKeyword} — visual ${inserted + 1}`;
+    const h2Text = h2s[nth - 1].replace(/^##\s+/, "").trim();
+    const alt = `${h2Text} illustration`;
     const md = `![${escapeMarkdownAlt(alt)}](${BLOG_IMAGE_PLACEHOLDER_URL})`;
     next = insertBeforeNthH2(next, md, nth);
     inserted++;

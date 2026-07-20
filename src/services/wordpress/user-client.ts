@@ -31,6 +31,8 @@ export interface WordPressPublishPayload {
   content: string;
   excerpt?: string;
   status?: "publish" | "draft";
+  coverImageUrl?: string | null;
+  categoryId?: number | null;
 }
 
 /** Application passwords are shown with spaces; WordPress accepts them with or without. */
@@ -103,11 +105,59 @@ export function createUserWordPressClient(baseUrl: string, username: string, app
       }
     },
 
+    /** Fetch all categories from WordPress */
+    async getCategories(): Promise<Array<{ id: number; name: string }>> {
+      try {
+        const res = await request<Array<{ id: number; name: string; slug: string }>>("GET", "/wp/v2/categories?per_page=100");
+        return Array.isArray(res) ? res.map(cat => ({ id: cat.id, name: cat.name })) : [];
+      } catch (e) {
+        console.error("[wordpress-client] failed to fetch categories:", e);
+        return [];
+      }
+    },
+
     /** Idempotent publish: update an existing post with the same slug, else create a new one. */
     async publishArticle(
       payload: WordPressPublishPayload,
     ): Promise<{ documentId: string; slug: string; link?: string }> {
       const status = payload.status ?? "publish";
+
+      let featuredMediaId: number | null = null;
+      if (payload.coverImageUrl) {
+        try {
+          const imageRes = await fetch(payload.coverImageUrl);
+          if (imageRes.ok) {
+            const blob = await imageRes.blob();
+            const arrayBuffer = await blob.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            const contentType = imageRes.headers.get("content-type") || "image/jpeg";
+            const ext = contentType.split("/")[1] || "jpg";
+            const filename = `${payload.slug}-cover.${ext}`;
+
+            const mediaRes = await fetch(`${base}/wp-json/wp/v2/media`, {
+              method: "POST",
+              headers: {
+                Authorization: `Basic ${auth}`,
+                "Content-Type": contentType,
+                "Content-Disposition": `attachment; filename="${filename}"`,
+              },
+              body: buffer,
+            });
+
+            if (mediaRes.ok) {
+              const mediaData = (await mediaRes.json()) as { id: number };
+              if (mediaData && typeof mediaData.id === "number") {
+                featuredMediaId = mediaData.id;
+              }
+            } else {
+              const mediaErrText = await mediaRes.text().catch(() => "");
+              console.error("[wordpress-client] media upload failed status:", mediaRes.status, mediaErrText);
+            }
+          }
+        } catch (e) {
+          console.error("[wordpress-client] failed to fetch/upload cover image:", e);
+        }
+      }
 
       let existingId: number | null = null;
       try {
@@ -120,13 +170,21 @@ export function createUserWordPressClient(baseUrl: string, username: string, app
         /* assume no existing post and create */
       }
 
-      const wpBody = {
+      const wpBody: Record<string, any> = {
         title: payload.title,
         content: payload.content,
         excerpt: payload.excerpt ?? "",
         slug: payload.slug,
         status,
       };
+
+      if (featuredMediaId !== null) {
+        wpBody.featured_media = featuredMediaId;
+      }
+
+      if (payload.categoryId) {
+        wpBody.categories = [payload.categoryId];
+      }
 
       const res = existingId
         ? await request<{ id: number; slug?: string; link?: string }>("POST", `/wp/v2/posts/${existingId}`, wpBody)

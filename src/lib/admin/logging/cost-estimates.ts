@@ -9,6 +9,13 @@ const API_CALL_USD_ESTIMATES: Partial<Record<ApiUsageProvider, number>> = {
   jina: 0.0002,
   scraper: 0.0005,
   ahrefs: 0.02,
+  // Licensed-image providers. Openverse and Wikimedia Commons are free public
+  // APIs; Pexels is free (attribution requested, no per-call charge). Kept at 0
+  // so image sourcing never inflates budget math — swap in a rate here if a
+  // paid stock provider is ever added.
+  openverse: 0,
+  wikimedia: 0,
+  pexels: 0,
 };
 
 /** USD per 1M input / output tokens for Gemini text generation (approximate, 2026). */

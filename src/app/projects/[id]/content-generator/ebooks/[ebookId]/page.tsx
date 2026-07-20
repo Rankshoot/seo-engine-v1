@@ -22,7 +22,7 @@ import {
 import { EbookReader, type EbookTheme } from "@/components/content-generator/ebook/EbookReader";
 import type { TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import { InlineAiEditOverlay } from "@/components/content-generator/shared/InlineAiEditOverlay";
-import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import { AiEditPanel } from "@/components/content-generator/shared/AiEditPanel";
 import { blogsApi } from "@/frontend/api/blogs";
 import { calendarApi } from "@/frontend/api/calendar";
 import { exportEbook, EBOOK_EXPORT_OPTIONS } from "@/lib/content-exports";
@@ -32,6 +32,20 @@ import type { Blog, EbookContentData, Project } from "@/lib/types";
 import type { BlogRewriteSelectionSnapshot } from "@/lib/blog-editor-rewrite-selection";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+function clearAllDomHighlights() {
+  if (typeof document === "undefined") return;
+  const highlights = document.querySelectorAll("mark.ai-rewrite-highlight");
+  highlights.forEach(el => {
+    const parent = el.parentNode;
+    if (parent) {
+      while (el.firstChild) {
+        parent.insertBefore(el.firstChild, el);
+      }
+      parent.removeChild(el);
+    }
+  });
+}
 
 const MONO_LABEL = { fontFamily: "CohereMono, monospace", letterSpacing: "0.28px" } as const;
 
@@ -87,6 +101,24 @@ export default function EbookViewerPage() {
       selectionSnapshotRef.current = null;
     }
   }, [mode]);
+
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (!aiEdit.open) return;
+      const target = e.target as HTMLElement;
+      const isInsideSidebar = target.closest(".ai-edit-panel") || target.closest("[data-ai-panel]");
+      if (isInsideSidebar) return;
+      if (target.textContent?.includes("Edit with AI")) return;
+      
+      clearAllDomHighlights();
+      tiptapRef.current?.clearHighlight();
+    };
+
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentClick);
+    };
+  }, [aiEdit.open]);
 
   const handleDirectSchedule = async () => {
     if (!projectId || !blog || scheduling) return;
@@ -157,6 +189,7 @@ export default function EbookViewerPage() {
   }, [project?.company, project?.domain]);
 
   const handleAiRewriterInsert = useCallback((rewritten: string) => {
+    clearAllDomHighlights();
     if (tiptapRef.current) {
       const ok = tiptapRef.current.replaceSelection(rewritten.trim());
       if (ok) {
@@ -173,11 +206,14 @@ export default function EbookViewerPage() {
         const range = snap.range.cloneRange();
         if (document.contains(range.startContainer)) {
           range.deleteContents();
-          const frag = document.createDocumentFragment();
-          frag.appendChild(document.createTextNode(rewritten.trim()));
-          range.insertNode(frag);
+          const mark = document.createElement("mark");
+          mark.className = "ai-rewrite-highlight";
+          mark.style.backgroundColor = "rgba(234, 179, 8, 0.25)";
+          mark.style.borderBottom = "2px solid var(--brand-action)";
+          mark.appendChild(document.createTextNode(rewritten.trim()));
+          range.insertNode(mark);
 
-          const end = frag.lastChild;
+          const end = mark.lastChild;
           if (end) {
             range.setStartAfter(end);
             range.collapse(true);
@@ -438,6 +474,36 @@ export default function EbookViewerPage() {
       toolbarLeft={toolbarLeft}
       toolbarRight={toolbarRight}
       sidebar={sidebar}
+      sidePanel={
+        mode === "edit" ? (
+          <AiEditPanel
+            blogId={blog.id}
+            projectDomain={project?.domain ?? ""}
+            selection={aiEdit.snapshot}
+            contentType="Ebook"
+            contentPart={
+              typeof document !== "undefined"
+                ? document.activeElement === titleRef.current
+                  ? "Cover Title"
+                  : document.activeElement === descRef.current
+                  ? "Cover Subtitle"
+                  : "Ebook Body"
+                : "Ebook Body"
+            }
+            surroundingContext={blog.content}
+            renderMarkdownSnippet={md => (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+            )}
+            onDiscard={() => {
+              setAiEdit({ open: false, snapshot: null });
+              selectionSnapshotRef.current = null;
+              clearAllDomHighlights();
+              tiptapRef.current?.clearHighlight();
+            }}
+            onInsert={handleAiRewriterInsert}
+          />
+        ) : null
+      }
       sidebarWidthPx={320}
       framedCanvas={false}
       toolbarInsideCanvas
@@ -464,29 +530,22 @@ export default function EbookViewerPage() {
         onOpen={({ snapshot, range }) => {
           setAiEdit({ open: true, snapshot });
           if (range) selectionSnapshotRef.current = { range };
+          clearAllDomHighlights();
+          tiptapRef.current?.setHighlightCurrentSelection();
+          
+          const active = document.activeElement;
+          if (range && (active === titleRef.current || active === descRef.current)) {
+            try {
+              const mark = document.createElement("mark");
+              mark.className = "ai-rewrite-highlight";
+              mark.style.backgroundColor = "rgba(234, 179, 8, 0.25)";
+              mark.style.borderBottom = "2px solid var(--brand-action)";
+              range.surroundContents(mark);
+            } catch (e) {
+              console.warn("Could not wrap DOM range:", e);
+            }
+          }
         }}
-      />
-      <BlogAiRewriterModal
-        open={aiEdit.open}
-        blogId={blog.id}
-        projectDomain={project?.domain ?? ""}
-        selection={aiEdit.snapshot}
-        contentType="Ebook"
-        contentPart={
-          typeof document !== "undefined"
-            ? document.activeElement === titleRef.current
-              ? "Cover Title"
-              : document.activeElement === descRef.current
-              ? "Cover Subtitle"
-              : "Ebook Body"
-            : "Ebook Body"
-        }
-        surroundingContext={blog.content}
-        renderMarkdownSnippet={md => (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
-        )}
-        onClose={() => setAiEdit({ open: false, snapshot: null })}
-        onInsert={handleAiRewriterInsert}
       />
     </PreviewShell>
   );

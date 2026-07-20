@@ -28,12 +28,16 @@ import {
   SectionHeading,
   StepRow,
   StudioBreadcrumb,
+  AskAiButton,
+  TopicSuggestionChips,
+  useAiFillTracker,
 } from "@/components/content-generator/shared";
 import { useProject, qk, DEFAULT_QUERY_OPTIONS } from "@/lib/query";
 import { contentGeneratorApi, type ContentStudioHistoryRow } from "@/frontend/api/content-generator";
 import { TARGET_REGIONS } from "@/lib/types";
 import {
   suggestContentTopicAction,
+  suggestTopicIdeasAction,
 } from "@/app/actions/content-actions";
 import {
   fetchAhrefsKeywordDataAction,
@@ -46,6 +50,9 @@ import { blogsApi } from "@/frontend/api/blogs";
 import { useUserQuota } from "@/hooks/useUserQuota";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { calendarRefreshBump } from "@/lib/redux/keyword-workspace-slice";
+import { useFormDraft } from "@/hooks/useFormDraft";
+import { useNotify } from "@/hooks/useNotify";
+import { startBlogGeneration } from "@/app/actions/blog-jobs-actions";
 
 const TONES = [
   { id: "premium-educational", label: "Premium · educational" },
@@ -201,8 +208,12 @@ export default function BlogGeneratorPage() {
     return () => { isOnPageRef.current = false; };
   }, []);
 
+  // Notification-center wiring: the durable job's id keys its "running" entry so
+  // the TaskNotificationWatcher can upgrade it to "ready"/"failed" + OS ping.
+  const notify = useNotify();
+  const submittingRef = useRef(false);
+
   const entryId = searchParams?.get("entryId");
-  const shouldSchedule = searchParams?.get("shouldSchedule") !== "false";
 
   // Audit-fix mode: coming from Content Health → Generate enhanced
   const auditUrl = searchParams?.get("auditUrl") || "";
@@ -236,6 +247,7 @@ export default function BlogGeneratorPage() {
   // of silently generating the old keyword underneath their edits.
 
   const [phase, setPhase] = useState<Phase>("form");
+  const [submitting, setSubmitting] = useState(false);
   const [topic, setTopic] = useState("");
   const [secondaryKeywords, setSecondaryKeywords] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
@@ -243,9 +255,13 @@ export default function BlogGeneratorPage() {
   const [goal, setGoal] = useState("");
   const [ctaObjective, setCtaObjective] = useState("");
   const [wordCount, setWordCount] = useState<number>(2500);
+  const [customWordCount, setCustomWordCount] = useState<string>("");
   const [region, setRegion] = useState("us");
   const [language, setLanguage] = useState("en");
   const [askLoading, setAskLoading] = useState(false);
+  const [topicIdeasLoading, setTopicIdeasLoading] = useState(false);
+  const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
+  const { isAiOwned, markUserOwned, canAutoFill, markAiFilled, fillFlashClass } = useAiFillTracker();
   const [streamStages, setStreamStages] = useState(BASE_STREAM_STAGES);
   const [streamProgress, setStreamProgress] = useState<number | undefined>(undefined);
   const [thinkingText, setThinkingText] = useState("");
@@ -269,6 +285,47 @@ export default function BlogGeneratorPage() {
   // Custom Instructions
   const [customInstructions, setCustomInstructions] = useState("");
 
+  // ── Draft persistence ──────────────────────────────────────────────────
+  // Restore an in-progress form when the user navigates away and comes back
+  // (or refreshes). Only active for a plain, fresh session — when the generator
+  // is opened from a calendar entry or an audit-fix link, those URL-driven flows
+  // own the form and we don't want a stale draft fighting them.
+  const hasUrlContext = !!entryId || !!auditUrl || !!keywordParam;
+  const { clearDraft, hadDraft } = useFormDraft(
+    "blog",
+    projectId,
+    {
+      primaryKeyword, topic, secondaryKeywords, audience, tone, goal, ctaObjective,
+      wordCount, customWordCount, region, language, useBrandPersona, brandPersona,
+      useAhrefsData, useDeepAnalysis, customInstructions,
+    },
+    {
+      enabled: phase === "form" && !hasUrlContext,
+      apply: (d) => {
+        if (hasUrlContext) return;
+        if (typeof d.primaryKeyword === "string" && d.primaryKeyword) setPrimaryKeyword(d.primaryKeyword);
+        if (typeof d.topic === "string") setTopic(d.topic);
+        if (Array.isArray(d.secondaryKeywords)) setSecondaryKeywords(d.secondaryKeywords as string[]);
+        if (typeof d.audience === "string") setAudience(d.audience);
+        if (typeof d.tone === "string") setTone(d.tone as (typeof TONES)[number]["id"]);
+        if (typeof d.goal === "string") setGoal(d.goal);
+        if (typeof d.ctaObjective === "string") setCtaObjective(d.ctaObjective);
+        if (typeof d.wordCount === "number") setWordCount(d.wordCount);
+        if (typeof d.customWordCount === "string") setCustomWordCount(d.customWordCount);
+        if (typeof d.region === "string") setRegion(d.region);
+        if (typeof d.language === "string") setLanguage(d.language);
+        if (typeof d.useBrandPersona === "boolean") setUseBrandPersona(d.useBrandPersona);
+        if (typeof d.brandPersona === "string") setBrandPersona(d.brandPersona);
+        if (typeof d.useAhrefsData === "boolean") setUseAhrefsData(d.useAhrefsData);
+        if (typeof d.useDeepAnalysis === "boolean") setUseDeepAnalysis(d.useDeepAnalysis);
+        if (typeof d.customInstructions === "string") setCustomInstructions(d.customInstructions);
+      },
+    },
+  );
+  // When a draft was restored, skip the project auto-seed below so it doesn't
+  // overwrite the user's saved region / language / brand persona.
+  const draftRestored = hadDraft && !hasUrlContext;
+
   const { data: history } = useQuery({
     queryKey: qk.contentStudioHistory(projectId),
     queryFn: () => contentGeneratorApi.studioHistory(projectId),
@@ -282,6 +339,9 @@ export default function BlogGeneratorPage() {
 
   // Set defaults from project
   useEffect(() => {
+    // A restored draft already carries the user's region / language / brand
+    // persona — don't clobber it with project defaults.
+    if (draftRestored) return;
     if (project?.target_audience && !audience) setAudience(project.target_audience);
     const tr = project?.target_region?.toLowerCase();
     if (tr && TARGET_REGIONS.some(r => r.code === tr)) setRegion(tr);
@@ -374,26 +434,71 @@ export default function BlogGeneratorPage() {
 
   const isFormValid = emptyRequiredFields.length === 0;
 
+  // Custom word count (if provided) overrides the preset chips. Clamped to a
+  // sane range so the value that reaches the generation prompt is always valid.
+  const effectiveWordCount = useMemo(() => {
+    const parsed = parseInt(customWordCount, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return wordCount;
+    return Math.min(6000, Math.max(500, parsed));
+  }, [customWordCount, wordCount]);
+
+  // Auto-fill: completes only fields the user left empty (or that a previous
+  // auto-fill wrote). User-typed values are passed as seeds and never replaced.
   const askAi = async () => {
     setAskLoading(true);
     try {
       const res = await suggestContentTopicAction(projectId, {
         contentType: "blog",
         avoidPhrases: secondaryKeywords,
-        seedKeyword: primaryKeyword.trim() || undefined,
+        seedKeyword: primaryKeyword.trim() && !isAiOwned("keyword") ? primaryKeyword.trim() : undefined,
+        seedTopic: topic.trim() && !isAiOwned("topic") ? topic.trim() : undefined,
       });
-      if (res.success) {
-        setTopic(res.topic);
-        setPrimaryKeyword(res.primary_keyword);
-        if (res.semantic_keywords.length) setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
-        if (res.goal) setGoal(res.goal);
-        if (res.cta_objective) setCtaObjective(res.cta_objective);
-        toast.success("Filled topic, keyword, and supporting cluster");
-      } else {
+      if (!res.success) {
         toast.error(res.error);
+        return;
       }
+      const filled: string[] = [];
+      if (res.topic && canAutoFill("topic", topic)) { setTopic(res.topic); filled.push("topic"); }
+      if (res.primary_keyword && canAutoFill("keyword", primaryKeyword)) { setPrimaryKeyword(res.primary_keyword); filled.push("keyword"); }
+      if (res.semantic_keywords.length && canAutoFill("secondaryKeywords", secondaryKeywords)) {
+        setSecondaryKeywords(res.semantic_keywords.slice(0, 8));
+        filled.push("secondaryKeywords");
+      }
+      if (res.goal && canAutoFill("goal", goal)) { setGoal(res.goal); filled.push("goal"); }
+      if (res.cta_objective && canAutoFill("cta", ctaObjective)) { setCtaObjective(res.cta_objective); filled.push("cta"); }
+      markAiFilled(filled);
+      setTopicSuggestions(Array.from(new Set([res.topic, ...(res.alternate_topics ?? [])].filter(Boolean))));
+      toast.success(
+        filled.length
+          ? `AI filled ${filled.length} field${filled.length === 1 ? "" : "s"} — your entries were kept`
+          : "Topic ideas ready — pick one below the topic field"
+      );
     } finally {
       setAskLoading(false);
+    }
+  };
+
+  // "More ideas" under the topic field — ONLY refreshes the topic suggestion
+  // chips. Never touches the keyword, audience, goal, CTA, or any other
+  // field, regardless of AI-fill ownership. Uses whatever is currently in
+  // the form (plus company/project context) purely as inspiration.
+  const refreshTopicIdeas = async () => {
+    setTopicIdeasLoading(true);
+    try {
+      const res = await suggestTopicIdeasAction(projectId, {
+        contentType: "blog",
+        seedKeyword: primaryKeyword.trim() || undefined,
+        audience: audience.trim() || undefined,
+        tone: TONES.find(t => t.id === tone)?.label,
+        goal: goal.trim() || undefined,
+        ctaObjective: ctaObjective.trim() || undefined,
+        secondaryKeywords,
+        avoidTopics: topicSuggestions,
+      });
+      if (!res.success) { toast.error(res.error); return; }
+      setTopicSuggestions(res.topics);
+    } finally {
+      setTopicIdeasLoading(false);
     }
   };
 
@@ -403,16 +508,10 @@ export default function BlogGeneratorPage() {
   };
 
   const runGeneration = async () => {
-    const stages = buildStages(useDeepAnalysis);
-    const stageOrder = useDeepAnalysis ? STAGE_ORDER_DEEP : STAGE_ORDER_BASE;
-    const stageCumulative = buildCumulative(stages);
+    if (submittingRef.current) return;
+    const genLabel = topic.trim() || primaryKeyword.trim() || "your blog";
 
-    setPhase("generating");
-    setStreamProgress(0);
-    setThinkingText("");
-    setIsThinking(false);
-    setStreamStages(stages.map(s => ({ ...s })));
-
+    // Advanced options → durable-job payload (same shape the stream route used).
     const advancedBody = {
       brandPersona: useBrandPersona && brandPersona.trim() ? brandPersona.trim() : undefined,
       useAhrefsData: useAhrefsData && (ahrefsH2s.length > 0 || ahrefsFaqs.length > 0),
@@ -423,88 +522,18 @@ export default function BlogGeneratorPage() {
       customInstructions: customInstructions.trim() || undefined,
     };
 
+    // Enqueue a DURABLE background job. Generation now runs server-side to
+    // completion regardless of the client — the user can refresh, close the tab,
+    // or queue several blogs at once. The TaskNotificationWatcher (mounted in the
+    // project shell) polls the job and fires the notification + OS ping on
+    // completion, wherever the user has navigated to.
+    submittingRef.current = true;
+    setSubmitting(true);
     try {
-      let finalEntryId = entryId;
-      if (!finalEntryId && shouldSchedule) {
-        const calRes = await calendarApi.addCustomKeyword(projectId, {
-          keyword: primaryKeyword,
-          title: `[Draft] ${topic}`,
-          articleType: "blog",
-          writerNotes: `Audience: ${audience}\nTone: ${TONES.find(t => t.id === tone)?.label}\nGoal: ${goal}\nCTA: ${ctaObjective}\nSecondary Keywords: ${secondaryKeywords.join(", ")}`,
-          targetDate: new Date().toISOString().split("T")[0],
-        });
-        if (!calRes.success) {
-          toast.error(calRes.error || "Failed to schedule blog");
-          setPhase("form");
-          return;
-        }
-        finalEntryId = calRes.data.id;
-      }
-
-      const handleEvent = (event: any) => {
-        if (event.event === "stage") {
-          const stageIdx = stageOrder.indexOf(event.stage as StreamStage);
-          const progressAtStage = stageIdx === 0 ? 0.02 : stageCumulative[stageIdx - 1];
-          setStreamProgress(progressAtStage);
-          if (event.stage === "polish") setIsThinking(false);
-          if (event.detail) {
-            setStreamStages(prev => prev.map(s => s.id === event.stage ? { ...s, detail: event.detail } : s));
-          }
-          return null;
-        } else if (event.event === "thinking") {
-          setIsThinking(true);
-          setThinkingText(prev => prev + event.chunk);
-          return null;
-        } else if (event.event === "thinking_done") {
-          setIsThinking(false);
-          return null;
-        } else if (event.event === "done") {
-          setStreamProgress(1);
-          setIsThinking(false);
-          const blogHref = `${studioBase}/blogs/${event.blogId}`;
-          // No-refresh updates: refresh Content History + Calendar wherever they're mounted.
-          void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.contentGeneratorHistory(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendar(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
-          void queryClient.invalidateQueries({ queryKey: qk.projectStats(projectId) });
-          dispatch(calendarRefreshBump({ projectId }));
-          if (isOnPageRef.current) {
-            // Still watching the drafting page → open the finished draft.
-            toast.success("Blog generated!");
-            router.push(blogHref);
-          } else {
-            // Navigated away while it generated → notify, never force-navigate.
-            toast.success(
-              (t) => (
-                <span className="flex items-center gap-3">
-                  <span>✅ Your blog{topic ? ` “${topic}”` : ""} is ready</span>
-                  <button
-                    type="button"
-                    onClick={() => { toast.dismiss(t.id); router.push(blogHref); }}
-                    className="rounded-md bg-brand-action px-2.5 py-1 text-[12px] font-semibold text-white hover:opacity-90"
-                  >
-                    View blog
-                  </button>
-                </span>
-              ),
-              { duration: 8000 }
-            );
-          }
-          return "done";
-        } else if (event.event === "error") {
-          toast.error(event.message || "Generation failed");
-          setPhase("form");
-          setIsThinking(false);
-          setStreamProgress(undefined);
-          return "error";
-        }
-        return null;
-      };
-
-      if (!finalEntryId) {
-        for await (const event of blogsApi.generateStreamDirect({
-          projectId: projectId!,
+      const res = await startBlogGeneration(
+        projectId,
+        {
+          ...(entryId ? { entryId } : {}),
           keyword: primaryKeyword,
           topic,
           audience,
@@ -512,37 +541,47 @@ export default function BlogGeneratorPage() {
           goal,
           ctaObjective,
           secondaryKeywords,
-          wordCount,
+          wordCount: effectiveWordCount,
           ...advancedBody,
-        })) {
-          const result = handleEvent(event);
-          if (result === "done" || result === "error") return;
-        }
-      } else {
-        for await (const event of blogsApi.generateStream({
-          entryId: finalEntryId!,
-          keyword: primaryKeyword,
-          topic,
-          audience,
-          tone: TONES.find(t => t.id === tone)?.label || tone,
-          goal,
-          ctaObjective,
-          secondaryKeywords,
-          wordCount,
-          ...advancedBody,
-        })) {
-          const result = handleEvent(event);
-          if (result === "done" || result === "error") return;
-        }
+          label: genLabel,
+        },
+        `blog:${projectId}:${entryId || primaryKeyword || "kw"}:${Date.now()}`,
+      );
+
+      if (!res.success || !res.jobId) {
+        toast.error(res.error || "Could not start generation. Please try again.");
+        return;
       }
 
-      toast.error("Generation ended unexpectedly. Please try again.");
-      setPhase("form");
-      setStreamProgress(undefined);
+      // Form no longer needed — clear the saved draft and register the running
+      // job so the bell shows it immediately (the watcher upgrades it to ready).
+      clearDraft();
+      notify({
+        key: `task:${res.jobId}`,
+        status: "running",
+        title: "Generating blog…",
+        body: genLabel,
+        projectId,
+        os: false,
+      });
+
+      // Refresh the surfaces that will show the finished blog once it lands.
+      void queryClient.invalidateQueries({ queryKey: qk.contentStudioHistory(projectId) });
+      void queryClient.invalidateQueries({ queryKey: qk.calendarWithBlogs(projectId) });
+
+      toast.success(
+        "Generating in the background — we'll notify you when it's ready.",
+        { duration: 5000 },
+      );
+      // Switch to Content History rather than dumping the user back on the empty
+      // form: the queued blog shows there as a live "Generating…" row and swaps to
+      // the finished post in place (no refresh) when the durable job completes.
+      router.push(`/projects/${projectId}/content-history`);
     } catch {
-      toast.error("An error occurred during generation");
-      setPhase("form");
-      setStreamProgress(undefined);
+      toast.error("Could not start generation. Please try again.");
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -557,7 +596,7 @@ export default function BlogGeneratorPage() {
       return "Synthesising live research, your brief, and approved keywords into a publication-ready blog post. Keep this tab open.";
     if (phase === "review")
       return "Confirm the angle. We'll run live SERP research, internal-link discovery, and a premium draft pass before saving.";
-    return "Configure the blog angle, audience, and CTA. Ask AI to seed it from your project domain when you're not sure where to start.";
+    return "Fill in what you know — a keyword, a topic, or nothing at all. Auto-fill with AI completes the empty fields and never touches what you typed.";
   }, [phase]);
 
   const hasAnyAhrefsCredits = hasAhrefsH2sCredits || hasAhrefsFaqsCredits;
@@ -592,17 +631,12 @@ export default function BlogGeneratorPage() {
         actions={
           phase === "form" ? (
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                shape="pill"
-                size="lg"
+              <AskAiButton
                 onClick={() => void askAi()}
-                disabled={askLoading || !hasAiCredits}
-                iconLeft={askLoading ? <Spinner size={14} /> : null}
-                title={!hasAiCredits ? "You've exhausted your AI credits. Upgrade to get more." : undefined}
-              >
-                {askLoading ? "Thinking…" : "Ask AI for a topic"}
-              </Button>
+                loading={askLoading}
+                disabled={!hasAiCredits}
+                disabledReason="You've exhausted your AI credits. Upgrade to get more."
+              />
               <Button
                 variant="action"
                 shape="pill"
@@ -630,14 +664,14 @@ export default function BlogGeneratorPage() {
                 shape="pill"
                 size="lg"
                 onClick={() => void runGeneration()}
-                disabled={!canGenerateBlog}
+                disabled={!canGenerateBlog || submitting}
                 title={
                   !canGenerateBlog
                     ? `Blog limit reached (${quota?.blogs.used}/${quota?.blogs.effectiveLimit}). Upgrade your plan to generate more.`
                     : undefined
                 }
               >
-                Generate blog
+                {submitting ? "Starting…" : "Generate blog"}
               </Button>
             </div>
           ) : null
@@ -672,7 +706,7 @@ export default function BlogGeneratorPage() {
             primaryKeyword={primaryKeyword}
             audience={audience}
             tone={TONES.find(t => t.id === tone)?.label ?? tone}
-            wordCount={wordCount}
+            wordCount={effectiveWordCount}
             goal={goal}
             ctaObjective={ctaObjective}
             secondaryKeywords={secondaryKeywords}
@@ -700,8 +734,16 @@ export default function BlogGeneratorPage() {
                     id="blog-topic"
                     inputSize="lg"
                     value={topic}
-                    onChange={e => setTopic(e.target.value)}
+                    onChange={e => { setTopic(e.target.value); markUserOwned("topic"); }}
                     placeholder="e.g. 10 Trends Shaping Recruitment Process Outsourcing in 2026"
+                    className={fillFlashClass("topic")}
+                  />
+                  <TopicSuggestionChips
+                    suggestions={topicSuggestions}
+                    activeTopic={topic}
+                    onPick={t => setTopic(t)}
+                    onReload={() => void refreshTopicIdeas()}
+                    loading={topicIdeasLoading}
                   />
                 </Field>
                 <ContentFormGrid cols={2}>
@@ -710,9 +752,9 @@ export default function BlogGeneratorPage() {
                       id="blog-keyword"
                       inputSize="lg"
                       value={primaryKeyword}
-                      onChange={e => setPrimaryKeyword(e.target.value)}
+                      onChange={e => { setPrimaryKeyword(e.target.value); markUserOwned("keyword"); }}
                       placeholder="recruitment process outsourcing"
-                      className={isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                      className={`${isKeywordTyping ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""} ${fillFlashClass("keyword")}`}
                     />
                   </Field>
                   <Field label="Target audience" required htmlFor="blog-audience">
@@ -730,12 +772,14 @@ export default function BlogGeneratorPage() {
                   description="Optional. We weave these naturally across the article — never as a list."
                   htmlFor="blog-secondary-keywords"
                 >
-                  <KeywordChips
-                    id="blog-secondary-keywords"
-                    value={secondaryKeywords}
-                    onChange={setSecondaryKeywords}
-                    placeholder="Type a keyword and press Enter…"
-                  />
+                  <div className={`rounded-lg ${fillFlashClass("secondaryKeywords")}`}>
+                    <KeywordChips
+                      id="blog-secondary-keywords"
+                      value={secondaryKeywords}
+                      onChange={v => { setSecondaryKeywords(v); markUserOwned("secondaryKeywords"); }}
+                      placeholder="Type a keyword and press Enter…"
+                    />
+                  </div>
                 </Field>
               </div>
             </ContentFormSection>
@@ -747,12 +791,31 @@ export default function BlogGeneratorPage() {
                   <ChipChoice options={TONES.map(t => ({ id: t.id, label: t.label }))} value={tone} onChange={setTone} ariaLabel="Tone" />
                 </Field>
                 <Field label="Target word count">
-                  <ChipChoice
-                    options={WORD_COUNT_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
-                    value={String(wordCount)}
-                    onChange={val => setWordCount(Number(val))}
-                    ariaLabel="Target word count"
-                  />
+                  <div className="space-y-3">
+                    <ChipChoice
+                      options={WORD_COUNT_OPTIONS.map(o => ({ id: o.id, label: o.label, hint: o.hint }))}
+                      value={customWordCount ? "" : String(wordCount)}
+                      onChange={val => { setWordCount(Number(val)); setCustomWordCount(""); }}
+                      ariaLabel="Target word count"
+                    />
+                    <Input
+                      id="blog-custom-word-count"
+                      type="number"
+                      inputSize="lg"
+                      min={500}
+                      max={6000}
+                      step={100}
+                      placeholder="Custom — e.g. 800 for a short post, or leave blank to use a preset"
+                      value={customWordCount}
+                      onChange={e => setCustomWordCount(e.target.value)}
+                      className={customWordCount ? "ring-2 ring-brand-action/40 border-brand-action/50" : ""}
+                    />
+                    {customWordCount ? (
+                      <p className="text-[11px] text-brand-action">
+                        Custom target: ~{effectiveWordCount.toLocaleString()} words (overrides the presets above)
+                      </p>
+                    ) : null}
+                  </div>
                 </Field>
                 <ContentFormGrid cols={2}>
                   <Field label="Region" htmlFor="blog-region">
@@ -785,8 +848,9 @@ export default function BlogGeneratorPage() {
                     id="blog-goal"
                     rows={3}
                     value={goal}
-                    onChange={e => setGoal(e.target.value)}
+                    onChange={e => { setGoal(e.target.value); markUserOwned("goal"); }}
                     placeholder="What should the reader walk away knowing or doing?"
+                    className={fillFlashClass("goal")}
                   />
                 </Field>
                 <Field label="CTA objective" htmlFor="blog-cta">
@@ -794,8 +858,9 @@ export default function BlogGeneratorPage() {
                     id="blog-cta"
                     rows={3}
                     value={ctaObjective}
-                    onChange={e => setCtaObjective(e.target.value)}
+                    onChange={e => { setCtaObjective(e.target.value); markUserOwned("cta"); }}
                     placeholder="What action should the conclusion steer the reader toward?"
+                    className={fillFlashClass("cta")}
                   />
                 </Field>
               </div>

@@ -187,7 +187,9 @@ export const keywordsApi = {
   bulkStatus(
     projectId: string,
     keywordIds: string[],
-    status: KeywordStatus
+    status: KeywordStatus,
+    /** keywordId -> ContentType, so bulk scheduling honors the content type picked per row. */
+    contentTypes?: Record<string, string>
   ): Promise<{
     success: boolean;
     error?: string;
@@ -196,7 +198,7 @@ export const keywordsApi = {
     firstScheduledDate?: string;
     calendarError?: string;
   }> {
-    return apiPost(V1Routes.keywordsBulkStatus(projectId), { keywordIds, status });
+    return apiPost(V1Routes.keywordsBulkStatus(projectId), { keywordIds, status, contentTypes });
   },
 
   deleteKeyword(

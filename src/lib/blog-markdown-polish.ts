@@ -93,6 +93,70 @@ function dropEmptyHeadings(lines: string[], fenced: boolean[]): string[] {
   return lines.filter((line, i) => fenced[i] || !/^\s{0,3}#{1,6}\s*$/.test(line));
 }
 
+/**
+ * Strip trailing attribute lists from headings: `## Sourcing {#sourcing}` →
+ * `## Sourcing`. These kramdown / markdown-it heading IDs render literally as
+ * "{#sourcing}" in the blog viewer (which has no attribute-list plugin), and the
+ * page template already provides anchor navigation — so inline IDs are pure noise.
+ */
+function stripHeadingAttributeLists(lines: string[], fenced: boolean[]): string[] {
+  return lines.map((line, i) => {
+    if (fenced[i] || !/^\s{0,3}#{1,6}\s+\S/.test(line)) return line;
+    return line.replace(/\s*\{[#.:][^}\n]*\}\s*$/, '').replace(/\s+$/, '');
+  });
+}
+
+/**
+ * Drop leaked prompt-instruction text. The repair/enhance prompt uses internal
+ * tokens (META_NEEDS_REPAIR, the ---META--- separator, "preserve the original
+ * angle") that a model sometimes echoes into the body or a heading — this is the
+ * last-line guard so none of that ever reaches the reader.
+ */
+const INSTRUCTION_LEAK_RE = /META_NEEDS_REPAIR|TITLE_NEEDS_REPAIR|-{2,}\s*META\b|\bMETA\s*-{2,}|"meta_description"\s*:|preserve the original angle/i;
+function dropInstructionLeakLines(lines: string[], fenced: boolean[]): string[] {
+  return lines.filter((line, i) => fenced[i] || !INSTRUCTION_LEAK_RE.test(line));
+}
+
+/**
+ * Remove an inline "Table of contents" section (heading + the anchor-link list
+ * under it). The blog page template renders its own ToC from the headings, so an
+ * inline one is duplicated chrome — and its `[text](#anchor)` links break once
+ * the heading `{#anchor}` IDs above are stripped.
+ */
+function stripInlineTableOfContents(lines: string[], fenced: boolean[]): string[] {
+  const tocHeadingRe = /^\s{0,3}#{1,6}\s+(?:table of contents|contents|in this article|on this page|quick links|jump to)\b/i;
+  const isListItem = (l: string) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(l);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!fenced[i] && tocHeadingRe.test(lines[i])) {
+      let j = i + 1;
+      let sawList = false;
+      while (j < lines.length) {
+        if (!lines[j].trim()) { j++; continue; }
+        if (!fenced[j] && isListItem(lines[j])) { sawList = true; j++; continue; }
+        break;
+      }
+      // Only treat it as a ToC (and drop it) when an actual list follows.
+      if (sawList) { i = j - 1; continue; }
+    }
+    out.push(lines[i]);
+  }
+  return out;
+}
+
+/**
+ * Convert em/en-dashes to natural comma phrasing on prose lines — the same
+ * "remove the AI footprint" pass the Gemini path already applies, centralised
+ * here so the Claude enhance/repair path gets it too. Skips fenced code and
+ * table rows (dashes there are structural, not prose).
+ */
+function humanizeProseDashes(lines: string[], fenced: boolean[]): string[] {
+  return lines.map((line, i) => {
+    if (fenced[i] || isTableRow(line)) return line;
+    return line.replace(/(\S)\s*[—–]\s*/g, '$1, ').replace(/,\s{0,2},/g, ', ');
+  });
+}
+
 /** Ensure a blank line before and after each heading so all renderers agree. */
 function padHeadings(lines: string[], fenced: boolean[]): string[] {
   const out: string[] = [];
@@ -272,6 +336,12 @@ export function normalizeMetaDescription(
   max = 160,
 ): string {
   let m = (meta ?? '').replace(/\s+/g, ' ').replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  // Discard a meta that is actually leaked prompt-instruction text (e.g.
+  // "…no change required as META_NEEDS_REPAIR is false.") so it never renders as
+  // the article subtitle — fall through to regenerating one from the body.
+  if (INSTRUCTION_LEAK_RE.test(m)) m = '';
+  // Strip the AI-footprint dashes from the description too.
+  m = m.replace(/(\S)\s*[—–]\s*/g, '$1, ');
   if (m.length < 40) {
     const para = bodyMarkdown
       .split('\n')
@@ -308,10 +378,14 @@ export function polishBlogMarkdown(markdown: string): string {
   // passes because they change line indices.
   let lines = md.split('\n');
   lines = fixHeadingSpacing(lines, fenceMask(lines));
+  lines = stripHeadingAttributeLists(lines, fenceMask(lines));
   lines = dropEmptyHeadings(lines, fenceMask(lines));
   lines = enforceSingleH1(lines, fenceMask(lines));
   lines = dropDuplicateLeadingTitle(lines);
   lines = dropArtifactLines(lines, fenceMask(lines));
+  lines = dropInstructionLeakLines(lines, fenceMask(lines));
+  lines = stripInlineTableOfContents(lines, fenceMask(lines));
+  lines = humanizeProseDashes(lines, fenceMask(lines));
   lines = padHeadings(lines, fenceMask(lines));
   md = lines.join('\n');
 

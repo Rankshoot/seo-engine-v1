@@ -3,7 +3,9 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs/server';
 import { generateContentCalendar } from '@/lib/gemini';
-import { CalendarEntry } from '@/lib/types';
+import { CalendarEntry, CONTENT_TYPE_ARTICLE_TYPE } from '@/lib/types';
+import { extractCalendarFocusKeyword } from '@/lib/content-health-calendar';
+import type { BlogAuditAnalysis } from '@/lib/content-audit';
 
 export async function generateCalendar(projectId: string, startDate: string) {
   const user = await currentUser();
@@ -370,10 +372,16 @@ export async function scheduleKeywordOnFirstVacantIfNeeded(
   return { ok: true, skipped: false, scheduledDate: date };
 }
 
-/** Assign each keyword (that is not already on the calendar) to a distinct earliest vacant day. */
+/**
+ * Assign each keyword (that is not already on the calendar) to a distinct earliest vacant day.
+ * Batched: one keyword fetch + one insert regardless of how many keywords are passed, instead of
+ * looping a per-keyword read/write (`addKeywordToCalendarOnDate`) N times.
+ */
 export async function scheduleKeywordsOnVacantDates(
   projectId: string,
-  keywordIds: string[]
+  keywordIds: string[],
+  /** Optional keywordId -> ContentType, used to pick the right `article_type` per keyword. */
+  contentTypes?: Record<string, string>
 ): Promise<{
   scheduled: { keywordId: string; date: string }[];
   skipped: string[];
@@ -393,8 +401,18 @@ export async function scheduleKeywordsOnVacantDates(
   );
   const need = unique.filter(id => !hasCal.has(id));
   const skipped = unique.filter(id => hasCal.has(id));
+  if (need.length === 0) return { scheduled: [], skipped };
 
+  const { data: kwRows, error: kwErr } = await supabaseAdmin
+    .from('keywords')
+    .select('id, keyword, secondary_keywords')
+    .in('id', need);
+  if (kwErr) return { scheduled: [], skipped, error: kwErr.message };
+
+  const kwById = new Map((kwRows ?? []).map(k => [k.id as string, k]));
   const dates = await collectEarliestVacantDates(projectId, need.length);
+
+  const rows: Record<string, unknown>[] = [];
   const scheduled: { keywordId: string; date: string }[] = [];
   let error: string | undefined;
 
@@ -404,14 +422,28 @@ export async function scheduleKeywordsOnVacantDates(
       error = error ?? 'Not enough vacant calendar days for all keywords.';
       break;
     }
-    const res = await addKeywordToCalendarOnDate(need[i], projectId, date, {
+    const kw = kwById.get(need[i]);
+    if (!kw) continue;
+    const articleType =
+      CONTENT_TYPE_ARTICLE_TYPE[contentTypes?.[need[i]] as keyof typeof CONTENT_TYPE_ARTICLE_TYPE] || 'Blog article';
+    rows.push({
+      project_id: projectId,
+      keyword_id: need[i],
+      scheduled_date: date,
+      title: (kw.keyword as string).trim() || 'Scheduled topic',
+      article_type: articleType,
+      slug: slugify(kw.keyword as string),
+      focus_keyword: kw.keyword,
+      secondary_keywords: (kw.secondary_keywords as string[] | null) ?? [],
+      status: 'scheduled',
       ai_source: 'organic keyword',
     });
-    if (!res.success) {
-      error = error ?? res.error;
-      continue;
-    }
     scheduled.push({ keywordId: need[i], date });
+  }
+
+  if (rows.length > 0) {
+    const { error: insErr } = await supabaseAdmin.from('calendar_entries').insert(rows);
+    if (insErr) return { scheduled: [], skipped, error: insErr.message };
   }
 
   return { scheduled, skipped, error };
@@ -442,7 +474,25 @@ export async function addContentHealthKeywordToCalendar(
   const user = await currentUser();
   if (!user) return { success: false, error: 'Not authenticated' as const };
 
-  const focusRaw = opts.focusKeyword.trim();
+  // Prefer a short, rankable keyword derived from the audit snapshot (falls back
+  // to the page slug) over whatever the caller passed — the caller often sends
+  // the full blog title, which reads badly on the calendar and previously caused
+  // the row to fuzzy-bind to an unrelated keyword. `extractCalendarFocusKeyword`
+  // is the single source of truth for "what keyword does this audited URL map to".
+  const snapshot = (opts.contentHealthAudit ?? null) as {
+    url?: string; title?: string; primary_keyword?: string; analysis?: BlogAuditAnalysis;
+  } | null;
+  const derivedFromSnapshot =
+    snapshot?.url && snapshot?.analysis
+      ? extractCalendarFocusKeyword({
+          url: snapshot.url,
+          title: snapshot.title ?? '',
+          primary_keyword: snapshot.primary_keyword ?? opts.focusKeyword ?? '',
+          analysis: snapshot.analysis,
+        }).trim()
+      : '';
+
+  const focusRaw = (derivedFromSnapshot || opts.focusKeyword || '').trim();
   if (!focusRaw) return { success: false, error: 'No focus keyword for this audit row' as const };
 
   const { data: project, error: pErr } = await supabaseAdmin
@@ -466,29 +516,15 @@ export async function addContentHealthKeywordToCalendar(
   if (kws?.length) {
     const byNorm = new Map(kws.map(k => [normKw(k.keyword), k]));
     const bySlug = new Map(kws.map(k => [slugKey(k.keyword), k]));
-    const exact = byNorm.get(normKw(focusRaw));
+    // Link to an existing keyword ONLY on an exact (normalized or slug-exact)
+    // match. The previous loose substring match caused a content-health refresh of
+    // ".../oilfield-operations-leadership-hiring" to bind to an unrelated
+    // "hiring" keyword row (wrong keyword + wrong volume on the calendar).
+    const exact = byNorm.get(normKw(focusRaw)) ?? bySlug.get(slugKey(focusRaw));
     if (exact) {
       keywordId = exact.id;
       canonical = exact.keyword;
       secondary = (exact.secondary_keywords as string[]) ?? [];
-    } else {
-      const slugHit = bySlug.get(slugKey(focusRaw));
-      if (slugHit) {
-        keywordId = slugHit.id;
-        canonical = slugHit.keyword;
-        secondary = (slugHit.secondary_keywords as string[]) ?? [];
-      } else {
-        const fs = slugKey(focusRaw);
-        for (const k of kws) {
-          const ks = slugKey(k.keyword);
-          if (fs && (fs.includes(ks) || ks.includes(fs))) {
-            keywordId = k.id;
-            canonical = k.keyword;
-            secondary = (k.secondary_keywords as string[]) ?? [];
-            break;
-          }
-        }
-      }
     }
   }
 

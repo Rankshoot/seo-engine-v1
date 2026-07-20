@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Project } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Logo } from "@/components/brand/Logo";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { qk } from "@/lib/query";
 import { useAppDispatch, useAppSelector, selectProjectStats } from "@/lib/redux/hooks";
 import { hydrateProjectStats } from "@/lib/redux/keyword-workspace-slice";
@@ -342,6 +343,7 @@ export default function ProjectSidebar({
               <Logo size="sm" />
             </Link>
             <div className="flex items-center gap-1">
+              <NotificationCenter />
               {/* Mobile close button */}
               {setMobileOpen && (
                 <button
@@ -367,6 +369,13 @@ export default function ProjectSidebar({
           </>
         )}
       </div>
+
+      {/* Collapsed-mode notification bell (expanded mode shows it in the header) */}
+      {isCollapsed && (
+        <div className="relative z-[70] flex justify-center border-b border-border-subtle/40 py-2">
+          <NotificationCenter />
+        </div>
+      )}
 
       {/* ── Project switcher ── */}
       <div className={`relative z-[60] transition-all duration-300 ease-in-out ${isCollapsed ? "px-2 py-2" : "px-3 py-3"}`} ref={dropdownRef}>

@@ -8,7 +8,7 @@ import { ArticleLibraryEntry, Blog, BlogSeoIssueKey, BlogStatus, CalendarEntryWi
 import type { BusinessBrief } from '@/lib/business-brief';
 import { insertBlogImagePlaceholders } from '@/services/openAiImages';
 import { sanitizeBlogContent } from '@/lib/blog-content';
-import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan } from '@/lib/content-health-calendar';
+import { formatContentHealthAuditForWriter, parseContentHealthRepairPlan, buildContentAnalysisBundle } from '@/lib/content-health-calendar';
 import { hybridReadUrl } from '@/services/hybridScraper';
 import type { BlogAuditAnalysis } from '@/lib/content-audit';
 import { stripEmptyFragmentAnchorTags } from '@/lib/blog-content';
@@ -131,6 +131,11 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
         brief,
         project,
         wordCount: Math.min(4000, Math.max(1200, countWords(fresh.markdown) + 200)),
+        // Same full-enhancement upgrade as the durable "Generate Enhanced" job —
+        // carries the audit's quality_rubric so regenerating stays consistent
+        // with the original enhance run rather than falling back to a thinner,
+        // issues-only repair pass.
+        contentAnalysisBundle: buildContentAnalysisBundle(repairPlan),
       });
 
       const preserveTitle = !repairTitleNeedsRepairFlag(analysis) && Boolean(repairPlan.title);
@@ -158,6 +163,10 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       }
       const finalContent = sanitized.content;
       const finalWordCount = countWords(finalContent);
+      // Guard against leaked prompt-instruction text landing in the subtitle
+      // (e.g. "…META_NEEDS_REPAIR is false.") — regenerates from the body if so.
+      const { normalizeMetaDescription } = await import('@/lib/blog-markdown-polish');
+      const cleanMetaDescription = normalizeMetaDescription(finalMetaDescription, finalContent);
 
       const { data: existing } = await supabaseAdmin
         .from('blogs')
@@ -168,7 +177,7 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       const upsertPayload = {
         title: finalTitle,
         content: finalContent,
-        meta_description: finalMetaDescription,
+        meta_description: cleanMetaDescription,
         slug: repaired.slug,
         word_count: finalWordCount,
         target_keyword: entry.focus_keyword,
@@ -374,6 +383,27 @@ export async function generateBlog(entryId: string, wordCount: number = 2500, wr
       .from('calendar_entries')
       .update({ status: 'generated', title: blogData.title })
       .eq('id', entryId);
+
+    // Rankshoot AI memory: learn from this blog AFTER the response (covered
+    // topic + durable style/preference learnings via one cheap Flash call).
+    // Fire-and-forget — a failure here can never affect the returned blog.
+    try {
+      const { after } = await import('next/server');
+      const memoryInput = {
+        projectId: entry.project_id,
+        userId: project.user_id,
+        focusKeyword: entry.focus_keyword,
+        title: blogData.title,
+        blogMarkdown: finalContent,
+        source: 'blog_generate' as const,
+      };
+      after(async () => {
+        const { updateProjectMemoryAfterBlog } = await import('@/lib/ai-memory');
+        await updateProjectMemoryAfterBlog(memoryInput);
+      });
+    } catch (memErr) {
+      console.warn('[blog] memory learning scheduling failed:', memErr);
+    }
 
     return { success: true, data: blog };
   } catch (e: unknown) {
@@ -1663,6 +1693,18 @@ function getTruncatedSurroundingContext(
 }
 
 /**
+ * Humanize AI-edit output: strip em dashes the model still slips in.
+ * Line-leading em dashes become list dashes; inline ones become commas.
+ * Markdown links are left untouched (em dashes never appear in hrefs we emit).
+ */
+function stripEmDashesFromRewrite(text: string): string {
+  if (!text.includes('—')) return text;
+  return text
+    .replace(/^—\s?/gm, '- ')
+    .replace(/\s*—\s*/g, ', ');
+}
+
+/**
  * Rewrite text the user selected in the visual blog editor (contentEditable).
  * Does not persist — the client replaces the selection and the user saves when ready.
  */
@@ -1957,6 +1999,15 @@ Do not invent URLs.
           : '';
 
   const typeContext = meta.contentType ? `Content type: ${meta.contentType}` : 'Content type: Blog post';
+  // Per-content-type tone line so an edit inside an ebook / whitepaper /
+  // LinkedIn post stays consistent with how that content type is written.
+  const contentTypeTone = ((): string => {
+    const ct = (meta.contentType ?? '').toLowerCase();
+    if (ct.includes('ebook')) return 'Match a premium educational, chapter-style long-form ebook tone.';
+    if (ct.includes('whitepaper')) return 'Match a formal, analyst-grade, evidence-led whitepaper tone.';
+    if (ct.includes('linkedin')) return 'Match a feed-native LinkedIn tone: punchy, plain-spoken, short sentences, no hashtag spam.';
+    return 'Match a professional business blog tone.';
+  })();
   const partContext = meta.contentPart ? `Section/Part being edited: ${meta.contentPart}` : '';
   const truncatedContext = meta.surroundingContext
     ? getTruncatedSurroundingContext(meta.surroundingContext, plain, sel)
@@ -2029,7 +2080,8 @@ Boundary rule (CRITICAL — always apply):
 
 Other rules:
 - When keeping the same URL, preserve href exactly unless the instruction changes it.
-- Match a professional business blog tone.
+- ${contentTypeTone}
+- Write like a human editor, not an AI: no em dashes (—) anywhere — use commas, periods, or parentheses instead. Avoid AI clichés (e.g. "delve", "unlock", "in today's fast-paced world", "game-changer").
 - Keep similar scope unless asked to expand.`;
 
   const t0 = Date.now();
@@ -2093,6 +2145,12 @@ Other rules:
       error: 'Model returned empty text.',
       trace: [{ label: '(gemini)', ok: false, ms, detail: 'empty output' }],
     };
+  }
+
+  // Only strip em dashes the model introduced — if the original selection
+  // already used them, the user's punctuation style wins and we keep them.
+  if (!sel.includes('—')) {
+    rewritten = stripEmDashesFromRewrite(rewritten);
   }
 
   let action: BlogEditorRewriteAction = structured?.action ?? 'replace_text';

@@ -772,6 +772,9 @@ export function humanizeDashes(text: string): string {
     // Replace emdash, endash, and double hyphens when they occur after a non-whitespace character
     .replace(/(\S)\s*[—–]\s*/g, '$1, ')
     .replace(/(\S)\s*--\s*/g, '$1, ')
+    // Fix missing spaces after closing bold tags followed by a letter or punctuation + letter
+    // E.g., **bold**Text -> **bold** Text, **bold**:Text -> **bold**: Text
+    .replace(/(\S)\*\*([:,;!?-]?)([A-Z])/g, '$1**$2 $3')
     // Clean up any double commas or commas next to other punctuation
     .replace(/,\s*,/g, ', ')
     .replace(/,\s*\./g, '.')

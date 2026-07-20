@@ -14,6 +14,7 @@ import {
   type NormalizedKeyword,
 } from './keyword-research';
 import { recordDataForSeoCall } from '@/lib/admin/logging/record-provider-call';
+import { getPlatformProviders } from '@/lib/admin/platform-settings-runtime';
 
 export type Intent = 'informational' | 'commercial' | 'navigational' | 'transactional' | '';
 export type CompetitionLevel = 'LOW' | 'MEDIUM' | 'HIGH' | '';
@@ -1998,6 +1999,9 @@ export async function discoverKeywordsForProject(
   //    (keyword_ideas/live + related_keywords/live). Both branches return
   //    `NormalizedKeyword[]` so the relevance / business-fit / scoring
   //    pipeline below stays provider-agnostic.
+  const providers = await getPlatformProviders();
+  const pageSize = providers.ahrefs_enabled ? 20 : 150;
+
   let researchKeywords: NormalizedKeyword[] = [];
   let researchTrace: KeywordResearchTraceEntry[] = [];
   let researchProvider: 'ahrefs' | 'dataforseo' = 'ahrefs';
@@ -2009,8 +2013,8 @@ export async function discoverKeywordsForProject(
       seeds: userSeeds,
       region,
       language,
-      limit: 40,
-      maxResults: 150,
+      limit: providers.ahrefs_enabled ? 20 : 40,
+      maxResults: pageSize,
       matchingLastVolume: extras.matchingLastVolume,
       relatedLastVolume: extras.relatedLastVolume,
       queryMatching: extras.queryMatching,
@@ -2212,6 +2216,14 @@ export async function discoverKeywordsForProject(
     (a, b) => (b.keyword_analysis_score ?? 0) - (a.keyword_analysis_score ?? 0)
   );
 
+  const sliced = merged.slice(0, pageSize);
+  console.log(
+    `[discoverKeywordsForProject] provider=${researchProvider} ` +
+      `fellBackToDataForSEO=${researchFellBack} ` +
+      `fallbackReason=${researchFallbackReason ?? 'n/a'} ` +
+      `raw=${merged.length} returned=${sliced.length} pageSize=${pageSize}`
+  );
+
   // Legacy helpers kept around for /keywords/new flow but not called here.
   void fetchKeywordOverview;
   void fetchSerpForKeywords;
@@ -2224,7 +2236,7 @@ export async function discoverKeywordsForProject(
   void getAuthHeader;
   void errEntry;
 
-  return { keywords: merged, trace, ahrefsDiscoveryState };
+  return { keywords: sliced, trace, ahrefsDiscoveryState };
 }
 
 function errEntry(label: string, e: unknown): DataForSEOTraceEntry {

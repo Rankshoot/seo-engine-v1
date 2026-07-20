@@ -39,9 +39,11 @@ export async function POST(
   // Resolve the user's CMS integration. An optional { cms_type } in the body
   // targets a specific provider when more than one is connected.
   let requestedCms: string | undefined;
+  let categoryId: number | undefined;
   try {
-    const body = (await req.json().catch(() => null)) as { cms_type?: string } | null;
+    const body = (await req.json().catch(() => null)) as { cms_type?: string; categoryId?: number } | null;
     requestedCms = body?.cms_type?.trim() || undefined;
+    categoryId = body?.categoryId ?? undefined;
   } catch {
     /* no body — fall back to the connected integration */
   }
@@ -147,13 +149,16 @@ export async function POST(
         integration.collection_name,
         integration.api_token,
       );
-      const html = renderMarkdownToHtml(contentForCms);
+      const contentWithoutTitle = stripLeadingTitle(contentForCms);
+      const html = renderMarkdownToHtml(contentWithoutTitle, { skipFigcaption: true });
       const r = await wp.publishArticle({
         title: blog.title,
         slug: blog.slug,
         content: html,
-        excerpt: buildExcerpt(contentForCms),
+        excerpt: buildExcerpt(contentWithoutTitle),
         status: "publish",
+        coverImageUrl,
+        categoryId,
       });
       result = { documentId: r.documentId, slug: r.slug };
       publishedUrl = r.link ?? `${integration.base_url}/?p=${r.documentId}`;
@@ -165,7 +170,8 @@ export async function POST(
         integration.api_token,
         integration.collection_name,
       );
-      const html = renderMarkdownToHtml(contentForCms);
+      const contentWithoutTitle = stripLeadingTitle(contentForCms);
+      const html = renderMarkdownToHtml(contentWithoutTitle, { skipFigcaption: true });
       const r = await shopify.publishArticle({
         title: blog.title,
         slug: blog.slug,
@@ -238,5 +244,17 @@ export async function POST(
     console.error("[publish-cms] unexpected error", err);
     return apiJson({ success: false, error: "Failed to publish to your CMS" }, { status: 500 });
   }
+}
+
+function stripLeadingTitle(markdown: string): string {
+  const trimmed = markdown.trimStart();
+  if (trimmed.startsWith("# ")) {
+    const nextNewLine = trimmed.indexOf("\n");
+    if (nextNewLine !== -1) {
+      return trimmed.slice(nextNewLine).trimStart();
+    }
+    return "";
+  }
+  return markdown;
 }
 

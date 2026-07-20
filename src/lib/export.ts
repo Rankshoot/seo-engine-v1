@@ -640,7 +640,7 @@ export function triggerDownload(blob: Blob, filename: string) {
  * images, blockquotes, code, hr, and tables to render properly in the
  * downloaded `.html` file.
  */
-export function renderMarkdownToHtml(markdown: string): string {
+export function renderMarkdownToHtml(markdown: string, options?: { skipFigcaption?: boolean }): string {
   const lines = markdown.split('\n');
   const out: string[] = [];
 
@@ -689,8 +689,9 @@ export function renderMarkdownToHtml(markdown: string): string {
       closeLists();
       const alt = escapeHTML(standaloneImage[1]);
       const src = escapeAttr(standaloneImage[2]);
+      const showCaption = alt && !options?.skipFigcaption;
       out.push(
-        `<figure><img src="${src}" alt="${alt}" loading="lazy">${alt ? `<figcaption>${alt}</figcaption>` : ''}</figure>`
+        `<figure><img src="${src}" alt="${alt}" loading="lazy">${showCaption ? `<figcaption>${alt}</figcaption>` : ''}</figure>`
       );
       i++;
       continue;

@@ -1,7 +1,7 @@
 'use server';
 
 import { after } from 'next/server';
-import { currentUser } from '@clerk/nextjs/server';
+import { auth } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { enqueueJob } from '@/lib/jobs/enqueue';
 import { getActiveJobs, getJob, requeueStale } from '@/lib/jobs/service';
@@ -18,16 +18,18 @@ interface OwnedProject {
 async function ensureOwner(
   projectId: string
 ): Promise<{ ok: true; userId: string; project: OwnedProject } | { ok: false; error: string }> {
-  const user = await currentUser();
-  if (!user) return { ok: false, error: 'Not authenticated' };
+  // auth() reads the session locally (no Clerk API round-trip), so the polling
+  // that resumes/tracks audit jobs can't trip Clerk's rate limit.
+  const { userId } = await auth();
+  if (!userId) return { ok: false, error: 'Not authenticated' };
   const { data, error } = await supabaseAdmin
     .from('projects')
     .select('id, domain, target_region, target_language')
     .eq('id', projectId)
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .single();
   if (error || !data) return { ok: false, error: 'Project not found' };
-  return { ok: true, userId: user.id, project: data as OwnedProject };
+  return { ok: true, userId, project: data as OwnedProject };
 }
 
 /** Canonical URL form for the idempotency key (drop hash + trailing slash). */

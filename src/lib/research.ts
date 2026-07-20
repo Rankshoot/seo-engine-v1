@@ -66,7 +66,7 @@ async function serperPost(endpoint: string, body: object): Promise<unknown> {
     }
     recordSerperCall(endpoint, true, latencyMs);
     return res.json();
-  } catch (e) {
+} catch (e) {
     recordSerperCall(
       endpoint,
       false,
@@ -75,6 +75,57 @@ async function serperPost(endpoint: string, body: object): Promise<unknown> {
     );
     return null;
   }
+}
+
+export async function searchGoogleImages(query: string, num = 10): Promise<{ title: string; imageUrl: string; sourceUrl: string }[]> {
+  const res = await serperPost('images', { q: query, num, tbs: "il:cl" }) as { images?: Array<{ title?: string; imageUrl?: string; link?: string }> };
+  if (!res || !res.images || !Array.isArray(res.images)) {
+    return [];
+  }
+  return res.images.map(img => ({
+    title: img.title || '',
+    imageUrl: img.imageUrl || '',
+    sourceUrl: img.link || '',
+  }));
+}
+
+
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  domain: string;
+}
+
+/**
+ * Serper web search biased toward primary-source material (reports, studies,
+ * datasets, surveys). Used as the deep-research fallback when no Perplexity key
+ * is configured, so blogs can still be grounded in real, credible source URLs.
+ */
+export async function searchCredibleWeb(
+  keyword: string,
+  region = 'us',
+  language = 'en'
+): Promise<WebSearchResult[]> {
+  const q = `${keyword} statistics OR report OR study OR research OR survey`;
+  const web = await serperPost('search', { q, gl: region, hl: language, num: 15 });
+  const organic = (web as { organic?: SerperResultRow[] } | null)?.organic ?? [];
+  return organic
+    .map((r): WebSearchResult | null => {
+      const url = typeof r.link === 'string' ? r.link : '';
+      if (!url) return null;
+      let domain = typeof r.domain === 'string' ? r.domain : '';
+      if (!domain) {
+        try { domain = new URL(url).hostname; } catch { domain = ''; }
+      }
+      return {
+        title: typeof r.title === 'string' ? r.title : '',
+        url,
+        snippet: typeof r.snippet === 'string' ? r.snippet : '',
+        domain: domain.replace(/^www\./, ''),
+      };
+    })
+    .filter((r): r is WebSearchResult => r !== null);
 }
 
 export async function researchKeyword(

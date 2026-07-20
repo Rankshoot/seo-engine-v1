@@ -420,6 +420,8 @@ export interface ContentTopicSuggestion {
   rationale: string;
   goal?: string;
   cta_objective?: string;
+  /** 2-3 alternative topic angles so the form can offer pickable suggestions. */
+  alternate_topics: string[];
 }
 
 interface RawTopicSuggestion {
@@ -429,6 +431,7 @@ interface RawTopicSuggestion {
   rationale?: string;
   goal?: string;
   cta_objective?: string;
+  alternate_topics?: string[];
 }
 
 /** Gemini schema dialect (`v1beta`) — same shape as `INSTANT_KEYWORD_TOPIC_SCHEMA` in `lib/gemini.ts`. */
@@ -441,8 +444,9 @@ const TOPIC_SUGGESTION_SCHEMA = {
     rationale: { type: 'STRING' },
     goal: { type: 'STRING' },
     cta_objective: { type: 'STRING' },
+    alternate_topics: { type: 'ARRAY', items: { type: 'STRING' } },
   },
-  required: ['topic', 'primary_keyword', 'semantic_keywords', 'rationale', 'goal', 'cta_objective'],
+  required: ['topic', 'primary_keyword', 'semantic_keywords', 'rationale', 'goal', 'cta_objective', 'alternate_topics'],
 } as const;
 
 /** Last-resort line scrape so a slightly malformed model reply still produces a usable suggestion. */
@@ -474,6 +478,7 @@ function looseExtractTopicSuggestion(raw: string): RawTopicSuggestion | null {
     rationale: grab('rationale') ?? undefined,
     goal: grab('goal') ?? undefined,
     cta_objective: grab('cta_objective') ?? undefined,
+    alternate_topics: grabArray('alternate_topics') ?? undefined,
   };
 }
 
@@ -487,6 +492,12 @@ function normalizeSuggestion(raw: RawTopicSuggestion): ContentTopicSuggestion {
     rationale: (raw.rationale ?? '').trim(),
     goal: (raw.goal ?? '').trim() || undefined,
     cta_objective: (raw.cta_objective ?? '').trim() || undefined,
+    alternate_topics: Array.isArray(raw.alternate_topics)
+      ? raw.alternate_topics
+          .filter((s): s is string => typeof s === 'string' && !!s.trim())
+          .map(s => s.trim())
+          .slice(0, 4)
+      : [],
   };
 }
 
@@ -500,6 +511,12 @@ export async function suggestContentTopicWithFlash(input: {
   avoidPhrases: string[];
   usedKeywords: string[];
   seedKeyword?: string;
+  /** Topic the user already typed — must be respected, not replaced. */
+  seedTopic?: string;
+  /** Topic ideas already shown to the user — never repeat these. */
+  avoidTopics?: string[];
+  /** Other form fields already filled in (audience/tone/goal/CTA/etc) — context only, never a fill target. */
+  formContext?: string;
 }): Promise<ContentTopicSuggestion> {
   const briefBlock = input.briefSummary?.trim()
     ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
@@ -521,6 +538,18 @@ export async function suggestContentTopicWithFlash(input: {
     ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one. Design the topic, semantic_keywords, and rationale specifically for this keyword.`
     : `Choose a fresh primary keyword that the brand can rank for — one that is NOT in the forbidden list above and is not a close variant of any forbidden keyword.`;
 
+  const seedTopicRule = input.seedTopic?.trim()
+    ? `The user has already written their own topic: "${input.seedTopic.trim().slice(0, 300)}". Treat it as the anchor: design semantic_keywords, goal, and cta_objective to serve THAT topic. Your "topic" field and alternate_topics should be sharper alternative phrasings or adjacent angles of the user's topic — never an unrelated subject.`
+    : '';
+
+  const avoidTopicsBlock = input.avoidTopics?.length
+    ? `Do NOT repeat any of these topic ideas (already suggested — give genuinely different angles):\n${input.avoidTopics.slice(0, 12).map(t => `- ${t}`).join('\n')}`
+    : '';
+
+  const formContextBlock = input.formContext?.trim()
+    ? `Details the user has already filled in on this form (keep the topic and alternate_topics consistent with these — do not contradict them):\n${input.formContext.trim().slice(0, 800)}`
+    : '';
+
   const prompt = `You are an SEO content strategist suggesting ONE ${input.contentTypeLabel} topic that the Rankshoot content engine should produce next.
 
 CONTEXT
@@ -533,6 +562,12 @@ ${avoidKeywordsBlock}
 
 ${seedRule}
 
+${seedTopicRule}
+
+${avoidTopicsBlock}
+
+${formContextBlock}
+
 ${avoidBlock}
 
 Rules:
@@ -542,9 +577,10 @@ Rules:
 - rationale: 1 sentence on why this topic earns organic traffic for THIS domain.
 - goal: 1 sentence describing what the reader should know or do after reading (reader takeaway).
 - cta_objective: 1 sentence describing the action the conclusion should steer the reader toward (e.g. book a demo, download a guide, start a free trial).
+- alternate_topics: exactly 3 alternative topic titles for the same primary keyword — distinct angles (e.g. guide vs. comparison vs. trends), each usable as-is.
 
 Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
-{"topic": "...", "primary_keyword": "...", "semantic_keywords": ["..."], "rationale": "...", "goal": "...", "cta_objective": "..."}`;
+{"topic": "...", "primary_keyword": "...", "semantic_keywords": ["..."], "rationale": "...", "goal": "...", "cta_objective": "...", "alternate_topics": ["...", "...", "..."]}`;
 
   // Pass 1 — Gemini Flash with a strict response schema.
   // Temperature kept moderate so the model stays JSON-clean; bumping output
@@ -649,6 +685,8 @@ export async function suggestLinkedInInputsWithFlash(input: {
   brandValues?: string;
   brandDescription?: string;
   seedKeyword?: string;
+  /** Topic the user already typed — must be output verbatim, not replaced. */
+  seedTopic?: string;
 }): Promise<LinkedInInputsSuggestion> {
   const briefBlock = input.briefSummary?.trim()
     ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
@@ -657,6 +695,10 @@ export async function suggestLinkedInInputsWithFlash(input: {
   const seedRule = input.seedKeyword?.trim()
     ? `CRITICAL REQUIREMENT: The user has already provided the primary keyword: "${input.seedKeyword.trim()}". You MUST output EXACTLY this keyword in the "primary_keyword" field of your JSON response. Do NOT change it, modify it, or choose a different one.`
     : `Suggest a highly relevant primary keyword (2-6 words) related to the project niche and audience.`;
+
+  const seedTopicRule = input.seedTopic?.trim()
+    ? `CRITICAL REQUIREMENT: The user has already written the post topic: "${input.seedTopic.trim().slice(0, 300)}". Output EXACTLY this text in the "topic" field. Design post_style, tone, cta_objective, and the rest to make THIS topic perform in the feed.`
+    : '';
 
   const prompt = `You are a social media SEO content strategist proposing a LinkedIn post plan.
 Suggest the form input values that will produce the best feed-native LinkedIn post next.
@@ -671,6 +713,8 @@ ${input.brandDescription ? `- Brand Description: ${input.brandDescription}` : ''
 ${briefBlock}
 
 ${seedRule}
+
+${seedTopicRule}
 
 Rules for values:
 - post_style: Must be exactly one of: "educational", "founder", "industry_insight", "storytelling", "list", "carousel". Pick the style that best fits this topic and niche.
@@ -750,4 +794,112 @@ Return JSON ONLY (no markdown fences, no commentary) with EXACTLY these keys:
 
   throw new Error('AI returned an unparseable response for LinkedIn suggestions. Please try again.');
 }
+
+interface RawTopicsList {
+  topics?: string[];
+}
+
+const TOPICS_LIST_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    topics: {
+      type: 'ARRAY',
+      items: { type: 'STRING' }
+    }
+  },
+  required: ['topics']
+} as const;
+
+export async function suggestMultipleTopicsWithFlash(input: {
+  contentTypeLabel: string;
+  niche: string;
+  audience: string;
+  domain: string;
+  briefSummary: string | null;
+  seedKeyword?: string;
+  avoidTopics?: string[];
+  formContext?: string;
+}): Promise<string[]> {
+  const briefBlock = input.briefSummary?.trim()
+    ? `BRIEF: ${input.briefSummary.trim().slice(0, 1500)}`
+    : '(no cached brief)';
+
+  const seedRule = input.seedKeyword?.trim()
+    ? `CRITICAL REQUIREMENT: Every suggested topic title MUST be directly relevant to the primary keyword: "${input.seedKeyword.trim()}". You MUST ensure the topic ideas are designed specifically to rank for this keyword.`
+    : `Choose fresh topic ideas that are highly relevant to the brand's niche and audience.`;
+
+  const avoidTopicsBlock = input.avoidTopics?.length
+    ? `Do NOT repeat or duplicate any of these topic ideas (already suggested or used):\n${input.avoidTopics.slice(0, 20).map(t => `- ${t}`).join('\n')}`
+    : '';
+
+  const formContextBlock = input.formContext?.trim()
+    ? `Other details from the form context to respect (keep the topic ideas consistent with these):\n${input.formContext.trim().slice(0, 800)}`
+    : '';
+
+  const prompt = `You are an SEO content strategist suggesting exactly 5 distinct, engaging, and high-CTR ${input.contentTypeLabel} topic ideas (titles) that the Rankshoot content engine should produce next.
+
+CONTEXT
+- Domain: ${input.domain}
+- Niche: ${input.niche}
+- Target audience: ${input.audience}
+${briefBlock}
+
+${seedRule}
+
+${avoidTopicsBlock}
+
+${formContextBlock}
+
+Rules:
+- Suggest exactly 5 unique topic ideas/titles.
+- Each topic title must be completely distinct in angle (e.g., one comprehensive guide, one listicle/tips, one trends/insights, one comparative vs., one actionable checklist, one case-study-style title).
+- Make sure they are catchy, professional, SEO-optimized, and address search intent.
+- Do not repeat or rephrase any topics from the avoided list.
+
+Return JSON ONLY (no markdown fences, no commentary) with EXACTLY this structure:
+{"topics": ["Topic Idea 1", "Topic Idea 2", "Topic Idea 3", "Topic Idea 4", "Topic Idea 5"]}`;
+
+  let raw = '';
+  try {
+    raw = await aiGenerate('assistant', prompt, {
+      temperature: 0.75,
+      maxOutputTokens: 2048,
+      jsonMode: true,
+      responseSchema: TOPICS_LIST_SCHEMA as unknown as Record<string, unknown>,
+    });
+  } catch (e) {
+    console.warn(
+      '[content-studio] Flash suggestMultipleTopics call failed; retrying with Pro.',
+      e instanceof Error ? e.message : e,
+    );
+  }
+
+  const fromFlash = raw ? parseLooseJson<RawTopicsList>(raw) : null;
+  if (fromFlash && Array.isArray(fromFlash.topics) && fromFlash.topics.length > 0) {
+    return fromFlash.topics.map(t => t.trim()).filter(Boolean);
+  }
+
+  // Fallback to Pro
+  let proRaw = '';
+  try {
+    proRaw = await aiGenerate('assistant', prompt, {
+      temperature: 0.8,
+      maxOutputTokens: 2048,
+      jsonMode: true,
+      responseSchema: TOPICS_LIST_SCHEMA as unknown as Record<string, unknown>,
+    });
+  } catch (e) {
+    throw new Error(
+      `Topics generation failed (Flash + Pro): ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  const fromPro = parseLooseJson<RawTopicsList>(proRaw);
+  if (fromPro && Array.isArray(fromPro.topics) && fromPro.topics.length > 0) {
+    return fromPro.topics.map(t => t.trim()).filter(Boolean);
+  }
+
+  throw new Error('AI returned an empty or unparseable response for topic ideas.');
+}
+
 

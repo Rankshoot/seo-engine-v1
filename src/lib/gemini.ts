@@ -1,5 +1,5 @@
 import { CalendarEntry, Project } from './types';
-import { ResearchContext, formatResearchForPrompt } from './research';
+import { ResearchContext } from './research';
 import type { BusinessBrief } from './business-brief';
 import { buildBlogPrompt } from './prompts/blog-prompt';
 import { buildKeywordIntentPrompt } from './prompts/keyword-intent-prompt';
@@ -11,11 +11,7 @@ import {
   type FunnelStage,
 } from '@/lib/keyword-funnel';
 import { countWordsInMarkdown, stripEmptyFragmentAnchorTags, validateExternalUrl, humanizeDashes } from '@/lib/blog-content';
-import {
-  extractGeminiTokenUsage,
-  recordGeminiCall,
-} from '@/lib/admin/logging/record-provider-call';
-import { computeSEOScore, openingPlainLower } from './seo-analyzer';
+import { computeSEOScore } from './seo-analyzer';
 
 import { aiGenerate, aiGenerateStructured } from '@/services/ai/providers';
 import {
@@ -43,43 +39,6 @@ function safeHost(url: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Render optional keyword + SERP context into a prompt-ready block.
- * Kept here (not in research.ts) so the gemini prompt is the single place
- * that decides how this data influences the article.
- */
-function formatAhrefsContextForPrompt(ctx: {
-  ideas: Array<{ keyword: string; volume: number; difficulty: number | null; cpc: number | null }>;
-  serp: Array<{ position: number; url: string; title: string; domain: string; domain_rating: number | null; traffic: number | null }>;
-}): string {
-  const lines: string[] = [];
-  lines.push('=== KEYWORD + SERP CONTEXT (live research data — use to expand topical coverage) ===\n');
-
-  if (ctx.ideas.length) {
-    lines.push('ADJACENT QUERIES TO ANSWER (from matching-terms + related-terms + search-suggestions):');
-    lines.push('Each is a real search with monthly Google volume. Answer at least 6 of these naturally inside the article body or FAQ — do NOT just append them as a bulleted list.');
-    ctx.ideas.slice(0, 24).forEach(k => {
-      const kdLabel = k.difficulty != null ? ` · KD ${k.difficulty}` : '';
-      lines.push(`• "${k.keyword}" — ${k.volume.toLocaleString()} searches/mo${kdLabel}`);
-    });
-    lines.push('');
-  }
-
-  if (ctx.serp.length) {
-    lines.push('LIVE TOP-10 SERP:');
-    lines.push('These are the pages currently winning for the target keyword. Beat them by going deeper on whatever they cover, AND covering at least one angle they miss.');
-    ctx.serp.slice(0, 10).forEach(p => {
-      const dr = p.domain_rating != null ? ` · DR ${Math.round(p.domain_rating)}` : '';
-      const traffic = p.traffic ? ` · ~${p.traffic.toLocaleString()} mo traffic` : '';
-      lines.push(`#${p.position} — "${p.title}" — ${p.domain}${dr}${traffic}`);
-    });
-    lines.push('');
-  }
-
-  lines.push('=== END KEYWORD + SERP CONTEXT ===');
-  return lines.join('\n');
 }
 
 export async function geminiGenerate(
@@ -653,102 +612,51 @@ export function parseGeneratedBlogJson(
   };
 }
 
+/**
+ * Minimal, non-destructive safety net applied after generation.
+ *
+ * This used to mechanically staple the keyword into the title, inject a canned
+ * intro sentence, append a boilerplate FAQ block, rewrite the meta with a
+ * template sentence, and bolt " & <keyword>" onto H2 headings whenever a metric
+ * fell short. That machinery is what forced every article into the same robotic
+ * wireframe, so it has been removed. We now only fix things that would otherwise
+ * produce broken output, and we NEVER fabricate body content:
+ *   1. Ensure the H1 exists and matches the requested title verbatim.
+ *   2. Backfill an empty meta description from the opening prose (no marketing
+ *      boilerplate) so the field is never blank.
+ * Everything else (keyword usage, FAQ, structure) is left to the model — the
+ * prompt already asks for it, and forcing it here only makes the text look AI-written.
+ */
 function applyDeterministicFallbackFixes(
   blog: GeneratedBlog,
-  targetKeyword: string,
-  project: Project
+  _targetKeyword: string,
+  _project: Project,
+  expectedTitle?: string
 ): GeneratedBlog {
   let content = blog.content ?? '';
   let meta_description = blog.meta_description ?? '';
   let title = blog.title ?? '';
-  const kw = targetKeyword.trim();
 
-  // 1. Title Keyword Fix
-  if (kw && !title.toLowerCase().includes(kw.toLowerCase())) {
-    title = `${kw}: ${title}`;
+  // 1. Title must be the requested title, verbatim, as the H1.
+  const wantTitle = (expectedTitle ?? title).trim();
+  if (wantTitle) {
+    title = wantTitle;
     if (/^\s*#\s+/m.test(content)) {
-      content = content.replace(/^\s*#\s+(.+)$/m, `# ${title}`);
+      content = content.replace(/^\s*#\s+(.+)$/m, `# ${wantTitle}`);
     } else {
-      content = `# ${title}\n\n${content}`;
+      content = `# ${wantTitle}\n\n${content}`;
     }
   }
 
-  // 2. Intro Keyword Fix (first 100 words)
-  const opening100 = openingPlainLower(content, 100);
-  if (kw && !opening100.toLowerCase().includes(kw.toLowerCase())) {
-    const lines = content.split('\n');
-    let inserted = false;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.startsWith('# ') || line.startsWith('---') || line === '') continue;
-      lines[i] = `When focusing on ${kw}, businesses can gain a significant competitive edge. ${lines[i]}`;
-      inserted = true;
-      break;
-    }
-    if (inserted) {
-      content = lines.join('\n');
-    } else {
-      content = content + `\n\nWhen considering ${kw}, understanding best practices is essential for long-term success.`;
-    }
-  }
-
-  // 3. FAQ Missing Fix
-  const hasFAQ = /#{1,3}\s*(faq|frequently asked)/i.test(content);
-  if (!hasFAQ) {
-    const faqSection = `
-
-## Frequently Asked Questions
-
-### What is ${kw}?
-${kw} is a crucial strategy in modern industries that helps businesses optimize their processes, improve efficiency, and drive sustainable growth over the long term.
-
-### Why is ${kw} important?
-Implementing ${kw} allows organizations to stay competitive, adapt to changing market demands, and deliver superior value to their target audience and clients.
-
-### How can we get started with ${kw}?
-To get started, evaluate your current needs, define clear objectives, align your team on best practices, and implement key tools to monitor your overall progress.
-
-### What are the main challenges of ${kw}?
-Common challenges include resistance to change, lack of proper training, and integration issues, which can all be addressed with strong planning and leadership support.`;
-    
-    if (content.toLowerCase().includes('## conclusion')) {
-      content = content.replace(/##\s+conclusion/i, `${faqSection}\n\n## Conclusion`);
-    } else {
-      content = content + faqSection;
-    }
-  }
-
-  // 4. Meta Description Fix
-  const isMetaValid = meta_description.length >= 140 && 
-                      meta_description.length <= 165 && 
-                      meta_description.toLowerCase().includes(kw.toLowerCase());
-  
-  if (!isMetaValid && kw) {
-    const candidateMeta = `Discover how to master ${kw} with our expert guide. Read on to learn the best strategies, tips, and solutions for your business today.`;
-    meta_description = candidateMeta.slice(0, 160);
-  }
-
-  // 5. Keyword Density Fix
-  const words = content.toLowerCase().replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ").split(/\s+/).filter(Boolean);
-  const kwWords = kw.toLowerCase().replace(/[#>*_\-[\]()`~.,!?;:"]/g, " ").split(/\s+/).filter(Boolean);
-  let kwOccurrences = 0;
-  for (let i = 0; i <= words.length - kwWords.length; i++) {
-    if (kwWords.every((w, j) => words[i + j] === w)) kwOccurrences++;
-  }
-  const kwDensity = words.length > 0 ? (kwOccurrences / words.length) * 100 : 0;
-  if (kwDensity < 0.5 && kw) {
-    const lines = content.split('\n');
-    let headingsUpdated = 0;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startsWith('## ') && headingsUpdated < 2 && !lines[i].toLowerCase().includes(kw.toLowerCase())) {
-        lines[i] = `${lines[i]} & ${kw}`;
-        headingsUpdated++;
-      }
-    }
-    content = lines.join('\n');
-    
-    if (content.toLowerCase().includes('## conclusion')) {
-      content = content.replace(/##\s+conclusion/i, `Implementing ${kw} is key.\n\n## Conclusion`);
+  // 2. Backfill an empty/too-short meta from the opening prose — never a template.
+  if (meta_description.trim().length < 50) {
+    const firstPara = content
+      .split('\n')
+      .map(l => l.trim())
+      .find(l => l && !l.startsWith('#') && !l.startsWith('>') && !l.startsWith('!') && !l.startsWith('|'));
+    if (firstPara) {
+      const plain = firstPara.replace(/[*_`#>]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').trim();
+      meta_description = plain.length > 160 ? `${plain.slice(0, 157).trimEnd()}...` : plain;
     }
   }
 
@@ -763,17 +671,6 @@ Common challenges include resistance to change, lack of proper training, and int
   };
 }
 
-function slugFromTopic(topic: string): string {
-  const base = topic
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 10)
-    .join('-');
-  return base || 'article';
-}
 
 export async function generateBlogPost(
   entry: CalendarEntry,
@@ -819,14 +716,6 @@ export async function generateBlogPost(
     .filter((r): r is PromiseFulfilledResult<{ candidate: typeof allInternalCandidates[number]; ok: boolean }> => r.status === 'fulfilled' && r.value.ok)
     .map(r => r.value.candidate);
 
-  const siteLinks = validatedInternalLinks
-    .filter(c => c.type === 'site')
-    .slice(0, 12);
-
-  const generatedLinks = validatedInternalLinks
-    .filter(c => c.type === 'generated')
-    .slice(0, 8);
-
   const filteredBrief = brief
     ? {
         ...brief,
@@ -844,16 +733,50 @@ export async function generateBlogPost(
 
   // Live follow-up questions (Perplexity → PAA fallback) become dedicated,
   // AEO-optimised question H2s in the article. Best-effort — never blocks.
+  // Deep research (credible sources + facts) runs alongside it.
   let followUpQuestions: string[] = [];
-  try {
-    const { resolveFollowUpQuestions } = await import('@/lib/perplexity');
-    followUpQuestions = await resolveFollowUpQuestions(
-      entry.focus_keyword,
-      research?.peopleAlsoAsk,
-      { limit: 3 }
-    );
-  } catch (e) {
-    console.warn('[blog-gen] follow-up questions fetch failed, continuing:', e);
+  let verifiedSources: import('@/lib/deep-research').DeepResearchResult | null = null;
+  let projectMemoryBlock = '';
+  let globalHeuristicsBlock = '';
+  {
+    const followUpsPromise = (async () => {
+      try {
+        const { resolveFollowUpQuestions } = await import('@/lib/perplexity');
+        return await resolveFollowUpQuestions(entry.focus_keyword, research?.peopleAlsoAsk, { limit: 3 });
+      } catch (e) {
+        console.warn('[blog-gen] follow-up questions fetch failed, continuing:', e);
+        return [] as string[];
+      }
+    })();
+    const deepResearchPromise = (async () => {
+      try {
+        const { researchCredibleSources } = await import('@/lib/deep-research');
+        return await researchCredibleSources(entry.focus_keyword);
+      } catch (e) {
+        console.warn('[blog-gen] deep research failed, continuing:', e);
+        return null;
+      }
+    })();
+    // Rankshoot AI memory — best-effort, "" blocks when empty or on failure.
+    const memoryPromise = (async () => {
+      try {
+        const { loadProjectMemory, formatProjectMemoryForPrompt, loadGlobalHeuristics, formatGlobalHeuristicsForPrompt } = await import('@/lib/ai-memory');
+        const [entries, heuristics] = await Promise.all([
+          loadProjectMemory(project.id),
+          loadGlobalHeuristics(),
+        ]);
+        return {
+          memory: formatProjectMemoryForPrompt(entries),
+          heuristics: formatGlobalHeuristicsForPrompt(heuristics),
+        };
+      } catch {
+        return { memory: '', heuristics: '' };
+      }
+    })();
+    let memoryBlocks: { memory: string; heuristics: string };
+    [followUpQuestions, verifiedSources, memoryBlocks] = await Promise.all([followUpsPromise, deepResearchPromise, memoryPromise]);
+    projectMemoryBlock = memoryBlocks.memory;
+    globalHeuristicsBlock = memoryBlocks.heuristics;
   }
 
   const prompt = buildBlogPrompt({
@@ -865,29 +788,43 @@ export async function generateBlogPost(
     },
     project,
     wordCount,
+    // Feed the keyword's intent/funnel (from the joined keywords row when present)
+    // into archetype selection so structure adapts to what the searcher wants.
+    keywordIntent: entry.keywords?.intent ?? null,
+    funnelStage: entry.keywords?.funnel_stage ?? null,
     research,
+    verifiedSources,
     existingBlogs: filteredExistingBlogs,
     brief: filteredBrief,
     followUpQuestions,
     ahrefsContext: ahrefsContext || undefined,
     writerNotes,
+    projectMemoryBlock,
+    globalHeuristicsBlock,
   });
 
   const text = await geminiGenerate(prompt, 3, true, 'application/json', project.user_id, project.id);
   const result = parseGeneratedBlogJson(text, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
 
-  // ── Pre-save SEO Quality Gate & Repair Loop ──
+  // ── Pre-save quality net (repair only genuinely broken drafts) ──
+  // We keep the SEO score for LOGGING, but we no longer rewrite a perfectly good
+  // draft just because it scored under an arbitrary 85 on a rubric that rewards
+  // the old bloated template (1500+ words, 3+ H2s, big FAQ). That gate is exactly
+  // what homogenised every article. We now only invoke an LLM repair pass when the
+  // draft is genuinely deficient — missing core elements — and the repair fixes
+  // only the specific failed checks without padding or re-imposing a fixed shape.
   let currentBlogCandidate = result;
   let repairAttempts = 0;
-  const maxRepairAttempts = 2;
-  let scoreObj = computeSEOScore(currentBlogCandidate, project.domain);
+  const maxRepairAttempts = 1;
+  let scoreObj = computeSEOScore(currentBlogCandidate, project.domain, entry.title);
+  const REPAIR_FLOOR = 50; // only genuinely broken/thin drafts fall below this
 
-  while (repairAttempts < maxRepairAttempts && (scoreObj.total < 85 || ['C', 'D', 'F'].includes(scoreObj.grade))) {
+  while (repairAttempts < maxRepairAttempts && scoreObj.total < REPAIR_FLOOR) {
     repairAttempts++;
     const failedChecks = scoreObj.checks.filter(c => !c.pass);
     const failedChecksText = failedChecks.map(c => `- ${c.label} (${c.points}pt): ${c.hint}`).join('\n');
 
-    const repairPrompt = `You are a senior SEO editor. Your job is to repair a generated blog post that failed the SEO quality checks. You MUST correct all failed checks while maintaining the original value, structure, tone, and external/internal links of the post.
+    const repairPrompt = `You are a senior editor fixing a blog draft that is missing some essentials. Fix ONLY the specific issues listed, and change as little else as possible. Preserve the draft's structure, length, angle, voice, and its existing links — do not pad it, do not add sections that don't fit, do not impose a fixed number of FAQs or links, and do not make it read more robotic.
 
 BUSINESS CONTEXT:
 - Company: ${project.company}
@@ -895,37 +832,22 @@ BUSINESS CONTEXT:
 - Niche: ${project.niche}
 - Focus Keyword: "${entry.focus_keyword}"
 
-CURRENT STATUS:
-- Current SEO Score: ${scoreObj.total} / ${scoreObj.maxTotal} (Grade: ${scoreObj.grade})
-- Failed SEO Checks that MUST be fixed:
+ISSUES TO FIX (fix these and nothing else):
 ${failedChecksText}
 
-ORIGINAL META DESCRIPTION:
-${currentBlogCandidate.meta_description}
-
-ORIGINAL GENERATED BLOG ARTICLE:
-${currentBlogCandidate.content}
-
-REPAIR INSTRUCTIONS:
-- You MUST fix all failed checks.
-- Include the exact focus keyword "${entry.focus_keyword}" verbatim in:
-  1. H1 title
-  2. First 100 words of intro
-  3. At least one H2 heading
-  4. The conclusion section
-  5. The meta description (must be exactly 150-160 characters long).
-- Ensure a FAQ section exists under "## FAQs" with 7-10 FAQs, each question formatted as "###".
-- Maintain keyword density strictly between 0.5% and 3%. Do not keyword stuff!
-- Do not invent any new external/internal links. Use only the verified ones present in the original post.
-- Internal links: the repaired post should retain 4–6 internal links from the original. Do not drop existing internal links unless they are broken.
-- External links: the repaired post should retain 4–6 credible external citations from the original. Do not replace or invent new external URLs — only use what was already in the original post.
-- Preserve the human, editorial tone of the original. Do not introduce robotic or filler phrases.
-- Return a strict JSON response only matching this exact format:
+RULES:
+- Keep the H1 exactly "${entry.title}" verbatim.
+- Work the focus keyword "${entry.focus_keyword}" in ONLY where it reads naturally (intro and where relevant) — never stuff it, never repeat it in a pattern.
+- If a FAQ section is missing and the piece would benefit from one, add a short "## FAQs" section with a few genuinely useful Q&As — not a fixed count of boilerplate.
+- Do not invent new external/internal links. Use only the verified links already in the draft.
+- Meta description: 150-160 characters, contains the focus keyword, reads like a real sentence.
+- Preserve the human, editorial tone. Do not introduce filler or robotic phrasing.
+- Return strict JSON only in this format:
 {
-  "title": "[Fixed H1 Title]",
-  "metaDescription": "[Fixed Meta Description (150-160 chars, includes focus keyword)]",
-  "contentMarkdown": "[Entire corrected blog content starting with H1, with fixed FAQs, headings, keyword density, etc.]",
-  "faqQuestions": ["Question 1", "Question 2", ...],
+  "title": "[H1 Title, verbatim]",
+  "metaDescription": "[Meta Description]",
+  "contentMarkdown": "[Corrected blog content starting with H1]",
+  "faqQuestions": ["Question 1", "..."],
   "internalLinksUsed": [],
   "externalLinksUsed": []
 }
@@ -934,26 +856,22 @@ REPAIR INSTRUCTIONS:
     try {
       const repairedRaw = await geminiGenerate(repairPrompt, 2, true, 'application/json', project.user_id, project.id);
       const repairedBlog = parseGeneratedBlogJson(repairedRaw, { ...entry, focus_keyword: entry.focus_keyword }, project, research);
-      const newScoreObj = computeSEOScore(repairedBlog, project.domain);
+      const newScoreObj = computeSEOScore(repairedBlog, project.domain, entry.title);
 
+      // Only keep the repair if it actually improved the draft.
       if (newScoreObj.total > scoreObj.total) {
         currentBlogCandidate = repairedBlog;
         scoreObj = newScoreObj;
-      }
-
-      if (scoreObj.total >= 85 && !['C', 'D', 'F'].includes(scoreObj.grade)) {
-        break; // Quality target achieved!
       }
     } catch (repairErr) {
       console.error(`[blog-gen-repair] Attempt ${repairAttempts} failed:`, repairErr);
     }
   }
 
-  // ── Deterministic fallback fixes ──
-  const finalBlog = applyDeterministicFallbackFixes(currentBlogCandidate, entry.focus_keyword, project);
+  const finalBlog = applyDeterministicFallbackFixes(currentBlogCandidate, entry.focus_keyword, project, entry.title);
   
   // Re-evaluate score after deterministic fallbacks
-  const finalScoreObj = computeSEOScore(finalBlog, project.domain);
+  const finalScoreObj = computeSEOScore(finalBlog, project.domain, entry.title);
 
   // Dev-only logging
   console.log('[blog-gen-seo] Quality Gate Summary:', JSON.stringify({
@@ -1099,6 +1017,12 @@ export interface RepairBlogInput {
     category?: string;
   }>;
   contentGaps: string[];
+  /**
+   * What the top-ranking blog posts for this keyword do better — the concrete
+   * advantages the enhanced version must match or beat to outrank them. Sourced
+   * from the deep audit's competitor scrape (DataForSEO SERP → scrape top 5).
+   */
+  competitorInsights?: Array<{ url: string; advantages: string[] }>;
   /** URLs on the user's own site we can link to. Must be verbatim — LLM won't invent. */
   internalLinkPool: string[];
   /** Best-guess primary keyword this page is trying to rank for. */
@@ -1423,15 +1347,6 @@ export async function analyzeKeywordGapStrategy(
 
   return { analysisMarkdown, clusterKeywords };
 }
-
-const INSTANT_KEYWORD_TOPIC_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    keyword: { type: 'STRING' },
-    topic: { type: 'STRING' },
-  },
-  required: ['keyword', 'topic'],
-} as const;
 
 /**
  * One keyword grounded in the project's website domain, then one article topic that targets that keyword (no web search).

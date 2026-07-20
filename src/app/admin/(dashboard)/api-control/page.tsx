@@ -1,5 +1,6 @@
 import { getApiControlSettings } from "@/app/actions/admin-api-control-actions";
 import { ApiControlEditor } from "./ApiControlEditor";
+import { ProviderSourceCard } from "./ProviderSourceCard";
 
 export default async function AdminApiControlPage() {
   const plans = await getApiControlSettings();
@@ -14,6 +15,7 @@ export default async function AdminApiControlPage() {
           Manage Ahrefs API access for each subscription plan. Toggle features on/off per plan to control costs and differentiate plan tiers.
         </p>
       </div>
+      <ProviderSourceCard />
       <ApiControlEditor initialPlans={plans} />
     </div>
   );

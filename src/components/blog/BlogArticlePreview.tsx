@@ -121,8 +121,18 @@ export function EditorialPreview({
     [blog, prep.ok, prep.content],
   );
   const internalSet = useMemo(() => internalSetForBlog(effectiveBlog), [effectiveBlog]);
-  const { heroTitle, body } = useMemo(() => stripHeroHeading(effectiveBlog), [effectiveBlog]);
   const coverImageUrl = (blog.content_data as BlogContentData | undefined)?.cover_image_url;
+  const { heroTitle, body } = useMemo(() => {
+    const stripped = stripHeroHeading(effectiveBlog);
+    if (coverImageUrl) {
+      const escapedUrl = coverImageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const imgRegex = new RegExp(`^\\s*!\\[[^\\]]*\\]\\(${escapedUrl}\\)\\s*\\n*`, 'i');
+      if (imgRegex.test(stripped.body)) {
+        stripped.body = stripped.body.replace(imgRegex, '');
+      }
+    }
+    return stripped;
+  }, [effectiveBlog, coverImageUrl]);
   const components = useMemo(
     () => buildMarkdownComponents(internalSet, ownSiteHost, imageGenOptions),
     [internalSet, ownSiteHost, imageGenOptions]

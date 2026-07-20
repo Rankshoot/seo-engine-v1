@@ -7,7 +7,10 @@ import { suggestProjectTargetingField } from "@/app/actions/project-actions";
 import { TARGET_REGIONS } from "@/lib/types";
 import { ArrowRight, ArrowLeft, Plus, X, Sparkles, Globe2 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
-import { Spinner } from "@/components/common";
+import { AuthUserButton as UserButton } from "@/components/auth-wrapper";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Button, Field, Label, Input, Textarea, Select, IconButton, AiFillLabelButton } from "@/components/common";
+import { useUserQuota } from "@/hooks/useUserQuota";
 
 interface ProjectDraft {
   name: string;
@@ -19,6 +22,7 @@ interface ProjectDraft {
   competitors: string[];
   description: string;
   brand_voice: string;
+  brand_values: string;
   brand_description: string;
 }
 
@@ -26,6 +30,7 @@ const TOTAL_STEPS = 5;
 
 export function OnboardingFlow({ userName }: { userName: string }) {
   const router = useRouter();
+  const { hasAiCredits } = useUserQuota();
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -41,6 +46,7 @@ export function OnboardingFlow({ userName }: { userName: string }) {
     competitors: ["", ""],
     description: "",
     brand_voice: "",
+    brand_values: "",
     brand_description: "",
   });
 
@@ -59,7 +65,7 @@ export function OnboardingFlow({ userName }: { userName: string }) {
   function goNext() { if (step < TOTAL_STEPS) transition(step + 1); }
   function goBack() { if (step > 0) transition(step - 1); }
 
-  async function fillWithAi(field: "niche" | "target_audience" | "brand_voice" | "brand_description") {
+  async function fillWithAi(field: "niche" | "target_audience" | "brand_voice" | "brand_values" | "brand_description") {
     setAiLoading(field);
     try {
       const res = await suggestProjectTargetingField({
@@ -89,7 +95,7 @@ export function OnboardingFlow({ userName }: { userName: string }) {
         description: draft.description,
         competitors: draft.competitors.filter(c => c.trim()),
         brand_voice: draft.brand_voice,
-        brand_values: "",
+        brand_values: draft.brand_values,
         brand_description: draft.brand_description,
       });
       if (res.success && res.data) {
@@ -105,6 +111,7 @@ export function OnboardingFlow({ userName }: { userName: string }) {
   }
 
   const sharedProps = { draft, update, onNext: goNext, onBack: goBack };
+  const aiProps = { aiLoading, onAiFill: fillWithAi, hasAiCredits };
 
   return (
     <div className="relative min-h-screen bg-surface-primary flex flex-col">
@@ -114,23 +121,29 @@ export function OnboardingFlow({ userName }: { userName: string }) {
         <div className="absolute bottom-0 right-0 h-[400px] w-[500px] rounded-full bg-brand-aqua/6 blur-[120px]" />
       </div>
 
-      {/* Top bar — floating pill style */}
+      {/* Top bar — same nav chrome as the projects page (logo, step progress, theme, profile/logout) */}
       <header className="sticky top-0 z-40 flex justify-center px-4 pt-4 pb-1">
-        <div className="flex w-full max-w-[760px] items-center justify-between rounded-full border border-border-subtle bg-glass px-5 py-2.5 shadow-[0_4px_24px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)] backdrop-blur-md">
+        <div className="flex w-full max-w-[900px] items-center justify-between rounded-card border border-border-subtle bg-glass px-5 py-2.5 shadow-[0_4px_24px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)] backdrop-blur-md">
           <Logo size="sm" />
-          {step > 0 && (
-            <div className="flex items-center gap-3">
-              <span className="text-[12px] text-text-tertiary hidden sm:block">
-                Step {step} of {TOTAL_STEPS}
-              </span>
-              <div className="w-28 h-1.5 bg-surface-secondary rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-brand-violet rounded-full transition-all duration-500 ease-out"
-                  style={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
-                />
+          <div className="flex items-center gap-4">
+            {step > 0 && (
+              <div className="hidden items-center gap-3 sm:flex">
+                <span className="text-[12px] text-text-tertiary">
+                  Step {step} of {TOTAL_STEPS}
+                </span>
+                <div className="w-28 h-1.5 bg-surface-secondary rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-brand-violet rounded-full transition-all duration-500 ease-out"
+                    style={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
+                  />
+                </div>
               </div>
+            )}
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <UserButton />
             </div>
-          )}
+          </div>
         </div>
       </header>
 
@@ -144,13 +157,12 @@ export function OnboardingFlow({ userName }: { userName: string }) {
           {step === 0 && <StepWelcome userName={userName} onStart={goNext} />}
           {step === 1 && <StepBasicInfo {...sharedProps} />}
           {step === 2 && <StepDomainRegion {...sharedProps} />}
-          {step === 3 && <StepNicheAudience {...sharedProps} aiLoading={aiLoading} onAiFill={fillWithAi} />}
+          {step === 3 && <StepNicheAudience {...sharedProps} {...aiProps} />}
           {step === 4 && <StepCompetitors {...sharedProps} />}
           {step === 5 && (
             <StepBrandVoice
               {...sharedProps}
-              aiLoading={aiLoading}
-              onAiFill={fillWithAi}
+              {...aiProps}
               onCreate={handleCreate}
               creating={creating}
               error={error}
@@ -168,7 +180,7 @@ function StepWelcome({ userName, onStart }: { userName: string; onStart: () => v
   const firstName = userName.split(" ")[0];
   return (
     <div className="text-center">
-      <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary mb-8">
+      <div className="inline-flex items-center gap-2 rounded-md border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary mb-8">
         <span className="ai-orb" /> Your AI SEO workspace
       </div>
 
@@ -176,7 +188,7 @@ function StepWelcome({ userName, onStart }: { userName: string; onStart: () => v
         {firstName ? `Hey ${firstName} 👋` : "Welcome 👋"}
       </h1>
       <p className="mt-4 text-[16px] leading-relaxed text-text-secondary max-w-[380px] mx-auto">
-        Let's set up your first project. In about 2 minutes you'll have
+        Let&rsquo;s set up your first project. In about 2 minutes you&rsquo;ll have
         curated keyword opportunities ready to publish.
       </p>
 
@@ -188,7 +200,7 @@ function StepWelcome({ userName, onStart }: { userName: string; onStart: () => v
         ].map(item => (
           <div
             key={item.title}
-            className="rounded-xl border border-border-subtle bg-surface-elevated p-3.5"
+            className="rounded-card border border-border-subtle bg-surface-elevated p-3.5"
           >
             <div className="text-[20px] mb-2">{item.emoji}</div>
             <div className="text-[13px] font-semibold text-text-primary">{item.title}</div>
@@ -197,12 +209,16 @@ function StepWelcome({ userName, onStart }: { userName: string; onStart: () => v
         ))}
       </div>
 
-      <button
+      <Button
+        variant="primary"
+        size="lg"
+        fullWidth
         onClick={onStart}
-        className="mt-8 w-full inline-flex items-center justify-center gap-2 rounded-full bg-text-primary px-6 py-3.5 text-[15px] font-semibold text-surface-primary shadow-md transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg"
+        className="mt-8"
+        iconRight={<ArrowRight />}
       >
-        Let's get started <ArrowRight className="h-4 w-4" />
-      </button>
+        Let&rsquo;s get started
+      </Button>
 
       <p className="mt-4 text-[12px] text-text-tertiary">No credit card needed to explore</p>
     </div>
@@ -224,27 +240,25 @@ function StepBasicInfo({
         sub="What's the project called and which company is this for?"
       />
       <div className="space-y-4">
-        <FormField label="Project name" required>
-          <input
+        <Field label="Project name" required htmlFor="ob-name">
+          <Input
+            id="ob-name"
             autoFocus
-            type="text"
             value={draft.name}
             onChange={e => update("name", e.target.value)}
             onKeyDown={e => e.key === "Enter" && canContinue && onNext()}
             placeholder="e.g. Main SEO Campaign"
-            className={inputCls}
           />
-        </FormField>
-        <FormField label="Company name" required>
-          <input
-            type="text"
+        </Field>
+        <Field label="Company name" required htmlFor="ob-company">
+          <Input
+            id="ob-company"
             value={draft.company}
             onChange={e => update("company", e.target.value)}
             onKeyDown={e => e.key === "Enter" && canContinue && onNext()}
             placeholder="e.g. Acme Corp"
-            className={inputCls}
           />
-        </FormField>
+        </Field>
       </div>
       <StepNav onBack={onBack} onNext={onNext} disabled={!canContinue} />
     </div>
@@ -264,42 +278,39 @@ function StepDomainRegion({ draft, update, onNext, onBack }: StepProps) {
         sub="We'll use your domain and region to find the most relevant keyword opportunities."
       />
       <div className="space-y-4">
-        <FormField label="Website domain" required hint="Just the domain — no https:// needed">
+        <Field label="Website domain" required htmlFor="ob-domain" description="Just the domain — no https:// needed">
           <div className="relative">
             <Globe2 className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
-            <input
+            <Input
+              id="ob-domain"
               autoFocus
-              type="text"
               value={draft.domain}
               onChange={e => update("domain", e.target.value)}
               onKeyDown={e => e.key === "Enter" && canContinue && onNext()}
               placeholder="yourwebsite.com"
-              className={`${inputCls} pl-10`}
+              className="pl-10"
             />
           </div>
-        </FormField>
+        </Field>
 
-        <FormField label="Target region" required hint="Primary market you're writing content for">
-          <select
-            value={draft.target_region}
-            onChange={e => update("target_region", e.target.value)}
-            className={inputCls}
-          >
+        <Field label="Target region" required htmlFor="ob-region" description="Primary market you're writing content for">
+          <Select id="ob-region" value={draft.target_region} onChange={e => update("target_region", e.target.value)}>
             {TARGET_REGIONS.map(r => (
               <option key={r.code} value={r.code}>{r.name}</option>
             ))}
-          </select>
-        </FormField>
+          </Select>
+        </Field>
 
-        <FormField label="Short description" hint="Optional — helps AI generate better keyword suggestions">
-          <textarea
+        <Field label="Short description" htmlFor="ob-description" description="Optional — helps AI generate better keyword suggestions">
+          <Textarea
+            id="ob-description"
             value={draft.description}
             onChange={e => update("description", e.target.value)}
             placeholder="What does your company do? Who are your customers? (2–3 sentences)"
             rows={3}
-            className={`${inputCls} resize-none`}
+            className="resize-none"
           />
-        </FormField>
+        </Field>
       </div>
       <StepNav onBack={onBack} onNext={onNext} disabled={!canContinue} />
     </div>
@@ -309,7 +320,7 @@ function StepDomainRegion({ draft, update, onNext, onBack }: StepProps) {
 /* ──────────── Step 3: Niche & audience ──────────── */
 
 function StepNicheAudience({
-  draft, update, onNext, onBack, aiLoading, onAiFill,
+  draft, update, onNext, onBack, aiLoading, onAiFill, hasAiCredits,
 }: StepProps & AiProps) {
   const canContinue = draft.niche.trim();
 
@@ -322,37 +333,51 @@ function StepNicheAudience({
       />
 
       <InfoTip>
-        <strong>Tip:</strong> Use 1–3 word descriptions for niche (e.g. "SaaS HR software") and audience (e.g. "HR managers at SMBs") — this dramatically improves keyword relevance.
+        <strong>Tip:</strong> Use 1–3 word descriptions for niche (e.g. &ldquo;SaaS HR software&rdquo;) and audience (e.g. &ldquo;HR managers at SMBs&rdquo;) — this dramatically improves keyword relevance.
       </InfoTip>
 
       <div className="space-y-4">
-        <FormField label="Niche / Industry" required hint="Your primary market category">
-          <div className="flex gap-2">
-            <input
-              autoFocus
-              type="text"
-              value={draft.niche}
-              onChange={e => update("niche", e.target.value)}
-              onKeyDown={e => e.key === "Enter" && canContinue && onNext()}
-              placeholder="e.g. SaaS HR software"
-              className={`${inputCls} flex-1`}
+        <div>
+          <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+            <Label htmlFor="ob-niche" required className="min-w-0 flex-1">
+              Niche / Industry
+            </Label>
+            <AiFillLabelButton
+              busy={aiLoading === "niche"}
+              disabled={!draft.company && !draft.domain}
+              onClick={() => onAiFill("niche")}
+              hasAiCredits={hasAiCredits}
             />
-            <AiButton busy={aiLoading === "niche"} onClick={() => onAiFill("niche")} disabled={!draft.company && !draft.domain} />
           </div>
-        </FormField>
+          <Input
+            id="ob-niche"
+            autoFocus
+            value={draft.niche}
+            onChange={e => update("niche", e.target.value)}
+            onKeyDown={e => e.key === "Enter" && canContinue && onNext()}
+            placeholder="e.g. SaaS HR software"
+          />
+        </div>
 
-        <FormField label="Target audience" hint="Who are you writing content for?">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={draft.target_audience}
-              onChange={e => update("target_audience", e.target.value)}
-              placeholder="e.g. HR managers at mid-size companies"
-              className={`${inputCls} flex-1`}
+        <div>
+          <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+            <Label htmlFor="ob-audience" className="min-w-0 flex-1">
+              Target audience
+            </Label>
+            <AiFillLabelButton
+              busy={aiLoading === "target_audience"}
+              disabled={!draft.niche}
+              onClick={() => onAiFill("target_audience")}
+              hasAiCredits={hasAiCredits}
             />
-            <AiButton busy={aiLoading === "target_audience"} onClick={() => onAiFill("target_audience")} disabled={!draft.niche} />
           </div>
-        </FormField>
+          <Input
+            id="ob-audience"
+            value={draft.target_audience}
+            onChange={e => update("target_audience", e.target.value)}
+            placeholder="e.g. HR managers at mid-size companies"
+          />
+        </div>
       </div>
       <StepNav onBack={onBack} onNext={onNext} disabled={!canContinue} />
     </div>
@@ -379,11 +404,11 @@ function StepCompetitors({ draft, update, onNext, onBack }: StepProps) {
       <StepHeader
         num={4}
         title="Who are your competitors?"
-        sub="Optional but powerful — we'll find keywords they rank for that you can steal."
+        sub="Optional but powerful — we&rsquo;ll find keywords they rank for that you can steal."
       />
 
       <InfoTip>
-        <strong>How we use this:</strong> We analyze competitor rankings to surface keyword gaps — pages they rank for that you don't. You can skip this and add competitors later.
+        <strong>How we use this:</strong> We analyze competitor rankings to surface keyword gaps — pages they rank for that you don&rsquo;t. You can skip this and add competitors later.
       </InfoTip>
 
       <div className="space-y-2.5">
@@ -391,22 +416,22 @@ function StepCompetitors({ draft, update, onNext, onBack }: StepProps) {
           <div key={i} className="flex items-center gap-2">
             <div className="relative flex-1">
               <Globe2 className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
-              <input
-                type="text"
+              <Input
                 value={c}
                 onChange={e => updateCompetitor(i, e.target.value)}
                 placeholder={`Competitor domain ${i + 1}`}
-                className={`${inputCls} pl-10`}
+                className="pl-10"
               />
             </div>
             {draft.competitors.length > 1 && (
-              <button
-                type="button"
+              <IconButton
+                aria-label="Remove competitor"
                 onClick={() => removeCompetitor(i)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-subtle text-text-tertiary hover:border-border-default hover:text-text-secondary transition-colors"
+                variant="ghost"
+                className="hover:bg-status-danger/10 hover:text-status-danger"
               >
                 <X className="h-4 w-4" />
-              </button>
+              </IconButton>
             )}
           </div>
         ))}
@@ -427,58 +452,95 @@ function StepCompetitors({ draft, update, onNext, onBack }: StepProps) {
   );
 }
 
-/* ──────────── Step 5: Brand voice (optional) + Create ──────────── */
+/* ──────────── Step 5: Brand persona (optional) + Create ──────────── */
 
 function StepBrandVoice({
-  draft, update, onBack, onCreate, creating, error, aiLoading, onAiFill,
+  draft, update, onBack, onCreate, creating, error, aiLoading, onAiFill, hasAiCredits,
 }: StepProps & AiProps & { onCreate: () => void; creating: boolean; error: string }) {
   return (
     <div>
       <StepHeader
         num={5}
-        title="Brand voice"
+        title="Brand persona"
         sub="Optional — helps AI match your tone. Skip it and we'll use a professional default."
       />
 
       <div className="space-y-4">
-        <FormField label="Brand voice / tone" hint="How should we write — formal, friendly, technical?">
-          <div className="flex gap-2">
-            <input
-              autoFocus
-              type="text"
-              value={draft.brand_voice}
-              onChange={e => update("brand_voice", e.target.value)}
-              placeholder="e.g. Friendly, expert, jargon-free"
-              className={`${inputCls} flex-1`}
-            />
-            <AiButton
+        <div>
+          <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+            <Label htmlFor="ob-brand-voice" className="min-w-0 flex-1">
+              Brand Voice / Tone
+            </Label>
+            <AiFillLabelButton
               busy={aiLoading === "brand_voice"}
+              disabled={!draft.company && !draft.domain}
               onClick={() => onAiFill("brand_voice")}
-              disabled={!draft.company && !draft.domain}
+              hasAiCredits={hasAiCredits}
             />
           </div>
-        </FormField>
+          <Input
+            id="ob-brand-voice"
+            autoFocus
+            value={draft.brand_voice}
+            onChange={e => update("brand_voice", e.target.value)}
+            placeholder="e.g. professional, authoritative, warm, witty"
+          />
+          <p className="mt-1 text-[11px] text-text-tertiary">
+            Adjectives describing how your brand sounds to others.
+          </p>
+        </div>
 
-        <FormField label="Brand personality / bio" hint="One sentence about what makes you different">
-          <div className="flex gap-2">
-            <textarea
-              value={draft.brand_description}
-              onChange={e => update("brand_description", e.target.value)}
-              placeholder="e.g. We make HR software that actually saves people time, not just promises it."
-              rows={2}
-              className={`${inputCls} flex-1 resize-none`}
-            />
-            <AiButton
-              busy={aiLoading === "brand_description"}
-              onClick={() => onAiFill("brand_description")}
+        <div>
+          <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+            <Label htmlFor="ob-brand-values" className="min-w-0 flex-1">
+              Core Values / Messaging
+            </Label>
+            <AiFillLabelButton
+              busy={aiLoading === "brand_values"}
               disabled={!draft.company && !draft.domain}
+              onClick={() => onAiFill("brand_values")}
+              hasAiCredits={hasAiCredits}
             />
           </div>
-        </FormField>
+          <Input
+            id="ob-brand-values"
+            value={draft.brand_values}
+            onChange={e => update("brand_values", e.target.value)}
+            placeholder="e.g. customer-first, sustainability, transparency"
+          />
+          <p className="mt-1 text-[11px] text-text-tertiary">
+            Key principles or messaging themes driving your brand.
+          </p>
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+            <Label htmlFor="ob-brand-desc" className="min-w-0 flex-1">
+              Brand Personality / Description
+            </Label>
+            <AiFillLabelButton
+              busy={aiLoading === "brand_description"}
+              disabled={!draft.company && !draft.domain}
+              onClick={() => onAiFill("brand_description")}
+              hasAiCredits={hasAiCredits}
+            />
+          </div>
+          <Textarea
+            id="ob-brand-desc"
+            rows={2}
+            value={draft.brand_description}
+            onChange={e => update("brand_description", e.target.value)}
+            placeholder="e.g. An expert advisor explaining complex concepts simply without jargon."
+            className="resize-none"
+          />
+          <p className="mt-1 text-[11px] text-text-tertiary">
+            Brief description of your brand&rsquo;s character or persona.
+          </p>
+        </div>
       </div>
 
       {/* Project summary before create */}
-      <div className="mt-6 rounded-xl border border-border-subtle bg-surface-elevated p-4 space-y-2">
+      <div className="mt-6 rounded-card border border-border-subtle bg-surface-elevated p-4 space-y-2">
         <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-text-tertiary mb-3">Ready to create</p>
         {[
           { label: "Project", value: draft.name || draft.company },
@@ -500,30 +562,19 @@ function StepBrandVoice({
       )}
 
       <div className="mt-6 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex items-center gap-1.5 rounded-full border border-border-default bg-surface-elevated px-4 py-2.5 text-[13px] font-medium text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
-        </button>
-        <button
-          type="button"
+        <Button variant="secondary" onClick={onBack} iconLeft={<ArrowLeft />}>
+          Back
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
+          fullWidth
           onClick={onCreate}
-          disabled={creating}
-          className="flex-1 inline-flex items-center justify-center gap-2 rounded-full bg-text-primary px-6 py-2.5 text-[14px] font-semibold text-surface-primary shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md disabled:opacity-60 disabled:cursor-not-allowed disabled:translate-y-0"
+          loading={creating}
+          iconRight={!creating ? <ArrowRight /> : undefined}
         >
-          {creating ? (
-            <>
-              <Spinner size={14} className="text-surface-primary" />
-              Creating project…
-            </>
-          ) : (
-            <>
-              Create project & discover keywords <ArrowRight className="h-4 w-4" />
-            </>
-          )}
-        </button>
+          {creating ? "Creating project…" : "Create project & discover keywords"}
+        </Button>
       </div>
 
       <p className="mt-3 text-center text-[12px] text-text-tertiary">
@@ -544,13 +595,14 @@ interface StepProps {
 
 interface AiProps {
   aiLoading: string | null;
-  onAiFill: (field: "niche" | "target_audience" | "brand_voice" | "brand_description") => void;
+  onAiFill: (field: "niche" | "target_audience" | "brand_voice" | "brand_values" | "brand_description") => void;
+  hasAiCredits: boolean;
 }
 
 function StepHeader({ num, title, sub }: { num: number; title: string; sub: string }) {
   return (
     <div className="mb-7">
-      <div className="inline-flex items-center gap-2 rounded-full border border-brand-violet/30 bg-brand-violet/8 px-2.5 py-0.5 text-[11px] font-semibold text-brand-violet mb-4">
+      <div className="inline-flex items-center gap-2 rounded-md border border-brand-violet/30 bg-brand-violet/8 px-2.5 py-0.5 text-[11px] font-semibold text-brand-violet mb-4">
         <span className="flex h-4 w-4 items-center justify-center rounded-full bg-brand-violet text-[10px] font-bold text-white">{num}</span>
         Step {num} of {TOTAL_STEPS}
       </div>
@@ -560,45 +612,12 @@ function StepHeader({ num, title, sub }: { num: number; title: string; sub: stri
   );
 }
 
-function FormField({
-  label, required, hint, children,
-}: { label: string; required?: boolean; hint?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <label className="text-[13px] font-medium text-text-primary">
-          {label}{required && <span className="text-status-danger ml-0.5">*</span>}
-        </label>
-        {hint && <span className="text-[11px] text-text-tertiary">{hint}</span>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function InfoTip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-5 rounded-xl border border-brand-violet/20 bg-brand-violet/6 px-4 py-3 text-[12.5px] leading-relaxed text-text-secondary">
+    <div className="mb-5 rounded-card border border-brand-violet/20 bg-brand-violet/6 px-4 py-3 text-[12.5px] leading-relaxed text-text-secondary">
       <Sparkles className="inline h-3.5 w-3.5 text-brand-violet mr-1.5 shrink-0" />
       {children}
     </div>
-  );
-}
-
-function AiButton({
-  busy, onClick, disabled,
-}: { busy: boolean; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled || busy}
-      title="Fill with AI"
-      className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-lg border border-brand-action/40 bg-brand-action/10 px-2.5 py-2 text-[11.5px] font-semibold text-brand-action transition-all hover:border-brand-action/65 hover:bg-brand-action/18 disabled:opacity-40 disabled:cursor-not-allowed h-[42px]"
-    >
-      {busy ? <Spinner size={12} className="text-brand-action" /> : <Sparkles className="h-3.5 w-3.5" />}
-      {!busy && <span>AI</span>}
-    </button>
   );
 }
 
@@ -614,13 +633,9 @@ function StepNav({
 }) {
   return (
     <div className="mt-8 flex items-center gap-3">
-      <button
-        type="button"
-        onClick={onBack}
-        className="flex items-center gap-1.5 rounded-full border border-border-default bg-surface-elevated px-4 py-2.5 text-[13px] font-medium text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors shrink-0"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" /> Back
-      </button>
+      <Button variant="secondary" onClick={onBack} iconLeft={<ArrowLeft />}>
+        Back
+      </Button>
 
       {skipLabel && onSkip && (
         <button
@@ -632,17 +647,9 @@ function StepNav({
         </button>
       )}
 
-      <button
-        type="button"
-        onClick={onNext}
-        disabled={disabled}
-        className="flex-1 inline-flex items-center justify-center gap-2 rounded-full bg-text-primary px-5 py-2.5 text-[14px] font-semibold text-surface-primary shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md disabled:opacity-40 disabled:cursor-not-allowed disabled:translate-y-0"
-      >
-        {nextLabel} <ArrowRight className="h-4 w-4" />
-      </button>
+      <Button variant="primary" fullWidth onClick={onNext} disabled={disabled} iconRight={<ArrowRight />}>
+        {nextLabel}
+      </Button>
     </div>
   );
 }
-
-const inputCls =
-  "w-full rounded-xl border border-border-default bg-surface-elevated px-4 py-2.5 text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand-action focus:ring-1 focus:ring-brand-action/30 transition-colors";

@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS projects (
   sitemap_synced_at TIMESTAMPTZ,
   sitemap_url_count INTEGER NOT NULL DEFAULT 0,
   sitemap_prompt_dismissed_at TIMESTAMPTZ,
+  -- Set when the user clears this project's AI memory (see supabase-migration-ai-memory.sql).
+  memory_cleared_at TIMESTAMPTZ DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -555,3 +557,44 @@ CREATE TABLE IF NOT EXISTS user_approvals (
 CREATE INDEX IF NOT EXISTS idx_user_approvals_clerk_user_id ON user_approvals(clerk_user_id);
 CREATE INDEX IF NOT EXISTS idx_user_approvals_status ON user_approvals(status);
 CREATE INDEX IF NOT EXISTS idx_user_approvals_email ON user_approvals(email);
+
+-- ============================================================
+-- Rankshoot AI memory (see supabase-migration-ai-memory.sql)
+-- ============================================================
+
+-- Per-project, user-owned content memory. Editable/deletable in Settings;
+-- deletes are real — cleared memory is never reused.
+CREATE TABLE IF NOT EXISTS project_content_memory (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL DEFAULT '',
+  -- 'topic_covered' | 'style' | 'preference' | 'audience_insight' | 'activity'
+  kind TEXT NOT NULL DEFAULT 'style',
+  content TEXT NOT NULL,
+  -- 'blog_generate' | 'repair' | 'audit' | 'user'
+  source TEXT NOT NULL DEFAULT 'blog_generate',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_content_memory_project_created
+  ON project_content_memory(project_id, created_at DESC);
+
+-- Global anonymized style-only heuristics (backend/admin only — never shown to users).
+CREATE TABLE IF NOT EXISTS global_style_heuristics (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  heuristic TEXT NOT NULL,
+  -- 'structure' | 'style' | 'seo' | 'aeo' | 'geo'
+  category TEXT NOT NULL DEFAULT 'style',
+  evidence_count INTEGER NOT NULL DEFAULT 1,
+  -- 'active' | 'archived'
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_global_style_heuristics_text
+  ON global_style_heuristics (lower(heuristic));
+
+CREATE INDEX IF NOT EXISTS idx_global_style_heuristics_status
+  ON global_style_heuristics(status, evidence_count DESC);

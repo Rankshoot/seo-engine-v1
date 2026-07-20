@@ -27,7 +27,7 @@ import { PageTitle } from "@/components/common/typography/Typography";
 import { ProjectNavLink } from "@/components/ProjectNavLink";
 import { TipTapBlogEditor, type TipTapBlogEditorRef } from "@/components/content-generator/shared/TipTapBlogEditor";
 import SEOScorePanel from "@/components/dashboard/SEOScorePanel";
-import { BlogAiRewriterModal } from "@/components/BlogAiRewriterModal";
+import { AiEditPanel } from "@/components/content-generator/shared/AiEditPanel";
 import {
   PreviewerScheduler,
   PreviewShell,
@@ -50,6 +50,7 @@ import {
 } from "@/components/blog/BlogViewerHelpers";
 import { PublishToCmsButton } from "@/components/blog/PublishToStrapiButton";
 import { integrationsApi } from "@/frontend/api/integrations";
+import { Dialog } from "@/components/common";
 import {
   buildMarkdownComponents, markdownUrlTransform, internalSetForBlog,
   markdownAiSnippetToDocumentFragment,
@@ -128,6 +129,20 @@ function showServerActionError(err: any, fallback: string) {
   }
 }
 
+function clearAllDomHighlights() {
+  if (typeof document === "undefined") return;
+  const highlights = document.querySelectorAll("mark.ai-rewrite-highlight");
+  highlights.forEach(el => {
+    const parent = el.parentNode;
+    if (parent) {
+      while (el.firstChild) {
+        parent.insertBefore(el.firstChild, el);
+      }
+      parent.removeChild(el);
+    }
+  });
+}
+
 // ─── Page component ────────────────────────────────────────────────────────
 
 export default function BlogViewerPage() {
@@ -194,6 +209,7 @@ export default function BlogViewerPage() {
   const coverImageFileInputRef = useRef<HTMLInputElement | null>(null);
   const [generatingCoverImage, setGeneratingCoverImage] = useState(false);
   const [uploadingCoverImage, setUploadingCoverImage] = useState(false);
+  const [zoomCoverImage, setZoomCoverImage] = useState(false);
 
   // ── Content analysis ───────────────────────────────────────────────────
   const [analysisModalOpen,  setAnalysisModalOpen]  = useState(false);
@@ -307,6 +323,24 @@ export default function BlogViewerPage() {
       }
     }
   }, [blogQueryRes, blogId, projectId]);
+
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (!aiRewriter.open) return;
+      const target = e.target as HTMLElement;
+      const isInsideSidebar = target.closest(".ai-edit-panel") || target.closest("[data-ai-panel]");
+      if (isInsideSidebar) return;
+      if (target.textContent?.includes("Edit with AI")) return;
+      
+      clearAllDomHighlights();
+      tiptapBodyRef.current?.clearHighlight();
+    };
+
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentClick);
+    };
+  }, [aiRewriter.open]);
 
   useEffect(() => {
     if (projectQueryRes?.success && projectQueryRes.data) setProject(projectQueryRes.data);
@@ -750,6 +784,7 @@ export default function BlogViewerPage() {
   };
 
   const handleAiRewriterInsert = (rewritten: string) => {
+    clearAllDomHighlights();
     if (tiptapBodyRef.current) {
       const ok = tiptapBodyRef.current.replaceSelection(rewritten.trim());
       if (ok) {
@@ -774,8 +809,15 @@ export default function BlogViewerPage() {
       }
       range.deleteContents();
       const frag = markdownAiSnippetToDocumentFragment(rewritten.trim(), displayBlog, document, ownSiteHost);
-      range.insertNode(frag);
-      const end = frag.lastChild;
+      const mark = document.createElement("mark");
+      mark.className = "ai-rewrite-highlight";
+      mark.style.backgroundColor = "rgba(234, 179, 8, 0.25)";
+      mark.style.borderBottom = "2px solid var(--brand-action)";
+      while (frag.firstChild) {
+        mark.appendChild(frag.firstChild);
+      }
+      range.insertNode(mark);
+      const end = mark.lastChild;
       if (end) { range.setStartAfter(end); range.collapse(true); }
       const s = window.getSelection();
       s?.removeAllRanges();
@@ -862,7 +904,6 @@ export default function BlogViewerPage() {
 
   const researchSources  = currentBlog.research_sources ?? 0;
   const blogStatus       = asBlogStatus(currentBlog.status);
-  const statusInfo       = BLOG_STATUSES.find(s => s.value === blogStatus)!;
   const sidebarMuted     = editMode || savingContent || scoreRefreshing;
   const isInstantArticle = Boolean(blog.article_type?.startsWith("Instant ·"));
   const isImport         = blog.article_type === "Import";
@@ -1045,6 +1086,16 @@ export default function BlogViewerPage() {
               </button>
               <button
                 type="button"
+                onClick={() => setZoomCoverImage(true)}
+                className="p-2.5 rounded-xl bg-white/10 hover:bg-white/25 border border-white/20 text-white transition-colors"
+                title="Zoom cover image"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10.5 7.5v6m3-3h-6" />
+                </svg>
+              </button>
+              <button
+                type="button"
                 onClick={handleGenerateCoverImage}
                 disabled={uploadingCoverImage || generatingCoverImage}
                 className="p-2.5 rounded-xl bg-white/10 hover:bg-white/25 border border-white/20 text-white transition-colors"
@@ -1151,34 +1202,6 @@ export default function BlogViewerPage() {
       {/* Editorial metadata */}
       <Divider />
       <div className="px-4 pt-3.5 pb-1">
-        {editMode && (
-          <div className="mb-3.5">
-            <div className="flex items-center justify-between mb-1.5">
-              <SLabel>Status</SLabel>
-              {savingStatus && <SpinIcon className="w-3 h-3" />}
-            </div>
-            <div className="relative">
-              <select
-                value={blogStatus}
-                onChange={e => handleStatusChange(e.target.value as BlogStatus)}
-                disabled={savingStatus}
-                className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
-                style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
-              >
-                {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
-              <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-              </svg>
-            </div>
-            <div className="flex items-center gap-1.5 mt-1.5">
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusInfo.color }} />
-              <p className="text-[10px] text-text-tertiary">{statusInfo.hint}</p>
-            </div>
-            {statusError && <p className="mt-1 text-[10px] text-status-danger">{statusError}</p>}
-          </div>
-        )}
-
         <div className="mb-3.5">
           <SLabel>Target Keyword</SLabel>
           <p className="text-[13px] font-semibold text-text-primary leading-snug">{currentBlog.target_keyword}</p>
@@ -1336,6 +1359,68 @@ export default function BlogViewerPage() {
         toolbarLeft={toolbarLeft}
         toolbarRight={toolbarRight}
         sidebar={sidebar}
+        sidePanel={
+          editMode ? (
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="min-h-0 flex-1">
+                <AiEditPanel
+                  blogId={currentBlog.id}
+                  projectDomain={project?.domain ?? ""}
+                  selection={aiRewriter.snapshot}
+                  contentType="Blog Post"
+                  contentPart={
+                    typeof document !== "undefined"
+                      ? document.activeElement === titleEditorRef.current
+                        ? "Blog Title"
+                        : document.activeElement === descEditorRef.current
+                        ? "Meta Description"
+                        : "Blog Body"
+                      : "Blog Body"
+                  }
+                  surroundingContext={currentBlog.content}
+                  renderMarkdownSnippet={md => (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={buildMarkdownComponents(internalSetForBlog(currentBlog), ownSiteHost)}
+                      urlTransform={markdownUrlTransform}
+                    >
+                      {md}
+                    </ReactMarkdown>
+                  )}
+                  onDiscard={() => {
+                    setAiRewriter({ open: false, snapshot: null });
+                    selectionSnapshotRef.current = null;
+                    clearAllDomHighlights();
+                    tiptapBodyRef.current?.clearHighlight();
+                  }}
+                  onInsert={handleAiRewriterInsert}
+                />
+              </div>
+              {/* Status stays reachable in edit mode (it used to live in the sidebar) */}
+              <div className="shrink-0 border-t border-border-subtle px-4 py-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <SLabel>Status</SLabel>
+                  {savingStatus && <SpinIcon className="w-3 h-3" />}
+                </div>
+                <div className="relative">
+                  <select
+                    value={blogStatus}
+                    onChange={e => handleStatusChange(e.target.value as BlogStatus)}
+                    disabled={savingStatus}
+                    className="w-full rounded-[6px] px-3 py-2 text-[13px] font-medium outline-none appearance-none transition-all pr-7"
+                    style={{ background: "var(--surface-tertiary)", border: `1px solid var(--border-subtle)`, color: V.txt }}
+                  >
+                    {BLOG_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                  <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                  </svg>
+                </div>
+                {statusError && <p className="mt-1 text-[10px] text-status-danger">{statusError}</p>}
+              </div>
+            </div>
+          ) : null
+        }
         sidebarWidthPx={288}
         framedCanvas={false}
         toolbarInsideCanvas
@@ -1370,7 +1455,16 @@ export default function BlogViewerPage() {
                 <div className="text-text-secondary" style={{ fontSize: 17, lineHeight: 1.78 }}>
                   <TipTapBlogEditor
                     key={`tiptap-${currentBlog.id}-${editSessionKey}`}
-                    initialMarkdown={currentBlog.content.replace(/^\s*#\s+.+\n+/, "")}
+                    initialMarkdown={(() => {
+                      let content = currentBlog.content;
+                      const coverUrl = (currentBlog.content_data as BlogContentData | undefined)?.cover_image_url;
+                      if (coverUrl) {
+                        const escapedUrl = coverUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const imgRegex = new RegExp(`^\\s*!\\[[^\\]]*\\]\\(${escapedUrl}\\)\\s*\\n*`, 'i');
+                        content = content.replace(imgRegex, '');
+                      }
+                      return content.replace(/^\s*#\s+.+\n+/, "");
+                    })()}
                     containerRef={editorRef}
                     ref={tiptapBodyRef}
                   />
@@ -1400,12 +1494,27 @@ export default function BlogViewerPage() {
 
       {/* AI edit overlays */}
       <BlogEditAiFixOverlay
-        active={editMode && !aiRewriter.open}
+        active={editMode}
         getRoots={getEditRoots}
         panelRef={blogPanelRef}
         onOpen={({ snapshot, range }) => {
           selectionSnapshotRef.current = { range };
           setAiRewriter({ open: true, snapshot });
+          clearAllDomHighlights();
+          tiptapBodyRef.current?.setHighlightCurrentSelection();
+          
+          const active = document.activeElement;
+          if (active === titleEditorRef.current || active === descEditorRef.current) {
+            try {
+              const mark = document.createElement("mark");
+              mark.className = "ai-rewrite-highlight";
+              mark.style.backgroundColor = "rgba(234, 179, 8, 0.25)";
+              mark.style.borderBottom = "2px solid var(--brand-action)";
+              range.surroundContents(mark);
+            } catch (e) {
+              console.warn("Could not wrap DOM range:", e);
+            }
+          }
         }}
       />
       <BlogImageEditOverlay
@@ -1441,37 +1550,33 @@ export default function BlogViewerPage() {
           scheduling={analysisScheduling}
         />
       </Suspense>
-      <BlogAiRewriterModal
-        open={aiRewriter.open}
-        blogId={currentBlog.id}
-        projectDomain={project?.domain ?? ""}
-        selection={aiRewriter.snapshot}
-        contentType="Blog Post"
-        contentPart={
-          typeof document !== "undefined"
-            ? document.activeElement === titleEditorRef.current
-              ? "Blog Title"
-              : document.activeElement === descEditorRef.current
-              ? "Meta Description"
-              : "Blog Body"
-            : "Blog Body"
-        }
-        surroundingContext={currentBlog.content}
-        renderMarkdownSnippet={md => (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={buildMarkdownComponents(internalSetForBlog(currentBlog), ownSiteHost)}
-            urlTransform={markdownUrlTransform}
+
+      {/* Zoom Cover Image Modal */}
+      <Dialog
+        open={zoomCoverImage}
+        onClose={() => setZoomCoverImage(false)}
+        size="lg"
+        unstyled
+        closeOnEscape
+        closeOnBackdrop
+      >
+        <div className="relative flex items-center justify-center w-full h-full bg-black/90 p-4 min-h-[50vh]">
+          <button
+            type="button"
+            onClick={() => setZoomCoverImage(false)}
+            className="absolute top-4 right-4 z-50 p-2.5 rounded-full bg-black/40 hover:bg-black/60 text-white border border-white/10"
           >
-            {md}
-          </ReactMarkdown>
-        )}
-        onClose={() => {
-          setAiRewriter({ open: false, snapshot: null });
-          selectionSnapshotRef.current = null;
-        }}
-        onInsert={handleAiRewriterInsert}
-      />
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <img
+            src={sidebarCoverImageUrl}
+            alt="Zoomed Cover Image"
+            className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+          />
+        </div>
+      </Dialog>
     </>
   );
 }

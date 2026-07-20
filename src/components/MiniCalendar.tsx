@@ -85,11 +85,11 @@ function DayEntryCard({
   const resolvedBlogId = calendarBlogId ?? historyEntry?.id;
 
   const isGenerated =
-    !!resolvedBlogId ||
-    entry.status === "generated" ||
-    entry.status === "downloaded" ||
-    entry.status === "approved" ||
-    entry.status === "published";
+    !!resolvedBlogId &&
+    (entry.status === "generated" ||
+      entry.status === "downloaded" ||
+      entry.status === "approved" ||
+      entry.status === "published");
   const origin = resolveCalendarKeywordOrigin({
     contentHealthAudit: entry.content_health_audit,
     keywordSourceType: kwData?.source_type,

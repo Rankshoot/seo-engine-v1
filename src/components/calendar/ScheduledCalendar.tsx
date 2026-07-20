@@ -67,6 +67,21 @@ function entryBlogTitle(entry: CalendarEntry | null): string {
   return et || entry.focus_keyword || "—";
 }
 
+/**
+ * The audited URL behind a content-health "refresh" calendar entry, or null for a
+ * normal keyword entry. Used to route the Generate button back to Content Audit
+ * Studio (where the enhanced version is generated) instead of the content
+ * generator (which would ignore the audit and treat it as a brand-new topic).
+ */
+function auditUrlFromEntry(entry: { content_health_audit?: unknown }): string | null {
+  const raw = entry.content_health_audit;
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as { version?: number; url?: string };
+  if ((o.version !== 1 && o.version !== 2) || typeof o.url !== "string") return null;
+  const url = o.url.trim();
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
 function getGeneratorSlug(articleType: string): string {
   const t = (articleType || "").toLowerCase();
   if (t === "ebook") return "ebooks";
@@ -142,11 +157,11 @@ const CalendarListRow = memo(function CalendarListRow({
   const resolvedBlogId = calendarBlogId ?? historyEntry?.id;
 
   const isLocked =
-    !!resolvedBlogId ||
-    effectiveStatus === "generated" ||
-    effectiveStatus === "downloaded" ||
-    effectiveStatus === "approved" ||
-    effectiveStatus === "published";
+    !!resolvedBlogId &&
+    (effectiveStatus === "generated" ||
+      effectiveStatus === "downloaded" ||
+      effectiveStatus === "approved" ||
+      effectiveStatus === "published");
   const isGenerating  = effectiveStatus === "generating";
   const isPickingThis = pickingDateForEntryId === entry.id;
   const canReschedule = Boolean(entry.keyword_id) && !isGenerating;
@@ -331,6 +346,14 @@ export function ScheduledCalendar() {
   }, []);
 
   const handleGenerateClick = useCallback((entry: CalendarEntry) => {
+    // Content-health refresh entries belong to Content Audit Studio, not the
+    // content generator — open the full audit for that URL so the user can review
+    // the issues and generate the enhanced version there.
+    const auditUrl = auditUrlFromEntry(entry);
+    if (auditUrl) {
+      router.push(`/projects/${projectId}/audit?url=${encodeURIComponent(auditUrl)}`);
+      return;
+    }
     const slug = getGeneratorSlug(entry.article_type);
     router.push(
       `/projects/${projectId}/content-generator/${slug}?entryId=${entry.id}&keyword=${encodeURIComponent(

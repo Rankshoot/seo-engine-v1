@@ -1,7 +1,8 @@
-"use client";
-
-import { forwardRef, useImperativeHandle, type RefObject } from "react";
+import { forwardRef, useImperativeHandle, useRef, type RefObject } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
+import { Extension } from "@tiptap/core";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { Image } from "@tiptap/extension-image";
 import { Youtube } from "@tiptap/extension-youtube";
@@ -13,6 +14,8 @@ import { cn } from "@/lib/cn";
 
 export interface TipTapBlogEditorRef {
   getMarkdown: () => string;
+  setHighlightCurrentSelection: () => void;
+  clearHighlight: () => void;
   /**
    * Replace the current ProseMirror selection with `markdown` content.
    * Returns true if the replacement was applied, false if no selection exists.
@@ -111,6 +114,44 @@ const ImageWithMarkdown = Image.extend({
   },
 });
 
+const HighlightPluginKey = new PluginKey("selection-highlight");
+
+interface SelectionHighlightOptions {
+  getHighlightRange: () => { from: number; to: number } | null;
+}
+
+const SelectionHighlightExtension = Extension.create<SelectionHighlightOptions>({
+  name: "selectionHighlight",
+
+  addOptions() {
+    return {
+      getHighlightRange: () => null,
+    };
+  },
+
+  addProseMirrorPlugins() {
+    const options = this.options;
+    return [
+      new Plugin({
+        key: HighlightPluginKey,
+        props: {
+          decorations(state) {
+            const range = options.getHighlightRange();
+            if (!range || range.from === range.to) {
+              return DecorationSet.empty;
+            }
+            const dec = Decoration.inline(range.from, range.to, {
+              class: "ai-rewrite-highlight",
+              style: "background-color: rgba(234, 179, 8, 0.25); border-bottom: 1px solid var(--brand-action); transition: background-color 0.2s;",
+            });
+            return DecorationSet.create(state.doc, [dec]);
+          },
+        },
+      }),
+    ];
+  },
+});
+
 /* ── YouTube extension with tiptap-markdown serialization spec ───────── */
 const YoutubeWithMarkdown = Youtube.extend({
   addStorage() {
@@ -135,6 +176,9 @@ export const TipTapBlogEditor = forwardRef<
   TipTapBlogEditorRef,
   TipTapBlogEditorProps
 >(({ initialMarkdown, containerRef, onChange, className, style }, ref) => {
+  const highlightRangeRef = useRef<{ from: number; to: number } | null>(null);
+  const isApplyingEditRef = useRef<boolean>(false);
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -151,6 +195,9 @@ export const TipTapBlogEditor = forwardRef<
       TableHeader,
       Link.configure({ openOnClick: false, autolink: true }),
       Markdown.configure({ html: true, tightLists: true, bulletListMarker: "-" }),
+      SelectionHighlightExtension.configure({
+        getHighlightRange: () => highlightRangeRef.current,
+      }),
     ],
     // Pre-process to restore youtube fenced blocks as proper TipTap youtube nodes
     content: preprocessMarkdown(initialMarkdown),
@@ -159,6 +206,18 @@ export const TipTapBlogEditor = forwardRef<
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const raw = (editor.storage as any).markdown?.getMarkdown?.() ?? "";
         onChange(postprocessMarkdown(raw).replace(/\n{3,}/g, "\n\n").trim());
+      }
+    },
+    onSelectionUpdate({ editor }) {
+      if (isApplyingEditRef.current) return;
+      if (!editor.isFocused) return;
+      const { from, to } = editor.state.selection;
+      const hr = highlightRangeRef.current;
+      if (hr) {
+        if (from < hr.from || to > hr.to) {
+          highlightRangeRef.current = null;
+          editor.view.dispatch(editor.state.tr);
+        }
       }
     },
     editorProps: {
@@ -178,15 +237,40 @@ export const TipTapBlogEditor = forwardRef<
       const raw = (editor.storage as any).markdown?.getMarkdown?.() ?? "";
       return postprocessMarkdown(raw).replace(/\n{3,}/g, "\n\n").trim();
     },
+    setHighlightCurrentSelection: () => {
+      if (!editor) return;
+      const { from, to } = editor.state.selection;
+      if (from !== to) {
+        highlightRangeRef.current = { from, to };
+        editor.view.dispatch(editor.state.tr);
+      }
+    },
+    clearHighlight: () => {
+      highlightRangeRef.current = null;
+      if (editor) {
+        editor.view.dispatch(editor.state.tr);
+      }
+    },
     replaceSelection: (markdown: string) => {
       if (!editor) return false;
       const { from, to } = editor.state.selection;
       if (from === to) return false; // no selection
       // preprocessMarkdown handles ```youtube``` fenced blocks → div[data-youtube-video]
       const processed = preprocessMarkdown(markdown);
-      editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, processed, {
-        parseOptions: { preserveWhitespace: "full" },
-      }).run();
+
+      isApplyingEditRef.current = true;
+      try {
+        editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, processed, {
+          parseOptions: { preserveWhitespace: "full" },
+        }).run();
+      } finally {
+        isApplyingEditRef.current = false;
+      }
+
+      const newTo = editor.state.selection.from;
+      highlightRangeRef.current = { from, to: newTo };
+      editor.view.dispatch(editor.state.tr);
+
       return true;
     },
     updateImageAtDom: (img: HTMLImageElement, newSrc: string, newAlt?: string) => {

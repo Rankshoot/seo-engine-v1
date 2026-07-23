@@ -31,6 +31,7 @@ export type { StudioBrandMastheadProps } from "./StudioBrandMasthead";
 export { MarkdownFormatToolbar } from "./MarkdownFormatToolbar";
 export type { MarkdownFormatToolbarProps } from "./MarkdownFormatToolbar";
 export { KeywordChips } from "./KeywordChips";
+export { KnowledgeSourcesPanel } from "./KnowledgeSourcesPanel";
 export {
   ContentForm,
   ContentFormSection,

@@ -25,6 +25,7 @@ import {
   GenerationProgress,
   ThinkingPanel,
   KeywordChips,
+  KnowledgeSourcesPanel,
   SectionHeading,
   StepRow,
   StudioBreadcrumb,
@@ -284,6 +285,9 @@ export default function BlogGeneratorPage() {
   const [competitorError, setCompetitorError] = useState("");
   // Custom Instructions
   const [customInstructions, setCustomInstructions] = useState("");
+  // Knowledge sources selected for THIS blog (optional-scope only; `always`
+  // sources are included automatically by the backend).
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
 
   // ── Draft persistence ──────────────────────────────────────────────────
   // Restore an in-progress form when the user navigates away and comes back
@@ -297,7 +301,7 @@ export default function BlogGeneratorPage() {
     {
       primaryKeyword, topic, secondaryKeywords, audience, tone, goal, ctaObjective,
       wordCount, customWordCount, region, language, useBrandPersona, brandPersona,
-      useAhrefsData, useDeepAnalysis, customInstructions,
+      useAhrefsData, useDeepAnalysis, customInstructions, selectedSourceIds,
     },
     {
       enabled: phase === "form" && !hasUrlContext,
@@ -319,6 +323,7 @@ export default function BlogGeneratorPage() {
         if (typeof d.useAhrefsData === "boolean") setUseAhrefsData(d.useAhrefsData);
         if (typeof d.useDeepAnalysis === "boolean") setUseDeepAnalysis(d.useDeepAnalysis);
         if (typeof d.customInstructions === "string") setCustomInstructions(d.customInstructions);
+        if (Array.isArray(d.selectedSourceIds)) setSelectedSourceIds(d.selectedSourceIds as string[]);
       },
     },
   );
@@ -520,6 +525,7 @@ export default function BlogGeneratorPage() {
       useDeepAnalysis: useDeepAnalysis && competitorPages.length > 0,
       deepAnalysisPages: useDeepAnalysis ? competitorPages : [],
       customInstructions: customInstructions.trim() || undefined,
+      sourceIds: selectedSourceIds.length ? selectedSourceIds : undefined,
     };
 
     // Enqueue a DURABLE background job. Generation now runs server-side to
@@ -719,6 +725,7 @@ export default function BlogGeneratorPage() {
             useDeepAnalysis={useDeepAnalysis}
             competitorPagesCount={competitorPages.length}
             customInstructions={customInstructions}
+            selectedSourceCount={selectedSourceIds.length}
           />
         ) : (
           <ContentForm>
@@ -1007,6 +1014,13 @@ export default function BlogGeneratorPage() {
                       placeholder="e.g. Include a comparison table. Avoid mentioning competitor X. Write in first-person plural."
                     />
                   </div>
+
+                  {/* Knowledge Sources */}
+                  <KnowledgeSourcesPanel
+                    projectId={projectId}
+                    selectedIds={selectedSourceIds}
+                    onSelectionChange={setSelectedSourceIds}
+                  />
               </div>
             </ContentFormSection>
 
@@ -1045,7 +1059,7 @@ function ReviewView({
   topic, primaryKeyword, audience, tone, wordCount, goal, ctaObjective,
   secondaryKeywords, regionLabel, languageLabel,
   hasBrandPersona, useAhrefsData, ahrefsH2sCount, ahrefsFaqsCount,
-  useDeepAnalysis, competitorPagesCount, customInstructions,
+  useDeepAnalysis, competitorPagesCount, customInstructions, selectedSourceCount,
 }: {
   topic: string;
   primaryKeyword: string;
@@ -1064,6 +1078,7 @@ function ReviewView({
   useDeepAnalysis: boolean;
   competitorPagesCount: number;
   customInstructions: string;
+  selectedSourceCount: number;
 }) {
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: "Topic", value: topic },
@@ -1093,6 +1108,7 @@ function ReviewView({
   if (useAhrefsData) activeFeatures.push(`Keyword intelligence (${ahrefsH2sCount} H2s, ${ahrefsFaqsCount} FAQs)`);
   if (useDeepAnalysis) activeFeatures.push(`Deep analysis (${competitorPagesCount} pages)`);
   if (customInstructions.trim()) activeFeatures.push("Custom instructions");
+  if (selectedSourceCount > 0) activeFeatures.push(`Knowledge sources (${selectedSourceCount} selected)`);
 
   return (
     <div className="space-y-8">

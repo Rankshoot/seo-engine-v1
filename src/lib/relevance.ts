@@ -6,15 +6,24 @@
  * embed the Business Brief once, embed the candidate keywords in a single
  * batched call, and drop anything below a cosine-similarity threshold.
  *
- * Uses Gemini `text-embedding-004` (free tier generous, 768-dim).
+ * Uses Gemini `gemini-embedding-001` at 768 output dims (its predecessor
+ * `text-embedding-004` was retired and now 404s). Cosine is dimension-agnostic,
+ * so both the query and the documents just need to use this same model+dims.
  */
 
 import type { BusinessBrief } from './business-brief';
 
+const EMBED_MODEL = 'gemini-embedding-001';
 const EMBED_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents';
+  `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:batchEmbedContents`;
 
-const MODEL_PATH = 'models/text-embedding-004';
+const MODEL_PATH = `models/${EMBED_MODEL}`;
+/**
+ * Reduce from the model's native 3072 dims to 768 — keeps stored chunk vectors
+ * lean and matches the scale we used before. Cosine similarity is unaffected by
+ * the reduction.
+ */
+const OUTPUT_DIMS = 768;
 
 const DEFAULT_THRESHOLD = 0.55;
 /** How many strings to send per batchEmbedContents call. */
@@ -54,7 +63,7 @@ interface EmbedResponse {
   error?: { message?: string };
 }
 
-async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIEVAL_DOCUMENT'): Promise<number[][]> {
+export async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIEVAL_DOCUMENT'): Promise<number[][]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY missing in server env');
 
@@ -63,6 +72,7 @@ async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIE
       model: MODEL_PATH,
       content: { parts: [{ text }] },
       taskType,
+      outputDimensionality: OUTPUT_DIMS,
     })),
   };
 
@@ -83,7 +93,7 @@ async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIE
     void import("@/lib/admin/logging/record-provider-call").then(({ recordAiCall }) => {
       recordAiCall({
         provider: "gemini",
-        model: "text-embedding-004",
+        model: EMBED_MODEL,
         prompt: `[embedding batch of ${texts.length} texts, taskType=${taskType}]`,
         ok: false,
         latencyMs,
@@ -100,7 +110,7 @@ async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIE
     void import("@/lib/admin/logging/record-provider-call").then(({ recordAiCall }) => {
       recordAiCall({
         provider: "gemini",
-        model: "text-embedding-004",
+        model: EMBED_MODEL,
         prompt: `[embedding batch of ${texts.length} texts]`,
         ok: false,
         latencyMs,
@@ -116,7 +126,7 @@ async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIE
   void import("@/lib/admin/logging/record-provider-call").then(({ recordAiCall }) => {
     recordAiCall({
       provider: "gemini",
-      model: "text-embedding-004",
+      model: EMBED_MODEL,
       prompt: `[embedding batch of ${texts.length} texts, taskType=${taskType}]`,
       estimatedCostUsd: 0, // free tier
       ok: true,
@@ -134,7 +144,7 @@ async function embedBatch(texts: string[], taskType: 'RETRIEVAL_QUERY' | 'RETRIE
   return rows.map(r => r.values ?? []);
 }
 
-function cosine(a: number[], b: number[]): number {
+export function cosine(a: number[], b: number[]): number {
   if (!a.length || a.length !== b.length) return 0;
   let dot = 0;
   let na = 0;

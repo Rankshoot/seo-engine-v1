@@ -31,6 +31,12 @@ export interface BlogGenerationParams {
   useDeepAnalysis?: boolean;
   deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
   customInstructions?: string;
+  /**
+   * Knowledge sources selected for THIS blog. Project `always`-scope sources are
+   * included automatically regardless of this list. Relevant excerpts are
+   * retrieved and cited/interlinked in the article where they fit.
+   */
+  sourceIds?: string[];
 }
 
 export type BlogGenProgress =
@@ -608,6 +614,30 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           if (params.ahrefsFaqs?.length) await QuotaService.deductQuota(params.userId, "ahrefs_faqs", 1);
         }
 
+        // ── Knowledge sources: retrieve relevant excerpts from the user's
+        // uploaded reports/docs (project `always` sources + any selected for this
+        // blog). Best-effort — never blocks generation. Excerpts are cited and
+        // interlinked in the article only where they genuinely fit.
+        let customSources: import("@/lib/content-sources/retrieve").RetrievedSource[] = [];
+        try {
+          const { retrieveRelevantSourceExcerpts } = await import("@/lib/content-sources/retrieve");
+          const sourceQuery = [
+            entry.focus_keyword,
+            entry.title,
+            ...(entry.secondary_keywords ?? []),
+          ].filter(Boolean).join(" — ");
+          customSources = await retrieveRelevantSourceExcerpts({
+            projectId,
+            sourceIds: params.sourceIds,
+            query: sourceQuery,
+          });
+          if (customSources.length) {
+            emit({ event: "stage", stage: "research", detail: `Pulled relevant data points from ${customSources.length} of your knowledge source${customSources.length > 1 ? "s" : ""}…` });
+          }
+        } catch (srcErr) {
+          console.warn("[blog generate] knowledge-source retrieval failed, continuing:", srcErr);
+        }
+
         // Build the blog prompt
         const blogPrompt = buildBlogPrompt({
           entry: {
@@ -633,6 +663,7 @@ Respond with a concise but rich analysis (300–500 words) structured as:
           deepAnalysisSummary,
           projectMemoryBlock,
           globalHeuristicsBlock,
+          customSources,
         });
 
         // ── Stage 4 + 5: Draft → parse → validate, with bounded auto-retry ──

@@ -6,6 +6,7 @@ import { minCitationYear } from '@/lib/blog-content';
 import { selectBlogArchetype } from '@/lib/blog-archetype';
 import type { DeepResearchResult } from '@/lib/deep-research';
 import { formatDeepResearchForPrompt } from '@/lib/deep-research';
+import type { RetrievedSource } from '@/lib/content-sources/retrieve';
 
 export interface BlogPromptContext {
   entry: {
@@ -58,6 +59,51 @@ export interface BlogPromptContext {
    * real data and external citations are restricted to these exact URLs.
    */
   verifiedSources?: DeepResearchResult | null;
+  /**
+   * Relevant excerpts retrieved from the user's uploaded knowledge sources
+   * (industry reports, whitepapers, reference docs). The article should cite
+   * specific data points from these where they genuinely fit — never forced —
+   * and interlink to each source's canonical `citeUrl`.
+   */
+  customSources?: RetrievedSource[];
+}
+
+/**
+ * Build the CUSTOM KNOWLEDGE SOURCES prompt block. The user attached these
+ * reports/docs specifically so the article draws on them, so the instruction is
+ * to actively MINE each source for data relevant to this article's topic and
+ * cite it — while never fabricating figures the source doesn't contain. Returns
+ * "" when there are no sources.
+ */
+function formatCustomSourcesForPrompt(sources: RetrievedSource[]): string {
+  const usable = sources.filter((s) => s.text.trim().length > 0);
+  if (!usable.length) return '';
+
+  const blocks = usable
+    .map((s, i) => {
+      const link = s.citeUrl
+        ? `\nReport page — interlink to THIS exact URL wherever you cite this source: ${s.citeUrl}`
+        : '';
+      const scopeNote = s.mode === 'full'
+        ? '(full document below)'
+        : '(most relevant sections below — this is a large document)';
+      return `─── SOURCE ${i + 1}: "${s.title}" ${scopeNote} ───${link}\n${s.text.trim()}`;
+    })
+    .join('\n\n');
+
+  const nameList = usable.map((s) => `"${s.title}"`).join(', ');
+
+  return `\n════════════════════════════════════════
+CUSTOM KNOWLEDGE SOURCES — the user's own reference material (${nameList})
+════════════════════════════════════════
+The user attached ${usable.length === 1 ? 'this source' : 'these sources'} specifically so this article draws on ${usable.length === 1 ? 'it' : 'them'}. Treat ${usable.length === 1 ? 'it' : 'them'} as a PRIMARY, authoritative source and mine ${usable.length === 1 ? 'it' : 'them'} hard:
+- Actively find the concrete statistics, figures, percentages, and named findings in the material below that are relevant to THIS article's topic, industry, and audience, and build them into the article. When the source covers this topic/industry at all, include at least 2-4 specific data points from it.
+- For every data point you use, add an in-text attribution (e.g. "according to ${usable[0].title}") AND one contextual inline link to that source's report-page URL, placed next to the claim it supports.
+- Use ONLY numbers, quotes, and findings that literally appear in the material below. Never invent or extrapolate a figure, and never attach the report link to a claim the source does not actually make. If the source genuinely has nothing relevant to this article, don't force it — but that should be rare when the topic overlaps.
+- These report-page links are approved, expected external links — include them even if other citation rules restrict external URLs to an approved list.
+
+${blocks}
+`;
 }
 
 function formatAhrefsContextForPrompt(ahrefs: any): string {
@@ -112,7 +158,7 @@ ${serp || '(none)'}
 }
 
 export function buildBlogPrompt(ctx: BlogPromptContext): string {
-  const { entry, project, wordCount, keywordIntent, funnelStage, research, existingBlogs, brief, extraInternalLinks, followUpQuestions, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary, verifiedSources, projectMemoryBlock, globalHeuristicsBlock } = ctx;
+  const { entry, project, wordCount, keywordIntent, funnelStage, research, existingBlogs, brief, extraInternalLinks, followUpQuestions, ahrefsContext, writerNotes, brandPersona, customInstructions, deepAnalysisSummary, verifiedSources, projectMemoryBlock, globalHeuristicsBlock, customSources } = ctx;
 
   // Recency window for citations: sources must be from this year or newer.
   const currentYear = new Date().getFullYear();
@@ -243,6 +289,8 @@ Pool:\n${[siteBlock, generatedBlock].filter(Boolean).join('\n\n')}`;
     ? `\nCOMPETITOR CONTENT GAP ANALYSIS (derived from scraping the top 5 ranking pages — use this to ensure your blog outranks them by covering what they miss):\n${deepAnalysisSummary}\n`
     : "";
 
+  const customSourcesBlock = customSources?.length ? formatCustomSourcesForPrompt(customSources) : "";
+
   // Verified facts + approved citation URLs from the live deep-research pass.
   const verifiedResearchBlock = verifiedSources ? formatDeepResearchForPrompt(verifiedSources) : "";
   const verifiedSourceCount = verifiedSources?.sources.length ?? 0;
@@ -347,7 +395,7 @@ ${faqSeeds}
 ${verifiedResearchBlock}
 ${researchBlock}
 ${ahrefsBlock}
-${researchContextBlock}${deepAnalysisSummaryBlock}${customInstructionsBlock}
+${researchContextBlock}${deepAnalysisSummaryBlock}${customSourcesBlock}${customInstructionsBlock}
 
 ════════════════════════════════════════
 CONTENT SHAPE — ${archetype.label}

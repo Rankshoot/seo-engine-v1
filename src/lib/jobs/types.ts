@@ -13,7 +13,9 @@ export type JobType =
   // reserved for later phases:
   | 'keyword_discovery'
   | 'blog_generate'
-  | 'content_image';
+  | 'content_image'
+  // Extract + chunk + embed an uploaded knowledge source (report/doc/link).
+  | 'content_source_ingest';
 
 export interface JobRecord {
   id: string;
@@ -80,6 +82,12 @@ export interface BlogGenerateJobPayload {
   useDeepAnalysis?: boolean;
   deepAnalysisPages?: Array<{ url: string; title: string; domain: string; position: number }>;
   customInstructions?: string;
+  /**
+   * Optional knowledge sources selected for THIS blog (project `always` sources
+   * are always included regardless). The generator retrieves relevant excerpts
+   * from these and cites/interlinks them where they fit.
+   */
+  sourceIds?: string[];
   /** A human label (topic/keyword) surfaced by the client while polling. */
   label?: string;
   /**
@@ -88,6 +96,12 @@ export interface BlogGenerateJobPayload {
    * back to their audit row so the shared "Generating…" button state resolves.
    */
   auditUrl?: string;
+}
+
+/** Payload for a `content_source_ingest` job — one uploaded/added source. */
+export interface ContentSourceIngestJobPayload {
+  sourceId: string;
+  projectId: string;
 }
 
 export const JOB_SELECT =

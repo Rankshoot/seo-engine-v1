@@ -11,6 +11,7 @@ import type {
   ContentAuditJobPayload,
   SiteAuditScanJobPayload,
   BlogGenerateJobPayload,
+  ContentSourceIngestJobPayload,
   JobRecord,
 } from './types';
 
@@ -20,6 +21,7 @@ const handlers: Record<string, JobHandler> = {
   content_audit: runContentAuditJob,
   site_audit_scan: runSiteAuditScanJob,
   blog_generate: runBlogGenerateJob,
+  content_source_ingest: runContentSourceIngestJob,
 };
 
 export function getJobHandler(type: string): JobHandler | null {
@@ -194,4 +196,19 @@ async function runBlogGenerateJob(job: JobRecord): Promise<Record<string, unknow
   }
 
   return { blogId, label: p.label ?? '' };
+}
+
+/**
+ * Durable ingestion of an uploaded knowledge source: extract → chunk → embed →
+ * persist chunks, flipping the source row to 'ready' (or 'failed'). Runs here so
+ * a large report (up to 100 MB) survives request timeouts. Idempotent — the
+ * ingest core clears prior chunks first, so a retried job converges.
+ */
+async function runContentSourceIngestJob(job: JobRecord): Promise<Record<string, unknown>> {
+  const p = job.payload as unknown as ContentSourceIngestJobPayload;
+  if (!p?.sourceId) throw new Error('content_source_ingest job missing sourceId');
+
+  const { ingestContentSource } = await import('@/lib/content-sources/ingest');
+  const { chunkCount, charCount } = await ingestContentSource(p.sourceId);
+  return { sourceId: p.sourceId, chunkCount, charCount };
 }

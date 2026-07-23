@@ -3,7 +3,11 @@ import { generateTrendingKeywordsAction } from "@/app/actions/keyword-actions";
 import { apiJson } from "@/server/http/json";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Search-grounded generation (real web search + synthesis) runs well past the
+// old 60s cap — the route was killing requests before the internal 90s AI
+// timeout could even fire cleanly. Matches other single-call AI routes
+// (blogs/enhance, keywords/domain) with margin above the internal timeout.
+export const maxDuration = 120;
 
 export async function POST(req: Request, { params }: { params: Promise<{ projectId: string }> }) {
   const user = await currentUser();

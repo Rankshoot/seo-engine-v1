@@ -289,7 +289,18 @@ export async function aiGenerate(
   }
 
   await checkBudgetControls(opts.userId, opts.projectId);
-  const { provider, model } = await getProviderForRoute(feature);
+  let { provider, model } = await getProviderForRoute(feature);
+  // Live web-search grounding is a Gemini-only capability in this codebase —
+  // Claude's provider has no search tool wired at all, so silently routing a
+  // `useGoogleSearch: true` call to Claude (e.g. this feature's admin routing
+  // falls back to another feature's model, or is set to a Claude model) would
+  // make the flag a no-op: the model would fabricate "current" info from
+  // training data instead of actually searching. Force Gemini whenever the
+  // caller explicitly asked for search, regardless of the configured route.
+  if (opts.useGoogleSearch && provider.id !== "gemini") {
+    provider = providers.gemini;
+    model = DEFAULT_GEMINI_MODEL;
+  }
   const timeoutMs = opts.timeoutMs !== undefined ? opts.timeoutMs : 120000;
   const systemPrompt = getSystemPromptWithDate(opts.systemPrompt);
 

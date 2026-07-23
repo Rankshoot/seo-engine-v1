@@ -17,7 +17,15 @@ export interface TrendingKeywordSuggestion {
   rationale: string;
   /** AI's recommended content format for this keyword. */
   recommendedType: SuggestedContentType;
+  /** Marketing funnel stage this keyword targets. */
+  funnelStage?: "TOFU" | "MOFU" | "BOFU";
 }
+
+const FUNNEL_BADGE: Record<"TOFU" | "MOFU" | "BOFU", { label: string; className: string }> = {
+  TOFU: { label: "TOFU", className: "border-brand-action/25 bg-brand-action/10 text-brand-action" },
+  MOFU: { label: "MOFU", className: "border-brand-violet/25 bg-brand-violet/10 text-brand-violet" },
+  BOFU: { label: "BOFU", className: "border-status-success/25 bg-status-success/10 text-status-success" },
+};
 
 const CONTENT_TYPE_OPTIONS: { value: SuggestedContentType; label: string }[] = [
   { value: "blog", label: "Blog article" },
@@ -178,7 +186,7 @@ export function GenerateKeywordsModal({
       title="Generate keywords"
       description={
         phase === "prompt"
-          ? "The AI will suggest 5 trending, diversified keyword ideas grounded in your business brief."
+          ? "The AI will suggest  trending, diversified keyword ideas grounded in your business brief."
           : "Pick the ones worth publishing, then schedule them straight to your calendar."
       }
       footer={
@@ -254,28 +262,26 @@ export function GenerateKeywordsModal({
             return (
               <div
                 key={s.keyword}
-                className={`flex items-start gap-3 rounded-xl border px-4 py-3 transition-all duration-300 ${
-                  state === "scheduled"
-                    ? "border-status-success/30 bg-status-success/[0.06] opacity-70"
-                    : state === "error"
+                className={`flex items-start gap-3 rounded-xl border px-4 py-3 transition-all duration-300 ${state === "scheduled"
+                  ? "border-status-success/30 bg-status-success/[0.06] opacity-70"
+                  : state === "error"
                     ? "border-status-danger/30 bg-status-danger/[0.05]"
                     : isSelected
-                    ? "border-brand-action/40 bg-brand-action/[0.05]"
-                    : "border-border-subtle bg-surface-elevated"
-                }`}
+                      ? "border-brand-action/40 bg-brand-action/[0.05]"
+                      : "border-border-subtle bg-surface-elevated"
+                  }`}
               >
                 <button
                   type="button"
                   onClick={() => toggleSelected(s.keyword)}
                   disabled={state === "scheduling" || state === "scheduled"}
                   aria-label={isSelected ? `Deselect ${s.keyword}` : `Select ${s.keyword}`}
-                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-                    state === "scheduled"
-                      ? "border-status-success bg-status-success text-white"
-                      : isSelected
+                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${state === "scheduled"
+                    ? "border-status-success bg-status-success text-white"
+                    : isSelected
                       ? "border-brand-action bg-brand-action text-white"
                       : "border-border-strong bg-transparent"
-                  }`}
+                    }`}
                 >
                   {(isSelected || state === "scheduled") && (
                     <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -288,6 +294,11 @@ export function GenerateKeywordsModal({
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[14px] font-semibold text-text-primary">{s.keyword}</span>
+                      {s.funnelStage && (
+                        <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-bold tracking-wide ${FUNNEL_BADGE[s.funnelStage].className}`}>
+                          {FUNNEL_BADGE[s.funnelStage].label}
+                        </span>
+                      )}
                       {state === "scheduling" && <Spinner size={12} />}
                       {state === "scheduled" && (
                         <span className="text-[11px] font-semibold text-status-success">Scheduled ✓</span>

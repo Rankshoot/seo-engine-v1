@@ -9,7 +9,7 @@ import {
   type CompetitorKeywordsForSiteRow,
   type DataForSEOTraceEntry,
 } from '@/lib/dataforseo';
-import { Keyword, KeywordStatus, CONTENT_TYPE_ARTICLE_TYPE } from '@/lib/types';
+import { Keyword, KeywordStatus, CONTENT_TYPE_ARTICLE_TYPE, TARGET_REGIONS } from '@/lib/types';
 import { generateBusinessBrief, getBusinessBrief } from './brief-actions';
 import type { BusinessBrief } from '@/lib/business-brief';
 import {
@@ -725,6 +725,8 @@ export interface TrendingKeywordSuggestion {
   rationale: string;
   /** AI's recommended content type for this keyword (drives the modal's dropdown default). */
   recommendedType: SuggestedContentType;
+  /** Marketing funnel stage this keyword targets — informational, shown as a badge in the modal. */
+  funnelStage?: 'TOFU' | 'MOFU' | 'BOFU';
 }
 
 /**
@@ -777,6 +779,23 @@ export async function generateTrendingKeywordsAction(
     .map(r => String(r.keyword ?? '').trim())
     .filter(Boolean);
 
+  // Keywords already scheduled on the calendar. A keyword can be scheduled
+  // without ever having a row in `keywords` (e.g. ad-hoc / repair / content-health
+  // entries), so this is a separate source of truth from existingKeywords above —
+  // both must be excluded, or the button can re-suggest something already queued.
+  let calendarKeywords: string[] = [];
+  try {
+    const { data: calendarRows } = await supabaseAdmin
+      .from('calendar_entries')
+      .select('focus_keyword, secondary_keywords')
+      .eq('project_id', projectId)
+      .limit(500);
+    calendarKeywords = (calendarRows ?? []).flatMap(r => [
+      String((r as { focus_keyword?: string }).focus_keyword ?? '').trim(),
+      ...(((r as { secondary_keywords?: string[] }).secondary_keywords ?? []).map(k => String(k ?? '').trim())),
+    ]).filter(Boolean);
+  } catch { /* no-op */ }
+
   // Titles of content already published on the site (from the sitemap the user
   // configures in Settings). Feeding these lets the AI see what already exists
   // so it proposes genuinely NEW, complementary topics instead of re-suggesting
@@ -795,12 +814,30 @@ export async function generateTrendingKeywordsAction(
       .filter(t => t.length > 3);
   } catch { /* sitemap not configured / table absent — no-op */ }
 
+  // What this project's AI has learned from previous work here — style,
+  // preferences, audience insights, and (most relevant here) topics already
+  // covered, so new suggestions extend the site's existing content strategy
+  // instead of drifting into unrelated territory.
+  const { loadProjectMemory, formatProjectMemoryForPrompt } = await import('@/lib/ai-memory');
+  const memoryEntries = await loadProjectMemory(projectId);
+  const memoryBlock = formatProjectMemoryForPrompt(memoryEntries);
+
+  // Deterministic, case/whitespace-insensitive exclusion set — the prompt asks
+  // the model to avoid these too, but we never rely on the LLM alone to honor
+  // "never repeat": every suggestion is hard-filtered against this set below.
+  const normKw = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  const excludedNormalized = new Set(
+    [...existingKeywords, ...calendarKeywords, ...postedTitles].map(normKw).filter(Boolean)
+  );
+
   const userPrompt = (opts.userPrompt || '').trim();
+  const regionName = TARGET_REGIONS.find(r => r.code === project.target_region)?.name || project.target_region || 'unspecified';
 
   const businessContext = [
     `Company: ${project.company || project.name || ''}`,
     `Domain: ${project.domain || ''}`,
     `Niche/industry: ${project.niche || 'unspecified'}`,
+    `Target region: ${regionName}`,
     `Target audience: ${project.target_audience || 'unspecified'}`,
     brief?.summary ? `Business summary: ${brief.summary}` : '',
     brief?.products?.length ? `Products/offerings: ${brief.products.join(', ')}` : '',
@@ -808,30 +845,39 @@ export async function generateTrendingKeywordsAction(
     brief?.audiences?.length ? `Audience segments: ${brief.audiences.join(', ')}` : '',
   ].filter(Boolean).join('\n');
 
-  const prompt = `You are an expert SEO strategist generating NEW blog keyword ideas for a content calendar.
+  const prompt = `You are an expert SEO strategist generating NEW, TRENDING blog keyword ideas for a content calendar. You have live web search — use it.
 ${userPrompt ? `\nPRIMARY INSTRUCTION — follow this first and most closely. It overrides the general business context below whenever they conflict:\n"${userPrompt}"\n` : ''}
 BUSINESS CONTEXT (background${userPrompt ? " — keep ideas relevant to this business, but the instruction above takes priority" : ''}):
 ${businessContext || 'No business brief available yet.'}
-${existingKeywords.length ? `\nKeywords already covered on this project's calendar/discovery — do NOT repeat these or close variants:\n${existingKeywords.slice(0, 150).join(', ')}` : ''}
+${memoryBlock}
 ${postedTitles.length ? `\nContent ALREADY PUBLISHED on this site (from its sitemap) — do NOT suggest keywords that overlap these topics. Instead, propose fresh, complementary angles that expand the same themes the site clearly invests in:\n${postedTitles.slice(0, 150).join(' | ')}` : ''}
+${excludedNormalized.size ? `\nKEYWORDS TO NEVER SUGGEST — already covered in this project's keyword list, already scheduled on the calendar, or already published (do NOT repeat these or a close variant of any of them):\n${[...excludedNormalized].slice(0, 250).join(', ')}` : ''}
 
-Generate exactly 5 NEW, DIVERSE keyword ideas. Requirements:
-- KEYWORD LENGTH: Each keyword MUST be 2–3 words maximum — short, primary SEO/GEO/AEO keywords (e.g. "talent acquisition", "RPO pricing", "structured hiring"). Never use full questions or long phrases as the keyword.
-- Prioritise core terms people actually search on AI assistants (ChatGPT, Perplexity, Google AI Overviews) — favour high AEO/GEO potential (clear, entity-rich, directly answerable) over raw search volume.
-- Stay in the same topical territory the site already publishes in (so they fit the brand), but never duplicate an existing keyword or published title above — always something newer.
-- Diversify across search intent (informational/commercial/navigational), funnel stage, and angle — never 5 near-duplicates.
+STEP 1 — RESEARCH FIRST: search the web for what's actually trending RIGHT NOW (recent news, industry reports, product launches, regulatory changes, seasonal moments) in this niche, specific to ${regionName}. Ground every keyword in something genuinely current — not a generic evergreen topic restated.
+
+STEP 2 — Generate exactly 8 NEW, DIVERSE keyword ideas from that research. Requirements:
+- KEYWORD LENGTH: Mix it up naturally — include short head terms (2 words), mid-tail phrases (3-5 words), AND long-tail phrases (6+ words, close to a natural search query). Do NOT force every keyword to the same length, and do NOT cap every keyword at 2-3 words. At the same time, avoid full sentences or awkwardly long strings — a long-tail keyword should still read like something a real person would type into a search bar, not a full question with filler words.
+- Every keyword must have realistic HIGH SEARCH-VOLUME potential for ${regionName} — favour terms with clear existing demand over obscure/no-volume phrasing. Prioritise terms people actually search on Google and AI assistants (ChatGPT, Perplexity, Google AI Overviews) — high AEO/GEO potential (clear, entity-rich, directly answerable).
+- Stay in the same topical territory the site already publishes in (so they fit the brand and what has worked before, per the project memory above), but NEVER suggest anything in the "never suggest" list above or a close variant of it — always something newer and tied to what's currently trending.
+- FUNNEL STAGE: using the business's products/offerings above, deliberately spread the 8 keywords across the marketing funnel — include a mix of TOFU (broad awareness/education, e.g. "what is X"), MOFU (comparison/consideration, e.g. "X vs Y", "best X for Z"), and BOFU (ready-to-buy/high commercial intent, tied directly to a specific product/offering) — not all 8 from the same stage.
+- Diversify across search intent (informational/commercial/navigational), funnel stage, and keyword length — never near-duplicates.
 - For each keyword, recommend the best content format: "blog" (most topics), "ebook" or "whitepaper" (deep, download-worthy or data-heavy topics), or "linkedin" (short opinion/thought-leadership angles).
 
-Respond with ONLY valid JSON, no markdown fences, no commentary:
-{"keywords":[{"keyword":"...","rationale":"one short sentence on why this is a good target right now","recommendedType":"blog|ebook|whitepaper|linkedin"}]}`;
+Respond with ONLY this JSON on its own, no markdown fences, no commentary, no text before or after it:
+{"keywords":[{"keyword":"...","rationale":"one short sentence on why this is trending/a good target right now","recommendedType":"blog|ebook|whitepaper|linkedin","funnelStage":"TOFU|MOFU|BOFU"}]}`;
 
   let raw: string;
   try {
     raw = await aiGenerate('keyword-ideation', prompt, {
       temperature: 0.9,
-      maxOutputTokens: 1200,
-      jsonMode: true,
-      timeoutMs: 45000,
+      maxOutputTokens: 2048,
+      useGoogleSearch: true,
+      // Search-grounded calls (real web search + synthesis) run noticeably
+      // slower than a plain completion — 45s was tuned for the old non-grounded
+      // call and was aborting real grounded requests mid-flight. This is a
+      // foreground, user-awaited action (spinner + "Thinking…"), so bounded but
+      // generous beats both "too short" and fully unbounded.
+      timeoutMs: 90000,
       userId: user.id,
       projectId,
     });
@@ -844,19 +890,38 @@ Respond with ONLY valid JSON, no markdown fences, no commentary:
     const v = String(t ?? '').trim().toLowerCase();
     return (SUPPORTED_TYPES as string[]).includes(v) ? (v as SuggestedContentType) : 'blog';
   };
+  const SUPPORTED_FUNNEL_STAGES = ['TOFU', 'MOFU', 'BOFU'] as const;
+  const normalizeFunnel = (t: unknown): 'TOFU' | 'MOFU' | 'BOFU' | undefined => {
+    const v = String(t ?? '').trim().toUpperCase();
+    return (SUPPORTED_FUNNEL_STAGES as readonly string[]).includes(v) ? (v as 'TOFU' | 'MOFU' | 'BOFU') : undefined;
+  };
 
   const { parseLooseJson } = await import('@/services/ai/providers/base');
   const parsed = parseLooseJson<{
-    keywords?: Array<{ keyword?: string; rationale?: string; recommendedType?: string }>;
+    keywords?: Array<{ keyword?: string; rationale?: string; recommendedType?: string; funnelStage?: string }>;
   }>(raw);
-  const keywords: TrendingKeywordSuggestion[] = (parsed?.keywords ?? [])
+  const candidates: TrendingKeywordSuggestion[] = (parsed?.keywords ?? [])
     .map(k => ({
       keyword: (k.keyword || '').trim(),
       rationale: (k.rationale || '').trim(),
       recommendedType: normalizeType(k.recommendedType),
+      funnelStage: normalizeFunnel(k.funnelStage),
     }))
-    .filter(k => k.keyword)
-    .slice(0, 5);
+    .filter(k => k.keyword);
+
+  // Deterministic hard filter — never trust the prompt alone to honor "don't
+  // repeat": drop anything that exact-matches (normalized) a keyword already in
+  // this project's list, already scheduled on the calendar, or already
+  // published, and drop near-duplicates within this same batch too.
+  const seenInBatch = new Set<string>();
+  const keywords: TrendingKeywordSuggestion[] = [];
+  for (const k of candidates) {
+    const norm = normKw(k.keyword);
+    if (excludedNormalized.has(norm) || seenInBatch.has(norm)) continue;
+    seenInBatch.add(norm);
+    keywords.push(k);
+    if (keywords.length >= 8) break;
+  }
 
   if (!keywords.length) {
     return { success: false, error: 'The AI did not return usable keyword ideas. Please try again.' };
